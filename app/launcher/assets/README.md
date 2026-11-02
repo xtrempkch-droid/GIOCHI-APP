@@ -1,0 +1,1 @@
+Arte-fonte do launcher: icones do tema, fontes, logos. Nao entra no pacote.

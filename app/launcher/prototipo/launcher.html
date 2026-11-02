@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Giochi Launcher — protótipo corrigido</title>
+<!--
+  PROTÓTIPO CORRIGIDO — referência visual e funcional do launcher.
+
+  Esta é a versão corrigida do mockup original. Ela implementa o que o mockup
+  não tinha: gamepad, escala sem corte, estado consistente e alvos de toque
+  utilizáveis. A versão de produção é a reescrita em Rust em ../crates/core/.
+
+  A arquitetura é a mesma do núcleo Rust, de propósito: comandos com os mesmos
+  nomes, reducer puro, foco como (zona, índice), pilha de overlays separada da
+  aba. O port deve ser mecânico.
+
+  O que este arquivo NÃO faz (e o protótipo fingia fazer):
+    - não lança app nenhum; só registra a intenção
+    - não lê bateria/temperatura/TDP reais — mostra "—" quando não há leitura
+    - FPS é medido de verdade (requestAnimationFrame)
+-->
+<style>
+:root{
+  --bg:#070a12; --panel:#0f1621; --panel2:#1a2436; --card:#22304a;
+  --line:rgba(120,160,200,0.12); --line2:rgba(120,160,200,0.3);
+  --accent:#66c0f4; --ok:#10b981; --warn:#f59e0b; --danger:#ef4444;
+  --text:#f1f5f9; --dim:#94a3b8; --faint:rgba(148,163,184,0.55);
+  --font:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --glow:#66c0f4;
+  /* Alvo mínimo de toque, em unidades de projeto. */
+  --touch:44px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#000;color:var(--text);
+  font-family:var(--font);user-select:none;-webkit-user-select:none;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+
+/* ── ESCALA ────────────────────────────────────────────────────
+   Correção do bug original: escala e centralização usam a MESMA
+   largura (1280). Resultado é letterbox centrado — sobra tarja,
+   nunca corte. Em 640x480 o protótipo cortava 106px de cada lado. */
+#stage{
+  position:absolute; left:50%; top:50%;
+  width:1280px; height:720px;
+  transform-origin:center center;
+  transform:translate(-50%,-50%) scale(var(--scale,1));
+  overflow:hidden;
+}
+
+#ambient{position:absolute;inset:0;
+  background:radial-gradient(ellipse 80% 60% at 50% 0%,var(--glow) 0%,transparent 65%),
+             radial-gradient(ellipse 60% 50% at 15% 90%,rgba(120,60,180,0.08) 0%,transparent 60%),
+             var(--bg);
+  opacity:0.55}
+
+/* Área segura: 960 centrada dentro do canvas de 1280. */
+#safe{position:absolute;left:160px;top:0;width:960px;height:720px;
+  display:grid;grid-template-rows:56px 610px 54px;padding:0 6px}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--line);padding:0 2px}
+.tabs{display:flex;gap:3px}
+.tab{min-height:var(--touch);padding:0 16px;border-radius:7px;font-size:12px;
+  font-weight:500;color:var(--dim);background:transparent;border:1px solid transparent;
+  cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;
+  transition:color .15s,background .15s}
+.tab:hover{color:var(--text)}
+.tab.on{color:var(--text);background:var(--card);border-color:var(--line2)}
+.tab.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+
+.status{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:600}
+.badge{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:99px;
+  background:rgba(0,0,0,0.4);border:1px solid var(--line);font-family:var(--mono);font-size:11px}
+.badge.pad-ok{color:var(--ok);border-color:rgba(16,185,129,0.35)}
+.badge.pad-off{color:var(--dim)}
+.clock{font-family:var(--mono);font-size:13px;letter-spacing:0.4px}
+.icon-btn{width:var(--touch);height:var(--touch);min-width:var(--touch);
+  border-radius:6px;background:transparent;border:1px solid transparent;color:var(--dim);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative}
+.icon-btn:hover{color:var(--text);border-color:var(--line2)}
+.icon-btn.power{background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.35);color:var(--danger)}
+.icon-btn.power:hover{background:rgba(239,68,68,0.22)}
+.ring{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.ring circle{stroke-linecap:round}
+
+#main{position:relative;overflow:hidden;padding:8px 4px}
+
+/* ── HOME ─────────────────────────────────────────────── */
+.home{position:relative;height:100%;display:flex;flex-direction:column}
+.carousel{position:relative;flex:1;overflow:hidden}
+.ccard{position:absolute;top:50%;left:50%;width:520px;height:320px;border-radius:18px;
+  background:linear-gradient(135deg,var(--c1),var(--c2));
+  border:1px solid rgba(255,255,255,0.06);overflow:hidden;cursor:pointer;will-change:transform}
+.ccard::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 30% 25%,var(--g),transparent 55%);opacity:0.18}
+.ccard-letter{position:absolute;top:6px;right:22px;font-size:200px;font-weight:900;
+  color:rgba(255,255,255,0.055);line-height:1;pointer-events:none}
+.ccard-body{position:absolute;inset:0;padding:22px 24px;display:flex;
+  flex-direction:column;justify-content:flex-end}
+.ccard-cat{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;
+  color:var(--g);margin-bottom:6px}
+.ccard-title{font-size:26px;font-weight:800;color:white;line-height:1.1;margin-bottom:4px;
+  text-shadow:0 2px 12px rgba(0,0,0,0.4)}
+.ccard-meta{font-size:11px;color:rgba(255,255,255,0.65);margin-bottom:14px}
+.ccard-play{display:inline-flex;align-items:center;gap:6px;min-height:var(--touch);
+  padding:0 16px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.28);
+  border-radius:8px;color:white;font-size:11px;font-weight:700;align-self:flex-start;
+  cursor:pointer;font-family:var(--font)}
+.ccard.focused{border:2px solid var(--g);box-shadow:0 0 40px -8px var(--g)}
+.ccard-ghost{opacity:0.35;pointer-events:none}
+.dots{display:flex;justify-content:center;gap:5px;margin:10px 0 6px}
+.dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.15);
+  transition:background .2s,width .2s}
+.dot.on{background:var(--glow);width:20px;border-radius:3px}
+.context{text-align:center;padding:0 20px;font-size:11px;color:var(--dim);font-family:var(--mono)}
+.context strong{color:var(--text)}
+
+/* ── BIBLIOTECA ───────────────────────────────────────── */
+.lib-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.lib-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+.filters{display:flex;gap:5px}
+.chip{min-height:var(--touch);padding:0 14px;border-radius:99px;font-size:10px;
+  font-weight:600;background:transparent;border:1px solid var(--line);color:var(--dim);
+  cursor:pointer;font-family:var(--font)}
+.chip.on{background:var(--card);border-color:var(--line2);color:var(--text)}
+.chip.focused{border-color:var(--accent);outline:1px solid var(--accent);
+  outline-offset:-2px;color:var(--accent)}
+
+/* Correção: grade com altura automática e página calculada.
+   O original tinha grid-template-rows:repeat(2,1fr) fixo e estourava
+   com qualquer contagem diferente de 8. */
+.grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:1fr;gap:9px;
+  flex:1;min-height:0}
+.gcard{position:relative;border-radius:10px;border:1px solid rgba(255,255,255,0.06);
+  background:linear-gradient(135deg,var(--c1),var(--c2));padding:11px;display:flex;
+  flex-direction:column;justify-content:space-between;cursor:pointer;overflow:hidden;
+  transition:transform .15s;min-height:0}
+.gcard::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 70% 20%,var(--g),transparent 50%);opacity:0.15}
+.gcard.focused{border-color:var(--g);outline:1px solid var(--g);outline-offset:-3px;
+  transform:translateY(-2px)}
+.gcard-cat{position:relative;font-size:8px;font-weight:800;text-transform:uppercase;
+  letter-spacing:0.5px;color:var(--g);align-self:flex-start;padding:2px 6px;
+  border-radius:3px;background:rgba(0,0,0,0.4)}
+.gcard-info{position:relative;min-width:0}
+.gcard-title{font-size:13px;font-weight:700;color:white;line-height:1.15;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gcard-meta{font-size:9px;color:rgba(255,255,255,0.55);margin-top:2px;font-family:var(--mono)}
+.gcard-fav{position:absolute;top:8px;right:8px;color:var(--warn);z-index:2}
+.empty{grid-column:1/-1;display:flex;align-items:center;justify-content:center;
+  color:var(--faint);font-size:11px;padding:40px}
+.pager{display:flex;align-items:center;justify-content:center;gap:8px;font-size:9px;
+  color:var(--dim);font-family:var(--mono);margin-top:6px;height:14px}
+
+/* ── APPS ─────────────────────────────────────────────── */
+.apps-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:1fr;
+  gap:9px;height:100%}
+.acard{padding:14px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);
+  display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;
+  cursor:pointer;transition:transform .15s,border-color .15s;min-height:0}
+.acard.focused{border-color:var(--accent);outline:1px solid var(--accent);
+  outline-offset:-3px;transform:translateY(-2px)}
+.acard-icon{color:var(--accent);display:flex;align-items:center;justify-content:center}
+.acard-title{font-size:12px;font-weight:700;color:var(--text)}
+.acard-cat{font-size:9px;color:var(--dim);font-family:var(--mono)}
+
+/* ── CONFIG ───────────────────────────────────────────── */
+.settings{display:grid;grid-template-columns:230px 1fr;gap:14px;height:100%;padding-top:6px}
+.side{display:flex;flex-direction:column;gap:3px;border-right:1px solid var(--line);padding-right:12px}
+.scat{min-height:var(--touch);padding:0 11px;border-radius:7px;font-size:11px;font-weight:600;
+  color:var(--dim);background:transparent;border:1px solid transparent;text-align:left;
+  cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:8px}
+.scat:hover{color:var(--text);background:rgba(255,255,255,0.03)}
+.scat.on{color:var(--accent);background:var(--card);border-color:var(--line2)}
+.scat.focused{border-color:var(--accent);outline:1px solid var(--accent);
+  outline-offset:-2px;color:var(--accent)}
+.scontent{overflow-y:auto;padding-right:4px}
+.scontent h4{font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px}
+.srow{padding:10px 12px;border-radius:8px;background:rgba(0,0,0,0.25);
+  border:1px solid var(--line);margin-bottom:7px;display:flex;justify-content:space-between;
+  align-items:center;gap:12px;font-size:11px;min-height:var(--touch)}
+.srow strong{display:block;font-weight:600;color:var(--text);margin-bottom:1px;font-size:11px}
+.srow small{font-size:9px;color:var(--dim);font-family:var(--mono)}
+.sval{color:var(--accent);font-family:var(--mono);font-weight:700;white-space:nowrap}
+.snote{font-size:10px;color:var(--faint);line-height:1.7;margin-top:10px}
+
+/* ── RODAPÉ ───────────────────────────────────────────── */
+.foot{display:flex;align-items:center;justify-content:space-between;padding:0 2px;
+  border-top:1px solid var(--line);font-size:10px;color:var(--dim)}
+.hints{display:flex;gap:11px}
+.hint{display:flex;align-items:center;gap:4px}
+.hint kbd{display:inline-flex;align-items:center;justify-content:center;min-width:17px;
+  height:16px;padding:0 4px;background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.14);border-radius:3px;font-size:9px;
+  font-weight:700;color:var(--accent);font-family:var(--mono)}
+.build{font-family:var(--mono);font-size:9px;color:var(--faint)}
+
+/* ── OVERLAYS ─────────────────────────────────────────── */
+.ov{position:absolute;inset:0;background:rgba(0,0,0,0.78);display:flex;
+  align-items:center;justify-content:center;animation:fadeIn .18s ease;z-index:50}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.panel{background:var(--panel);border:1px solid var(--line2);border-radius:16px;overflow:hidden}
+.panel-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;
+  align-items:center;gap:8px;color:var(--accent);font-size:13px;font-weight:700}
+.panel-head h3{color:var(--text);font-size:13px;font-weight:700}
+
+.search{width:900px;max-height:560px;display:flex;flex-direction:column}
+.search-input{display:flex;align-items:center;gap:10px;padding:12px 16px;
+  border-bottom:1px solid var(--line);color:var(--accent)}
+.search-input .q{flex:1;font-size:16px;font-weight:600;color:var(--text);min-height:22px}
+.search-input .q.empty{color:var(--faint);font-weight:400}
+.search-input .caret{display:inline-block;width:2px;height:18px;background:var(--accent);
+  vertical-align:middle;animation:blink 1s steps(2) infinite;margin-left:1px}
+@keyframes blink{50%{opacity:0}}
+.search-body{display:grid;grid-template-columns:1fr 380px;gap:14px;padding:14px;
+  flex:1;min-height:0}
+.kbd{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;align-content:start}
+.key{min-height:var(--touch);border-radius:7px;background:var(--panel2);
+  border:1px solid var(--line);color:var(--text);font-size:13px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  font-family:var(--mono)}
+.key.focused{border-color:var(--accent);background:var(--card);color:var(--accent);
+  outline:1px solid var(--accent);outline-offset:-2px}
+.results{overflow-y:auto}
+.res-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;
+  color:var(--dim);margin-bottom:8px}
+.res-item{padding:9px 11px;border-radius:7px;background:var(--panel2);
+  border:1px solid var(--line);margin-bottom:5px;display:flex;gap:10px;align-items:center;
+  cursor:pointer;min-height:var(--touch)}
+.res-item.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+.res-dot{width:28px;height:28px;border-radius:5px;
+  background:linear-gradient(135deg,var(--c1),var(--c2));flex-shrink:0}
+.res-name{font-size:11px;font-weight:600;color:var(--text)}
+.res-cat{font-size:9px;color:var(--dim);font-family:var(--mono)}
+.res-empty{text-align:center;padding:20px;color:var(--faint);font-size:11px;font-style:italic}
+
+.qs{width:520px}
+.qs-rows{padding:8px}
+.qs-row{min-height:var(--touch);padding:10px 12px;border-radius:8px;
+  background:rgba(0,0,0,0.25);border:1px solid var(--line);margin-bottom:5px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  font-size:11px;cursor:pointer}
+.qs-row.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+.qs-label{display:flex;align-items:center;gap:8px;color:var(--text);font-weight:600;flex:1}
+.qs-label svg{color:var(--accent)}
+.qs-val{color:var(--accent);font-family:var(--mono);font-weight:700;font-size:10px;
+  min-width:50px;text-align:right}
+.slider{flex:1.5;height:8px;border-radius:4px;background:rgba(255,255,255,0.1);
+  position:relative;overflow:hidden;cursor:pointer}
+.slider-fill{position:absolute;inset:0;width:var(--p);background:var(--accent);border-radius:4px}
+.perf-tabs{display:flex;gap:4px}
+.perf-chip{padding:4px 8px;border-radius:5px;font-size:9px;font-weight:700;
+  background:transparent;border:1px solid var(--line);color:var(--dim);font-family:var(--font)}
+.perf-chip.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.tgl{width:34px;height:18px;border-radius:99px;background:rgba(255,255,255,0.1);
+  position:relative;transition:background .2s;flex-shrink:0}
+.tgl::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;
+  border-radius:50%;background:var(--dim);transition:transform .2s,background .2s}
+.tgl.on{background:rgba(102,192,244,0.3)}
+.tgl.on::after{transform:translateX(16px);background:var(--accent)}
+.qs-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px;
+  border-top:1px solid var(--line)}
+.qs-btn{min-height:var(--touch);padding:9px;border-radius:7px;font-size:11px;
+  font-weight:700;cursor:pointer;font-family:var(--font);background:var(--panel2);
+  border:1px solid var(--line);color:var(--text)}
+.qs-btn.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+.qs-btn.danger{background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:var(--danger)}
+
+.detail{width:760px}
+.detail-hero{padding:22px 24px;background:linear-gradient(135deg,var(--c1),var(--c2));
+  position:relative;overflow:hidden}
+.detail-hero::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 30% 25%,var(--g),transparent 55%);opacity:0.2}
+.detail-letter{position:absolute;top:-10px;right:20px;font-size:180px;font-weight:900;
+  color:rgba(255,255,255,0.06);line-height:1}
+.detail-hero-content{position:relative;z-index:1}
+.detail-cat{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1px;
+  color:var(--g);margin-bottom:5px}
+.detail-title{font-size:28px;font-weight:800;color:white;margin-bottom:12px;
+  text-shadow:0 2px 10px rgba(0,0,0,0.4)}
+.detail-stats{display:flex;gap:24px;font-family:var(--mono);font-size:9px;flex-wrap:wrap}
+.detail-stats span{color:rgba(255,255,255,0.55);display:block;text-transform:uppercase;
+  letter-spacing:0.5px}
+.detail-stats strong{color:white;font-size:16px;margin-top:3px;display:block;
+  font-weight:800;font-family:var(--font)}
+.detail-actions{padding:12px;display:flex;gap:8px;justify-content:flex-end;
+  border-top:1px solid var(--line)}
+.d-btn{min-height:var(--touch);padding:9px 18px;border-radius:8px;font-size:11px;
+  font-weight:700;cursor:pointer;font-family:var(--font);background:var(--panel2);
+  border:1px solid var(--line);color:var(--text)}
+.d-btn.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+.d-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+
+.power-pop{width:340px;padding:20px;text-align:center}
+.power-ico{width:48px;height:48px;border-radius:12px;background:rgba(239,68,68,0.15);
+  color:var(--danger);display:flex;align-items:center;justify-content:center;margin:0 auto 10px}
+.power-pop h3{font-size:15px;font-weight:700;margin-bottom:3px}
+.power-pop p{font-size:10px;color:var(--dim);margin-bottom:14px}
+.power-actions{display:flex;flex-direction:column;gap:5px}
+.p-btn{min-height:var(--touch);padding:9px;border-radius:7px;font-size:11px;
+  font-weight:700;cursor:pointer;font-family:var(--font);background:var(--panel2);
+  border:1px solid var(--line);color:var(--text)}
+.p-btn.focused{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:-2px}
+.p-btn.danger{background:rgba(239,68,68,0.9);color:white;border-color:var(--danger)}
+.p-btn.ghost{background:transparent;color:var(--dim)}
+
+/* Telas de ciclo de vida: mutuamente exclusivas via `screen`. */
+.boot,.sleep,.shut{position:absolute;inset:0;background:#000;z-index:100;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;color:var(--dim)}
+.boot{gap:20px}
+.boot-logo{font-size:32px;font-weight:200;color:var(--accent);letter-spacing:6px;
+  text-transform:uppercase;animation:fadeIn .6s ease}
+.boot-tag{font-size:10px;color:var(--faint);font-family:var(--mono);
+  letter-spacing:1.5px;animation:fadeIn .9s ease}
+.sleep{cursor:pointer;animation:fadeIn .3s ease}
+.sleep svg{color:var(--accent);opacity:0.5}
+.sleep p{font-size:11px}
+.shut{font-family:var(--mono);font-size:12px;color:var(--faint);cursor:pointer}
+
+.hud{position:absolute;top:66px;right:170px;background:rgba(0,0,0,0.7);
+  border:1px solid var(--line2);border-radius:8px;padding:8px 12px;
+  font-family:var(--mono);font-size:10px;color:var(--accent);display:flex;
+  gap:14px;z-index:5}
+.hud-item{display:flex;flex-direction:column;align-items:flex-start}
+.hud-item span{color:var(--dim);font-size:8px;text-transform:uppercase;
+  letter-spacing:0.5px;margin-bottom:2px}
+.hud-item strong{color:var(--accent);font-weight:700}
+
+#toast-container{position:absolute;inset:0;pointer-events:none;z-index:80}
+.toast{position:absolute;bottom:64px;left:50%;transform:translateX(-50%);
+  background:var(--panel);border:1px solid var(--line2);color:var(--text);
+  font-size:11px;padding:9px 16px;border-radius:8px;display:flex;align-items:center;
+  gap:8px;opacity:0;transition:opacity .2s}
+.toast.on{opacity:1}
+.toast svg{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="ambient"></div>
+  <div id="safe">
+    <header class="topbar" id="topbar"></header>
+    <main id="main"></main>
+    <footer class="foot" id="foot"></footer>
+  </div>
+  <div id="overlays"></div>
+  <div id="toast-container"></div>
+</div>
+
+<script>
+'use strict';
+
+// ════════════════════════════════════════════════════════════
+// ÍCONES — SVG inline, nunca emoji.
+// Emoji vira "tofu" (retângulo vazio) em console sem fonte de
+// emoji, e o protótipo usava 🎮 📁 🌐 🛒 como ícone de app.
+// ════════════════════════════════════════════════════════════
+const icon = (path, size = 13, extra = '') =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" ` +
+  `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${path}</svg>`;
+
+const I = {
+  gamepad: icon('<line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="15" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="11" r="1" fill="currentColor"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>'),
+  apps: icon('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
+  settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+  search: icon('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>', 16),
+  power: icon('<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>', 14),
+  moon: icon('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>', 42, 'stroke-width="1.5"'),
+  play: `<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>`,
+  check: icon('<polyline points="20 6 9 17 4 12"/>', 12, 'stroke-width="2.5"'),
+  wifi: icon('<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/>', 11),
+  bt: icon('<polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"/>', 11),
+  vol: icon('<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>'),
+  sun: icon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>'),
+  bolt: icon('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
+  chart: icon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'),
+  star: `<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><polygon points="12 2 15 9 22 9.3 16.5 14 18.3 21 12 17.2 5.7 21 7.5 14 2 9.3 9 9"/></svg>`,
+  home: icon('<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'),
+  // Ícones de app
+  music: icon('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', 26),
+  retro: icon('<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="15" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="11" r="1" fill="currentColor"/>', 26),
+  files: icon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', 26),
+  term: icon('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>', 26),
+  browse: icon('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', 26),
+  camera: icon('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 26),
+  cart: icon('<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>', 26),
+  sync: icon('<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>', 26),
+};
+
+// ════════════════════════════════════════════════════════════
+// DADOS — catálogo REAL do projeto, não títulos inventados.
+// O protótipo listava Hollow Knight, Celeste, Hades etc., que não
+// estão no catálogo. Aqui são os jogos que existem de fato.
+// ════════════════════════════════════════════════════════════
+const GAMES = [
+  { id:0, title:'Arcade Volleyball', category:'Esporte', c1:'#1e40af', c2:'#0c1e5f', g:'#3b82f6', hours:0, last:'nunca', favorite:true, year:1988 },
+  { id:1, title:'Colossal Cave Adventure', category:'Aventura', c1:'#0f766e', c2:'#042f2e', g:'#14b8a6', hours:0, last:'nunca', favorite:false, year:1976 },
+  { id:2, title:'Spacewar', category:'Ação', c1:'#4a2d5c', c2:'#1a0e24', g:'#8b5cf6', hours:0, last:'nunca', favorite:true, year:1962 },
+  { id:3, title:'Shattered Pixel Dungeon', category:'Roguelike', c1:'#b45309', c2:'#451a03', g:'#f59e0b', hours:0, last:'nunca', favorite:false, year:2014 },
+];
+
+const APPS = [
+  { id:'music',  title:'Música',     icon:'music',  category:'Mídia' },
+  { id:'retro',  title:'RetroArch',  icon:'retro',  category:'Emulador' },
+  { id:'files',  title:'Arquivos',   icon:'files',  category:'Sistema' },
+  { id:'term',   title:'Terminal',   icon:'term',   category:'Avançado' },
+  { id:'browse', title:'Navegador',  icon:'browse', category:'Internet' },
+  { id:'shots',  title:'Capturas',   icon:'camera', category:'Mídia' },
+  { id:'store',  title:'Loja',       icon:'cart',   category:'Sistema' },
+  { id:'sync',   title:'Sincronizar',icon:'sync',   category:'Nuvem' },
+];
+
+const TABS = ['home', 'library', 'apps', 'settings'];
+const TAB_LABELS = { home:'Home', library:'Jogos', apps:'Apps', settings:'Config' };
+const TAB_ICON = { home:I.home, library:I.gamepad, apps:I.apps, settings:I.settings };
+const TAB_ZONE = { home:'home-carousel', library:'library-grid', apps:'apps-grid', settings:'settings-sidebar' };
+
+const SETTINGS_CATS = ['appearance','sound','network','controller','system','about'];
+const SETTINGS_LABELS = {
+  appearance:'Aparência', sound:'Som', network:'Rede e BT',
+  controller:'Controle', system:'Sistema', about:'Sobre',
+};
+const FILTERS = ['all','fav','recent'];
+const FILTER_LABELS = { all:'Todos', fav:'Favoritos', recent:'Recentes' };
+const PERF_MODES = ['eco','balanced','boost'];
+
+const KEYBOARD = [
+  ['A','B','C','D','E','F','G'],
+  ['H','I','J','K','L','M','N'],
+  ['O','P','Q','R','S','T','U'],
+  ['V','W','X','Y','Z',' ','⌫'],
+];
+const KBD_COLS = 7;
+
+// Itens por página da biblioteca. Corrige a grade de 2 linhas fixas.
+const LIB_PAGE_SIZE = 8;
+
+const ZONE_COLS = {
+  'home-carousel':1, 'library-grid':4, 'library-filters':3, 'apps-grid':4,
+  'settings-sidebar':1, 'search-keyboard':KBD_COLS, 'search-results':1,
+  'quick-settings':1, 'game-detail-actions':4, 'power-actions':1,
+};
+
+// ════════════════════════════════════════════════════════════
+// ESTADO — `screen` é único e mutuamente exclusivo.
+// O protótipo tinha booting/sleeping/shutdown como booleanos
+// separados, e dois podiam ser verdadeiros ao mesmo tempo.
+// ════════════════════════════════════════════════════════════
+const initialState = () => ({
+  screen: 'boot',                 // boot | running | sleeping | shutdown
+  tab: 'home',
+  overlays: [],                   // pilha separada das abas
+  focus: { zone:'home-carousel', index:0 },
+  savedFocus: {},
+  games: GAMES.map(g => ({ ...g })),
+  apps: APPS.map(a => ({ ...a })),
+  carousel: 0,
+  libraryFilter: 'all',
+  settingsCat: 'appearance',
+  selectedGame: null,
+  searchQuery: '',
+  settings: { volume:70, brightness:80, perf:'balanced', wifi:true, bluetooth:true, hud:false },
+  toast: { msg:'', on:false },
+  fps: 0,
+  battery: null,                  // null = sem leitura, mostra "—"
+  padConnected: false,
+});
+
+let State = initialState();
+
+const topOverlay = s => s.overlays[s.overlays.length - 1] || null;
+const hasOverlay = s => s.overlays.length > 0;
+const overlayOpen = (s, id) => s.overlays.includes(id);
+
+const filteredGames = s => {
+  if (s.libraryFilter === 'fav') return s.games.filter(g => g.favorite);
+  // "Recentes": ordena por atividade. Sem histórico ainda, mantém a ordem
+  // do catálogo — mas agora isso é explícito, não um bug disfarçado.
+  return [...s.games].sort((a,b) => (b.hours || 0) - (a.hours || 0));
+};
+
+const searchResults = s => {
+  const q = s.searchQuery.trim().toLowerCase();
+  if (!q) return [];
+  return s.games.filter(g => g.title.toLowerCase().includes(q));
+};
+
+// Contagem por zona. Enum implícito: zona desconhecida devolve 0 e trava a
+// navegação, então a lista é fechada e `navigate` avisa no console.
+function zoneCount(s, zone) {
+  switch (zone) {
+    case 'home-carousel':       return s.games.length;
+    case 'library-filters':     return FILTERS.length;
+    case 'library-grid':        return filteredGames(s).length;
+    case 'apps-grid':           return s.apps.length;
+    case 'settings-sidebar':    return SETTINGS_CATS.length;
+    case 'search-keyboard':     return KEYBOARD.length * KBD_COLS;
+    case 'search-results':      return searchResults(s).length;
+    case 'quick-settings':      return 8;
+    case 'game-detail-actions': return 4;
+    case 'power-actions':       return 4;
+    default:
+      console.warn('[launcher] zona sem contagem:', zone);
+      return 0;
+  }
+}
+
+const overlayZone = id => ({
+  search:'search-keyboard', 'quick-settings':'quick-settings',
+  'game-detail':'game-detail-actions', 'power-popup':'power-actions',
+}[id] || null);
+
+const focusedGame = s => s.games[s.carousel] || null;
+
+// ════════════════════════════════════════════════════════════
+// TOAST — timer fora do reducer, como no Rust.
+// ════════════════════════════════════════════════════════════
+let toastTimer = null;
+function showToast(state, msg) {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastTimer = null; dispatch('HIDE_TOAST'); }, 2200);
+  return { ...state, toast:{ msg, on:true } };
+}
+function clearToastTimer() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+}
+
+// ════════════════════════════════════════════════════════════
+// REDUCER
+// ════════════════════════════════════════════════════════════
+function reduce(s, cmd, p) {
+  switch (cmd) {
+    case 'NAV_UP': case 'NAV_DOWN': case 'NAV_LEFT': case 'NAV_RIGHT':
+      return navigate(s, cmd.slice(4));
+
+    case 'CONFIRM': return confirmAction(s);
+    case 'BACK': return goBack(s);
+    case 'OPTIONS': return openDetail(s);
+    case 'SEARCH': return openSearch(s);
+
+    case 'TAB_LEFT':  return tabStep(s, -1);
+    case 'TAB_RIGHT': return tabStep(s, 1);
+
+    case 'TOGGLE_QS':
+      if (overlayOpen(s, 'quick-settings')) return goBack(s);
+      if (hasOverlay(s) || s.screen !== 'running') return s;
+      return pushOverlay(s, 'quick-settings');
+
+    case 'POWER_SHORT':
+      if (hasOverlay(s) || s.screen !== 'running') return s;
+      return toSleeping(s);
+
+    case 'POWER_HOLD':
+      if (hasOverlay(s) || s.screen !== 'running') return s;
+      return pushOverlay(s, 'power-popup');
+
+    case 'WAKE':
+      return { ...s, screen:'running' };
+
+    case 'REBOOT':
+      clearToastTimer();
+      return { ...initialState(), games:s.games, apps:s.apps, screen:'boot' };
+
+    case 'BOOT_DONE':
+      return s.screen === 'boot' ? { ...s, screen:'running' } : s;
+
+    case 'HIDE_TOAST':
+      return { ...s, toast:{ msg:'', on:false } };
+
+    case 'SET_VOLUME':
+      return { ...s, settings:{ ...s.settings, volume: clamp(p.value, 0, 100) } };
+    case 'SET_BRIGHTNESS':
+      return { ...s, settings:{ ...s.settings, brightness: clamp(p.value, 0, 100) } };
+    case 'SET_PERF':
+      return { ...s, settings:{ ...s.settings, perf:p.value } };
+    case 'TOGGLE_WIFI':
+      return { ...s, settings:{ ...s.settings, wifi:!s.settings.wifi } };
+    case 'TOGGLE_BT':
+      return { ...s, settings:{ ...s.settings, bluetooth:!s.settings.bluetooth } };
+    case 'TOGGLE_HUD':
+      return { ...s, settings:{ ...s.settings, hud:!s.settings.hud } };
+
+    case 'SET_FILTER': {
+      const i = Math.max(0, FILTERS.indexOf(p.value));
+      return { ...s, libraryFilter:p.value, focus:{ zone:'library-filters', index:i } };
+    }
+
+    case 'SET_SEARCH_QUERY':
+      return { ...s, searchQuery:p.value };
+    case 'SET_SETTINGS_CAT':
+      return { ...s, settingsCat:p.value };
+
+    case 'TICK_FPS':
+      return { ...s, fps:p.value };
+    case 'SET_BATTERY':
+      return { ...s, battery:p.value };
+    case 'SET_PAD':
+      return { ...s, padConnected:p.value };
+
+    default:
+      console.warn('[launcher] comando desconhecido:', cmd);
+      return s;
+  }
+}
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function navigate(s, dir) {
+  const zone = s.focus.zone;
+  if (!zone) return s;
+
+  // Carrossel: só horizontal, com laço.
+  if (zone === 'home-carousel') {
+    if (dir !== 'LEFT' && dir !== 'RIGHT') return s;
+    const n = s.games.length;
+    if (!n) return s;
+    const next = (s.carousel + (dir === 'RIGHT' ? 1 : -1) + n) % n;
+    return { ...s, carousel:next, focus:{ zone, index:next } };
+  }
+
+  // Ajustes rápidos: horizontal ajusta, não move.
+  if (zone === 'quick-settings') {
+    const row = s.focus.index;
+    if (dir === 'UP')   return { ...s, focus:{ zone, index:Math.max(0, row-1) } };
+    if (dir === 'DOWN') return { ...s, focus:{ zone, index:Math.min(7, row+1) } };
+    if (dir === 'LEFT' || dir === 'RIGHT') {
+      const d = dir === 'RIGHT' ? 1 : -1;
+      if (row === 0) return reduce(s, 'SET_VOLUME', { value:s.settings.volume + d*5 });
+      if (row === 1) return reduce(s, 'SET_BRIGHTNESS', { value:s.settings.brightness + d*5 });
+      if (row === 2) {
+        const i = PERF_MODES.indexOf(s.settings.perf);
+        return reduce(s, 'SET_PERF', { value:PERF_MODES[clamp(i+d, 0, 2)] });
+      }
+    }
+    return s;
+  }
+
+  // Filtros: horizontal troca.
+  if (zone === 'library-filters') {
+    if (dir === 'LEFT' || dir === 'RIGHT') {
+      const i = clamp(s.focus.index + (dir === 'RIGHT' ? 1 : -1), 0, FILTERS.length - 1);
+      return reduce(s, 'SET_FILTER', { value:FILTERS[i] });
+    }
+    if (dir === 'DOWN') return { ...s, focus:{ zone:'library-grid', index:0 } };
+    return s;
+  }
+
+  if (zone === 'search-results' && dir === 'LEFT')
+    return { ...s, focus:{ zone:'search-keyboard', index:0 } };
+
+  const cols = ZONE_COLS[zone];
+  const count = zoneCount(s, zone);
+  if (!cols || count <= 0) return s;
+
+  if (zone === 'library-grid' && dir === 'UP' && s.focus.index < cols)
+    return { ...s, focus:{ zone:'library-filters', index:0 } };
+
+  if (zone === 'search-keyboard' && dir === 'RIGHT') {
+    const col = s.focus.index % KBD_COLS;
+    if (col === KBD_COLS - 1 && searchResults(s).length > 0)
+      return { ...s, focus:{ zone:'search-results', index:0 } };
+  }
+
+  const rows = Math.ceil(count / cols);
+  const idx = s.focus.index;
+  const row = Math.floor(idx / cols), col = idx % cols;
+  let r = row, c = col;
+  if (dir === 'UP')    r = Math.max(0, row-1);
+  if (dir === 'DOWN')  r = Math.min(rows-1, row+1);
+  if (dir === 'LEFT')  c = Math.max(0, col-1);
+  if (dir === 'RIGHT') c = Math.min(cols-1, col+1);
+  let n = r*cols + c;
+  if (n >= count) n = count - 1;
+  if (n === idx) return s;
+  return { ...s, focus:{ zone, index:n } };
+}
+
+function pushOverlay(s, id) {
+  if (s.overlays.includes(id)) return s;
+  const savedFocus = { ...s.savedFocus, [s.focus.zone]: s.focus.index };
+  return {
+    ...s,
+    overlays:[...s.overlays, id],
+    savedFocus,
+    focus:{ zone:overlayZone(id), index:0 },
+  };
+}
+
+function goBack(s) {
+  if (!s.overlays.length) return s;
+  const overlays = s.overlays.slice(0, -1);
+  const zone = overlays.length ? overlayZone(overlays[overlays.length-1]) : TAB_ZONE[s.tab];
+  const index = s.savedFocus[zone] || 0;
+  return { ...s, overlays, focus:{ zone, index } };
+}
+
+function openDetail(s) {
+  if (s.focus.zone === 'home-carousel' && focusedGame(s)) {
+    return pushOverlay({ ...s, selectedGame:focusedGame(s) }, 'game-detail');
+  }
+  if (s.focus.zone === 'library-grid') {
+    const g = filteredGames(s)[s.focus.index];
+    if (!g) return s;
+    return pushOverlay({ ...s, selectedGame:g }, 'game-detail');
+  }
+  return s;
+}
+
+function openSearch(s) {
+  if (hasOverlay(s) || s.screen !== 'running') return s;
+  return pushOverlay({ ...s, searchQuery:'' }, 'search');
+}
+
+function tabStep(s, d) {
+  if (hasOverlay(s) || s.screen !== 'running') return s;
+  const savedFocus = { ...s.savedFocus, [s.focus.zone]: s.focus.index };
+  const i = TABS.indexOf(s.tab);
+  const tab = TABS[(i + d + TABS.length) % TABS.length];
+  const zone = TAB_ZONE[tab];
+  return { ...s, tab, savedFocus, focus:{ zone, index: savedFocus[zone] || 0 } };
+}
+
+function toSleeping(s) {
+  return { ...s, screen:'sleeping', overlays:[], toast:{ msg:'', on:false } };
+}
+
+// Desligar limpa toast. O protótipo mostrava "Reiniciando..." e
+// "Sistema desligado" ao mesmo tempo.
+function toShutdown(s) {
+  clearToastTimer();
+  return { ...s, screen:'shutdown', overlays:[], toast:{ msg:'', on:false } };
+}
+
+function confirmAction(s) {
+  const zone = s.focus.zone;
+  const i = s.focus.index;
+
+  if (zone === 'home-carousel') {
+    const g = focusedGame(s);
+    return g ? showToast(s, `Iniciando ${g.title}...`) : s;
+  }
+
+  if (zone === 'library-filters') return s;
+
+  if (zone === 'library-grid') {
+    const g = filteredGames(s)[i];
+    if (!g) return s;
+    return pushOverlay({ ...s, selectedGame:g }, 'game-detail');
+  }
+
+  if (zone === 'apps-grid') {
+    const app = s.apps[i];
+    return app ? showToast(s, `Abrindo ${app.title}...`) : s;
+  }
+
+  if (zone === 'settings-sidebar') {
+    return { ...s, settingsCat: SETTINGS_CATS[i] || s.settingsCat };
+  }
+
+  if (zone === 'search-keyboard') {
+    const row = Math.floor(i / KBD_COLS), col = i % KBD_COLS;
+    const k = KEYBOARD[row] && KEYBOARD[row][col];
+    if (!k) return s;
+    if (k === '⌫') return { ...s, searchQuery: s.searchQuery.slice(0, -1) };
+    return { ...s, searchQuery: s.searchQuery + k };
+  }
+
+  if (zone === 'search-results') {
+    const g = searchResults(s)[i];
+    if (!g) return s;
+    return pushOverlay({ ...s, selectedGame:g }, 'game-detail');
+  }
+
+  if (zone === 'quick-settings') {
+    if (i === 3) return reduce(s, 'TOGGLE_WIFI');
+    if (i === 4) return reduce(s, 'TOGGLE_BT');
+    if (i === 5) return reduce(s, 'TOGGLE_HUD');
+    if (i === 6) return toSleeping(s);
+    if (i === 7) return showToast(toSleeping(s), 'Reiniciando...');
+    return s;
+  }
+
+  if (zone === 'game-detail-actions' && s.selectedGame) {
+    if (i === 0) return showToast(goBack(s), `Iniciando ${s.selectedGame.title}...`);
+    if (i === 1) {
+      const games = s.games.map(g =>
+        g.id === s.selectedGame.id ? { ...g, favorite:!g.favorite } : g);
+      const selected = games.find(g => g.id === s.selectedGame.id);
+      return showToast({ ...s, games, selectedGame:selected },
+        selected.favorite ? 'Adicionado aos favoritos' : 'Removido dos favoritos');
+    }
+    if (i === 2) return showToast(s, 'Opções do jogo');
+    if (i === 3) return goBack(s);
+  }
+
+  if (zone === 'power-actions') {
+    if (i === 0) return toSleeping(s);
+    if (i === 1) return showToast(toSleeping(s), 'Reiniciando...');
+    if (i === 2) return toShutdown(s);
+    if (i === 3) return goBack(s);
+  }
+
+  return s;
+}
+
+// ════════════════════════════════════════════════════════════
+// GAMEPAD — o que faltava por completo no protótipo.
+// Botão dispara na BORDA; direção REPETE com atraso.
+// ════════════════════════════════════════════════════════════
+const PAD = {
+  AXIS_DEADZONE: 0.35,
+  REPEAT_DELAY_MS: 230,
+  REPEAT_INTERVAL_MS: 100,
+  prev: [],
+  dir: null,
+  dirSince: 0,
+  lastRepeat: 0,
+};
+
+const PAD_BUTTONS = {
+  0:'CONFIRM',   // A / Cross
+  1:'BACK',      // B / Circle
+  2:'OPTIONS',   // X / Square
+  3:'SEARCH',    // Y / Triangle
+  4:'TAB_LEFT',  // LB
+  5:'TAB_RIGHT', // RB
+  8:'TOGGLE_QS', // Select / Back
+  9:'POWER_HOLD',// Start / Menu
+};
+
+function padDirection(gp) {
+  const b = gp.buttons;
+  const pressed = i => !!(b[i] && b[i].pressed);
+  if (pressed(12)) return 'NAV_UP';
+  if (pressed(13)) return 'NAV_DOWN';
+  if (pressed(14)) return 'NAV_LEFT';
+  if (pressed(15)) return 'NAV_RIGHT';
+  const x = Math.abs(gp.axes[0] || 0) >= PAD.AXIS_DEADZONE ? gp.axes[0] : 0;
+  const y = Math.abs(gp.axes[1] || 0) >= PAD.AXIS_DEADZONE ? gp.axes[1] : 0;
+  if (!x && !y) return null;
+  if (Math.abs(x) >= Math.abs(y)) return x > 0 ? 'NAV_RIGHT' : 'NAV_LEFT';
+  return y > 0 ? 'NAV_DOWN' : 'NAV_UP';
+}
+
+function pollGamepad(now) {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const p of pads) { if (p && p.connected) { gp = p; break; } }
+
+  const connected = !!gp;
+  if (connected !== State.padConnected) dispatch('SET_PAD', { value:connected });
+  if (!gp) { PAD.prev = []; PAD.dir = null; return; }
+
+  if (State.screen !== 'running') return;
+
+  // Botões: borda de subida.
+  for (const [index, cmd] of Object.entries(PAD_BUTTONS)) {
+    const nowPressed = !!(gp.buttons[index] && gp.buttons[index].pressed);
+    const wasPressed = !!PAD.prev[index];
+    if (nowPressed && !wasPressed) dispatch(cmd);
+    PAD.prev[index] = nowPressed;
+  }
+
+  // Direção: dispara na hora, depois repete.
+  const dir = padDirection(gp);
+  if (!dir) {
+    PAD.dir = null;
+    return;
+  }
+  if (dir !== PAD.dir) {
+    PAD.dir = dir;
+    PAD.dirSince = now;
+    PAD.lastRepeat = now;
+    dispatch(dir);
+    return;
+  }
+  const held = now - PAD.dirSince;
+  if (held >= PAD.REPEAT_DELAY_MS && now - PAD.lastRepeat >= PAD.REPEAT_INTERVAL_MS) {
+    PAD.lastRepeat = now;
+    dispatch(dir);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// RENDER
+// ════════════════════════════════════════════════════════════
+function render() {
+  const fg = focusedGame(State);
+  const ambient = document.getElementById('ambient');
+  if (fg) ambient.style.setProperty('--glow', fg.g);
+  renderTopBar();
+  renderMain();
+  renderFooter();
+  renderOverlays();
+  renderToast();
+  renderHUD();
+}
+
+function renderTopBar() {
+  const cur = State.tab;
+  const blocked = hasOverlay(State) || State.screen !== 'running';
+  const tabs = TABS.map(t => `
+    <button class="tab ${t === cur ? 'on' : ''}" data-tab="${t}"
+      ${blocked ? 'disabled' : ''}>${TAB_ICON[t]} ${TAB_LABELS[t]}</button>
+  `).join('');
+
+  const battery = State.battery === null
+    ? '<div class="badge" title="Sem leitura de bateria">—</div>'
+    : `<div class="badge" title="Bateria">${State.battery}%</div>`;
+
+  const padBadge = State.padConnected
+    ? `<div class="badge pad-ok" title="Controle conectado">${I.gamepad} ON</div>`
+    : `<div class="badge pad-off" title="Nenhum controle detectado">${I.gamepad} OFF</div>`;
+
+  document.getElementById('topbar').innerHTML = `
+    <div class="tabs">${tabs}</div>
+    <div class="status">
+      <button class="icon-btn" data-action="toggle-qs" title="Ajustes rápidos">${I.settings}</button>
+      <button class="icon-btn power" id="power-btn" title="Energia">
+        <svg class="ring" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(239,68,68,0.2)" stroke-width="2"/>
+          <circle class="ring-p" cx="18" cy="18" r="16" fill="none" stroke="#ef4444" stroke-width="2"
+            stroke-dasharray="${(2*Math.PI*16).toFixed(2)}" stroke-dashoffset="${(2*Math.PI*16).toFixed(2)}"
+            transform="rotate(-90 18 18)"/>
+        </svg>
+        ${I.power}
+      </button>
+      ${padBadge}
+      <div class="badge" title="Wi-Fi">${I.wifi} ${State.settings.wifi ? 'ON' : 'OFF'}</div>
+      ${battery}
+      <div class="clock" id="clock">--:--</div>
+    </div>
+  `;
+  bindPower();
+  updateClock();
+}
+
+function renderMain() {
+  const fn = {
+    home: viewHome, library: viewLibrary, apps: viewApps, settings: viewSettings,
+  }[State.tab];
+  document.getElementById('main').innerHTML = fn ? fn() : '';
+}
+
+function viewHome() {
+  const n = State.games.length;
+  if (!n) return '<div class="empty">Nenhum jogo no catálogo.</div>';
+
+  const focused = State.carousel;
+  const cards = [];
+  const used = new Set();
+  for (const off of [0, -1, 1]) {
+    const idx = (focused + off + n) % n;
+    if (used.has(idx)) continue;
+    used.add(idx);
+    const g = State.games[idx];
+    const isFocused = off === 0;
+    cards.push(`
+      <div class="ccard ${isFocused ? 'focused' : 'ccard-ghost'}"
+           data-game-carousel="${idx}"
+           style="--c1:${g.c1};--c2:${g.c2};--g:${g.g};
+                  transform:translate(-50%,-50%) translateX(${off*420}px) scale(${isFocused?1:0.62});
+                  z-index:${10-Math.abs(off)}">
+        <div class="ccard-letter">${escapeHtml(g.title.charAt(0))}</div>
+        <div class="ccard-body">
+          <div class="ccard-cat">${escapeHtml(g.category)}</div>
+          <div class="ccard-title">${escapeHtml(g.title)}</div>
+          <div class="ccard-meta">${g.year} • ${g.hours > 0 ? g.hours.toFixed(1)+'h' : 'nunca jogado'}</div>
+          ${isFocused ? `<button class="ccard-play" data-action="play">${I.play} Jogar</button>` : ''}
+        </div>
+      </div>`);
+  }
+
+  const dots = State.games.map((_, i) =>
+    `<div class="dot ${i === focused ? 'on' : ''}"></div>`).join('');
+  const g = State.games[focused];
+
+  return `
+    <div class="home">
+      <div class="carousel">${cards.join('')}</div>
+      <div class="dots">${dots}</div>
+      <div class="context"><strong>${escapeHtml(g.title)}</strong> • ${escapeHtml(g.category)} • ${g.year}</div>
+    </div>`;
+}
+
+function viewLibrary() {
+  const games = filteredGames(State);
+  const total = games.length;
+  const focusedIndex = State.focus.zone === 'library-grid' ? State.focus.index : -1;
+
+  // Página derivada do foco: com 4 itens não sobra tarja, com 12 não estoura.
+  const page = Math.floor(Math.max(0, focusedIndex) / LIB_PAGE_SIZE);
+  const pageItems = games.slice(page * LIB_PAGE_SIZE, (page + 1) * LIB_PAGE_SIZE);
+  const pages = Math.max(1, Math.ceil(total / LIB_PAGE_SIZE));
+
+  const chips = FILTERS.map((v, i) => `
+    <button class="chip ${State.libraryFilter === v ? 'on' : ''}
+      ${State.focus.zone === 'library-filters' && State.focus.index === i ? 'focused' : ''}"
+      data-filter="${v}" data-filter-idx="${i}">${FILTER_LABELS[v]}</button>`).join('');
+
+  const cards = pageItems.map((g, i) => {
+    const globalIndex = page * LIB_PAGE_SIZE + i;
+    return `
+      <div class="gcard ${globalIndex === focusedIndex ? 'focused' : ''}"
+           data-game-grid="${globalIndex}"
+           style="--c1:${g.c1};--c2:${g.c2};--g:${g.g}">
+        ${g.favorite ? `<span class="gcard-fav">${I.star}</span>` : ''}
+        <div class="gcard-cat">${escapeHtml(g.category)}</div>
+        <div class="gcard-info">
+          <div class="gcard-title">${escapeHtml(g.title)}</div>
+          <div class="gcard-meta">${g.year}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const body = total
+    ? `<div class="grid">${cards}</div>`
+    : '<div class="empty">Nenhum jogo nesta categoria</div>';
+
+  return `
+    <div style="height:100%;display:flex;flex-direction:column">
+      <div class="lib-head">
+        <div class="lib-title">Biblioteca</div>
+        <div class="filters">${chips}</div>
+      </div>
+      ${body}
+      <div class="pager">${total} jogo(s) • página ${page+1}/${pages}</div>
+    </div>`;
+}
+
+function viewApps() {
+  const focused = State.focus.zone === 'apps-grid' ? State.focus.index : -1;
+  const cards = State.apps.map((a, i) => `
+    <div class="acard ${i === focused ? 'focused' : ''}" data-app-idx="${i}">
+      <div class="acard-icon">${I[a.icon] || I.apps}</div>
+      <div>
+        <div class="acard-title">${escapeHtml(a.title)}</div>
+        <div class="acard-cat">${escapeHtml(a.category)}</div>
+      </div>
+    </div>`).join('');
+  return `<div class="apps-grid">${cards}</div>`;
+}
+
+function viewSettings() {
+  const cat = State.settingsCat;
+  const focused = State.focus.zone === 'settings-sidebar' ? State.focus.index : -1;
+  const side = SETTINGS_CATS.map((c, i) => `
+    <button class="scat ${cat === c ? 'on' : ''} ${i === focused ? 'focused' : ''}"
+      data-cat="${c}">${SETTINGS_LABELS[c]}</button>`).join('');
+
+  const rows = {
+    appearance: [
+      ['Tema Giochi Dark', 'Otimizado para OLED'],
+      ['Escala da interface', 'Letterbox centrado, sem corte'],
+    ],
+    sound: [
+      ['Volume geral', `${State.settings.volume}%`],
+      ['Saída padrão', 'Alto-falante estéreo'],
+    ],
+    network: [
+      ['Wi-Fi', State.settings.wifi ? 'Ligado' : 'Desligado'],
+      ['Bluetooth', State.settings.bluetooth ? 'Ativo' : 'Desligado'],
+    ],
+    controller: [
+      ['A / Cross', 'Confirmar'],
+      ['B / Circle', 'Voltar'],
+      ['X / Square', 'Detalhes'],
+      ['Y / Triangle', 'Buscar'],
+      ['LB / RB', 'Trocar aba'],
+      ['Select', 'Ajustes rápidos'],
+      ['Start', 'Menu de energia'],
+    ],
+    system: [
+      ['Versão', 'launcher 0.1.0'],
+      ['Modo de desempenho', State.settings.perf],
+    ],
+  };
+
+  const content = cat === 'about'
+    ? `<h4>Sobre</h4>
+       <p class="snote">
+         Giochi Launcher — protótipo corrigido. Interface desenhada para
+         gamepad, com toque como adicional.<br><br>
+         Arquitetura: estado único, reducer, foco por zona e pilha de overlays
+         separada da aba. É a mesma estrutura do núcleo em Rust, para que o
+         port seja mecânico.<br><br>
+         Sem leitura de sensores: onde não há dado real, a interface mostra
+         &ldquo;—&rdquo; em vez de inventar número.
+       </p>`
+    : `<h4>${SETTINGS_LABELS[cat]}</h4>
+       ${(rows[cat] || []).map(([k, v]) => `
+         <div class="srow"><div><strong>${escapeHtml(k)}</strong></div>
+         <span class="sval">${escapeHtml(String(v))}</span></div>`).join('')}`;
+
+  return `<div class="settings"><div class="side">${side}</div>
+          <div class="scontent">${content}</div></div>`;
+}
+
+function renderFooter() {
+  const o = topOverlay(State);
+  let hints;
+  if (o === 'search') hints = [['↑↓←→','Navegar'],['A','Selecionar'],['B','Voltar']];
+  else if (o === 'quick-settings') hints = [['↑↓','Navegar'],['←→','Ajustar'],['A','Confirmar'],['B','Fechar']];
+  else if (o === 'game-detail') hints = [['←→','Ação'],['A','Confirmar'],['B','Voltar']];
+  else if (o === 'power-popup') hints = [['↑↓','Navegar'],['A','Confirmar'],['B','Cancelar']];
+  else hints = [['A','Jogar'],['X','Detalhes'],['Y','Buscar'],['LB/RB','Aba'],['Select','Ajustes']];
+
+  const tag = State.settings.perf === 'boost' ? 'Boost'
+            : State.settings.perf === 'eco' ? 'Eco' : 'Balanced';
+  document.getElementById('foot').innerHTML = `
+    <div class="hints">${hints.map(([k,l]) =>
+      `<span class="hint"><kbd>${k}</kbd> ${l}</span>`).join('')}</div>
+    <div class="build">giochi-launcher 0.1.0 • ${tag}</div>`;
+}
+
+function renderOverlays() {
+  const html = [];
+  State.overlays.forEach(o => {
+    if (o === 'search') html.push(renderSearch());
+    if (o === 'quick-settings') html.push(renderQS());
+    if (o === 'game-detail') html.push(renderDetail());
+    if (o === 'power-popup') html.push(renderPower());
+  });
+
+  // Telas de ciclo de vida: uma só, porque `screen` é único.
+  if (State.screen === 'sleeping') {
+    html.push(`<div class="sleep" id="sleep-ov">${I.moon}
+      <p>Toque ou pressione qualquer botão para acordar.</p></div>`);
+  }
+  if (State.screen === 'shutdown') {
+    html.push(`<div class="shut" id="shut-ov">
+      Sistema desligado. Toque ou pressione A para reiniciar.</div>`);
+  }
+  if (State.screen === 'boot') {
+    html.push(`<div class="boot"><div class="boot-logo">Giochi</div>
+      <div class="boot-tag">launcher 0.1.0</div></div>`);
+  }
+
+  document.getElementById('overlays').innerHTML = html.join('');
+
+  const sleep = document.getElementById('sleep-ov');
+  if (sleep) sleep.addEventListener('pointerdown', e => { e.stopPropagation(); dispatch('WAKE'); });
+  const shut = document.getElementById('shut-ov');
+  if (shut) shut.addEventListener('pointerdown', e => { e.stopPropagation(); dispatch('REBOOT'); });
+}
+
+function renderSearch() {
+  const q = State.searchQuery;
+  const results = searchResults(State);
+  const focusK = State.focus.zone === 'search-keyboard' ? State.focus.index : -1;
+  const focusR = State.focus.zone === 'search-results' ? State.focus.index : -1;
+
+  const keys = KEYBOARD.map((row, r) => row.map((k, c) => {
+    const idx = r * KBD_COLS + c;
+    return `<button class="key ${idx === focusK ? 'focused' : ''}"
+      data-key-idx="${idx}">${k === ' ' ? 'ESPAÇO' : k === '⌫' ? '⌫' : k}</button>`;
+  }).join('')).join('');
+
+  const list = results.length
+    ? results.map((g, i) => `
+        <div class="res-item ${i === focusR ? 'focused' : ''}" data-result-idx="${i}">
+          <div class="res-dot" style="--c1:${g.c1};--c2:${g.c2}"></div>
+          <div><div class="res-name">${escapeHtml(g.title)}</div>
+          <div class="res-cat">${escapeHtml(g.category)}</div></div>
+        </div>`).join('')
+    : `<div class="res-empty">${q ? 'Nenhum resultado' : 'Digite para buscar...'}</div>`;
+
+  return `<div class="ov"><div class="panel search">
+    <div class="search-input">${I.search}
+      <div class="q ${q ? '' : 'empty'}">${escapeHtml(q) || 'Buscar jogo...'}<span class="caret"></span></div>
+    </div>
+    <div class="search-body">
+      <div class="kbd">${keys}</div>
+      <div class="results"><div class="res-title">Resultados (${results.length})</div>${list}</div>
+    </div>
+  </div></div>`;
+}
+
+function renderQS() {
+  const s = State.settings;
+  const focused = State.focus.zone === 'quick-settings' ? State.focus.index : -1;
+  const row = (i, label, ic, val) => `
+    <div class="qs-row ${i === focused ? 'focused' : ''}" data-qs-row="${i}">
+      <div class="qs-label">${ic} ${label}</div>${val}
+    </div>`;
+  const slider = v => `
+    <div class="slider"><div class="slider-fill" style="--p:${v}%"></div></div>
+    <div class="qs-val">${v}%</div>`;
+  const perf = cur => `<div class="perf-tabs">${PERF_MODES.map(m => `
+    <span class="perf-chip ${cur === m ? 'on' : ''}">${
+      m === 'balanced' ? 'Bal.' : m === 'eco' ? 'Eco' : 'Boost'}</span>`).join('')}</div>`;
+  const tgl = on => `<div class="tgl ${on ? 'on' : ''}"></div>`;
+
+  return `<div class="ov"><div class="panel qs">
+    <div class="panel-head">${I.settings}<h3>Ajustes rápidos</h3></div>
+    <div class="qs-rows">
+      ${row(0, 'Volume', I.vol, slider(s.volume))}
+      ${row(1, 'Brilho', I.sun, slider(s.brightness))}
+      ${row(2, 'Desempenho', I.bolt, perf(s.perf))}
+      ${row(3, 'Wi-Fi', I.wifi, tgl(s.wifi))}
+      ${row(4, 'Bluetooth', I.bt, tgl(s.bluetooth))}
+      ${row(5, 'HUD de FPS', I.chart, tgl(s.hud))}
+    </div>
+    <div class="qs-actions">
+      <button class="qs-btn ${focused === 6 ? 'focused' : ''}" data-qs-action="sleep">Suspender</button>
+      <button class="qs-btn danger ${focused === 7 ? 'focused' : ''}" data-qs-action="restart">Reiniciar</button>
+    </div>
+  </div></div>`;
+}
+
+function renderDetail() {
+  const g = State.selectedGame;
+  if (!g) return '';
+  const focused = State.focus.zone === 'game-detail-actions' ? State.focus.index : -1;
+  const actions = [
+    { label:'Jogar', cls:'primary' },
+    { label:g.favorite ? 'Favoritado' : 'Favoritar', cls:'' },
+    { label:'Opções', cls:'' },
+    { label:'Voltar', cls:'' },
+  ].map((a, i) => `<button class="d-btn ${a.cls} ${i === focused ? 'focused' : ''}"
+    data-detail-idx="${i}">${a.label}</button>`).join('');
+
+  return `<div class="ov"><div class="panel detail">
+    <div class="detail-hero" style="--c1:${g.c1};--c2:${g.c2};--g:${g.g}">
+      <div class="detail-letter">${escapeHtml(g.title.charAt(0))}</div>
+      <div class="detail-hero-content">
+        <div class="detail-cat">${escapeHtml(g.category)}</div>
+        <div class="detail-title">${escapeHtml(g.title)}</div>
+        <div class="detail-stats">
+          <div><span>Ano</span><strong>${g.year}</strong></div>
+          <div><span>Horas</span><strong>${g.hours > 0 ? g.hours.toFixed(1)+'h' : '—'}</strong></div>
+          <div><span>Última</span><strong>${escapeHtml(g.last)}</strong></div>
+          <div><span>Favorito</span><strong>${g.favorite ? 'Sim' : '—'}</strong></div>
+        </div>
+      </div>
+    </div>
+    <div class="detail-actions">${actions}</div>
+  </div></div>`;
+}
+
+function renderPower() {
+  const focused = State.focus.zone === 'power-actions' ? State.focus.index : -1;
+  const opts = [
+    { label:'Suspender', cls:'' },
+    { label:'Reiniciar', cls:'' },
+    { label:'Desligar', cls:'danger' },
+    { label:'Cancelar', cls:'ghost' },
+  ].map((o, i) => `<button class="p-btn ${o.cls} ${i === focused ? 'focused' : ''}"
+    data-power-idx="${i}">${o.label}</button>`).join('');
+
+  return `<div class="ov"><div class="panel power-pop">
+    <div class="power-ico">${I.power}</div>
+    <h3>Opções de energia</h3>
+    <p>O que deseja fazer?</p>
+    <div class="power-actions">${opts}</div>
+  </div></div>`;
+}
+
+function renderToast() {
+  let el = document.getElementById('toast-el');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast-el';
+    el.className = 'toast';
+    document.getElementById('toast-container').appendChild(el);
+  }
+  el.innerHTML = `${I.check}<span>${escapeHtml(State.toast.msg)}</span>`;
+  el.classList.toggle('on', State.toast.on);
+}
+
+function renderHUD() {
+  let el = document.getElementById('hud-el');
+  if (!State.settings.hud) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'hud-el';
+    el.className = 'hud';
+    document.getElementById('stage').appendChild(el);
+  }
+  // FPS é real. Temperatura e TDP não existem sem integração com o sistema,
+  // então mostram "—" em vez de número aleatório.
+  el.innerHTML = `
+    <div class="hud-item"><span>FPS</span><strong>${State.fps || '—'}</strong></div>
+    <div class="hud-item"><span>TEMP</span><strong>—</strong></div>
+    <div class="hud-item"><span>TDP</span><strong>—</strong></div>`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+function updateClock() {
+  const el = document.getElementById('clock');
+  if (!el) return;
+  const d = new Date();
+  el.textContent = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+// ── ENERGIA (toque curto / longo) ───────────────────────────
+let powerTimer = null, powerStart = 0;
+const HOLD_MS = 1200, TAP_MS = 400;
+
+function bindPower() {
+  const btn = document.getElementById('power-btn');
+  if (!btn) return;
+  const ring = btn.querySelector('.ring-p');
+  const circ = 2 * Math.PI * 16;
+
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (State.screen !== 'running') return;
+    try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+    powerStart = Date.now();
+    if (ring) {
+      ring.style.transition = 'none';
+      ring.style.strokeDashoffset = circ;
+      void ring.getBoundingClientRect();
+      ring.style.transition = `stroke-dashoffset ${HOLD_MS}ms linear`;
+      ring.style.strokeDashoffset = 0;
+    }
+    powerTimer = setTimeout(() => {
+      powerTimer = null;
+      if (ring) { ring.style.transition = 'stroke-dashoffset .2s'; ring.style.strokeDashoffset = circ; }
+      dispatch('POWER_HOLD');
+    }, HOLD_MS);
+  });
+
+  const end = () => {
+    if (!powerTimer) return;
+    clearTimeout(powerTimer);
+    powerTimer = null;
+    if (ring) { ring.style.transition = 'stroke-dashoffset .2s'; ring.style.strokeDashoffset = circ; }
+    if (Date.now() - powerStart < TAP_MS) dispatch('POWER_SHORT');
+  };
+  btn.addEventListener('pointerup', end);
+  btn.addEventListener('pointercancel', end);
+}
+
+// ── TECLADO (para desenvolvimento no PC) ────────────────────
+const KEYMAP = {
+  ArrowUp:'NAV_UP', ArrowDown:'NAV_DOWN', ArrowLeft:'NAV_LEFT', ArrowRight:'NAV_RIGHT',
+  Enter:'CONFIRM', ' ':'CONFIRM', Escape:'BACK',
+  Tab:'TOGGLE_QS',
+  q:'TAB_LEFT', e:'TAB_RIGHT',
+  x:'OPTIONS', y:'SEARCH',
+  p:'POWER_SHORT',
+};
+
+window.addEventListener('keydown', ev => {
+  if (State.screen === 'shutdown') {
+    if (ev.key === 'Enter' || ev.key.toLowerCase() === 'p') { ev.preventDefault(); dispatch('REBOOT'); }
+    return;
+  }
+  if (State.screen === 'sleeping') { ev.preventDefault(); dispatch('WAKE'); return; }
+  if (State.screen === 'boot') return;
+
+  if (overlayOpen(State, 'search')) {
+    if (ev.key === 'Escape') { ev.preventDefault(); dispatch('BACK'); return; }
+    if (ev.key === 'Backspace') {
+      ev.preventDefault();
+      dispatch('SET_SEARCH_QUERY', { value:State.searchQuery.slice(0, -1) });
+      return;
+    }
+    const nav = KEYMAP[ev.key];
+    if (nav && nav.startsWith('NAV_')) { ev.preventDefault(); dispatch(nav); return; }
+    if (ev.key.length === 1) {
+      ev.preventDefault();
+      dispatch('SET_SEARCH_QUERY', { value:State.searchQuery + ev.key });
+      return;
+    }
+    return;
+  }
+
+  const key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  const cmd = KEYMAP[key];
+  if (cmd) { ev.preventDefault(); dispatch(cmd); }
+});
+
+// ── TOQUE / MOUSE ───────────────────────────────────────────
+document.addEventListener('pointerdown', ev => {
+  if (State.screen === 'boot') return;
+
+  const hit = sel => ev.target.closest(sel);
+  let el;
+
+  if ((el = hit('[data-tab]'))) {
+    State = { ...State, tab:el.dataset.tab,
+      focus:{ zone:TAB_ZONE[el.dataset.tab], index:0 } };
+    render(); return;
+  }
+
+  if ((el = hit('[data-game-carousel]'))) {
+    const idx = parseInt(el.dataset.gameCarousel, 10);
+    if (State.carousel !== idx) {
+      State = { ...State, carousel:idx, focus:{ zone:'home-carousel', index:idx } };
+      render();
+    } else {
+      dispatch('CONFIRM');
+    }
+    return;
+  }
+
+  if ((el = hit('[data-action="play"]'))) { dispatch('CONFIRM'); return; }
+  if ((el = hit('[data-action="toggle-qs"]'))) { dispatch('TOGGLE_QS'); return; }
+
+  if ((el = hit('[data-filter]'))) {
+    dispatch('SET_FILTER', { value:el.dataset.filter });
+    return;
+  }
+
+  if ((el = hit('[data-game-grid]'))) {
+    const idx = parseInt(el.dataset.gameGrid, 10);
+    const g = filteredGames(State)[idx];
+    if (!g) return;
+    State = pushOverlay({ ...State, selectedGame:g, focus:{ zone:'library-grid', index:idx } }, 'game-detail');
+    render(); return;
+  }
+
+  if ((el = hit('[data-app-idx]'))) {
+    State = { ...State, focus:{ zone:'apps-grid', index:parseInt(el.dataset.appIdx, 10) } };
+    dispatch('CONFIRM'); return;
+  }
+
+  if ((el = hit('[data-cat]'))) {
+    dispatch('SET_SETTINGS_CAT', { value:el.dataset.cat }); return;
+  }
+
+  if ((el = hit('[data-key-idx]'))) {
+    State = { ...State, focus:{ zone:'search-keyboard', index:parseInt(el.dataset.keyIdx, 10) } };
+    dispatch('CONFIRM'); return;
+  }
+
+  if ((el = hit('[data-result-idx]'))) {
+    State = { ...State, focus:{ zone:'search-results', index:parseInt(el.dataset.resultIdx, 10) } };
+    dispatch('CONFIRM'); return;
+  }
+
+  if ((el = hit('[data-qs-row]'))) {
+    const idx = parseInt(el.dataset.qsRow, 10);
+    const slider = el.querySelector('.slider');
+    if (slider && (idx === 0 || idx === 1)) {
+      const r = slider.getBoundingClientRect();
+      const pct = clamp(Math.round(((ev.clientX - r.left) / r.width) * 100), 0, 100);
+      dispatch(idx === 0 ? 'SET_VOLUME' : 'SET_BRIGHTNESS', { value:pct });
+      return;
+    }
+    State = { ...State, focus:{ zone:'quick-settings', index:idx } };
+    render(); return;
+  }
+
+  if ((el = hit('[data-qs-action]'))) {
+    const isSleep = el.dataset.qsAction === 'sleep';
+    State = { ...State, focus:{ zone:'quick-settings', index: isSleep ? 6 : 7 } };
+    dispatch('CONFIRM');
+    return;
+  }
+
+  if ((el = hit('[data-detail-idx]'))) {
+    State = { ...State, focus:{ zone:'game-detail-actions', index:parseInt(el.dataset.detailIdx, 10) } };
+    dispatch('CONFIRM'); return;
+  }
+
+  if ((el = hit('[data-power-idx]'))) {
+    State = { ...State, focus:{ zone:'power-actions', index:parseInt(el.dataset.powerIdx, 10) } };
+    dispatch('CONFIRM'); return;
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// DISPATCH / LOOP / ESCALA
+// ════════════════════════════════════════════════════════════
+function dispatch(cmd, payload) {
+  const before = State;
+  State = reduce(State, cmd, payload);
+  if (State !== before) render();
+}
+
+// Escala: UMA largura (1280) para escala e centralização.
+function fit() {
+  const scale = Math.min(innerWidth / 1280, innerHeight / 720);
+  document.documentElement.style.setProperty('--scale', String(scale));
+}
+addEventListener('resize', fit);
+
+// FPS real.
+let frames = 0, fpsStamp = performance.now();
+function loop(now) {
+  frames++;
+  if (now - fpsStamp >= 1000) {
+    const fps = Math.round((frames * 1000) / (now - fpsStamp));
+    frames = 0;
+    fpsStamp = now;
+    if (State.settings.hud) dispatch('TICK_FPS', { value:fps });
+  }
+  pollGamepad(now);
+  requestAnimationFrame(loop);
+}
+
+// Bateria: só mostra se o navegador informar.
+async function readBattery() {
+  try {
+    if (!navigator.getBattery) return;
+    const b = await navigator.getBattery();
+    const update = () => dispatch('SET_BATTERY', { value: Math.round(b.level * 100) });
+    update();
+    b.addEventListener('levelchange', update);
+  } catch (_) { /* sem leitura: fica "—" */ }
+}
+
+addEventListener('gamepadconnected', () => dispatch('SET_PAD', { value:true }));
+addEventListener('gamepaddisconnected', () => dispatch('SET_PAD', { value:false }));
+
+addEventListener('DOMContentLoaded', () => {
+  fit();
+  render();
+  setInterval(updateClock, 1000);
+  requestAnimationFrame(loop);
+  readBattery();
+  setTimeout(() => dispatch('BOOT_DONE'), 1200);
+});
+</script>
+</body>
+</html>

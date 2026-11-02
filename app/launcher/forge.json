@@ -1,0 +1,10 @@
+{
+  "runtime": "native",
+  "graphics_api_min": "gles2",
+  "graphics_api_fallback": "gles2",
+  "ram_min_mb": 192,
+  "vram_min_mb": 32,
+  "display_min_width": 640,
+  "display_min_height": 480,
+  "touchscreen_required": false
+}

@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://giochi.local/schemas/metadata.schema.json",
+  "title": "metadata.json do pacote .giochi",
+  "description": "Identidade de um app publicado. Formato herdado do antecessor GIOCHI-KONSOL-OS; additionalProperties:false e intencional.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "developer", "version", "arch", "runtime", "entrypoint"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Nome exibido na loja."
+    },
+    "developer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$",
+      "description": "Semver obrigatório: 1.0.0, nunca 1.0."
+    },
+    "arch": {
+      "enum": ["aarch64"],
+      "description": "Arquitetura única do console."
+    },
+    "runtime": {
+      "enum": ["godot", "retroarch", "proton", "native"],
+      "description": "Único vocabulário fechado compartilhado entre app e sistema. 'native' cobre binário próprio (Python, C++, C)."
+    },
+    "entrypoint": {
+      "type": "string",
+      "pattern": "^bin/",
+      "description": "Caminho relativo dentro de bin/. Não pode ser absoluto nem conter '..'."
+    },
+    "graphics_api": {
+      "enum": ["gles2", "gles3"],
+      "description": "Opcional. API gráfica usada em tempo de execução."
+    },
+    "license": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.+()-]*$",
+      "description": "Opcional, mas obrigatório na prática para publicar. Identificador SPDX (MIT, GPL-3.0-only, Apache-2.0) ou 'Proprietary'. Define as obrigações de distribuição do app."
+    },
+    "licenseUrl": {
+      "type": "string",
+      "pattern": "^https?://",
+      "description": "Opcional. Onde está o texto da licença e a Corresponding Source, quando a licença exigir."
+    },
+    "buttons_map": {
+      "type": "object",
+      "description": "Opcional. Mapeamento de botões específico do app.",
+      "additionalProperties": true
+    }
+  }
+}

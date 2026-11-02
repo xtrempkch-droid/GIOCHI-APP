@@ -1,0 +1,19 @@
+[package]
+name = "giochi-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Launcher do Giochi — SDL2 com renderer próprio"
+
+[[bin]]
+name = "giochi-launcher"
+path = "src/main.rs"
+
+[dependencies]
+giochi-launcher-core = { path = "../core" }
+
+# SDL2 sem wrapper extra: o desenho é feito com primitivas do SDL_Renderer.
+# `ttf` entra só para o texto. Sem `image`, sem `gfx`: ícones são vetoriais
+# desenhados por nós, não PNG.
+sdl2 = { version = "0.37", features = ["ttf"] }

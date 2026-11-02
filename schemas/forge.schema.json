@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://giochi.local/schemas/forge.schema.json",
+  "title": "forge.json — requisitos do app",
+  "description": "Declara o que o app EXIGE do aparelho. Não declara pacotes Buildroot: quem sabe o que a imagem tem é o Giochi System. Formato herdado do antecessor GIOCHI-KONSOL-OS.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "arch": {
+      "enum": ["aarch64"],
+      "description": "Default aplicado pelo classificador: aarch64."
+    },
+    "runtime": {
+      "enum": ["godot", "retroarch", "proton", "native"],
+      "description": "Default: godot."
+    },
+    "graphics_api_min": {
+      "enum": ["gles2", "gles3", "vulkan"],
+      "description": "Default: gles3. 'vulkan' é sempre incompatível: o aparelho só tem GLES 3.0/2.0."
+    },
+    "graphics_api_fallback": {
+      "enum": ["gles2", "gles3"],
+      "description": "Default: gles2."
+    },
+    "godot_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Major.minor do Godot exigido."
+    },
+    "ram_min_mb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Default: 0."
+    },
+    "vram_min_mb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Default: 0."
+    },
+    "display_min_width": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "display_min_height": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "touchscreen_required": {
+      "type": "boolean",
+      "description": "Default: false."
+    }
+  }
+}

@@ -1,0 +1,1 @@
+Arte-fonte deste app: logos, fontes, sons, arquivos editáveis. Não entra no pacote.

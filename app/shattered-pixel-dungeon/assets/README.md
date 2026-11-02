@@ -1,0 +1,1 @@
+Arte-fonte (upstream GPL-3.0). Nao entra no pacote.

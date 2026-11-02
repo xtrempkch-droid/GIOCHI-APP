@@ -1,0 +1,354 @@
+# AGENTS.md — Giochi app
+
+> Handoff técnico deste repositório. Leia antes de continuar o trabalho.
+> Atualizado em: 02/11/2026.
+
+## 1. Objetivo
+
+Este repositório é a **camada de experiência** do projeto Giochi: os apps e jogos
+que rodam sobre o sistema gerado pelo **Giochi System**, e que são reunidos com ele
+no **Giochi os**.
+
+| Repositório | Função |
+| --- | --- |
+| **Giochi app** (este) | Apps, jogos, arte e manifesto de requisitos |
+| **Giochi System** | Sistema Linux limpo: kernel, rootfs, boot, drivers, painel |
+| **Giochi os** | Junta sistema + apps e gera a imagem final por aparelho |
+
+Cada pasta é **repositório Git individual**. A comunicação entre elas é sempre por
+**artefato declarado explicitamente**, nunca por caminho relativo presumido.
+
+## 2. Localização
+
+```text
+C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi app
+```
+
+Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar).
+
+## 3. Estado atual
+
+### Concluído
+
+- Estrutura de repositório pronta para GitHub.
+- Pasta `app/` com um diretório por app, contendo `src/`, `bin/` e `assets/`.
+- `app/apps.json` como fonte da verdade da lista e do status.
+- `app/_template/` para criar app novo.
+- JSON Schema do `metadata.json` e do `forge.json` em `schemas/`.
+- Validador: `scripts/validate-app.mjs` + núcleo em `scripts/lib/apps.mjs`.
+- Leitor de dimensão de PNG sem dependência: `scripts/lib/png.mjs`.
+- Script de migração do antecessor: `scripts/migrar-do-antecessor.sh`.
+- Testes: `tests/validate-app.test.mjs`, runner `tests/run-all.mjs`.
+- Workflow de validação em PR e push.
+- Documentação em `docs/` (5 páginas).
+
+### Validado nesta sessão
+
+- `node scripts/validate-app.mjs --all` passou: **6 apps**, todos em `scaffold`.
+- `node tests/run-all.mjs` passou: **39/39**.
+- O validador foi exercitado contra: versão fora de semver, runtime inválido,
+  arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
+  com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,
+  `bin/` ausente, nome de pasta inválido, `forge.json` inválido, licença em formato
+  inválido e **GPL declarada na imagem assinada**.
+
+### Não executado / pendente
+
+- **Código-fonte dos apps NÃO foi migrado.** Nenhum `src/` tem conteúdo. O script
+  existe, mas nunca foi executado — não há `git` neste ambiente.
+- **Nenhum `bin/` tem conteúdo.** Os jogos são projetos Godot e precisam de export
+  ARM64; as ferramentas são Python e precisam ser empacotadas.
+- **Nenhuma `capa.png`** existe: 320×320 não foi gerado para nenhum app.
+- **Não há empacotador `.giochi`**, nem assinatura Ed25519.
+- **Repositório Git não criado.** `git` não está instalado neste ambiente.
+- **`scripts/migrar-do-antecessor.sh` nunca rodou** nem passou por `bash -n` —
+  mesmo risco do `build-device.sh` no Giochi System.
+
+## 4. Estrutura
+
+```text
+Giochi app/
+├── app/
+│   ├── apps.json              # fonte da verdade: id, pasta, runtime, status, distribution, license
+│   ├── _template/             # modelo para app novo
+│   ├── forge/                 # empacotador/classificador (host, roda no PC)
+│   ├── store/                 # loja (host, roda no PC)
+│   ├── arcade-volleyball/     # jogo padrão (image, godot)
+│   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
+│   ├── spacewar/              # jogo padrão (image, godot)
+│   └── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
+├── schemas/
+│   ├── metadata.schema.json
+│   └── forge.schema.json
+├── scripts/
+│   ├── validate-app.mjs
+│   ├── migrar-do-antecessor.sh
+│   └── lib/
+│       ├── apps.mjs
+│       └── png.mjs
+├── tests/
+│   ├── validate-app.test.mjs
+│   └── run-all.mjs
+├── docs/
+│   ├── README.md
+│   ├── adicionar-app.md
+│   ├── migracao.md
+│   ├── metadata.md
+│   ├── forge.md
+│   ├── pacote.md
+│   └── licenciamento.md
+└── .github/workflows/validate.yml
+```
+
+### Anatomia de um app
+
+```text
+app/<slug>/
+├── metadata.json     # identidade do pacote (obrigatório)
+├── forge.json        # requisitos de hardware (opcional)
+├── capa.png          # 320x320, capa da loja
+├── thumb.png         # opcional
+├── src/              # CÓDIGO-FONTE: projeto Godot, Python, C++
+├── bin/              # O QUE VAI PARA O APARELHO
+├── assets/           # ARTE-FONTE: logos, fontes, arquivos editáveis
+└── README.md
+```
+
+**A distinção `src/` × `bin/` × `assets/` é a decisão estrutural mais importante.**
+`src/` é o que se edita, `bin/` é o que o aparelho executa, `assets/` é material de
+trabalho que não viaja. Confundir isso gera pacote de centenas de megabytes com
+arquivos editáveis dentro.
+
+## 5. Contratos
+
+### `app/apps.json`
+
+```json
+{
+  "schemaVersion": 1,
+  "apps": [
+    { "id": "forge", "folder": "forge", "runtime": "native", "status": "scaffold" }
+  ]
+}
+```
+
+- `id` — slug kebab; é a identidade estável.
+- `folder` — pasta real em `app/`.
+- `runtime` — `godot`, `retroarch`, `proton` ou `native`.
+- `status` — `scaffold` ou `ready`.
+- `distribution` — `image`, `store` ou `host` (ver abaixo).
+- `license` — identificador SPDX ou `Proprietary`; precisa bater com o `metadata.json`.
+
+### `distribution` decide o destino e a licença
+
+| Valor | Onde roda | Efeito no licenciamento |
+| --- | --- | --- |
+| `image` | dentro da imagem assinada do aparelho | exige licença permissiva |
+| `store` | instalado em `/user`, enviado pela loja | aceita GPL |
+| `host` | no **computador do usuário** (loja, forge) | não vai para o aparelho |
+
+**A loja roda no PC do usuário**, não no aparelho: ela baixa/paga o pacote e envia
+pronto para o dispositivo. Decisão do usuário em 02/11/2026.
+
+Isso é o que permite vender app GPL: o pacote baixado não faz parte da imagem
+assinada, e o comprador pode substituí-lo em `/user` — exatamente o procedimento
+sem chave que a GPL-3.0 §6 exige. O validador **recusa mecanicamente** GPL/AGPL/LGPL
+com `distribution: "image"` (código `licenca_gpl_na_imagem`).
+
+**`scaffold`** significa: existe na árvore, mas a fonte não foi migrada e/ou o
+binário não foi exportado. Nesse estado a ausência de `entrypoint` vira **aviso**,
+não erro — senão o CI nasce vermelho e ninguém olha mais. Todo o resto continua
+sendo erro.
+
+**`ready`** significa: deve estar completo. Qualquer erro reprova.
+
+Pasta em `app/` que não esteja em `apps.json` reprova com `app_nao_registrado`:
+um app invisível para a loja é pior que um app quebrado.
+
+### `metadata.json`
+
+Campos obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`,
+`entrypoint`. `additionalProperties: false` — campo desconhecido reprova.
+
+Semver obrigatório (`1.0.0`, não `1.0`). `arch` só aceita `aarch64`.
+
+### `forge.json`
+
+Requisitos de capacidade: `arch`, `runtime`, `graphics_api_min`,
+`graphics_api_fallback`, `godot_version`, `ram_min_mb`, `vram_min_mb`,
+`display_min_width/height`, `touchscreen_required`. Todas opcionais.
+
+**Nunca declara `BR2_PACKAGE_*`.** O Buildroot descarta símbolo inexistente em
+silêncio; um app que declarasse pacote produziria build verde com biblioteca
+ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
+
+## 6. Comandos
+
+```bash
+node scripts/validate-app.mjs --all       # valida todos
+node scripts/validate-app.mjs app/store   # valida um
+node scripts/validate-app.mjs --all --json
+node tests/run-all.mjs                    # 39 testes
+bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
+```
+
+Não use `node --test tests/`: o runner spawna um processo por arquivo e sob
+sandbox falha com `spawn EPERM`. O runner próprio existe por isso.
+
+## 7. Decisões (02/11/2026)
+
+- **Pasta `app/` (singular)** — escolha do usuário.
+- **`src/` para código-fonte** — acrescentada ao template ao descobrir que os jogos
+  são projetos Godot, não binários. Sem ela, o projeto iria para `assets/` (que não
+  viaja) ou `bin/` (que é artefato).
+- **`runtime: "native"` acrescentado ao enum** — o antecessor registrou a lacuna
+  (`LOJA.md` §6): com só `godot`/`retroarch`/`proton`, as ferramentas em Python
+  (forge, store) não tinham como se declarar.
+- **`status: scaffold`** — espelha o padrão `draft` já usado no Giochi System
+  (`device/devices.json`). Evita CI vermelho permanente durante a migração.
+- **Launcher não vem** — será redesenhado por completo. Trazer o código atual só
+  criaria trabalho de remoção.
+- **Shattered Pixel Dungeon vem, mas só pela loja** — GPL-3.0 com `distribution:
+  "store"`. A análise do antecessor está preservada em `docs/licenciamento.md`: o
+  problema não é contaminação (§5), é *anti-tivoization* (§6) contra rootfs
+  assinado. Em `/user` o app é substituível e a obrigação se resolve.
+- **Licença do repositório: MIT — decidido, sem troca.** O objetivo era distribuir o
+  sistema e vender apps; MIT já permite os dois. Exclusividade sobre o sistema foi
+  descartada conscientemente: aceita-se que terceiros possam reaproveitar o código.
+  Não reabra essa discussão sem o usuário pedir.
+- **Licença dos apps próprios: `Proprietary` — decidido.** O comprador não pode
+  redistribuir. É o que dá base para cobrar pelo binário.
+- **Migração por script, não por cópia manual** — os projetos Godot têm assets
+  binários; copiar por API produziria árvore incompleta e sem histórico.
+
+## 8. O que falta para um app ser instalável
+
+```text
+src/  (projeto Godot)  ──export ARM64──►  bin/  ──empacotar──►  <slug>.giochi
+```
+
+Nenhuma das três etapas funciona hoje:
+
+1. **Export ARM64** — exige template de exportação do Godot para `linux arm64`.
+2. **Empacotador `.giochi`** — formato documentado em `docs/pacote.md`, script não
+  existe. Precisa respeitar a ordem `metadata.json → capa.png → thumb.png → bin/`,
+  porque o extrator no aparelho lê em streaming.
+3. **Assinatura** — Ed25519 + SHA-256, herdada do antecessor. Não implementada.
+
+## 9. Como retomar
+
+```bash
+cd "C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi app"
+node scripts/validate-app.mjs --all
+node tests/run-all.mjs
+```
+
+Para migrar as fontes do antecessor (exige `git`):
+
+```bash
+git clone https://github.com/xtrempkch-droid/GIOCHI-KONSOL-OS.git ~/giochi-antigo
+bash scripts/migrar-do-antecessor.sh ~/giochi-antigo
+node scripts/validate-app.mjs --all
+```
+
+Para publicar no GitHub:
+
+```bash
+git init
+git add .
+git commit -m "Initial Giochi app structure"
+git branch -M main
+git remote add origin https://github.com/xtrempkch-droid/GIOCHI-APP.git
+git push -u origin main
+```
+
+## 10. Arquivos que não devem ser commitados
+
+`dist/`, `out/`, `*.giochi`, `node_modules/`, `.godot/`, `.DS_Store`,
+`.vscode/`, `.idea/` e `target/` (build do Rust).
+
+**`bin/` deve ser commitado** — é exatamente o que vai para o aparelho.
+O `.gitignore` reflete isso.
+
+## 11. Ambiente desta sessão — o que dá e o que não dá para verificar
+
+Máquina: Windows, sem toolchain de desenvolvimento instalada. Situação real:
+
+| Ferramenta | Estado | Consequência |
+| --- | --- | --- |
+| `node` | **disponível** (runtime do DSH) | validador e testes JS rodam e passam |
+| `rustc` / `cargo` | **ausente** | `crates/core/*.rs` **nunca foi compilado** |
+| `git` | ausente | nenhum repositório criado, nenhum commit |
+| `bash` | ausente | `migrar-do-antecessor.sh` nunca rodou nem passou por `bash -n` |
+| `rustup` | ausente | não há como instalar o toolchain sem baixar da internet |
+
+### Regra de honestidade
+
+Nada aqui pode ser declarado "funciona" sem ter sido executado. O que está
+verificado:
+
+- `node scripts/validate-app.mjs --all` → 7 apps OK
+- `node tests/run-all.mjs` → 39/39
+
+O que **não** está verificado e precisa de atenção no primeiro ambiente com
+ferramentas:
+
+1. `cargo test` em `app/launcher` — 44 testes escritos, zero compilados. Rust que
+   não compila é código morto, então isto é o primeiro item.
+2. `bash -n scripts/migrar-do-antecessor.sh`
+3. `bash -n` no `build-device.sh` do **Giochi System**
+4. `prototipo/launcher.html` — este **funciona**: é HTML puro, sem build. Abrir no
+   navegador é a validação.
+
+### Por que o HTML foi corrigido em vez de só documentado
+
+Sem toolchain, a única coisa executável nesta máquina é o HTML. Corrigi-lo dá uma
+referência que dá para **ver funcionando** agora, e serve de especificação
+visual para a UI em Rust. Ele não é o produto: o produto é o binário Rust.
+
+## 12. Launcher — estado específico
+
+**Stack decidida em 02/11/2026: SDL2 + renderer próprio.** Alternativas
+descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
+1 GB de RAM). SDL2 já está no Buildroot e o KMSDRM dispensa compositor.
+
+| Item | Estado |
+| --- | --- |
+| `crates/core` — 6 módulos, 44 testes | escrito, **não compilado** |
+| `crates/ui-sdl` — 6 módulos (~2.900 linhas) | escrito, **não compilado** |
+| Protótipo HTML corrigido | **funcional** — `app/launcher/prototipo/launcher.html` |
+| Fonte | **DejaVu Sans** — permissiva, ampla cobertura, já instalada em distros Linux. O TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`. |
+| Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
+
+### Riscos abertos na compilação
+
+Nada do Rust passou por `rustc`. Pontos onde a API do `sdl2` 0.37 foi assumida:
+
+1. `Sdl2TtfContext::load_font` devolver `Font<'static, 'static>`. Se embutir o
+   tempo de vida do caminho, o cache de fontes precisa mudar de estratégia.
+2. `GameControllerSubsystem::open` recebendo `u32`.
+3. `Canvas::window_to_logical` existir na 0.37.
+
+O resto foi escrito de forma conservadora: sem macro avançada, sem trait
+genérica, sem `unsafe`.
+
+### Decisões de desenho
+
+- **Entrada por evdev, não por SDL gamepad.** Os botões dos handhelds vêm de driver
+  próprio (`rocknix-joypad`) e o SDL só reconhece controle com entrada no
+  `SDL_GameControllerDB`, que não existe para aparelho custom. Além disso,
+  `buttons.map` mapeia por código evdev, e o SDL entrega índice. O SDL ficou só com
+  janela e desenho. Ver `docs/controles.md`.
+- **Múltiplos controles:** uma thread de leitura por `/dev/input/event*`, estado é a
+  soma de todos. Analógico ainda não lido — normalizar exige `absinfo` (ioctl).
+- **Ícones como dados**, não PNG: lista de linhas/polilinhas/círculos no espaço
+  24×24. Sem asset binário, nítido em qualquer DPI.
+- **Gradiente por faixas de 4 px**, não shader: mantém o backend software do
+  SDL funcionando, que é o plano B do RK3326.
+- **Escala via `set_logical_size`**: o SDL letterboxa. O protótipo calculava à
+  mão e cortava 106 px de cada lado em 640×480.
+- **Toque por registro de retângulos durante o desenho**: quem desenha registra
+  a área tocável, então geometria e hit-test não podem divergir.
+- **Comandos de ponteiro no núcleo** (`FocusAt`, `GoTab`, `OpenGame`,
+  `OpenApp`, `GoSettingsCat`): sem eles a UI teria de simular dezenas de `Nav`
+  para chegar ao item tocado.

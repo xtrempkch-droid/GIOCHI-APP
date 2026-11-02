@@ -1,0 +1,24 @@
+{
+  "name": "giochi-app",
+  "version": "0.1.0",
+  "description": "Apps e jogos do Giochi. Cada app vive em app/<slug> com código-fonte, arte e contrato de pacote.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "validate": "node scripts/validate-app.mjs --all",
+    "validate:json": "node scripts/validate-app.mjs --all --json",
+    "test": "node tests/run-all.mjs"
+  },
+  "keywords": [
+    "giochi",
+    "apps",
+    "godot",
+    "retroarch",
+    "handheld",
+    "aarch64"
+  ]
+}

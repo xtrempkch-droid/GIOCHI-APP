@@ -1,0 +1,9 @@
+{
+  "title": "Giochi Launcher",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-launcher",
+  "license": "Proprietary"
+}

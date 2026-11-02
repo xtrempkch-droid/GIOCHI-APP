@@ -1,0 +1,9 @@
+{
+    "title":  "Giochi Store",
+    "developer":  "Giochi",
+    "version":  "1.0.0",
+    "arch":  "aarch64",
+    "runtime":  "native",
+    "entrypoint":  "bin/giochi-store",
+    "license":  "Proprietary"
+}

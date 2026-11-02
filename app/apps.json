@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "apps": [
+    {
+      "id": "forge",
+      "folder": "forge",
+      "runtime": "native",
+      "status": "scaffold",
+      "distribution": "host",
+      "license": "Proprietary",
+      "note": "Roda no PC do usuário: empacota e classifica apps. Não vai para o aparelho."
+    },
+    {
+      "id": "store",
+      "folder": "store",
+      "runtime": "native",
+      "status": "scaffold",
+      "distribution": "host",
+      "license": "Proprietary",
+      "note": "Roda no PC do usuário: baixa/paga o pacote e envia pronto para o aparelho. Não vai para o aparelho."
+    },
+    {
+      "id": "launcher",
+      "folder": "launcher",
+      "runtime": "native",
+      "status": "scaffold",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Reescrito em Rust a partir do protótipo HTML. Núcleo pronto; falta a camada de UI."
+    },
+    {
+      "id": "arcade-volleyball",
+      "folder": "arcade-volleyball",
+      "runtime": "godot",
+      "status": "scaffold",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo padrão. Projeto Godot não migrado; falta export ARM64 para bin/."
+    },
+    {
+      "id": "colossal-cave-adventure",
+      "folder": "colossal-cave-adventure",
+      "runtime": "godot",
+      "status": "scaffold",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo padrão. Projeto Godot não migrado; falta export ARM64 para bin/."
+    },
+    {
+      "id": "spacewar",
+      "folder": "spacewar",
+      "runtime": "godot",
+      "status": "scaffold",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo padrão. Projeto Godot não migrado; falta export ARM64 para bin/."
+    },
+    {
+      "id": "shattered-pixel-dungeon",
+      "folder": "shattered-pixel-dungeon",
+      "runtime": "native",
+      "status": "scaffold",
+      "distribution": "store",
+      "license": "GPL-3.0-only",
+      "note": "GPL-3.0: proibido na imagem assinada, permitido pela loja em /user. Ver docs/licenciamento.md."
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# Saída de build e empacotamento
+dist/
+out/
+*.giochi
+*.tar
+*.tar.gz
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# Godot — cache de importação, não é fonte
+.godot/
+*.translation
+
+# NÃO ignore bin/: é exatamente o que vai para o aparelho.

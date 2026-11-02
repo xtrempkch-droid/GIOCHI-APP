@@ -1,0 +1,11 @@
+[package]
+name = "giochi-launcher-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Núcleo do launcher Giochi: estado, foco, navegação e mapeamento de gamepad"
+
+# Sem dependências, de propósito: o núcleo precisa compilar e testar em
+# qualquer máquina, sem SDL, sem GPU, sem hardware.
+[dependencies]
