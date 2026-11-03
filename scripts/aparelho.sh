@@ -21,6 +21,7 @@
 #   bash scripts/aparelho.sh verificar
 #   bash scripts/aparelho.sh log
 #   bash scripts/aparelho.sh input [segundos]
+#   bash scripts/aparelho.sh capacidades [filtro]
 #
 # Variáveis:
 #   GIOCHI_DEVICE   host do aparelho (padrão: descobre sozinho)
@@ -364,6 +365,35 @@ cmd_input() {
   # Sem `timeout`: o BusyBox do aparelho não tem esse comando. O próprio
   # `--espiar-input <segundos>` termina sozinho.
   no_aparelho "env SDL_VIDEODRIVER=dummy $DESTINO_BIN --espiar-input $segundos"
+  printf '\n  para saber o código de um botão sem apertá-lo, use:\n'
+  printf '  bash scripts/aparelho.sh capacidades\n'
+}
+
+# O que o kernel **promete** emitir, por dispositivo.
+#
+# Complementa `input`, que mostra o que ele **entregou**. Quando um botão não
+# reage, são duas perguntas diferentes: o evento chegou? o dispositivo declara
+# esse código? Aqui responde-se a segunda, lendo `/proc/bus/input/devices` — o
+# único caminho, porque `evtest --query` devolve 0 para qualquer código nesta
+# imagem e não serve para descobrir nada.
+cmd_capacidades() {
+  exigir_aparelho
+  local filtro="${1:-}"
+  titulo "códigos que cada dispositivo declara"
+  local entrada
+  entrada=$(no_aparelho 'cat /proc/bus/input/devices')
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "$entrada" > "$tmp"
+  if [ -n "$filtro" ]; then
+    node "$RAIZ/scripts/capacidades-input.mjs" --arquivo "$tmp" --dispositivo "$filtro"
+  else
+    node "$RAIZ/scripts/capacidades-input.mjs" --arquivo "$tmp"
+  fi
+  rm -f "$tmp"
+  printf '\n  cruzar com o app: se o código não aparece em `input` ao apertar o\n'
+  printf '  botão, o problema é driver/DTS. Se aparece e o app ignora, o problema\n'
+  printf '  é o buttons.map ou o codigo nao tratado no app.\n'
 }
 
 # Verificação que importa: processo vivo E hardware aberto E frame correto.
@@ -463,6 +493,7 @@ case "${1:-ajuda}" in
   verificar)   cmd_verificar ;;
   log)         cmd_log ;;
   input)       shift; cmd_input "${1:-15}" ;;
+  capacidades) shift; cmd_capacidades "${1:-}" ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.

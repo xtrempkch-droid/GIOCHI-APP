@@ -5,3 +5,4 @@
 // por arquivo, e sob o sandbox de arquivos isso falha com `spawn EPERM`.
 import "./validate-app.test.mjs";
 import "./verificar-frame.test.mjs";
+import "./capacidades-input.test.mjs";

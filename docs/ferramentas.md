@@ -10,6 +10,7 @@ nenhum foi escrito "por completude".
 | --- | --- | --- |
 | `scripts/aparelho.sh` | PC | operação e diagnóstico do aparelho por SSH |
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
+| `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
@@ -26,6 +27,7 @@ bash scripts/aparelho.sh parar           # encerra pelo pid
 bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comparado
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
+bash scripts/aparelho.sh capacidades     # códigos que cada dispositivo declara
 ```
 
 ### Por que cada subcomando existe
@@ -99,7 +101,61 @@ alternativa possível.
 a UI desenhada — já aconteceu, e o quadro 100 % preto parecia bug do app. No
 aparelho, `kmsdrm` com `SDL_RENDER_DRIVER=software` funciona.
 
-## `compilar-launcher.sh`
+## `capacidades-input.mjs`
+
+```bash
+node scripts/capacidades-input.mjs                      # lê o /proc local
+node scripts/capacidades-input.mjs --arquivo dump.txt   # lê um dump
+node scripts/capacidades-input.mjs --codigo 116         # quem emite KEY_POWER
+node scripts/capacidades-input.mjs --dispositivo gpio   # um dispositivo só
+```
+
+Lê `B: KEY=` de `/proc/bus/input/devices`. É o único caminho: `evtest --query`
+devolve **0 para qualquer código** nesta imagem, então não serve para descobrir
+o que um botão emite.
+
+### O formato engana
+
+O kernel imprime as palavras de 64 bits em ordem **decrescente** — a **última**
+coluna é a palavra 0. Ler da esquerda para a direita desloca todos os códigos em
+múltiplos de 64 e produz um mapa plausível e errado.
+
+```text
+B: KEY=10000000000000 0     → palavra 1, bit 52 → 64+52 = 116 = KEY_POWER
+B: KEY=c000000000000 0      → palavra 1, bits 50-51 → 114 e 115 = VOLUMEDOWN/UP
+```
+
+### O que ele revelou no X55
+
+```text
+rk805 pwrkey        [event0]  116 KEY_POWER
+gpio-keys-control   [event3]  304-305   BTN_SOUTH (A), BTN_EAST (B)
+                              307-308   BTN_NORTH (X), BTN_WEST (Y)
+                              310-318   BTN_TL … BTN_THUMBR
+                              544-547   BTN_DPAD_UP/DOWN/LEFT/RIGHT
+gpio-keys-vol       [event4]  114-115   KEY_VOLUMEDOWN, KEY_VOLUMEUP
+```
+
+**17 códigos** no controle — que são exatamente os 17 botões citados no cabeçalho
+do `buttons.map` do sistema. Os 4 do direcional ficam na faixa `BTN_` (0x220), não
+na faixa `KEY_`, e é por isso que parecem códigos sem nome.
+
+Cruzando com o app: todos os 20 códigos declarados pelo kernel têm entrada em
+`code_for` e no `buttons.map`. A cobertura está completa — e agora há como provar
+isso em segundos, em vez de conferir 20 linhas à mão.
+
+### Como usar quando um botão não reage
+
+| `capacidades` declara? | `input` mostra ao apertar? | Conclusão |
+| --- | --- | --- |
+| sim | sim | kernel entrega; o problema é `buttons.map` ou `code_for` |
+| sim | não | driver ou DTS não registra o evento |
+| não | sim | bitmask incompleto; vale como aviso, não como veredito |
+| não | não | o botão não existe neste hardware |
+
+É essa separação que evita depurar no escuro. `KEY_POWER` e as teclas de volume
+ficaram meses sem função porque a pergunta certa nunca era feita.
+
 
 ```bash
 bash scripts/compilar-launcher.sh
@@ -135,11 +191,10 @@ mecânica de GPL declarada em `distribution: "image"`. Ver
 ## O que ainda falta
 
 - **`aparelho.sh` depende de `ssh` e `scp` no PC.** Não há plano B.
-- **`input` não decodifica o bitmask de capacidades.** `evtest --query` devolve
-  0 para qualquer código nesta imagem, então descobrir o código de um botão
-  exige ler `/proc/bus/input/devices` à mão. Automatizar isso é o próximo passo
-  natural.
 - **Nenhuma ferramenta cobre áudio além de listar o mixer.** Testar volume fim a
   fim ainda é manual (`alsactl` + arquivo de persistência).
 - **Não há teste de toque.** Não existe `/dev/uinput` nem `evemu` no aparelho,
   então não dá para injetar evento: toque só se testa com o dedo.
+- **O bitmask `ABS=` não é decodificado.** `capacidades-input.mjs` lê só `KEY=`.
+  Os eixos analógicos declaram faixa em `ABS`, e os `axis_*_min/max` do
+  `buttons.map` só podem ser conferidos contra isso — hoje é olho.
