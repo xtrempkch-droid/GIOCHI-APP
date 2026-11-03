@@ -107,6 +107,35 @@ Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
   `bin/` ausente, nome de pasta inválido, `forge.json` inválido, licença em formato
   inválido e **GPL declarada na imagem assinada**.
 
+### Fila de validação (03/11/2026, 19h)
+
+**Uma imagem nova existe e um segundo aparelho existe — nenhum dos dois foi
+testado ainda.** A equipe do Giochi System está validando e o hardware está em
+uso; o teste foi adiado de propósito, não esquecido.
+
+| Item | Estado |
+| --- | --- |
+| Imagem nova do sistema | **entregue, não testada** |
+| Segundo aparelho (**r35h**, resolução menor) | **não testado** |
+| `giochi-selftest` com bloco "bibliotecas do launcher" | **existe na imagem nova** |
+
+O r35h é o **primeiro teste real da arquitetura**. A premissa deste repositório é
+que o mesmo binário serve em hardware diferente porque orientação, brilho, volume
+e mapa de botões vêm do sistema. Com um aparelho só (X55), isso era afirmação;
+com dois, é verificável. O roteiro — incluindo as previsões a falsificar — está
+em `docs/checklist-imagem.md` §7. **Não escrever conclusão sobre o r35h antes de
+rodar.**
+
+Duas coisas mudaram no ambiente e já estão no toolkit:
+
+- **Acesso por `usb0`**: endereço fixo `10.55.0.2`, autenticação por **senha**
+  (`ssh root@10.55.0.2`). Não é preciso tirar o cartão para nada.
+  `GIOCHI_SENHA=... bash scripts/aparelho.sh ...` usa essa rota, e
+  `aparelho.sh opcoes` mostra qual seria usada.
+- **`/root/giochi-boot.log`** é criado pelo init e **é apagado ao regravar o
+  cartão**. Ler antes de regravar é o que preserva o diagnóstico.
+  `aparelho.sh boot-log` salva em `dist/`.
+
 ### Ainda pendente
 
 - **Código-fonte dos apps não foi migrado.** Nenhum `src/` tem conteúdo. O script
@@ -286,7 +315,7 @@ O aparelho vive mudando de IP e não inicia a UI sozinho, então a operação de
 tem script próprio. Guia completo em `docs/ferramentas.md`.
 
 ```bash
-bash scripts/aparelho.sh procurar         # varre a /24, acha pelo hostname
+bash scripts/aparelho.sh procurar         # tenta 10.55.0.2 (usb0), depois varre a /24
 bash scripts/aparelho.sh diagnostico      # sistema, tela, áudio, entrada, libs
 bash scripts/aparelho.sh instalar         # compila, instala, confere sha256
 bash scripts/aparelho.sh subir            # inicia o launcher (o init não faz)
@@ -295,6 +324,8 @@ bash scripts/aparelho.sh verificar        # processo + DRM + frame comparado
 bash scripts/aparelho.sh log
 bash scripts/aparelho.sh input 15         # eventos crus de /dev/input
 bash scripts/aparelho.sh capacidades      # códigos que cada dispositivo declara
+bash scripts/aparelho.sh opcoes           # rota e autenticação (rede x usb0)
+bash scripts/aparelho.sh boot-log         # salva o log ANTES de regravar o cartão
 
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
@@ -313,6 +344,14 @@ No X55 o controle declara **17 códigos**, que são os 17 botões do `buttons.ma
 os 4 do direcional estão em `BTN_DPAD_*` (0x220), faixa `BTN_` e não `KEY_`, e
 por isso parecem códigos sem nome. Todos os 20 códigos declarados têm entrada no
 app — cobertura completa, agora verificável em segundos.
+
+**A mesma distinção vale do lado da imagem**, e a equipe do System chegou nela
+pelo mesmo caminho: **biblioteca presente não prova uso.** Um `libharfbuzz.so` no
+rootfs não garante que o `SDL2_ttf` o use — só `readelf -d` mostra as
+`DT_NEEDED`. O `giochi-selftest` da imagem nova passou a fazer essa verificação.
+
+Regra geral que vale nos dois lados: **existir, declarar e ser usado são fatos
+diferentes**, e confundir os três custa uma sessão de diagnóstico.
 
 Três armadilhas que os scripts já tratam e que não devem ser reintroduzidas:
 `pkill -f giochi-launcher` mata a própria sessão SSH (use `pidof` + `kill`);

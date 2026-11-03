@@ -6,6 +6,38 @@ que um problema de imagem não seja confundido com um problema de app.
 
 Levantado em 03/11/2026, quando a primeira imagem foi validada a campo.
 
+## Antes de tudo: como chegar no aparelho
+
+Há dois caminhos físicos, e eles não se comportam igual:
+
+| Caminho | Endereço | Autenticação |
+| --- | --- | --- |
+| rede local (Wi-Fi) | DHCP — **muda a cada boot** | chave |
+| `usb0` (cabo) | **`10.55.0.2`**, fixo | **senha** |
+
+Pelo `usb0` não é preciso tirar o cartão para nada:
+
+```bash
+ssh root@10.55.0.2        # senha: giochi-dev
+```
+
+O toolkit já tenta o `10.55.0.2` **antes** de varrer a `/24`, e aceita senha:
+
+```bash
+GIOCHI_SENHA=giochi-dev bash scripts/aparelho.sh procurar
+GIOCHI_DEVICE=10.55.0.2 GIOCHI_SENHA=giochi-dev bash scripts/aparelho.sh diagnostico
+```
+
+Sem `sshpass` instalado, o `ssh` pede a senha a cada comando — funciona, mas é
+desconfortável. `bash scripts/aparelho.sh opcoes` mostra qual rota e qual
+autenticação seriam usadas, antes da tentativa. Instalar `sshpass` ou copiar a
+chave (`ssh-copy-id`) resolve.
+
+> **Regravar o cartão apaga o `/root/giochi-boot.log`.** O mesmo cartão serve os
+> dois lados, então ao testar o app no aparelho: **se um boot der errado, leia o
+> log antes de regravar.** É o que preserva o diagnóstico — depois do `dd` a
+> evidência não existe mais.
+
 ## Antes de tudo: qual é a base
 
 `bash scripts/aparelho.sh diagnostico` imprime tudo o que interessa. Guardar a
@@ -27,6 +59,43 @@ rootfs:    772.3M livres de 974.7M
 
 Se o kernel, a Buildroot ou o `hostname` mudaram sem aviso, **pare**: o resto da
 validação mede outra coisa.
+
+## O `giochi-selftest` roda primeiro
+
+A imagem atual traz um autoteste no próprio aparelho. Ele responde, sem SSH e
+sem o PC, se a base está sã:
+
+```bash
+giochi-selftest
+```
+
+O bloco **bibliotecas do launcher** é o que interessa para este repositório:
+
+| O que ele verifica | Por que importa |
+| --- | --- |
+| as cinco `.so`: `asound`, `freetype`, `harfbuzz`, `SDL2`, `SDL2_ttf` | são as que o launcher precisa para som, desenho e texto |
+| contagem de `.ttf` | sem fonte, `SDL2_ttf` presente não desenha nada |
+| `readelf -d` no `SDL2_ttf` | **prova que ele usa o harfbuzz** |
+
+Esse último é o item mais importante do bloco, e a razão é geral:
+
+> **Biblioteca presente não prova uso.**
+
+Um `libharfbuzz.so` instalado no rootfs não diz nada sobre o `SDL2_ttf` — ele
+pode ter sido linkado sem harfbuzz e falhar em tempo de execução, com a
+biblioteca ali do lado. `readelf -d` mostra as `DT_NEEDED` de verdade.
+
+É a mesma distinção que este projeto já aprendeu do outro lado, com outro nome:
+
+| Pergunta | Onde se responde |
+| --- | --- |
+| a biblioteca existe? | `ls` / `giochi-selftest` |
+| o binário **usa** a biblioteca? | `readelf -d` |
+| o dispositivo **declara** o código de tecla? | `B: KEY=` no `/proc` |
+| o kernel **entrega** o evento? | `aparelho.sh input` |
+
+Nos quatro casos, **existir** e **ser usado** são fatos diferentes, e confundir
+os dois custa uma sessão de diagnóstico.
 
 ## 1. A interface sobe sozinha?
 
@@ -69,6 +138,18 @@ desligar, ou mate o processo com `aparelho.sh parar`) e veja se ela volta sozinh
 
 O bloqueio número um até aqui. Dependência de imagem, não de código.
 
+**Pergunte ao aparelho primeiro**, sem SSH e sem o PC:
+
+```bash
+giochi-selftest          # bloco "bibliotecas do launcher"
+```
+
+Ele verifica as cinco `.so`, conta os `.ttf` e — o detalhe que muda o veredito —
+mostra o `readelf -d` do `SDL2_ttf`, provando que ele **usa** o harfbuzz.
+Biblioteca presente não prova uso.
+
+Do lado do PC, a mesma pergunta:
+
 ```bash
 bash scripts/aparelho.sh diagnostico | grep -A6 bibliotecas
 ```
@@ -83,11 +164,11 @@ libfreetype.so.6         presente
 fonte TTF: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 ```
 
-Três coisas precisam existir juntas: **`libSDL2_ttf`**, **`freetype`** e **o
-TTF**. Faltando qualquer uma, não há texto — e o `SDL2_ttf` sozinho não resolve,
-porque ele carrega freetype em tempo de execução.
+Quatro coisas precisam existir juntas: **`libSDL2_ttf`**, **`freetype`**,
+**`harfbuzz`** e **o TTF**. Faltando qualquer uma, não há texto — e `SDL2_ttf`
+sozinho não resolve, porque carrega freetype e harfbuzz em tempo de execução.
 
-Com as três presentes, **recompilar sem `--no-default-features`**:
+Com as quatro presentes, **recompilar sem `--no-default-features`**:
 
 ```bash
 bash scripts/aparelho.sh instalar
@@ -188,9 +269,73 @@ Ainda não cobertos por ferramenta:
   normalizados do `rocknix-joypad` (DTS do projeto). Qual dos dois a imagem usa
   muda a normalização por completo — ver `docs/controles.md`.
 
+## 7. Segundo aparelho: o teste da arquitetura
+
+Toda a decisão de camadas deste repositório — orientação lida do sistema,
+brilho por `sysfs`, volume descoberto no mixer, sem nome de aparelho na lógica —
+tem uma justificativa que **ainda não foi provada**: que o mesmo binário serve em
+hardware diferente sem remenda.
+
+O X55 foi o único aparelho até aqui. Um segundo modelo, com **resolução menor**,
+é o primeiro teste de verdade. Se o app precisar de ajuste de código para rodar
+nele, a arquitetura falhou em algum ponto — e o ponto é o diagnóstico, não o
+remendo.
+
+### O que o app já deveria fazer sozinho
+
+| Diferença esperada | Mecanismo que responde | Se falhar |
+| --- | --- | --- |
+| painel paisagem em vez de retrato | `fbcon/rotate` = `0` → sem giro | app ignorou o sistema |
+| outro sentido de giro | `fbcon/rotate` = `1` → `cw` | app fixou sentido |
+| resolução menor, mesma proporção | `set_logical_size` escala | app fixou pixel |
+| proporção diferente (4:3, 3:2) | letterbox do SDL | — é esperado, não é bug |
+| outro SoC, mesmo `aarch64` | binário é o mesmo | depende de libc do alvo |
+| botões com códigos diferentes | `/etc/giochi/buttons.map` do sistema | app descartou símbolo |
+
+**A proporção diferente é o caso onde "parece errado e está certo".** A UI é
+projetada em 1280×720 (16:9). Num painel 4:3 sobra faixa preta em cima e embaixo,
+porque o `set_logical_size` letterboxa em vez de distorcer. Se a comparação de
+frame acusar mais preto que o normal **e as proporções divergirem**, é isso — não
+é regressão de desenho.
+
+### Ordem de teste, quando a equipe liberar
+
+```bash
+bash scripts/aparelho.sh opcoes        # qual rota e qual autenticação
+bash scripts/aparelho.sh diagnostico   # resolução, rotação, PMIC, botões
+bash scripts/aparelho.sh verificar     # frame comparado com a referência do PC
+bash scripts/aparelho.sh capacidades   # códigos que este aparelho declara
+```
+
+Três coisas precisam ser lidas **antes** de qualquer conclusão:
+
+1. **`painel: connected LxA`** — a resolução real. Toda expectativa depende dela.
+2. **`rotação: fbcon/rotate=N`** — a declaração do sistema para este painel.
+3. **`host:`** — o hostname identifica o modelo; sem ele, o IP de outro aparelho
+   na bancada produz medição do aparelho errado.
+
+### Como registrar o resultado
+
+O valor de testar o segundo aparelho é a **comparação**, então guarde a saída:
+
+```bash
+bash scripts/aparelho.sh diagnostico | tee dist/imagem-x55.txt     # o antigo
+bash scripts/aparelho.sh diagnostico | tee dist/imagem-r35h.txt    # o novo
+diff dist/imagem-x55.txt dist/imagem-r35h.txt
+```
+
+O `diff` é o que mostra a diferença que o código teve (ou não) de absorver.
+Se o app subiu sem uma linha alterada, a arquitetura se paga; se exigiu mudança,
+o `diff` do código mostra exatamente qual premissa estava errada.
+
+> **Estado:** o r35h **não foi testado**. A equipe do System está validando a
+> imagem e o aparelho está em uso. Nada nesta seção foi executado — é previsão,
+> escrita antes do teste para poder ser falsificada.
+
 ## Resumo em uma tela
 
 ```bash
+bash scripts/aparelho.sh opcoes            # rota e autenticação
 bash scripts/aparelho.sh procurar          # IP muda a cada boot
 bash scripts/aparelho.sh diagnostico | tee dist/imagem.txt
 bash scripts/aparelho.sh verificar         # frame comparado
@@ -201,12 +346,14 @@ bash scripts/aparelho.sh log               # orientação, brilho, volume, fonte
 | Item | Se falhar, é do |
 | --- | --- |
 | UI não sobe no boot | **sistema** (`inittab`) |
-| Sem texto | **sistema** (SDL2_ttf, freetype, fonte) |
+| Sem texto | **sistema** (SDL2_ttf, freetype, TTF) |
+| `SDL2_ttf` presente e mesmo assim sem texto | **sistema** (`readelf -d`: harfbuzz ausente) |
 | Orientação errada | **sistema** (`fbcon=rotate`) |
 | Código de botão ausente | **sistema** (driver/DTS) |
 | Botão chega e não age | **app** (`buttons.map`, `code_for`) |
 | Frame preto ou girado | **app** (desenho, rotação) |
+| Faixa preta com proporção diferente | **nenhum** — letterbox esperado |
 | Volume/brilho não persistem | **app** (dono do estado, por contrato) |
 
-Essa última coluna é o objetivo deste checklist: dizer de quem é o problema
+Essa última linha é o objetivo deste checklist: dizer de quem é o problema
 **antes** de abrir o editor.

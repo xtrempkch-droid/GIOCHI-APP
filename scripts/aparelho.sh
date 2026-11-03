@@ -22,10 +22,14 @@
 #   bash scripts/aparelho.sh log
 #   bash scripts/aparelho.sh input [segundos]
 #   bash scripts/aparelho.sh capacidades [filtro]
+#   bash scripts/aparelho.sh opcoes
+#   bash scripts/aparelho.sh boot-log   (salva ANTES de regravar o cartão)
 #
 # Variáveis:
-#   GIOCHI_DEVICE   host do aparelho (padrão: descobre sozinho)
-#   GIOCHI_SUBREDE  prefixo da rede (padrão: 192.168.1)
+#   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
+#   GIOCHI_SUBREDE     prefixo da rede (padrão: 192.168.1)
+#   GIOCHI_CANDIDATOS  endereços tentados antes da varredura (padrão: 10.55.0.2, o usb0)
+#   GIOCHI_SENHA       senha do aparelho; sem ela, autenticação por chave
 set -uo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,10 +37,38 @@ SUBREDE="${GIOCHI_SUBREDE:-192.168.1}"
 DESTINO_BIN="/opt/giochi/apps/launcher/bin/giochi-launcher"
 LOG="/tmp/giochi.log"
 
+# Endereços conhecidos do aparelho, tentados ANTES de varrer a /24.
+#
+# São dois caminhos físicos diferentes: pela rede local (DHCP, IP imprevisível)
+# e pelo `usb0` (endereço fixo `10.55.0.2`, autenticação por senha). Sondar dois
+# endereços leva um segundo; varrer 254 leva minutos e às vezes nem acha, porque
+# o cliente DHCP pode ter entregue um IP fora do prefixo configurado.
+CANDIDATOS=(${GIOCHI_CANDIDATOS:-10.55.0.2})
+
 # Opções do ssh: sem host key interativa (o IP muda, a chave seria outra) e com
 # timeout curto, porque o aparelho desliga e a conexão fica pendurada.
-SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8)
-SCP_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no)
+#
+# `BatchMode=yes` é o padrão porque falhar rápido é melhor que ficar esperando
+# digitação em script. Mas ele também impede o ssh de **pedir** senha, e o
+# `usb0` do aparelho autentica por senha — então quando há `GIOCHI_SENHA` o
+# BatchMode sai, senão a rota usb0 nunca funcionaria.
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=8)
+SCP_OPTS=(-o StrictHostKeyChecking=no)
+SSH_BIN=(ssh)
+SCP_BIN=(scp)
+
+if [ -n "${GIOCHI_SENHA:-}" ]; then
+  # `sshpass` evita redigitar a senha a cada comando encadeado (procurar faz
+  # uma conexão por candidato). Sem ele, o ssh pede a senha no terminal — uma
+  # vez por comando. Funciona, mas é desconfortável; por isso a preferência.
+  if command -v sshpass >/dev/null 2>&1; then
+    SSH_BIN=(sshpass -p "$GIOCHI_SENHA" ssh)
+    SCP_BIN=(sshpass -p "$GIOCHI_SENHA" scp)
+  fi
+else
+  SSH_OPTS+=(-o BatchMode=yes)
+  SCP_OPTS+=(-o BatchMode=yes)
+fi
 
 VERDE=$'\033[32m'; VERMELHO=$'\033[31m'; AMARELO=$'\033[33m'; NEGRITO=$'\033[1m'; ZERA=$'\033[0m'
 # Sem cor quando a saída não é um terminal. Sem isto, qualquer script que leia
@@ -65,7 +97,7 @@ sem_ruido() {
 eh_o_aparelho() {
   local ip="$1"
   local nome
-  nome=$(timeout 6 ssh "${SSH_OPTS[@]}" "root@$ip" 'uname -n' 2>/dev/null | sem_ruido)
+  nome=$(timeout 6 "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$ip" 'uname -n' 2>/dev/null | sem_ruido)
   case "$nome" in
     *giochi*) printf '%s' "$ip"; return 0 ;;
   esac
@@ -74,6 +106,19 @@ eh_o_aparelho() {
 
 # Varre a /24 em paralelo. Serial levaria minutos com 254 endereços e timeout.
 procurar() {
+  # Endereços conhecidos primeiro: o `usb0` tem IP fixo (10.55.0.2) e responde
+  # em um segundo. Varrer a /24 inteira quando o aparelho está no cabo USB é
+  # desperdício — e pior, não acha nada, porque o usb0 não está nessa faixa.
+  local ip
+  for ip in "${CANDIDATOS[@]}"; do
+    if timeout 3 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null; then
+      if eh_o_aparelho "$ip" >/dev/null 2>&1; then
+        printf '%s\n' "$ip"
+        return 0
+      fi
+    fi
+  done
+
   local encontrados
   encontrados=$(mktemp)
   local pids=()
@@ -120,7 +165,7 @@ resolver_host() {
 
 # Executa no aparelho. Aborta com mensagem clara se a rede não responder.
 no_aparelho() {
-  ssh "${SSH_OPTS[@]}" "root@$HOST" "$@" 2>&1 | sem_ruido
+  "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" "$@" 2>&1 | sem_ruido
 }
 
 exigir_aparelho() {
@@ -128,13 +173,42 @@ exigir_aparelho() {
   if [ -z "${HOST:-}" ]; then
     morrer "aparelho não encontrado em $SUBREDE.0/24 — está ligado? (GIOCHI_DEVICE=ip para fixar)"
   fi
-  if ! timeout 10 ssh "${SSH_OPTS[@]}" "root@$HOST" true 2>/dev/null; then
+  if ! timeout 10 "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" true 2>/dev/null; then
     morrer "sem SSH em $HOST"
   fi
   ok "aparelho em $HOST"
 }
 
 verdadeiro() { return 0; }
+
+# Mostra por qual caminho o script tentaria falar com o aparelho.
+#
+# Existe porque "não conecta" tem causas muito diferentes — chave errada, senha
+# errada, IP mudou, `BatchMode` impedindo o prompt — e cada uma dá a mesma
+# mensagem de erro do ssh. Aqui a decisão fica visível antes da tentativa.
+cmd_opcoes() {
+  titulo "rota de acesso"
+  local host
+  host=$(resolver_host 2>/dev/null) || host=""
+  printf '  host:        %s\n' "${host:-(não descoberto)}"
+  printf '  GIOCHI_DEVICE: %s\n' "${GIOCHI_DEVICE:-(vazio)}"
+  printf '  candidatos:  %s\n' "${CANDIDATOS[*]}"
+
+  titulo "autenticação"
+  if [ -n "${GIOCHI_SENHA:-}" ]; then
+    if command -v sshpass >/dev/null 2>&1; then
+      ok "senha via sshpass (BatchMode desligado)"
+    else
+      aviso "senha sem sshpass — o ssh vai PEDIR a senha em cada comando"
+      printf '  instale sshpass, ou use chave: ssh-copy-id root@%s\n' "${host:-<ip>}"
+    fi
+  else
+    ok "chave, sem prompt (BatchMode=yes)"
+  fi
+
+  titulo "comando que seria executado"
+  printf '  %s %s %s uname -n\n' "${SSH_BIN[*]}" "${SSH_OPTS[*]}" "${host:+root@$host}"
+}
 
 # ── auxiliares de captura ───────────────────────────────────
 
@@ -196,14 +270,18 @@ iniciar_launcher() {
 
 cmd_procurar() {
   titulo "procurando o aparelho na $SUBREDE.0/24"
+  printf '  candidatos fixos tentados antes da varredura: %s\n' "${CANDIDATOS[*]}"
   local lista
   if ! lista=$(procurar); then
     falha "nenhum aparelho Giochi encontrado"
-    printf '  dicas: está ligado? mesma rede Wi-Fi? GIOCHI_DEVICE=ip para fixar\n'
+    printf '  dicas:\n'
+    printf '    - está ligado? mesma rede Wi-Fi? GIOCHI_DEVICE=ip para fixar\n'
+    printf '    - por USB (usb0), o aparelho fica em 10.55.0.2 e autentica por senha:\n'
+    printf '        GIOCHI_DEVICE=10.55.0.2 GIOCHI_SENHA=<senha> bash scripts/aparelho.sh procurar\n'
     exit 1
   fi
   printf '%s\n' "$lista" | while read -r ip; do
-    printf '  %s %s\n' "$(printf '%s' "$VERDE")$ip$(printf '%s' "$ZERA")" "$(ssh "${SSH_OPTS[@]}" "root@$ip" 'uname -n' 2>/dev/null | sem_ruido)"
+    printf '  %s %s\n' "$(printf '%s' "$VERDE")$ip$(printf '%s' "$ZERA")" "$("${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$ip" 'uname -n' 2>/dev/null | sem_ruido)"
   done
 }
 
@@ -357,6 +435,41 @@ cmd_log() {
   no_aparelho "if [ -f $LOG ]; then tail -40 $LOG; else echo '(sem log — o app nunca subiu nesta sessão)'; fi"
 }
 
+# Traz o log de boot do aparelho.
+#
+# **Regravar o cartão apaga `/root/giochi-boot.log`** — o mesmo cartão serve os
+# dois lados. Um boot que deu errado só é diagnosticável se o log for lido antes
+# da regravação, e confiar na memória para isso é frágil: o momento de regravar é
+# justamente quando se quer "resolver logo". Ter o comando reduz a chance de
+# perder a evidência por esquecimento.
+#
+# Guarda em `dist/`, que é ignorado pelo git, com a data no nome para que dois
+# boots ruins não se sobrescrevam.
+cmd_boot_log() {
+  exigir_aparelho
+  local origem="/root/giochi-boot.log"
+  if ! no_aparelho "[ -f $origem ] && echo PRESENTE" | grep -q PRESENTE; then
+    aviso "$origem não existe neste boot"
+    printf '  o log é criado pelo init do Giochi System; se ele não aparece,\n'
+    printf '  isso já é informação: ou o init não rodou, ou o caminho mudou.\n'
+    return 1
+  fi
+
+  local destino
+  destino="$RAIZ/dist/boot-log-$(date +%Y%m%d-%H%M%S).txt"
+  mkdir -p "$RAIZ/dist"
+  if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "root@$HOST:$origem" "$destino" 2>/dev/null; then
+    ok "salvo em $destino ($(wc -l < "$destino" | tr -d ' ') linhas)"
+    titulo "últimas 40 linhas"
+    tail -40 "$destino"
+  else
+    # Plano B: sem scp (ou sem sshpass), lê pelo próprio ssh.
+    titulo "não consegui copiar; lendo pelo ssh"
+    no_aparelho "tail -40 $origem"
+    aviso "o log NÃO foi salvo — não regrave sem antes copiá-lo"
+  fi
+}
+
 # Mostra o que o kernel entrega, sem mapa e sem tradução.
 #
 # É o ponto de partida de qualquer bug de botão: se o evento não aparece aqui, o
@@ -451,7 +564,7 @@ cmd_verificar() {
       env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software $DESTINO_BIN --dump-frame /tmp/verif.bmp >/dev/null 2>&1
       [ -s /tmp/verif.bmp ] && echo GERADO
     " | grep -q GERADO; then
-    if scp "${SCP_OPTS[@]}" -q "root@$HOST:/tmp/verif.bmp" "$tmp_captura/frame.bmp" 2>/dev/null; then
+    if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "root@$HOST:/tmp/verif.bmp" "$tmp_captura/frame.bmp" 2>/dev/null; then
       # A referência é o mesmo código rodando no PC, sem tela. Se o binário de
       # PC existir, comparar vale mais que as heurísticas de cor: é o que separa
       # "desenhou" de "desenhou de cabeça para baixo".
@@ -500,6 +613,8 @@ case "${1:-ajuda}" in
   log)         cmd_log ;;
   input)       shift; cmd_input "${1:-15}" ;;
   capacidades) shift; cmd_capacidades "${1:-}" ;;
+  opcoes)      cmd_opcoes ;;
+  boot-log)    cmd_boot_log ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.
@@ -507,7 +622,7 @@ case "${1:-ajuda}" in
     ;;
   *)
     falha "subcomando desconhecido: $1"
-    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log\n'
+    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log\n'
     exit 1
     ;;
 esac

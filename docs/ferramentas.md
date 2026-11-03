@@ -28,13 +28,53 @@ bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comp
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
 bash scripts/aparelho.sh capacidades     # códigos que cada dispositivo declara
+bash scripts/aparelho.sh opcoes          # qual rota e autenticação seriam usadas
+bash scripts/aparelho.sh boot-log       # salva /root/giochi-boot.log ANTES de regravar
 ```
+
+Variáveis:
+
+| Variável | Para quê |
+| --- | --- |
+| `GIOCHI_DEVICE` | fixa o host, pulando a descoberta |
+| `GIOCHI_SUBREDE` | prefixo da varredura (padrão `192.168.1`) |
+| `GIOCHI_CANDIDATOS` | endereços tentados antes da varredura (padrão `10.55.0.2`) |
+| `GIOCHI_SENHA` | senha; sem ela, autenticação por chave |
 
 ### Por que cada subcomando existe
 
 **O IP muda a cada boot.** É DHCP. `procurar` varre a `/24` em paralelo e
 identifica o aparelho pelo hostname (`*giochi*`), não pelo endereço antigo nem
 pelo MAC. Fixar o IP na memória sempre custa uma rodada de tentativas erradas.
+
+**São dois caminhos físicos.** Pela rede o endereço é imprevisível; pelo cabo
+`usb0` é fixo em `10.55.0.2` e autentica por **senha**. `procurar` tenta os
+candidatos fixos **antes** de varrer 254 endereços — um segundo em vez de
+minutos, e é a única forma de achar o aparelho quando ele está no USB, já que
+esse endereço não pertence à faixa varrida.
+
+`GIOCHI_SENHA` desliga o `BatchMode` do ssh. Sem isso a rota `usb0` nunca
+funcionaria: `BatchMode=yes` manda o ssh **falhar** em vez de pedir senha. Com
+`sshpass` instalado a senha é passada direto; sem ele, o ssh pede no terminal —
+uma vez por comando, o que funciona mas incomoda.
+
+`opcoes` mostra a decisão antes da tentativa. Existe porque "não conecta" tem
+causas muito diferentes — chave, senha, IP mudou, `BatchMode` — e todas dão a
+mesma mensagem do ssh:
+
+```text
+$ bash scripts/aparelho.sh opcoes
+
+rota de acesso
+  host:        10.55.0.2
+  candidatos:  10.55.0.2
+
+autenticação
+aviso senha sem sshpass — o ssh vai PEDIR a senha em cada comando
+
+comando que seria executado
+  ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 root@10.55.0.2 uname -n
+```
 
 **O `inittab` não inicia o `giochi-init`.** A interface não sobe sozinha hoje;
 `subir` faz o que o init deveria fazer. Isto é dívida do **Giochi System**, não
@@ -47,6 +87,22 @@ compara o quadro do aparelho com o mesmo código rodando no PC.
 **`pkill -f` mata a própria sessão SSH.** A linha de comando do shell contém o
 padrão procurado, então o shell casa consigo mesmo. O script usa `pidof` e depois
 `kill`.
+
+### `boot-log`: a evidência que a regravação apaga
+
+O mesmo cartão serve os dois lados da bancada. **Regravar apaga o
+`/root/giochi-boot.log`** — e é exatamente no momento de regravar que a memória
+falha, porque a vontade é "resolver logo". Um comando reduz isso a um passo:
+
+```bash
+bash scripts/aparelho.sh boot-log
+# salvo em dist/boot-log-20261103-191530.txt (48 linhas)
+```
+
+Guarda com a data no nome em `dist/` (ignorado pelo git), então dois boots ruins
+não se sobrescrevem. Se o arquivo não existir, isso **já é informação**: ou o init
+não rodou, ou o caminho mudou — e a mensagem diz isso em vez de falhar em
+silêncio.
 
 ### `verificar`, em detalhe
 
@@ -191,6 +247,11 @@ mecânica de GPL declarada em `distribution: "image"`. Ver
 ## O que ainda falta
 
 - **`aparelho.sh` depende de `ssh` e `scp` no PC.** Não há plano B.
+- **A rota `usb0` não foi exercitada.** O código existe e a montagem das opções
+  foi verificada com `opcoes`, mas nenhuma conexão real por `usb0` foi feita —
+  o aparelho estava em uso pela equipe do System. `sshpass` também não está
+  instalado nesta máquina, então o caminho com senha só foi validado até a
+  construção do comando.
 - **Nenhuma ferramenta cobre áudio além de listar o mixer.** Testar volume fim a
   fim ainda é manual (`alsactl` + arquivo de persistência).
 - **Não há teste de toque.** Não existe `/dev/uinput` nem `evemu` no aparelho,
@@ -198,3 +259,7 @@ mecânica de GPL declarada em `distribution: "image"`. Ver
 - **O bitmask `ABS=` não é decodificado.** `capacidades-input.mjs` lê só `KEY=`.
   Os eixos analógicos declaram faixa em `ABS`, e os `axis_*_min/max` do
   `buttons.map` só podem ser conferidos contra isso — hoje é olho.
+- **`boot-log` não foi exercitado.** O arquivo não existe na imagem anterior, e o
+  aparelho estava em uso pela equipe do System durante esta rodada — então o
+  caminho "arquivo presente" nunca rodou. O caminho "arquivo ausente" é o
+  esperado hoje e está implementado com mensagem própria.

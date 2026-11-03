@@ -25,6 +25,11 @@ na tela real. O que falta é **texto** — e texto é a maior parte da interface
 | `/dev/input/event*` | tem 5 dispositivos | entrada por evdev funciona |
 | `/dev/dri/card0`, `renderD128` | tem | KMSDRM abriu e renderizou |
 
+> Esta tabela é o estado da **imagem anterior**. A imagem nova traz o bloco
+> **"bibliotecas do launcher"** no `giochi-selftest`, que responde a mesma
+> pergunta no próprio aparelho — e melhor, porque inclui o `readelf -d`. Ver
+> [checklist-imagem.md](checklist-imagem.md).
+
 Evidência de que só falta o texto: frames reais capturados do aparelho em
 [`app/launcher/README.md`](../app/launcher/README.md) e a saída
 
@@ -151,7 +156,24 @@ serrilhado.
 
 ## Como conferir se a dependência entrou
 
-**O caminho rápido**, com o aparelho na rede:
+**Pergunte ao próprio aparelho**, sem SSH e sem o PC:
+
+```bash
+giochi-selftest
+```
+
+O bloco **bibliotecas do launcher** lista as cinco `.so` que importam
+(`asound`, `freetype`, `harfbuzz`, `SDL2`, `SDL2_ttf`), conta os `.ttf` e roda
+`readelf -d` no `SDL2_ttf` para provar que ele **usa** o harfbuzz.
+
+Esse último passo é o que evita o falso positivo mais provável deste item:
+
+> **Biblioteca presente não prova uso.** Um `libharfbuzz.so` no rootfs não diz
+> nada sobre o `SDL2_ttf` — ele pode ter sido linkado sem harfbuzz e falhar só
+> em tempo de execução, com a biblioteca ali do lado. `readelf -d` mostra as
+> `DT_NEEDED` de verdade.
+
+**O caminho pelo PC**, com o aparelho na rede:
 
 ```bash
 bash scripts/aparelho.sh diagnostico | grep -A6 bibliotecas
