@@ -66,10 +66,16 @@ dessincronizados.
 
 ## Rodar
 
-Da raiz do repositório, `bash scripts/compilar-launcher.sh` resolve o SDL2 (inclui
-o caso sem root) e compila. Detalhes em
-[docs/compilar-launcher.md](../../docs/compilar-launcher.md). Se o SDL2 já está
-instalado no sistema:
+```bash
+# PC (x86-64), resolve o SDL2 inclusive sem root:
+bash scripts/compilar-launcher.sh
+
+# Aparelho (aarch64), cross-compile + instala em /opt/giochi/apps/launcher/bin:
+bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
+```
+
+Detalhes e armadilhas em [docs/compilar-launcher.md](../../docs/compilar-launcher.md).
+Se o SDL2 já está instalado no sistema:
 
 ```bash
 cd app/launcher
@@ -102,8 +108,8 @@ vazio.
 
 ## O que está verificado e o que não está
 
-Compilado e exercitado em 03/11/2026 (Linux x86-64, rustc 1.99, SDL2 2.32.10 +
-SDL2_ttf 2.24.0):
+Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
+2024.02, SDL2 2.28.5, painel DSI 720×1280):
 
 | Item | Estado |
 | --- | --- |
@@ -111,8 +117,11 @@ SDL2_ttf 2.24.0):
 | `crates/core` — 48 testes | **passam** |
 | `crates/ui-sdl` — 6 testes | **passam** |
 | `cargo build --workspace` | **sem erro e sem aviso** |
-| Execução real | **roda** — Home desenhada e gravada em BMP com `--dump-frame` |
-| Alvo aarch64 / KMSDRM | **não testado** — não há placa aqui |
+| x86-64 | **roda** — Home desenhada e gravada em BMP |
+| **aarch64** | **roda no aparelho** — `KMSDRM` real, frame capturado |
+| Rotação para painel retrato | **funciona** — 0 % de letterbox (antes ~40 %) |
+| Texto no aparelho | **não** — falta `libSDL2_ttf`; ver [docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md) |
+| Entrada por evdev no aparelho | não exercitada — 5 dispositivos existem, mas ninguém apertou botão |
 
 As três suposições de API do `sdl2` 0.37 anotadas como risco foram resolvidas:
 
@@ -123,8 +132,8 @@ As três suposições de API do `sdl2` 0.37 anotadas como risco foram resolvidas
    em `Painter::window_to_logical`, com a mesma matemática do
    `SDL_RenderWindowToLogical`.
 
-Falta validar: cross-build aarch64, backend GLES2 sobre KMSDRM e a leitura real
-dos dispositivos em `/dev/input`.
+Falta validar: backend GLES2 (o testado foi o renderer software sobre KMSDRM),
+leitura real dos dispositivos em `/dev/input` e o desempenho no RK3326.
 
 ## Relação com o protótipo
 
@@ -135,8 +144,10 @@ reinterpretação. O diagnóstico dos defeitos do mockup original está em
 
 ## O que falta
 
-- **Cross-build aarch64** e teste na placa (o único alvo que importa).
-- **Fonte TTF** dentro do pacote, com licença compatível.
+- **Texto no aparelho** — depende de `SDL2_ttf` + freetype + uma fonte na imagem
+  ([docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md)).
+- **Backend GLES2** e medição de FPS no RK3326.
+- **Fonte TTF** dentro do pacote (`assets/fonts/DejaVuSans.ttf`).
 - **Leitura real** de bateria, temperatura e apps instalados; hoje a UI mostra
   `—` onde não há sensor.
 - **Lançar apps de verdade** — o código registra a intenção e mostra aviso.

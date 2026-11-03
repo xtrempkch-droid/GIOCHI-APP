@@ -23,10 +23,10 @@
       "id": "launcher",
       "folder": "launcher",
       "runtime": "native",
-      "status": "scaffold",
+      "status": "ready",
       "distribution": "image",
       "license": "Proprietary",
-      "note": "Reescrito em Rust a partir do protótipo HTML. Núcleo pronto; falta a camada de UI."
+      "note": "Rust + SDL2. Compila para x86-64 e aarch64, roda no aparelho via KMSDRM com rotação para painel retrato."
     },
     {
       "id": "arcade-volleyball",

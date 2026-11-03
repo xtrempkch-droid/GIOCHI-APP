@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 03/11/2026.
+> Atualizado em: 03/11/2026 (com acesso ao aparelho real).
 
 ## 1. Objetivo
 
@@ -58,6 +58,23 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   `launcher-build` (compila o workspace com SDL2). Os dois comandos passam
   localmente com `--locked`; o YAML foi parseado, mas os jobs **não rodaram no
   GitHub** ainda.
+
+### Verificado NO APARELHO (03/11/2026)
+
+Aparelho `giochi-system-x55`: Buildroot 2024.02, aarch64, kernel 6.12.0,
+glibc 2.38, SDL2 2.28.5, painel DSI 720×1280, 1968 MB de RAM.
+Acesso por `ssh root@192.168.1.6`.
+
+- **Cross-compile aarch64 funciona**: `scripts/compilar-launcher-arm64.sh`
+  gera o binário do zero (sysroot + libs do aparelho + wrapper de link).
+- **O launcher RODA no aparelho**: `SDL_VIDEODRIVER=kmsdrm` abre o DRM real,
+  desenha e grava frame; o laço ficou 6 s vivo sem crash.
+- **Rotação para painel retrato**: antes ~40 % da tela era letterbox preto e a
+  UI saía deitada; agora 0 % de preto e o layout encaixa.
+- **Instalado** em `/opt/giochi/apps/launcher/bin/giochi-launcher`, o caminho
+  que o `giochi-init` espera.
+- `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
+- `capa.png` 320×320 gerada da paleta do tema (provisória).
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
   arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
   com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,
@@ -73,8 +90,14 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   ARM64; as ferramentas são Python e precisam ser empacotadas.
 - **Nenhuma `capa.png`** existe: 320×320 não foi gerado para nenhum app.
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
-- **Launcher: zero teste no alvo.** Tudo foi verificado em x86-64. Cross-build
-  aarch64, GLES2 sobre KMSDRM e leitura real de `/dev/input` seguem sem validação.
+- **Texto no aparelho.** Falta `libSDL2_ttf` (e freetype e fonte). O launcher
+  roda com `--no-default-features` e desenha tudo menos os glifos. Pedido
+  detalhado em `docs/dependencias-aparelho.md`. **É o bloqueio número um.**
+- **GLES2 e `/dev/input` no aparelho.** O que rodou foi o renderer *software*
+  sobre KMSDRM, e nenhum botão foi exercitado. Há 5 dispositivos
+  (`rk805 pwrkey`, `adc-joystick`, `rk817_ext Headphones`, `gpio-keys-control`,
+  `gpio-keys-vol`).
+- **Desempenho no RK3326** não medido.
 - **`bash -n` no `build-device.sh`** — fica no **Giochi System**, fora deste
   repositório, e continua sem verificação.
 
@@ -214,7 +237,9 @@ node scripts/validate-app.mjs --all --json
 node tests/run-all.mjs                    # 39 testes
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
-bash scripts/compilar-launcher.sh         # build do launcher, resolve o SDL2
+bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
+bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
+bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
 cd app/launcher && cargo test --workspace  # 54 testes do launcher
 ```
 
@@ -307,6 +332,8 @@ Sessão de 03/11/2026: **Linux x86-64 com a toolchain completa**. Isto encerra a
 | `git` | 2.53.0 | repositório existe, commits possíveis |
 | `bash` | 5.3.9 | `bash -n` nos scripts passa |
 | SDL2 / SDL2_ttf | 2.32.10 / 2.24.0 | via prefixo local em `~/.cache/giochi-sdl2/root` |
+| cross aarch64 | rustup target + sysroot 2.35 + libs do aparelho | `~/.cache/giochi-arm64` |
+| **aparelho** | `ssh root@192.168.1.6` | aarch64 real, KMSDRM funciona |
 
 O que **continua sem verificação**:
 
@@ -349,7 +376,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
 | Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
-| Cross-build aarch64 / KMSDRM / `/dev/input` | **não testado** — sem placa |
+| **aarch64 no aparelho** | **roda** — KMSDRM real, frame capturado |
+| Rotação para painel retrato (720×1280) | **funciona** — automática |
+| GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
@@ -389,6 +418,28 @@ testes passaram a rodar:
    que nenhum teste pegaria sem compilar.
 4. **`rows = 6` no painel rápido** era um número solto; o núcleo declara
    `QUICK_SETTINGS_ROWS = 8` (6 controles + 2 botões). Agora vem da constante.
+
+### Feature `texto`
+
+O crate `ui-sdl` compila em dois modos:
+
+| Build | Feature | Linka contra |
+| --- | --- | --- |
+| padrão | `texto` | `libSDL2` + `libSDL2_ttf` |
+| aparelho hoje | `--no-default-features` | só `libSDL2` |
+
+Sem `texto`, `text_size` devolve altura aproximada para o layout não colapsar e
+`text` não desenha nada. Existe porque o aparelho **não tem** `SDL2_ttf` nem
+freetype nem fonte — ver `docs/dependencias-aparelho.md`.
+
+### Rotação
+
+Painel é retrato (720×1280) e a UI é paisagem (1280×720). O `Painter` detecta
+pelo formato do output e gira 90° horário; `GIOCHI_ROTATE=0|90` força.
+
+Cada primitiva pública mapeia a coordenada **uma vez** e delega para uma versão
+`*_dev` em espaço de dispositivo. Sem essa separação, `stroke_round_rect`
+chamaria `fill_rect` e giraria duas vezes. O toque desfaz em `unmap_point`.
 
 ### Decisões de desenho
 

@@ -15,14 +15,20 @@
 //! aproximado por faixas de 4 px. Com 4 px de altura a diferença é invisível e
 //! o custo é baixo (~80 chamadas por cartão).
 
+#[cfg(feature = "texto")]
 use std::collections::HashMap;
 
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::surface::Surface;
-use sdl2::render::{BlendMode, TextureCreator, WindowCanvas};
+use sdl2::render::{BlendMode, WindowCanvas};
+#[cfg(feature = "texto")]
+use sdl2::render::TextureCreator;
+#[cfg(feature = "texto")]
 use sdl2::ttf::{Font, Sdl2TtfContext};
-use sdl2::video::{Window, WindowContext};
+use sdl2::video::Window;
+#[cfg(feature = "texto")]
+use sdl2::video::WindowContext;
 
 use crate::icons::{self, Prim};
 use crate::theme;
@@ -34,6 +40,22 @@ pub enum Align {
     Center,
     Right,
 }
+
+/// Rotação do desenho em relação ao espaço de projeto.
+///
+/// Existe porque o painel do aparelho é retrato (720x1280) enquanto a UI é
+/// desenhada em 1280x720. Sem girar, o conteúdo sai deitado e com tarja preta.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rotation {
+    None,
+    /// 90° no sentido horário: o projeto encaixa num painel retrato.
+    Cw90,
+}
+
+/// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
+/// dispositivo quando a rotação é aplicada.
+const DESIGN_W: i32 = 1280;
+const DESIGN_H: i32 = 720;
 
 /// Recorte retangular, para desenhar listas que rolam.
 #[derive(Clone, Copy, Debug)]
@@ -48,17 +70,26 @@ pub struct Painter {
     canvas: WindowCanvas,
     /// Guardado porque `Texture` empresta do `TextureCreator`. Criar um por
     /// texto obrigaria a manter os dois vivos ao mesmo tempo dentro da função.
+    #[cfg(feature = "texto")]
     creator: TextureCreator<WindowContext>,
+    #[cfg(feature = "texto")]
     ttf: Option<&'static Sdl2TtfContext>,
     /// Fonte por tamanho. Guardadas sem empréstimo do `Painter`, por isso
     /// `'static`: ver `take_font`.
+    #[cfg(feature = "texto")]
     fonts: HashMap<u16, Font<'static, 'static>>,
+    #[cfg(feature = "texto")]
     font_path: &'static str,
     clip_stack: Vec<Option<Clip>>,
+    rot: Rotation,
 }
 
 impl Painter {
     pub fn new(window: Window, font_path: &str) -> Result<Self, String> {
+        // Sem a feature `texto`, o parâmetro existe só para manter a mesma
+        // assinatura nos dois builds.
+        let _ = font_path;
+
         let mut canvas = window
             .into_canvas()
             .present_vsync()
@@ -66,36 +97,74 @@ impl Painter {
             .map_err(|e| format!("canvas: {e}"))?;
 
         canvas.set_blend_mode(BlendMode::Blend);
-        // Espaço de desenho fixo; o SDL letterboxa mantendo proporção.
-        canvas
-            .set_logical_size(1280, 720)
-            .map_err(|e| format!("logical size: {e}"))?;
 
-        // `Sdl2TtfContext` fica vazado de propósito: precisa viver mais que as
-        // fontes, e o programa termina antes disso importar.
-        let ttf: Option<&'static Sdl2TtfContext> = match sdl2::ttf::init() {
-            Ok(context) => Some(Box::leak(Box::new(context))),
-            Err(e) => {
-                eprintln!("aviso: TTF indisponível ({e}); o texto não será desenhado");
-                None
+        // Rotação: `GIOCHI_ROTATE` manda; sem ela, deduz pelo formato do
+        // output. Painel retrato com projeto paisagem só fecha girando.
+        let rot = match std::env::var("GIOCHI_ROTATE").ok().as_deref() {
+            Some("0") => Rotation::None,
+            Some("90") => Rotation::Cw90,
+            _ => {
+                let (ow, oh) = canvas.output_size().unwrap_or((DESIGN_W as u32, DESIGN_H as u32));
+                if oh > ow {
+                    Rotation::Cw90
+                } else {
+                    Rotation::None
+                }
             }
         };
 
-        // O caminho precisa ser `'static` para a `Font` ser `'static`.
-        let font_path: &'static str = Box::leak(font_path.to_string().into_boxed_str());
+        // Espaço de desenho fixo; o SDL letterboxa mantendo proporção. Com
+        // rotação, o espaço lógico passa a ser o do dispositivo, porque as
+        // primitivas já emitem coordenadas giradas e o encaixe é exato.
+        let (lw, lh) = match rot {
+            Rotation::None => (DESIGN_W as u32, DESIGN_H as u32),
+            Rotation::Cw90 => (DESIGN_H as u32, DESIGN_W as u32),
+        };
+        canvas
+            .set_logical_size(lw, lh)
+            .map_err(|e| format!("logical size: {e}"))?;
 
+        #[cfg(feature = "texto")]
         let creator = canvas.texture_creator();
 
-        Ok(Self {
-            canvas,
-            creator,
-            ttf,
-            fonts: HashMap::new(),
-            font_path,
-            clip_stack: Vec::new(),
-        })
+        #[cfg(feature = "texto")]
+        {
+            // `Sdl2TtfContext` fica vazado de propósito: precisa viver mais que
+            // as fontes, e o programa termina antes disso importar.
+            let ttf: Option<&'static Sdl2TtfContext> = match sdl2::ttf::init() {
+                Ok(context) => Some(Box::leak(Box::new(context))),
+                Err(e) => {
+                    eprintln!("aviso: TTF indisponível ({e}); o texto não será desenhado");
+                    None
+                }
+            };
+
+            // O caminho precisa ser `'static` para a `Font` ser `'static`.
+            let font_path: &'static str = Box::leak(font_path.to_string().into_boxed_str());
+
+            Ok(Self {
+                canvas,
+                creator,
+                ttf,
+                fonts: HashMap::new(),
+                font_path,
+                clip_stack: Vec::new(),
+                rot,
+            })
+        }
+
+        #[cfg(not(feature = "texto"))]
+        {
+            eprintln!("aviso: compilado sem a feature `texto`; nenhum texto será desenhado");
+            Ok(Self {
+                canvas,
+                clip_stack: Vec::new(),
+                rot,
+            })
+        }
     }
 
+    #[cfg(feature = "texto")]
     fn take_font(&mut self, size: u16) -> Option<Font<'static, 'static>> {
         if let Some(font) = self.fonts.remove(&size) {
             return Some(font);
@@ -164,10 +233,11 @@ impl Painter {
         let scale = (out_w as f32 / lw as f32).min(out_h as f32 / lh as f32);
         let off_x = (out_w as f32 - lw as f32 * scale) / 2.0;
         let off_y = (out_h as f32 - lh as f32 * scale) / 2.0;
-        Some((
-            ((x as f32 - off_x) / scale).round() as i32,
-            ((y as f32 - off_y) / scale).round() as i32,
-        ))
+        let lx = ((x as f32 - off_x) / scale).round() as i32;
+        let ly = ((y as f32 - off_y) / scale).round() as i32;
+        // Com rotação, o espaço lógico é o do dispositivo: desfaz o giro para
+        // que o toque volte a cair nas coordenadas de projeto usadas pelo layout.
+        Some(self.unmap_point(lx, ly))
     }
 
     // ── recorte ──────────────────────────────────────────────
@@ -188,7 +258,15 @@ impl Painter {
     }
 
     fn apply_clip(&mut self) {
-        let clip = self.clip_stack.last().copied().flatten();
+        let clip = self
+            .clip_stack
+            .last()
+            .copied()
+            .flatten()
+            .map(|c| {
+                let (x, y, w, h) = self.map_rect(c.x, c.y, c.w, c.h);
+                Clip { x, y, w, h }
+            });
         match clip {
             Some(c) => {
                 let _ = self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w.max(0) as u32, c.h.max(0) as u32));
@@ -199,7 +277,57 @@ impl Painter {
 
     // ── retângulos ───────────────────────────────────────────
 
+    /// Converte um retângulo do espaço de projeto para o do dispositivo.
+    ///
+    /// Gira 90° no sentido horário: `(x, y) → (ALT - y - h, x)` e os eixos
+    /// trocam. Um retângulo continua retângulo, então canto arredondado, borda e
+    /// gradiente não precisam de tratamento especial — basta entrar aqui.
+    fn map_rect(&self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+        match self.rot {
+            Rotation::None => (x, y, w, h),
+            Rotation::Cw90 => (DESIGN_H - y - h, x, h, w),
+        }
+    }
+
+    fn map_point(&self, x: i32, y: i32) -> (i32, i32) {
+        match self.rot {
+            Rotation::None => (x, y),
+            Rotation::Cw90 => (DESIGN_H - y, x),
+        }
+    }
+
+    /// Inverso de `map_point`: do dispositivo para o projeto.
+    fn unmap_point(&self, x: i32, y: i32) -> (i32, i32) {
+        match self.rot {
+            Rotation::None => (x, y),
+            Rotation::Cw90 => (y, DESIGN_H - x),
+        }
+    }
+
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
+        let (x, y, w, h) = self.map_rect(x, y, w, h);
+        self.fill_rect_dev(x, y, w, h, color);
+    }
+
+    /// Retângulo com cantos arredondados, por varredura de linhas.
+    pub fn fill_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+        let (x, y, w, h) = self.map_rect(x, y, w, h);
+        self.fill_round_rect_dev(x, y, w, h, radius, color);
+    }
+
+    pub fn stroke_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+        let (x, y, w, h) = self.map_rect(x, y, w, h);
+        self.stroke_round_rect_dev(x, y, w, h, radius, color);
+    }
+
+    // ── primitivas em espaço de dispositivo ──────────────────
+    //
+    // Tudo abaixo recebe coordenadas já transformadas. Existem para que as
+    // funções públicas façam o mapeamento uma única vez: sem essa separação,
+    // `stroke_round_rect` chamaria `fill_rect` e as coordenadas seriam giradas
+    // duas vezes.
+
+    fn fill_rect_dev(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
         if w <= 0 || h <= 0 {
             return;
         }
@@ -209,7 +337,7 @@ impl Painter {
             .fill_rect(Rect::new(x, y, w as u32, h as u32));
     }
 
-    pub fn stroke_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
+    fn stroke_rect_dev(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
         if w <= 0 || h <= 0 {
             return;
         }
@@ -219,14 +347,21 @@ impl Painter {
             .draw_rect(Rect::new(x, y, w as u32, h as u32));
     }
 
-    /// Retângulo com cantos arredondados, por varredura de linhas.
-    pub fn fill_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+    fn fill_round_rect_dev(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        radius: i32,
+        color: Color,
+    ) {
         if w <= 0 || h <= 0 {
             return;
         }
         let r = radius.min(w / 2).min(h / 2).max(0);
         if r == 0 {
-            self.fill_rect(x, y, w, h, color);
+            self.fill_rect_dev(x, y, w, h, color);
             return;
         }
 
@@ -249,29 +384,37 @@ impl Painter {
         let _ = self.canvas.fill_rects(&spans);
     }
 
-    pub fn stroke_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+    fn stroke_round_rect_dev(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        radius: i32,
+        color: Color,
+    ) {
         if w <= 0 || h <= 0 {
             return;
         }
         let r = radius.min(w / 2).min(h / 2).max(0);
         if r == 0 {
-            self.stroke_rect(x, y, w, h, color);
+            self.stroke_rect_dev(x, y, w, h, color);
             return;
         }
         // Retas centrais.
-        self.fill_rect(x + r, y, w - 2 * r, 1, color);
-        self.fill_rect(x + r, y + h - 1, w - 2 * r, 1, color);
-        self.fill_rect(x, y + r, 1, h - 2 * r, color);
-        self.fill_rect(x + w - 1, y + r, 1, h - 2 * r, color);
+        self.fill_rect_dev(x + r, y, w - 2 * r, 1, color);
+        self.fill_rect_dev(x + r, y + h - 1, w - 2 * r, 1, color);
+        self.fill_rect_dev(x, y + r, 1, h - 2 * r, color);
+        self.fill_rect_dev(x + w - 1, y + r, 1, h - 2 * r, color);
         // Cantos.
-        self.arc_corner(x + r, y + r, r, 180.0, 270.0, color);
-        self.arc_corner(x + w - r, y + r, r, 270.0, 360.0, color);
-        self.arc_corner(x + w - r, y + h - r, r, 0.0, 90.0, color);
-        self.arc_corner(x + r, y + h - r, r, 90.0, 180.0, color);
+        self.arc_corner_dev(x + r, y + r, r, 180.0, 270.0, color);
+        self.arc_corner_dev(x + w - r, y + r, r, 270.0, 360.0, color);
+        self.arc_corner_dev(x + w - r, y + h - r, r, 0.0, 90.0, color);
+        self.arc_corner_dev(x + r, y + h - r, r, 90.0, 180.0, color);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn arc_corner(&mut self, cx: i32, cy: i32, r: i32, from: f32, to: f32, color: Color) {
+    fn arc_corner_dev(&mut self, cx: i32, cy: i32, r: i32, from: f32, to: f32, color: Color) {
         let steps = (r as f32 * 1.6).max(6.0) as i32;
         self.canvas.set_draw_color(color);
         let mut previous: Option<(i32, i32)> = None;
@@ -293,6 +436,9 @@ impl Painter {
     ///
     /// Faixas de 4 px. O inset do canto é calculado pela borda mais restritiva
     /// da faixa, o que evita degrau visível.
+    ///
+    /// Sob rotação, cada faixa é um retângulo e é girada junto: o gradiente
+    /// acompanha a imagem sem precisar de eixo alternativo.
     #[allow(clippy::too_many_arguments)]
     pub fn vgradient_round_rect(
         &mut self,
@@ -327,12 +473,7 @@ impl Painter {
 
     // ── linhas e círculos ────────────────────────────────────
 
-    pub fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color) {
-        self.canvas.set_draw_color(color);
-        let _ = self.canvas.draw_line((x1, y1), (x2, y2));
-    }
-
-    pub fn stroke_circle(&mut self, cx: i32, cy: i32, r: i32, color: Color) {
+    fn stroke_circle_dev(&mut self, cx: i32, cy: i32, r: i32, color: Color) {
         if r <= 0 {
             return;
         }
@@ -356,6 +497,7 @@ impl Painter {
         if r <= 0 {
             return;
         }
+        let (cx, cy) = self.map_point(cx, cy);
         let mut spans: Vec<Rect> = Vec::with_capacity((r * 2) as usize);
         for dy in -r..=r {
             let half = ((r * r - dy * dy) as f32).sqrt().round() as i32;
@@ -371,16 +513,24 @@ impl Painter {
 
     /// Desenha um ícone centrado em (cx, cy) com o tamanho dado em unidades de
     /// projeto. `size` é a aresta da caixa 24×24 escalada.
+    ///
+    /// O mapeamento do ícone já aplica a rotação no *ponto*, então o
+    /// preenchimento por varredura roda no espaço do dispositivo. Isso funciona
+    /// para polígono em qualquer ângulo, ao contrário de girar só o retângulo
+    /// envolvente.
     pub fn icon(&mut self, name: &str, cx: i32, cy: i32, size: i32, color: Color) {
         let Some(icon) = icons::get(name) else {
             return;
         };
         let scale = size as f32 / 24.0;
-        let map = |x: f32, y: f32| -> (i32, i32) {
-            (
-                cx - size / 2 + (x * scale).round() as i32,
-                cy - size / 2 + (y * scale).round() as i32,
-            )
+        let rot = self.rot;
+        let map = move |x: f32, y: f32| -> (i32, i32) {
+            let px = cx - size / 2 + (x * scale).round() as i32;
+            let py = cy - size / 2 + (y * scale).round() as i32;
+            match rot {
+                Rotation::None => (px, py),
+                Rotation::Cw90 => (DESIGN_H - py, px),
+            }
         };
 
         for prim in icon.prims {
@@ -388,7 +538,8 @@ impl Painter {
                 Prim::Line(x1, y1, x2, y2) => {
                     let a = map(*x1, *y1);
                     let b = map(*x2, *y2);
-                    self.line(a.0, a.1, b.0, b.1, color);
+                    self.canvas.set_draw_color(color);
+                    let _ = self.canvas.draw_line(a, b);
                 }
                 Prim::Poly(points, filled) => {
                     if points.len() < 2 {
@@ -397,22 +548,24 @@ impl Painter {
                     if *filled {
                         self.fill_polygon(points, &map, color);
                     } else {
+                        self.canvas.set_draw_color(color);
                         for pair in points.windows(2) {
                             let a = map(pair[0].0, pair[0].1);
                             let b = map(pair[1].0, pair[1].1);
-                            self.line(a.0, a.1, b.0, b.1, color);
+                            let _ = self.canvas.draw_line(a, b);
                         }
                     }
                 }
                 Prim::Circle(x, y, r) => {
                     let center = map(*x, *y);
                     let radius = (r * scale).round().max(1.0) as i32;
-                    self.stroke_circle(center.0, center.1, radius, color);
+                    self.stroke_circle_dev(center.0, center.1, radius, color);
                 }
                 Prim::Rect(x, y, w, h) => {
                     let a = map(*x, *y);
                     let b = map(x + w, y + h);
-                    self.stroke_rect(a.0, a.1, b.0 - a.0, b.1 - a.1, color);
+                    let (rx, ry) = (a.0.min(b.0), a.1.min(b.1));
+                    self.stroke_rect_dev(rx, ry, (b.0 - a.0).abs(), (b.1 - a.1).abs(), color);
                 }
             }
         }
@@ -454,6 +607,7 @@ impl Painter {
 
     // ── texto ────────────────────────────────────────────────
 
+    #[cfg(feature = "texto")]
     pub fn text_size(&mut self, text: &str, size: u16) -> (i32, i32) {
         let Some(font) = self.take_font(size) else {
             return (0, 0);
@@ -463,7 +617,16 @@ impl Painter {
         (measured.0 as i32, measured.1 as i32)
     }
 
+    /// Sem TTF, o layout precisa de uma noção de altura para centralizar.
+    /// Aproximar por `size` mantém as faixas de texto no lugar em vez de
+    /// colapsar tudo na mesma linha.
+    #[cfg(not(feature = "texto"))]
+    pub fn text_size(&mut self, _text: &str, size: u16) -> (i32, i32) {
+        (0, size as i32)
+    }
+
     /// Desenha texto e devolve a largura usada.
+    #[cfg(feature = "texto")]
     pub fn text(&mut self, x: i32, y: i32, text: &str, size: u16, color: Color, align: Align) -> i32 {
         if text.is_empty() {
             return 0;
@@ -490,6 +653,19 @@ impl Painter {
 
         self.fonts.insert(size, font);
         width
+    }
+
+    #[cfg(not(feature = "texto"))]
+    pub fn text(
+        &mut self,
+        _x: i32,
+        _y: i32,
+        _text: &str,
+        _size: u16,
+        _color: Color,
+        _align: Align,
+    ) -> i32 {
+        0
     }
 
     pub fn text_left(&mut self, x: i32, y: i32, text: &str, size: u16, color: Color) -> i32 {
