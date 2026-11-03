@@ -14,6 +14,7 @@ use sdl2::keyboard::Keycode;
 use crate::backlight::Backlight;
 use crate::draw::Painter;
 use crate::power::{PowerAction, PowerWatch};
+use crate::system::{Acao, TentativaUnica};
 use crate::volume::{abrir_mixer, MixerBox, Repeticao, Volume};
 use crate::input_evdev::EvdevInput;
 use crate::theme;
@@ -61,6 +62,10 @@ pub struct App {
     /// Repetição das teclas de volume enquanto seguradas.
     rep_cima: Repeticao,
     rep_baixo: Repeticao,
+    /// Mensagem da última tentativa de desligar/reiniciar que falhou.
+    aviso_sistema: Option<String>,
+    /// Evita reexecutar `poweroff`/`reboot` a cada quadro quando falham.
+    tentativa_desligar: TentativaUnica,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -125,6 +130,8 @@ impl App {
             volume,
             rep_cima: Repeticao::novo(),
             rep_baixo: Repeticao::novo(),
+            aviso_sistema: None,
+            tentativa_desligar: TentativaUnica::nova(),
         }
     }
 
@@ -140,6 +147,55 @@ impl App {
         self.sync_backlight(tela_antes, self.state.screen);
         self.sync_brilho(brilho_antes, self.state.settings.brightness);
         self.sync_volume(volume_antes, self.state.settings.volume);
+        self.sync_sistema(tela_antes, self.state.screen);
+    }
+
+    /// Desenha uma vez antes de executar o comando do sistema.
+    ///
+    /// `poweroff` bloqueia até o sistema parar. Sem este quadro, a tela ficaria
+    /// congelada no menu de energia durante todo o desligamento — o usuário
+    /// acharia que travou. Aqui ele lê o que está acontecendo.
+    fn avisar_antes_de_executar(&mut self, mensagem: &str) {
+        self.painter.clear(theme::BG);
+        views::mensagem_central(&mut self.painter, mensagem);
+        self.painter.present();
+        eprintln!("sistema: {mensagem}");
+    }
+
+    /// Executa o desligar/reiniciar de verdade.
+    ///
+    /// O núcleo só troca a tela: ele é puro e precisa continuar testável sem
+    /// hardware. Quem chama `poweroff` é esta camada.
+    ///
+    /// Se o comando falhar — no X55 acontece, porque o PMIC não declara
+    /// `system-power-controller` — a mensagem vai para a tela. Um aparelho que
+    /// mostra "Sistema desligado" e continua ligado é pior que um que diz o que
+    /// deu errado.
+    fn sync_sistema(&mut self, antes: Screen, agora: Screen) {
+        // Qualquer saída das telas de sistema libera nova tentativa. Sem isso,
+        // depois de uma falha o usuário não conseguiria pedir de novo.
+        if !matches!(agora, Screen::Shutdown | Screen::Reboot) {
+            self.tentativa_desligar.resetar();
+            self.aviso_sistema = None;
+        }
+
+        match agora {
+            Screen::Shutdown if antes != Screen::Shutdown => {
+                if self.tentativa_desligar.primeira_vez() {
+                    self.avisar_antes_de_executar("Sistema desligado.");
+                    self.aviso_sistema = Some(crate::system::executar(Acao::Desligar));
+                    self.dirty = true;
+                }
+            }
+            Screen::Reboot if antes != Screen::Reboot => {
+                if self.tentativa_desligar.primeira_vez() {
+                    self.avisar_antes_de_executar("Reiniciando...");
+                    self.aviso_sistema = Some(crate::system::executar(Acao::Reiniciar));
+                    self.dirty = true;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Leva o volume da UI ao mixer.
@@ -241,7 +297,7 @@ impl App {
                 self.dispatch(Cmd::Wake);
                 return;
             }
-            Screen::Shutdown => {
+            Screen::Shutdown | Screen::Reboot => {
                 self.dispatch(Cmd::Reboot);
                 return;
             }
@@ -421,7 +477,7 @@ impl App {
         let power_acao = self.power.update(power_down, delta_seconds);
 
         match self.state.screen {
-            Screen::Sleeping | Screen::Shutdown => {
+            Screen::Sleeping | Screen::Shutdown | Screen::Reboot => {
                 if !commands.is_empty() || start_edge || power_down {
                     let cmd = if self.state.screen == Screen::Sleeping {
                         Cmd::Wake
@@ -508,6 +564,12 @@ impl App {
         }
 
         views::chrome_foot(&mut self.painter, &self.state);
+
+        // Aviso de falha de desligar/reiniciar. Fica por cima da tela preta para
+        // que o usuário saiba por que o aparelho continua ligado.
+        if let Some(msg) = self.aviso_sistema.clone() {
+            views::aviso_sistema(&mut self.painter, &msg);
+        }
         views::overlays(&mut self.painter, &self.state, &mut self.layout);
         views::toast(&mut self.painter, &self.state);
         views::hud(&mut self.painter, &self.state);

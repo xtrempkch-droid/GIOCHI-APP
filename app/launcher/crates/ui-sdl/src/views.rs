@@ -619,6 +619,52 @@ fn label_for_category(name: &str) -> String {
 // ════════════════════════════════════════════════════════════
 // OVERLAYS
 // ════════════════════════════════════════════════════════════
+/// Uma linha centralizada sobre fundo limpo.
+///
+/// Usada no instante entre o pedido de desligar e o sistema parar, quando ainda
+/// há tempo de desenhar um quadro.
+pub fn mensagem_central(p: &mut Painter, texto: &str) {
+    p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+    p.text_center(640, 350, texto, theme::F_BODY, theme::DIM);
+}
+
+/// Tela de falha ao desligar/reiniciar.
+///
+/// Existe porque o X55 não consegue cortar a energia sozinho (o PMIC não declara
+/// `system-power-controller`): o `poweroff` para o sistema mas o painel
+/// continua alimentado. Mostrar "Sistema desligado" nessa situação é mentira —
+/// aqui o usuário lê o motivo e o que fazer.
+pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
+    let w = 760;
+    let x = (1280 - w) / 2;
+    let y = 430;
+    let h = 120;
+    p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::PANEL2);
+    p.stroke_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::DANGER);
+    p.text_center(
+        640,
+        y + 22,
+        "Não foi possível desligar o aparelho",
+        theme::F_BODY,
+        theme::DANGER,
+    );
+    p.text_center(640, y + 56, mensagem, theme::F_TINY, theme::TEXT);
+    p.text_center(
+        640,
+        y + 84,
+        "Segure o botão de energia por 8 s para forçar. Quando o comando",
+        theme::F_TINY,
+        theme::DIM,
+    );
+    p.text_center(
+        640,
+        y + 100,
+        "funciona, o sistema desliga com o brilho já apagado.",
+        theme::F_TINY,
+        theme::DIM,
+    );
+}
+
 pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
     if state.overlays.is_empty() && state.screen == giochi_launcher_core::Screen::Running {
         return;
@@ -646,6 +692,10 @@ pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
             p.fill_rect(0, 0, 1280, 720, theme::BLACK);
             p.text_center(640, 350, "Sistema desligado.", theme::F_BODY, theme::FAINT);
             p.text_center(640, 374, "Pressione A para reiniciar.", theme::F_SMALL, theme::FAINT);
+        }
+        giochi_launcher_core::Screen::Reboot => {
+            p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+            p.text_center(640, 350, "Reiniciando...", theme::F_BODY, theme::DIM);
         }
         giochi_launcher_core::Screen::Boot => {
             p.fill_rect(0, 0, 1280, 720, theme::BLACK);

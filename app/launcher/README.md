@@ -47,6 +47,7 @@ launcher/
             ├── backlight.rs    # brilho do painel: dormir, acordar, persistir
             ├── display.rs      # orientação declarada pelo sistema
             ├── power.rs        # botão de energia: toque dorme, segurar abre menu
+            ├── system.rs       # poweroff/reboot de verdade, e diagnóstico
             └── volume.rs       # teclas de volume → mixer ALSA, com repetição
 ```
 
@@ -86,7 +87,7 @@ cd app/launcher
 cargo run                     # janela 1280x720
 cargo run -- --fullscreen     # tela cheia
 cargo run -- --font caminho/para/fonte.ttf
-cargo test --workspace        # 107 testes, sem tela e sem placa
+cargo test --workspace        # 117 testes, sem tela e sem placa
 ```
 
 Fonte: **DejaVu Sans**. O código procura nesta ordem:
@@ -131,6 +132,7 @@ Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
 | Orientação do painel | **lida do sistema** (`fbcon/rotate`), sem nome de aparelho no código |
 | Botão de energia físico | **funciona** — toque dorme, segurar 1 s abre o menu |
 | Teclas de volume | **funcionam** — passo de 5 %, repetição ao segurar, mixer real |
+| Desligar / reiniciar | **desliga de verdade** — `poweroff` cortou a energia no teste |
 | Volume no mixer ALSA | **confirmado por `alsactl`** — 70→100 % virou 255/255 |
 | Texto no aparelho | **não** — falta `libSDL2_ttf`; ver [docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md) |
 | Entrada por evdev no aparelho | não exercitada — 5 dispositivos existem, mas ninguém apertou botão |

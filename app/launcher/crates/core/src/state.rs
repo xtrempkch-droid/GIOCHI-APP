@@ -56,7 +56,13 @@ pub enum Screen {
     Boot,
     Running,
     Sleeping,
+    /// Desligar pedido pelo usuário. O sistema é desligado pela camada de UI.
     Shutdown,
+    /// Reiniciar pedido pelo usuário. Distinto de [`Screen::Boot`] porque
+    /// `Boot` também é o estado inicial: sem esta variante, "reiniciar" e
+    /// "primeiro boot" seriam a mesma tela e ninguém saberia quando chamar
+    /// `reboot`.
+    Reboot,
 }
 
 /// Overlays empilháveis.

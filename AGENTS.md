@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **107/107** (53 no `core`, 54 no
+- `cargo test --workspace` em `app/launcher`: **117/117** (60 no `core`, 57 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 107 testes do launcher
+cd app/launcher && cargo test --workspace  # 117 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -394,7 +394,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 107/107
+- `cargo test --workspace` → 117/117
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -427,6 +427,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Despertar por botão | **confirmado no aparelho** — log registra o gesto |
 | Botão de energia físico | **confirmado no aparelho** — segurar 1 s abriu o menu |
 | Teclas de volume | **confirmado no aparelho** — 70→65→...→100 e `alsactl` em 255/255 |
+| Desligar (`poweroff`) | **confirmado no aparelho** — cortou a energia de fato |
 | Mixer ALSA | **confirmado** — `Master Playback Volume`, elemento descoberto |
 | GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
@@ -468,6 +469,25 @@ testes passaram a rodar:
    que nenhum teste pegaria sem compilar.
 4. **`rows = 6` no painel rápido** era um número solto; o núcleo declara
    `QUICK_SETTINGS_ROWS = 8` (6 controles + 2 botões). Agora vem da constante.
+
+### Desligar e reiniciar
+
+O núcleo troca de tela; `crates/ui-sdl/src/system.rs` executa `poweroff` /
+`reboot`. `Screen::Reboot` existe separado de `Screen::Boot` porque `Boot` também
+é o estado inicial — sem isso ninguém saberia quando chamar `reboot`.
+
+**Medido em 03/11/2026: `poweroff` desliga o X55 de verdade** (o aparelho
+precisou ser religado pelo botão).
+
+Isso corrigiu uma conclusão errada minha. Eu tinha afirmado que, sem
+`rockchip,system-power-controller` no device tree, o `poweroff` só pararia o
+sistema sem cortar energia. A propriedade **está ausente** e o desligamento
+funciona assim mesmo. Escrevi a conclusão a partir do comportamento documentado
+do kernel, sem testar, e o teste a desmentiu.
+
+`--checar-energia` agora é informativo e diz isso na saída. A regra que fica:
+**ausência de propriedade de device tree não autoriza prever o comportamento de
+um comando.**
 
 ### Descarte silencioso no `buttons.map`
 

@@ -14,6 +14,8 @@
 //!                                   imprime o volume atual do mixer e sai
 //!   giochi-launcher --espiar-input [segundos]
 //!                                   mostra cada tecla que chega do kernel
+//!   giochi-launcher --checar-energia
+//!                                   mostra o que o device tree declara sobre energia
 //!
 //! Para o aparelho (GLES2 sobre KMSDRM), defina `GIOCHI_GLES=1`. No PC deixe
 //! vazio: forçar `opengles2` no desktop costuma falhar.
@@ -25,6 +27,7 @@ mod draw;
 mod icons;
 mod input_evdev;
 mod power;
+mod system;
 mod theme;
 mod views;
 mod volume;
@@ -127,6 +130,24 @@ fn main() -> Result<(), String> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(15);
         return espiar_input(segundos);
+    }
+
+    // Diagnóstico que NÃO desliga: mostra o que o device tree declara.
+    //
+    // Não é veredito sobre o `poweroff`: no X55 a propriedade não existe e o
+    // aparelho desliga normalmente (medido). Serve para comparar aparelhos e
+    // perceber mudança no device tree.
+    if args.iter().any(|a| a == "--checar-energia") {
+        let declarado = system::declaracao_de_energia();
+        println!(
+            "system-power-controller no device tree: {}",
+            if declarado { "declarado" } else { "ausente" }
+        );
+        println!();
+        println!("isto é informação, não veredito: no X55 a propriedade é ausente");
+        println!("e `poweroff` desliga o aparelho de verdade (medido em 03/11/2026).");
+        println!("para saber se desliga, o caminho é desligar.");
+        return Ok(());
     }
 
     let sdl = sdl2::init()?;

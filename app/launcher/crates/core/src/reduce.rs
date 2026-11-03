@@ -22,7 +22,10 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
     // overlay aberto que não pediu.
     // `Boot` fica de fora de propósito: `BootDone` chega justamente nesse
     // estado, e interceptar aqui impediria o launcher de sair do boot.
-    if matches!(state.screen, Screen::Sleeping | Screen::Shutdown) {
+    if matches!(
+        state.screen,
+        Screen::Sleeping | Screen::Shutdown | Screen::Reboot
+    ) {
         return from_locked_screen(state, cmd);
     }
 
@@ -178,12 +181,29 @@ fn from_locked_screen(state: State, cmd: Cmd) -> State {
         // Qualquer botão reinicia, como diz o texto da tela de desligado.
         Screen::Shutdown => {
             if cmd.is_user_input() || cmd == Cmd::Reboot {
-                reboot(state)
+                to_reboot(state)
             } else {
                 state
             }
         }
-        // Inalcançável: só se entra aqui em `Sleeping` ou `Shutdown`.
+        // Em `Reboot` o pedido já foi feito: se o sistema reiniciasse de fato,
+        // este processo não existiria mais. Chegar aqui com um botão significa
+        // que o `reboot` falhou, então a única saída honesta é voltar para a
+        // interface — insistir prenderia o usuário em "Reiniciando..." para
+        // sempre.
+        Screen::Reboot => {
+            if cmd.is_user_input() || cmd == Cmd::Reboot {
+                State {
+                    screen: Screen::Running,
+                    overlays: Vec::new(),
+                    toast: Toast::default(),
+                    ..state
+                }
+            } else {
+                state
+            }
+        }
+        // Inalcançável: só se entra aqui nas telas travadas.
         Screen::Boot | Screen::Running => state,
     }
 }
@@ -355,7 +375,7 @@ fn confirm(state: State) -> State {
 
         Zone::PowerActions => match index {
             0 => to_sleeping(state),
-            1 => to_boot(state),
+            1 => to_reboot(state),
             2 => to_shutdown(state),
             3 => go_back(state),
             _ => state,
@@ -559,6 +579,16 @@ fn to_boot(state: State) -> State {
     let mut next = State::new(state.games.clone(), state.apps.clone());
     next.screen = Screen::Boot;
     next
+}
+
+/// Pede reinício do sistema.
+fn to_reboot(state: State) -> State {
+    State {
+        screen: Screen::Reboot,
+        overlays: Vec::new(),
+        toast: Toast::default(),
+        ..state
+    }
 }
 
 fn reboot(state: State) -> State {
@@ -820,7 +850,64 @@ mod tests {
 
         let s = reduce(s, Cmd::Confirm);
 
-        assert_eq!(s.screen, Screen::Boot, "botão na tela de desligado reinicia");
+        // `Reboot`, não `Boot`: `Boot` é o estado inicial do launcher, e o
+        // sistema precisa saber a diferença para chamar `reboot` de verdade.
+        assert_eq!(s.screen, Screen::Reboot, "botão na tela de desligado reinicia");
+    }
+
+    #[test]
+    fn reiniciar_nao_e_o_mesmo_que_boot_inicial() {
+        // A distinção existe para o app poder chamar `reboot`. Se voltasse para
+        // `Boot`, "reiniciar" e "primeiro boot" seriam indistinguíveis.
+        let mut s = demo();
+        s.screen = Screen::Running;
+        s.focus = Focus::at(Zone::PowerActions, 1);
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.screen, Screen::Reboot);
+        assert_ne!(s.screen, Screen::Boot);
+    }
+
+    #[test]
+    fn reiniciar_limpa_overlay_e_toast() {
+        let mut s = demo();
+        s = push(s, Overlay::PowerPopup);
+        s.toast = Toast::show("algo");
+        s.focus = Focus::at(Zone::PowerActions, 1);
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.screen, Screen::Reboot);
+        assert!(s.overlays.is_empty(), "não pode sobrar overlay");
+        assert!(!s.toast.visible, "não pode sobrar toast");
+    }
+
+    #[test]
+    fn botao_em_reboot_devolve_a_interface_em_vez_de_prender() {
+        // Se `reboot` falhou, o usuário não pode ficar preso em
+        // "Reiniciando...": apertar qualquer botão volta ao app.
+        let mut s = demo();
+        s.screen = Screen::Reboot;
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(
+            s.screen,
+            Screen::Running,
+            "falha de reboot precisa ter saída"
+        );
+    }
+
+    #[test]
+    fn leitura_de_sistema_nao_reinicia() {
+        // Mesma regra do sono: bateria chegando não pode reiniciar o aparelho.
+        let mut s = demo();
+        s.screen = Screen::Reboot;
+
+        let s = reduce(s, Cmd::SetBattery(Some(50)));
+
+        assert_eq!(s.screen, Screen::Reboot, "só entrada de pessoa age");
     }
 
     #[test]

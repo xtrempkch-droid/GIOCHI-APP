@@ -70,6 +70,51 @@ rotação: Ccw90 (fonte: sistema (fbcon/rotate)) [output 720x1280]
 Isso é o que transforma "a tela está torta" em uma frase diagnosticável: ou o
 sistema declarou errado, ou o usuário sobrepôs, ou ninguém declarou.
 
+## Desligar e reiniciar
+
+O núcleo só troca de tela (`Screen::Shutdown` / `Screen::Reboot`); quem executa
+`poweroff` / `reboot` é a camada de UI (`crates/ui-sdl/src/system.rs`). O reducer
+continua puro e testável sem hardware.
+
+`Screen::Reboot` é distinto de `Screen::Boot` de propósito: `Boot` também é o
+estado inicial, e sem a variante separada "reiniciar" e "primeiro boot" seriam
+indistinguíveis — ninguém saberia quando chamar `reboot`.
+
+### Medição: `poweroff` desliga de verdade neste aparelho
+
+Testado em 03/11/2026 com o aparelho em mãos: `poweroff` cortou a energia e o
+aparelho precisou ser religado pelo botão físico.
+
+**Correção de uma conclusão errada.** A primeira versão do diagnóstico afirmava
+que, sem `rockchip,system-power-controller` no device tree, o `poweroff` apenas
+pararia o sistema sem cortar energia. A propriedade de fato **está ausente** no
+X55, mas o desligamento funciona — o driver do PMIC registra o caminho de outra
+forma. A conclusão foi escrita a partir do comportamento documentado do kernel,
+sem teste, e o teste a desmentiu.
+
+O diagnóstico hoje é informativo, e diz isso na própria saída:
+
+```text
+$ giochi-launcher --checar-energia
+system-power-controller no device tree: ausente
+
+isto é informação, não veredito: no X55 a propriedade é ausente
+e `poweroff` desliga o aparelho de verdade (medido em 03/11/2026).
+para saber se desliga, o caminho é desligar.
+```
+
+Regra que fica: **ausência de uma propriedade de device tree não autoriza
+prever o comportamento de um comando.** Só o comando responde.
+
+### Saídas para falha
+
+Se `poweroff`/`reboot` falhar:
+
+- a mensagem vai para a tela (não dá para dizer "desligado" e continuar ligado);
+- a tentativa não se repete a cada quadro, para não inundar o console;
+- em `Reboot`, qualquer botão devolve a interface — sem isso o usuário ficaria
+  preso em "Reiniciando..." para sempre, já que o processo continuaria vivo.
+
 ## O que o app NÃO deve conter
 
 - Nome de aparelho (`x55`, `rk3566`) em lógica.

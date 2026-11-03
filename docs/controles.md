@@ -148,7 +148,31 @@ O espião é o que separa "não chega ao sistema" de "chega e o app ignora": ele
 `/dev/input/event*` cru, sem mapa e sem tradução. A saída nomeia cada código, e
 no fim diz quantos eventos vieram.
 
-## 4. O programa de gerenciamento
+## 4. Desligar e reiniciar
+
+O app executa `poweroff` / `reboot` do BusyBox quando o estado vira
+`Screen::Shutdown` / `Screen::Reboot`. Verificado no X55: a energia é cortada de
+fato.
+
+Antes de executar, o app desenha um quadro ("Sistema desligado." / "Reiniciando..."),
+porque `poweroff` bloqueia até o sistema parar — sem isso a tela congelaria no
+menu de energia e pareceria travamento.
+
+Se o comando falhar, a mensagem vai para a tela e a tentativa não se repete a
+cada quadro. Em `Reboot`, qualquer botão devolve a interface, para o usuário não
+ficar preso em "Reiniciando...".
+
+Diagnóstico que **não** desliga:
+
+```sh
+giochi-launcher --checar-energia
+```
+
+Ele mostra o que o device tree declara sobre energia e avisa que isso **não prevê**
+o comportamento do `poweroff` — no X55 a propriedade
+`rockchip,system-power-controller` está ausente e o aparelho desliga normalmente.
+
+## 5. O programa de gerenciamento
 
 Pedido: "vamos precisar de alguma aplicação para gerenciar isso, mesmo que seja algo
 adicional".
@@ -230,7 +254,7 @@ launcher lê um mapa plano e não precisa conhecer modelo de hardware.
 
 ---
 
-## 5. Em aberto
+## 6. Em aberto
 
 | # | Assunto |
 | --- | --- |
