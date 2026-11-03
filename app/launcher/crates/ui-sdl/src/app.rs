@@ -13,6 +13,7 @@ use sdl2::keyboard::Keycode;
 
 use crate::backlight::Backlight;
 use crate::draw::Painter;
+use crate::power::{PowerAction, PowerWatch};
 use crate::input_evdev::EvdevInput;
 use crate::theme;
 use crate::views::{self, Hit, Layout};
@@ -52,6 +53,8 @@ pub struct App {
     rotation_poll: f32,
     /// Backlight: apagar ao dormir, restaurar ao acordar.
     backlight: Backlight,
+    /// Botão de energia físico.
+    power: PowerWatch,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -93,6 +96,7 @@ impl App {
             last_minute: 0,
             rotation_poll: 0.0,
             backlight,
+            power: PowerWatch::novo(),
         }
     }
 
@@ -268,7 +272,7 @@ impl App {
             }
         }
 
-        self.poll_gamepad();
+        self.poll_gamepad(delta_seconds);
         self.tick_toast(delta_seconds);
         self.tick_rotation(delta_seconds);
 
@@ -343,7 +347,7 @@ impl App {
         }
     }
 
-    fn poll_gamepad(&mut self) {
+    fn poll_gamepad(&mut self, delta_seconds: f32) {
         self.evdev.poll();
 
         let connected = self.evdev.device_count() > 0;
@@ -370,15 +374,23 @@ impl App {
         // do quadro é descartado aqui para o botão que acorda não agir: era
         // exatamente o caso relatado no aparelho, em que nenhum botão voltava
         // porque só toque e teclado chamavam `Wake`.
+        // Botão de energia físico. Fora do `buttons.map` porque é botão do
+        // sistema (PMIC), não do controle — ver `crate::power`.
+        let power_down = self.evdev.power_pressed();
+        let power_acao = self.power.update(power_down, delta_seconds);
+
         match self.state.screen {
             Screen::Sleeping | Screen::Shutdown => {
-                if !commands.is_empty() || start_edge {
+                if !commands.is_empty() || start_edge || power_down {
                     let cmd = if self.state.screen == Screen::Sleeping {
                         Cmd::Wake
                     } else {
                         Cmd::Reboot
                     };
                     eprintln!("acordando: entrada com a tela travada");
+                    // O gesto serviu para acordar: consumir evita que soltar o
+                    // botão emita `Curto` e durma de novo em seguida.
+                    self.power.consumir();
                     self.dispatch(cmd);
                 }
                 return;
@@ -391,6 +403,21 @@ impl App {
         }
         if start_edge {
             self.dispatch(Cmd::PowerHold);
+        }
+
+        match power_acao {
+            Some(PowerAction::Longo) => {
+                eprintln!(
+                    "botão de energia: segurado {:.1}s, abrindo menu de energia",
+                    self.power.segurado()
+                );
+                self.dispatch(Cmd::PowerHold);
+            }
+            Some(PowerAction::Curto) => {
+                eprintln!("botão de energia: toque curto, dormindo");
+                self.dispatch(Cmd::PowerShort);
+            }
+            None => {}
         }
     }
 

@@ -67,7 +67,46 @@ do dispositivo em vez de assumido.
 
 ---
 
-## 2. O programa de gerenciamento
+## 2. Botão de energia
+
+Não é botão de controle: é do PMIC (`rk805 pwrkey`), existe para ligar e
+desligar o aparelho. Por isso **não passa pelo `buttons.map`** — um mapa por
+aparelho não deveria precisar declarar que o botão de energia existe.
+
+| Gesto | Ação |
+| --- | --- |
+| Toque curto (solta antes de 1 s) | dorme; backlight apaga |
+| Segurar 1 s ou mais | abre o menu de energia |
+| Qualquer gesto dormindo/desligado | acorda (o toque é consumido) |
+
+O menu abre **ao atingir o limiar**, não ao soltar. Esperar a soltura faria o
+usuário segurar sem nenhum sinal de que algo aconteceu — que foi exatamente a
+queixa original ("apertei e não aconteceu nada").
+
+O limiar é `PowerWatch::LIMIAR_PADRAO` em `crates/ui-sdl/src/power.rs`, com
+teste cobrindo cada caso (toque, segurar, soltar depois do menu, consumir ao
+acordar, quadro lento).
+
+### Como o código descobre o botão
+
+O código evdev vem do hardware, não de configuração. No X55:
+
+```text
+/sys/class/input/event0/device/capabilities/key  →  10000000000000 0
+```
+
+O kernel imprime as palavras de bits da **mais alta para a mais baixa**; o valor
+não-zero é a palavra 1, bit 52 → `64 + 52 = 116` = `KEY_POWER`. Conferido com o
+`gpio-keys-vol`, que declara `c000000000000` → bits 50/51 da palavra 1 → 114 e
+115 = `KEY_VOLUMEDOWN`/`KEY_VOLUMEUP`.
+
+> `evtest --query` **não serve** para isso: nesta build ele devolve 0 para
+> qualquer código, inclusive um que o dispositivo não declara. Use o bitmask.
+
+O `KEY_POWER` também abre o menu pelo botão **START**, por decisão anterior;
+os dois caminhos coexistem.
+
+## 3. O programa de gerenciamento
 
 Pedido: "vamos precisar de alguma aplicação para gerenciar isso, mesmo que seja algo
 adicional".
@@ -149,7 +188,7 @@ launcher lê um mapa plano e não precisa conhecer modelo de hardware.
 
 ---
 
-## 3. Em aberto
+## 4. Em aberto
 
 | # | Assunto |
 | --- | --- |

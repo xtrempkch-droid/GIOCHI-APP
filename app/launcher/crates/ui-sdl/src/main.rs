@@ -19,6 +19,7 @@ mod display;
 mod draw;
 mod icons;
 mod input_evdev;
+mod power;
 mod theme;
 mod views;
 

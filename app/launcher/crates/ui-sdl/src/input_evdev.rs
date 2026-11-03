@@ -43,6 +43,9 @@ const ABS_HAT0Y: u16 = 0x11;
 /// Caminho padrão do mapa, instalado pelo Giochi System.
 pub const DEFAULT_MAP_PATH: &str = "/etc/giochi/buttons.map";
 
+/// `KEY_POWER` em `linux/input-event-codes.h`. Botão de energia do PMIC.
+pub const KEY_POWER: u16 = 116;
+
 /// Evento normalizado que sai das threads.
 enum Ev {
     Key(u16, i32),
@@ -266,6 +269,22 @@ impl EvdevInput {
             tab_next: down("r"),
             quick_settings: down("select"),
         }
+    }
+
+    /// Botão de energia físico (`rk805 pwrkey`, `KEY_POWER`).
+    ///
+    /// Não passa pelo `buttons.map` de propósito: é um botão do **sistema**, não
+    /// do controle. Um mapa por aparelho não deveria precisar declarar que o
+    /// botão de energia existe — isso é fato do hardware, como o próprio
+    /// dispositivo de entrada.
+    ///
+    /// Medido no X55: `/sys/class/input/event0/device/capabilities/key` =
+    /// `10000000000000 0`, que decodificado dá o bit 52 da segunda palavra =
+    /// código 116 (`KEY_POWER`). O mesmo arquivo do `gpio-keys-vol` traz
+    /// `c000000000000` = 114/115 (`KEY_VOLUMEDOWN`/`KEY_VOLUMEUP`), o que
+    /// confirma a leitura.
+    pub fn power_pressed(&self) -> bool {
+        self.pressed.get(&KEY_POWER).copied().unwrap_or(false)
     }
 
     /// `start` abre o menu de energia; o núcleo trata fora do `Mapper`.

@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **84/84** (53 no `core`, 31 no
+- `cargo test --workspace` em `app/launcher`: **91/91** (53 no `core`, 38 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 84 testes do launcher
+cd app/launcher && cargo test --workspace  # 91 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -394,7 +394,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 84/84
+- `cargo test --workspace` → 91/91
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -424,7 +424,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço vivo |
 | Orientação lida do sistema | **confirmado** — `fbcon/rotate=3` → `Ccw90`, sem override |
 | Brilho no painel | **confirmado** — `--brilho 20/70/50` → 333/1166/833, e persiste |
-| Despertar por botão | **corrigido** no núcleo e no laço; falta apertar o botão |
+| Despertar por botão | **confirmado no aparelho** — log registra o gesto |
+| Botão de energia físico | **confirmado no aparelho** — segurar 1 s abriu o menu |
 | GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -499,7 +500,13 @@ Três regras, todas nascidas de bug real no aparelho:
    idempotente (dormir duas vezes não salva 0 como "anterior"). Na abertura,
    `destravar_tela_apagada` reacende se o valor veio 0 — proteção para o caso de
    o processo morrer dormindo.
-4. **O slider de brilho agora chega no painel.** Antes era decorativo: mudava
+4. **O botão de energia físico funciona.** `rk805 pwrkey` emite `KEY_POWER`
+   (116) e o app passou a lê-lo. Toque curto dorme (apaga o backlight); segurar
+   1 s abre o menu de energia, **ao atingir o limiar** e não ao soltar — senão
+   o usuário segura sem nenhum sinal. Antes disto o `PowerHold` estava ligado
+   apenas ao botão START, e o power não fazia nada.
+   A medição vive em `crates/ui-sdl/src/power.rs` (puro, 7 testes).
+5. **O slider de brilho agora chega no painel.** Antes era decorativo: mudava
    `settings.brightness` e nada em `sysfs`. Agora `definir_fracao` converte para
    a escala do `max_brightness`, escreve e **grava
    `/user/.config/giochi/brightness`** — o arquivo que o `giochi-init` lê no
@@ -510,6 +517,13 @@ Diagnóstico de campo, no próprio aparelho:
 ```bash
 giochi-launcher --testar-backlight   # apaga 2 s e restaura
 giochi-launcher --brilho 40          # mesmo caminho do slider, e persiste
+```
+
+O botão de energia deixa rastro no log, o que permite diagnosticar sem adivinhar:
+
+```text
+botão de energia: toque curto, dormindo
+botão de energia: segurado 1.0s, abrindo menu de energia
 ```
 
 Diagnóstico de campo, sem passar pelo menu de energia:

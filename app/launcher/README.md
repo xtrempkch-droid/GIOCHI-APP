@@ -45,7 +45,8 @@ launcher/
             ├── icons.rs        # ícones vetoriais (dados, não PNG)
             ├── views.rs        # telas + áreas tocáveis
             ├── backlight.rs    # brilho do painel: dormir, acordar, persistir
-            └── display.rs      # orientação declarada pelo sistema
+            ├── display.rs      # orientação declarada pelo sistema
+            └── power.rs        # botão de energia: toque dorme, segurar abre menu
 ```
 
 ## Decisões de desenho
@@ -84,7 +85,7 @@ cd app/launcher
 cargo run                     # janela 1280x720
 cargo run -- --fullscreen     # tela cheia
 cargo run -- --font caminho/para/fonte.ttf
-cargo test --workspace        # 84 testes, sem tela e sem placa
+cargo test --workspace        # 91 testes, sem tela e sem placa
 ```
 
 Fonte: **DejaVu Sans**. O código procura nesta ordem:
@@ -127,6 +128,7 @@ Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
 | Backlight ao dormir | **apaga e restaura** — verificado no painel (833 → 0 → 833) |
 | Brilho do painel | **controlado e persistido** — 333/1166/833 em 20/70/50 % |
 | Orientação do painel | **lida do sistema** (`fbcon/rotate`), sem nome de aparelho no código |
+| Botão de energia físico | **funciona** — toque dorme, segurar 1 s abre o menu |
 | Texto no aparelho | **não** — falta `libSDL2_ttf`; ver [docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md) |
 | Entrada por evdev no aparelho | não exercitada — 5 dispositivos existem, mas ninguém apertou botão |
 
