@@ -24,6 +24,11 @@ Os três primeiros são app e ficaram no app. O quinto era app **usando**
 característica de aparelho — foi movido para leitura de sistema. Os dois últimos
 estão documentados como pedido ao Giochi System.
 
+Falta ainda um veredito sobre um item: **os eixos analógicos**. O kernel os
+declara (`adc-joystick`), o app parseia a calibração `axis_*` do mapa, mas nada
+lê os eixos. Não é bug de camada — é funcionalidade não implementada, e ainda
+sem teste no hardware.
+
 ## O que o sistema já fornece (e o app passou a ler)
 
 | Necessidade | Interface | Estado no X55 |
@@ -32,11 +37,39 @@ estão documentados como pedido ao Giochi System.
 | Brilho do painel | `/sys/class/backlight/*/brightness` + `max_brightness` | **833 / 1666** |
 | Volume | mixer ALSA via `/dev/snd/controlC0` (libasound) | **`Master Playback Volume`, 0..255** |
 | Estado ALSA entre boots | — | **o sistema não guarda**; o app persiste |
-| Brilho salvo entre boots | `/user/.config/giochi/brightness` (lido pelo `giochi-init`) | existe o contrato, o arquivo ainda não |
-| Mapa de botões | `/etc/giochi/buttons.map` | presente, 19 teclas + calibração de eixos |
+| Brilho salvo entre boots | `/user/.config/giochi/brightness` (lido pelo `giochi-init`) | existe o contrato, o init não roda |
+| Mapa de botões | `/etc/giochi/buttons.map` | presente, 19 teclas + 9 de calibração = 28 entradas |
+| Capacidades de entrada | `/proc/bus/input/devices` (`B: KEY=`) | 20 códigos, todos cobertos pelo app |
 | Dispositivos de entrada | `/dev/input/event*` | 5 |
 | Tela | `/dev/dri/card0` | KMSDRM funciona |
 | Reinício da UI após um jogo | `giochi-init` | **não é chamado no boot** |
+
+### Capacidades declaradas × eventos entregues
+
+São duas perguntas distintas, e o sistema responde a ambas por interfaces
+diferentes:
+
+| Pergunta | Interface | Ferramenta |
+| --- | --- | --- |
+| o dispositivo **declara** o código? | `B: KEY=` em `/proc/bus/input/devices` | `aparelho.sh capacidades` |
+| o kernel **entregou** o evento? | `/dev/input/event*` | `aparelho.sh input` |
+
+O mapa real do X55, decodificado do bitmask:
+
+| Dispositivo | `eventN` | Códigos |
+| --- | --- | --- |
+| `rk805 pwrkey` | event0 | 116 `KEY_POWER` |
+| `gpio-keys-control` | event3 | 304-318 (13 botões) + 544-547 `BTN_DPAD_*` |
+| `gpio-keys-vol` | event4 | 114,115 `KEY_VOLUMEDOWN/UP` |
+
+**20 códigos, 20 cobertos** por `code_for` e pelo `buttons.map`. Isso é
+afirmação verificável, não estimativa: `bash scripts/aparelho.sh capacidades`
+responde em segundos.
+
+O bitmask engana — o kernel lista as palavras de 64 bits em ordem decrescente,
+então a última coluna é a palavra 0. E `evtest --query` devolve 0 para qualquer
+código nesta imagem, então o `/proc` é a única fonte. Detalhe em
+[ferramentas.md](ferramentas.md).
 
 ### Semântica de `fbcon=rotate:N`
 
@@ -170,3 +203,18 @@ grep -rn "x55\|X55\|rk3566" app/launcher/crates/ | grep -v "^.*//"
 Fora de comentário que **explica por que não hardcodar**, não deve haver
 resultado. O teste também existe em `display.rs`: a leitura de orientação é
 testada com arquivo temporário, sem depender de hardware.
+
+## Como usar este contrato na próxima imagem
+
+Quando o Giochi System entregar uma imagem corrigida, a pergunta não é "o app
+funciona?" — é **cada item desta tabela foi resolvido, ou verifiquei que não
+regrediu?** O roteiro está em [checklist-imagem.md](checklist-imagem.md), e ele
+já vem com a coluna "se falhar, é do sistema ou do app" preenchida.
+
+Os três itens de sistema, em ordem de impacto:
+
+| Item | Como saber que foi resolvido |
+| --- | --- |
+| `::respawn:/usr/bin/giochi-init` | ligar o aparelho e a UI aparecer sem SSH |
+| `SDL2_ttf` + freetype + TTF | `aparelho.sh diagnostico \| grep -A6 bibliotecas` com três `presente` |
+| Orientação declarada | `rotação: ... (fonte: sistema (fbcon/rotate))` no log |

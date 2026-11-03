@@ -2,7 +2,13 @@
 
 Relatório do que o **Giochi System** precisa colocar na imagem para o launcher
 funcionar completo. Levantado em 03/11/2026 no aparelho `giochi-system-x55`
-(Buildroot 2024.02, aarch64, kernel 6.12.0).
+(Buildroot 2024.02, aarch64, kernel 6.12.0) e reverificado no mesmo dia.
+
+Este documento é para o responsável pela imagem. Ele não descreve código deste
+repositório: descreve **o que a imagem precisa ter**. O que o app faz com cada
+item está em [contrato-app-sistema.md](contrato-app-sistema.md); a ordem de
+validação quando a imagem nova chegar está em
+[checklist-imagem.md](checklist-imagem.md).
 
 ## Resumo
 
@@ -94,11 +100,21 @@ escrito para dar: reiniciar o launcher quando um jogo termina (o launcher usa
 `exec`, então não sobra processo para redesenhar a UI).
 
 Consequência prática enquanto isso não entra: para ver a interface é preciso
+subir o launcher à mão.
+
+```bash
+bash scripts/aparelho.sh subir     # faz o que o `::respawn:` faria
+```
+
+Ou, sem o script, no aparelho:
 
 ```sh
 setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
   /opt/giochi/apps/launcher/bin/giochi-launcher > /tmp/ui.log 2>&1 < /dev/null &
 ```
+
+**Um aparelho que só mostra interface por SSH não é um console** — este é o item
+de maior impacto da lista, acima até do texto.
 
 ## O que NÃO precisa ser pedido
 
@@ -135,17 +151,47 @@ serrilhado.
 
 ## Como conferir se a dependência entrou
 
-No aparelho:
+**O caminho rápido**, com o aparelho na rede:
+
+```bash
+bash scripts/aparelho.sh diagnostico | grep -A6 bibliotecas
+```
+
+O esperado depois da correção:
+
+```text
+  libSDL2-2.0.so.0         presente
+  libSDL2_ttf-2.0.so.0     presente
+  libasound.so.2           presente
+  libfreetype.so.6         presente
+  fonte TTF: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+```
+
+Hoje a mesma saída diz `AUSENTE` nas duas linhas e a fonte vem vazia. As três
+coisas precisam existir juntas: **`libSDL2_ttf`**, **`freetype`** e **o TTF**.
+Faltando qualquer uma, não há texto — `SDL2_ttf` sozinho não resolve, porque ele
+carrega freetype em tempo de execução.
+
+Conferência manual, se preferir:
 
 ```sh
 ls -la /usr/lib/libSDL2_ttf*
 ls -la /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 ```
 
-Se as duas linhas existirem, basta recompilar **sem** `--no-default-features`:
+Com as duas presentes, basta recompilar **sem** `--no-default-features`:
 
 ```bash
-bash scripts/compilar-launcher-arm64.sh
+bash scripts/aparelho.sh instalar     # detecta as libs e liga a feature `texto`
+bash scripts/aparelho.sh verificar
+bash scripts/aparelho.sh log | grep -i fonte
 ```
 
-O script detecta as libs e o texto passa a aparecer.
+O log deve parar de dizer `nenhuma fonte carregada`.
+
+> **Atenção ao comparar frames:** com texto, o build do aparelho deixa de ser
+> idêntico à referência de PC sem texto. Recompile os dois no mesmo modo antes de
+> concluir que o desenho regrediu.
+
+O roteiro completo de validação de uma imagem nova (incluindo o `inittab`, que
+tem prioridade sobre este item) está em [checklist-imagem.md](checklist-imagem.md).

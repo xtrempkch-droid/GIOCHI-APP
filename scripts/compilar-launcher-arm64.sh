@@ -3,7 +3,11 @@
 #
 # Uso:
 #   bash scripts/compilar-launcher-arm64.sh                 # só compila
-#   bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
+#   bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.4
+#   bash scripts/compilar-launcher-arm64.sh --host root@192.168.1.4
+#
+# Sem --host/--instalar, o aparelho é descoberto por `aparelho.sh procurar`
+# (o IP muda a cada boot).
 #
 # ## Por que este script existe
 #
@@ -32,13 +36,33 @@ RAIZ_CACHE="${GIOCHI_ARM64_CACHE:-$HOME/.cache/giochi-arm64}"
 SYSROOT="$RAIZ_CACHE/sysroot"
 DEVS="$RAIZ_CACHE/debs"
 LIBDIR="$RAIZ_CACHE/devlibs"
-HOST_SSH="${GIOCHI_DEVICE:-root@192.168.1.6}"
+# O IP do aparelho muda a cada boot (DHCP). Sem `--instalar` explícito o script
+# tenta descobrir; se falhar, ele diz como apontar.
+HOST_SSH="${GIOCHI_DEVICE:-}"
 BASE_URL="https://archive.ubuntu.com/ubuntu/pool/main/c/cross-toolchain-base"
 LIB_DEB="libc6-dev-arm64-cross_2.35-0ubuntu1cross3_all.deb"
 RUN_DEB="libc6-arm64-cross_2.35-0ubuntu1cross3_all.deb"
 
 log()  { printf '\033[1m%s\033[0m\n' "$*"; }
 erro() { printf '\033[31merro:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Descobre o aparelho reusando `aparelho.sh procurar` em vez de duplicar a
+# varredura da /24. O endereço muda a cada boot, então fixar um padrão daria a
+# impressão de que o script "sabe" o IP — e a primeira inicialização após
+# reiniciar o aparelho falharia com uma mensagem de rede, não de configuração.
+resolver_aparelho() {
+  [ -n "$HOST_SSH" ] && return 0
+  local ip
+  # Só a linha de resultado tem a forma `<ip> <hostname>`. A linha de cabeçalho
+  # do `procurar` contém `192.168.1.0/24`, e um `grep` por IP sozinho pegava
+  # aquele endereço — que não é o aparelho.
+  ip=$(bash "$RAIZ/scripts/aparelho.sh" procurar 2>/dev/null |
+    grep -oE '^[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}[[:space:]]+[^[:space:]]+' |
+    head -1 | awk '{print $1}')
+  [ -n "$ip" ] || erro "aparelho não encontrado na rede. Use --host root@<ip> ou GIOCHI_DEVICE=root@<ip>"
+  HOST_SSH="root@$ip"
+  log "aparelho em $HOST_SSH"
+}
 
 INSTALAR=""
 while [ $# -gt 0 ]; do
@@ -83,6 +107,7 @@ precisa_do_aparelho() {
 
 if ! precisa_do_aparelho; then
   command -v scp >/dev/null || erro "scp necessário para copiar as libs do aparelho"
+  resolver_aparelho
   log "copiando libs do aparelho ($HOST_SSH) — o alvo real define o glibc"
   mkdir -p "$LIBDIR"
   for par in \

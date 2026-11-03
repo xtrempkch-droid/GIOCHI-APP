@@ -76,10 +76,12 @@ dessincronizados.
 bash scripts/compilar-launcher.sh
 
 # Aparelho (aarch64), cross-compile + instala em /opt/giochi/apps/launcher/bin:
-bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
+bash scripts/aparelho.sh instalar
 ```
 
-Detalhes e armadilhas em [docs/compilar-launcher.md](../../docs/compilar-launcher.md).
+`aparelho.sh instalar` acha o aparelho na rede (o IP muda a cada boot), delega o
+cross-compile e confere o sha256 do que ficou instalado. Detalhes e armadilhas em
+[docs/compilar-launcher.md](../../docs/compilar-launcher.md).
 Se o SDL2 já está instalado no sistema:
 
 ```bash
@@ -119,13 +121,14 @@ Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
 | Item | Estado |
 | --- | --- |
 | `prototipo/launcher.html` | funciona — HTML puro, abre no navegador |
-| `crates/core` — 48 testes | **passam** |
-| `crates/ui-sdl` — 6 testes | **passam** |
-| `cargo build --workspace` | **sem erro e sem aviso** |
+| `crates/core` — 64 testes | **passam** |
+| `crates/ui-sdl` — 57 testes | **passam** |
+| `cargo build --workspace` | **sem erro e sem aviso**, com e sem a feature `texto` |
 | x86-64 | **roda** — Home desenhada e gravada em BMP |
 | **aarch64** | **roda no aparelho** — `KMSDRM` real, frame capturado |
 | Rotação para painel retrato | **funciona** — 0 % de letterbox, 99,9 % igual à referência x86 |
 | Mapa de botões do aparelho | **parseia 13/13** (antes 1/13, por causa de comentário na linha) |
+| Cobertura das capacidades do kernel | **20/20** códigos declarados têm entrada no app |
 | Despertar por botão | **corrigido** — qualquer entrada acorda e é consumida |
 | Backlight ao dormir | **apaga e restaura** — verificado no painel (833 → 0 → 833) |
 | Brilho do painel | **controlado e persistido** — 333/1166/833 em 20/70/50 % |
@@ -134,8 +137,9 @@ Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
 | Teclas de volume | **funcionam** — passo de 5 %, repetição ao segurar, mixer real |
 | Desligar / reiniciar | **desliga de verdade** — `poweroff` cortou a energia no teste |
 | Volume no mixer ALSA | **confirmado por `alsactl`** — 70→100 % virou 255/255 |
+| Entrada por evdev no aparelho | **exercitada** — power, volume e os 13 botões mapeados |
 | Texto no aparelho | **não** — falta `libSDL2_ttf`; ver [docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md) |
-| Entrada por evdev no aparelho | não exercitada — 5 dispositivos existem, mas ninguém apertou botão |
+| Analógico | **não lido** — calibração parseada, eixos sem `absinfo` |
 
 As três suposições de API do `sdl2` 0.37 anotadas como risco foram resolvidas:
 
@@ -147,7 +151,18 @@ As três suposições de API do `sdl2` 0.37 anotadas como risco foram resolvidas
    `SDL_RenderWindowToLogical`.
 
 Falta validar: backend GLES2 (o testado foi o renderer software sobre KMSDRM),
-leitura real dos dispositivos em `/dev/input` e o desempenho no RK3326.
+leitura dos eixos analógicos e o desempenho no RK3326.
+
+Para exercitar no aparelho sem passar pela UI:
+
+```bash
+bash scripts/aparelho.sh subir
+bash scripts/aparelho.sh verificar          # processo + DRM + frame comparado
+bash scripts/aparelho.sh input 20           # o que o kernel entrega
+bash scripts/aparelho.sh capacidades        # o que o kernel promete
+```
+
+O guia das ferramentas está em [docs/ferramentas.md](../../docs/ferramentas.md).
 
 ## Relação com o protótipo
 

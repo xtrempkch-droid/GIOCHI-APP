@@ -68,44 +68,39 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 ### Verificado NO APARELHO (03/11/2026)
 
 Aparelho `giochi-system-x55`: Buildroot 2024.02, aarch64, kernel 6.12.0,
-glibc 2.38, SDL2 2.28.5, painel DSI 720×1280, 1968 MB de RAM.
-Acesso por `ssh root@192.168.1.6`.
+glibc 2.38, SDL2 2.28.5, PMIC `rk817`, painel DSI 720×1280, 1968 MB de RAM.
+Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
+`bash scripts/aparelho.sh procurar` em vez de decorar um endereço.
 
 - **Cross-compile aarch64 funciona**: `scripts/compilar-launcher-arm64.sh`
   gera o binário do zero (sysroot + libs do aparelho + wrapper de link).
 - **O launcher RODA no aparelho**: `SDL_VIDEODRIVER=kmsdrm` abre o DRM real,
-  desenha e grava frame; o laço ficou 6 s vivo sem crash.
+  desenha e grava frame; 6 descritores de DRM e 5 de `/dev/input` abertos.
 - **Rotação para painel retrato**: antes ~40 % da tela era letterbox preto e a
   UI saía deitada; agora 0 % de preto e o layout encaixa.
 - **Instalado** em `/opt/giochi/apps/launcher/bin/giochi-launcher`, o caminho
-  que o `giochi-init` espera, com sha256 idêntico ao do repositório.
-- **O `inittab` do aparelho NÃO inicia o `giochi-init`** — não há entrada
-  `::respawn:`. O launcher nunca sobe no boot; só por SSH. É do **Giochi
-  System**, registrado em `docs/dependencias-aparelho.md`.
-- `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
-- `capa.png` 320×320 gerada da paleta do tema (provisória).
-- **Corrigido o sentido da rotação**: o primeiro teste no aparelho mostrou a UI
-  de cabeça para baixo. Horário e anti-horário diferem 180°; o X55 precisa de
-  anti-horário. Confirmado por comparação de frame: 99,9 % igual à referência.
+  que o `giochi-init` espera, com sha256 idêntico ao do repositório —
+  conferido por `aparelho.sh instalar` a cada rodada.
+- **Corrigido o sentido da rotação**: o primeiro teste mostrou a UI de cabeça
+  para baixo. Horário e anti-horário diferem 180°; o X55 precisa de
+  anti-horário. Confirmado por comparação de frame: **99,9 %** igual à
+  referência, contra **10,9 %** no sentido oposto.
 - **Config de rotação com recarga ao vivo**: o arquivo é relido a cada segundo,
   então trocar o sentido não exige reabrir o launcher.
 - **Corrigido um bug que impedia os botões de funcionar**: o
-  `/etc/giochi/buttons.map` do aparelho tem comentário no fim de cada linha
+  `/etc/giochi/buttons.map` tem comentário no fim de cada linha
   (`up = BTN_DPAD_UP  # gpio4 PA0`), e o parser não cortava o `#`. Resultado:
-  **1 de 13** botões parseados, os outros 12 descartados em silêncio. O aviso
-  "mapa de botões incompleto" no console era o único indício. Agora corta e
-  tem teste com o conteúdo real do mapa.
-
-**O que ficou por confirmar nesta sessão:** o aparelho saiu da rede logo depois
-da instalação (`No route to host`, e um scan da /24 não o encontrou). O `scp`
-para `/opt/giochi/apps/launcher/bin/` concluiu e o `ls` remoto confirmou os
-432 KB, mas **não deu para executar o binário a partir desse caminho**. O
-executável testado foi o mesmo arquivo em `/tmp`, byte a byte. Ao retomar:
-
-```bash
-ssh root@<ip> 'SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
-  /opt/giochi/apps/launcher/bin/giochi-launcher --dump-frame /tmp/x.bmp'
-```
+  **1 de 13** botões parseados, os outros 12 descartados em silêncio. Agora
+  corta e tem teste com o conteúdo real do mapa.
+- **Botão de energia, volume, brilho, desligar e reiniciar: exercitados no
+  hardware.** Não são mais suposição — ver §12.
+- **Os 20 códigos de tecla declarados pelo kernel têm entrada no app.** O
+  `B: KEY=` de `/proc/bus/input/devices` foi decodificado e cruzado com
+  `code_for` e com o `buttons.map`: cobertura completa.
+- **O `inittab` NÃO inicia o `giochi-init`** — não há entrada `::respawn:`. O
+  launcher nunca sobe no boot; só por SSH. É do **Giochi System**.
+- `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
+- `capa.png` 320×320 gerada da paleta do tema (provisória).
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
   arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
   com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,
@@ -124,11 +119,12 @@ ssh root@<ip> 'SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
 - **Texto no aparelho.** Falta `libSDL2_ttf` (e freetype e fonte). O launcher
   roda com `--no-default-features` e desenha tudo menos os glifos. Pedido
   detalhado em `docs/dependencias-aparelho.md`. **É o bloqueio número um.**
-- **GLES2 e `/dev/input` no aparelho.** O que rodou foi o renderer *software*
-  sobre KMSDRM, e nenhum botão foi exercitado. Há 5 dispositivos
-  (`rk805 pwrkey`, `adc-joystick`, `rk817_ext Headphones`, `gpio-keys-control`,
-  `gpio-keys-vol`).
-- **Desempenho no RK3326** não medido.
+- **GLES2 não exercitado.** O que rodou foi o renderer *software* sobre KMSDRM,
+  que é o plano B do RK3326. O backend acelerado nunca foi aberto.
+- **Analógico não lido.** Os eixos estão declarados em `adc-joystick` e a
+  calibração (`axis_*`) já é parseada, mas normalizar exige `absinfo` por ioctl
+  e nada disso foi implementado. Os 13 botões, sim, funcionam.
+- **Desempenho no RK3326** não medido — não há contagem de FPS em campo.
 - **`bash -n` no `build-device.sh`** — fica no **Giochi System**, fora deste
   repositório, e continua sem verificação.
 
@@ -183,7 +179,8 @@ Giochi app/
 │   ├── compilar-launcher.md
 │   ├── dependencias-aparelho.md
 │   ├── contrato-app-sistema.md
-│   └── ferramentas.md
+│   ├── ferramentas.md
+│   └── checklist-imagem.md
 └── .github/workflows/validate.yml
 ```
 
@@ -279,8 +276,7 @@ node tests/run-all.mjs                    # 66 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
-bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
-bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
+bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
 cd app/launcher && cargo test --workspace  # 121 testes do launcher
 ```
 
@@ -382,23 +378,28 @@ bash scripts/compilar-launcher.sh
 cd app/launcher && cargo test --workspace
 ```
 
-Subir o launcher no aparelho (o `inittab` ainda não o inicia — ver
-`docs/contrato-app-sistema.md`):
+### Com o aparelho na mão
+
+O IP muda a cada boot e o `inittab` ainda não inicia o `giochi-init`. Os scripts
+já sabem disso:
 
 ```bash
-ssh root@<ip> 'setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
-  /opt/giochi/apps/launcher/bin/giochi-launcher > /tmp/giochi.log 2>&1 < /dev/null &'
+bash scripts/aparelho.sh procurar     # acha o IP pelo hostname
+bash scripts/aparelho.sh instalar     # compila, instala, confere sha256
+bash scripts/aparelho.sh subir        # faz o que o init deveria fazer
+bash scripts/aparelho.sh verificar    # processo + DRM + frame comparado
 ```
 
-Conferir que está desenhando de verdade, e não só vivo:
+`verificar` é o que prova que está desenhando, e não só vivo: captura o quadro,
+gera a referência no PC e compara pixel a pixel (99,9 % em `ccw`, 10,9 % em
+`cw`). Guia completo em `docs/ferramentas.md`.
 
-```bash
-ssh root@<ip> 'P=$(pidof giochi-launcher); ls -l /proc/$P/fd | grep -E "dri|input"'
-# esperado: /dev/dri/card0 + renderD128 + os 5 /dev/input/event*
-```
+### Quando chegar uma imagem nova do sistema
 
-O IP muda quando o aparelho reinicia. Se `No route to host`, varrer a /24 em vez
-de assumir o endereço antigo.
+Siga `docs/checklist-imagem.md`. Ele responde, em ordem, se a UI sobe no boot,
+se o texto aparece, se a orientação continua certa e se os botões continuam
+chegando — e diz **de quem é o problema** quando algo falha. É o roteiro da
+próxima rodada.
 
 Para migrar as fontes do antecessor:
 
@@ -422,8 +423,9 @@ mas ausente do arquivo, e o build do Rust entrou como não rastreado.
 
 ## 11. Ambiente desta sessão — o que dá e o que não dá para verificar
 
-Sessão de 03/11/2026: **Linux x86-64 com a toolchain completa**. Isto encerra a
-"era sem ferramentas" descrita nas versões anteriores deste arquivo.
+Sessão de 03/11/2026: **Linux x86-64 com a toolchain completa**, mais o aparelho
+na rede. Isto encerra a "era sem ferramentas" das versões anteriores deste
+arquivo, em que `rustc`, `git` e `bash` não existiam e nada podia ser executado.
 
 | Ferramenta | Estado | Consequência |
 | --- | --- | --- |
@@ -433,29 +435,38 @@ Sessão de 03/11/2026: **Linux x86-64 com a toolchain completa**. Isto encerra a
 | `bash` | 5.3.9 | `bash -n` nos scripts passa |
 | SDL2 / SDL2_ttf | 2.32.10 / 2.24.0 | via prefixo local em `~/.cache/giochi-sdl2/root` |
 | cross aarch64 | rustup target + sysroot 2.35 + libs do aparelho | `~/.cache/giochi-arm64` |
-| **aparelho** | `ssh root@192.168.1.6` | aarch64 real, KMSDRM funciona |
+| **aparelho** | `ssh root@<ip>`, IP **muda a cada boot** | aarch64 real, KMSDRM funciona |
+
+O aparelho entra e sai da rede (desligamento, troca de IP). Antes de qualquer
+comando, `bash scripts/aparelho.sh procurar`.
 
 O que **continua sem verificação**:
 
-1. **Alvo aarch64.** Tudo rodou em x86-64. `cargo build --target
-   aarch64-unknown-linux-gnu`, GLES2 sobre KMSDRM e `/dev/input` real não foram
-   exercitados. É o próximo item de verdade.
-2. `bash -n` no `build-device.sh` do **Giochi System** — outro repositório.
-3. `scripts/migrar-do-antecessor.sh` — sintaxe ok, execução nunca testada (falta
+1. **Backend GLES2** sobre KMSDRM — só o renderer software foi exercitado.
+2. **Eixos analógicos** — declarados pelo kernel, não lidos pelo app.
+3. **Desempenho no RK3326** — sem medição de FPS.
+4. `bash -n` no `build-device.sh` do **Giochi System** — outro repositório.
+5. `scripts/migrar-do-antecessor.sh` — sintaxe ok, execução nunca testada (falta
    um clone do antecessor).
 
 ### Regra de honestidade
 
 Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
-03/11/2026:
+03/11/2026, tudo rodado:
 
-- `node scripts/validate-app.mjs --all` → 7 apps OK
-- `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 121/121
-- `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
+- `node scripts/validate-app.mjs --all` → **7 apps OK**
+- `node tests/run-all.mjs` → **66/66**
+- `cargo test --workspace` → **121/121**
+- `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
+- `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
+- `aparelho.sh verificar` → frame 720×1280 comparado, **99,9 %** de acerto
 
-"Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
-Para o aparelho, nenhuma das duas vale ainda.
+"Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64
+**e** para o aparelho. O que não vale para o aparelho é o **texto** — e isso é
+dependência de imagem, não código.
+
+Uma afirmação já caiu por não ter sido testada: o `poweroff` (§12). A lição não
+é "cuidado com o kernel", é **testar antes de escrever**.
 
 ### Sobre o protótipo HTML
 
@@ -470,9 +481,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 6 módulos, 48 testes | **compila, testa e passa** |
-| `crates/ui-sdl` — 6 módulos, 6 testes | **compila, linka e roda** |
-| `cargo build --workspace` | zero erro, zero aviso |
+| `crates/core` — 6 módulos, 64 testes | **compila, testa e passa** |
+| `crates/ui-sdl` — 11 módulos, 57 testes | **compila, linka e roda** |
+| `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
 | Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
@@ -486,7 +497,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Teclas de volume | **confirmado no aparelho** — 70→65→...→100 e `alsactl` em 255/255 |
 | Desligar (`poweroff`) | **confirmado no aparelho** — cortou a energia de fato |
 | Mixer ALSA | **confirmado** — `Master Playback Volume`, elemento descoberto |
-| GLES2 / `/dev/input` / desempenho | **não exercitados** |
+| Cobertura do mapa de botões | **20/20** códigos do kernel têm entrada no app |
+| Ferramentas de teste | **9 subcomandos**, todos exercitados no aparelho — ver `docs/ferramentas.md` |
+| GLES2 / analógico / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
@@ -564,6 +577,50 @@ Foi esse aviso que revelou que as chaves `axis_*` (calibração do analógico) e
 declaradas pelo sistema e ignoradas pelo app. Agora são parseadas para
 `calibragem` e ficam prontas para quando a leitura do analógico entrar — sem
 voltar a aparecer como "desconhecido".
+
+### O que o kernel promete × o que ele entrega
+
+Duas perguntas diferentes, e confundi-las é o que faz depurar no escuro:
+
+| Pergunta | Ferramenta | Responde |
+| --- | --- | --- |
+| o evento chegou? | `aparelho.sh input` | lê `/dev/input` cru, sem mapa |
+| o dispositivo declara esse código? | `aparelho.sh capacidades` | lê `B: KEY=` do `/proc` |
+
+Quando um botão não reage, o cruzamento das duas dá o veredito:
+
+| declara? | entrega? | Conclusão |
+| --- | --- | --- |
+| sim | sim | kernel ok; o problema é `buttons.map` ou `code_for` |
+| sim | não | driver ou DTS não registra o evento |
+| não | sim | bitmask incompleto; aviso, não veredito |
+| não | não | o botão não existe neste hardware |
+
+**O formato do bitmask engana.** O kernel lista as palavras de 64 bits em ordem
+**decrescente**, então a última coluna é a palavra 0. Ler da esquerda desloca
+todos os códigos em múltiplos de 64 e produz um mapa plausível e errado:
+
+```text
+B: KEY=10000000000000 0    → palavra 1, bit 52 → 64+52 = 116 = KEY_POWER
+B: KEY=c000000000000 0     → palavra 1, bits 50-51 → 114 e 115 = VOLUMEDOWN/UP
+```
+
+`evtest --query` não ajuda: **devolve 0 para qualquer código** nesta imagem. O
+`/proc` é a única fonte.
+
+Mapa real do X55, decodificado:
+
+```text
+rk805 pwrkey        [event0]  116
+gpio-keys-control   [event3]  304,305,307,308,310-318   (13 botões do gamepad)
+                              544-547                   (direcional)
+gpio-keys-vol       [event4]  114,115
+```
+
+Os 4 do direcional são `BTN_DPAD_UP/DOWN/LEFT/RIGHT` — faixa `BTN_` 0x220, não
+faixa `KEY_`, e é por isso que parecem códigos sem nome. Somando: **20 códigos**,
+e os 20 têm entrada em `code_for` **e** no `buttons.map`. Cobertura completa, e
+agora há como provar isso em segundos em vez de conferir 20 linhas à mão.
 
 ### Feature `texto`
 

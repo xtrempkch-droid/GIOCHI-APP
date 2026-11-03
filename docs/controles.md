@@ -11,8 +11,9 @@ para desenhar.**
 
 O mapa por aparelho é `device/<pasta>/buttons.map` no **Giochi System**, derivado do
 DTS. Como extrair, o que já foi descoberto e por que os bancos públicos não servem
-estão em
-[Giochi system/docs/button-maps.md](../../Giochi%20system/docs/button-maps.md).
+estão em `docs/button-maps.md` **no repositório Giochi System** — não há link
+relativo aqui de propósito: os repositórios são independentes, e caminho relativo
+entre eles quebraria em qualquer clone isolado.
 
 ### Por que não a API de gamepad do SDL
 
@@ -102,6 +103,30 @@ não-zero é a palavra 1, bit 52 → `64 + 52 = 116` = `KEY_POWER`. Conferido co
 
 > `evtest --query` **não serve** para isso: nesta build ele devolve 0 para
 > qualquer código, inclusive um que o dispositivo não declara. Use o bitmask.
+
+Não faça essa conta à mão. Duas ferramentas respondem, e é o par que separa
+"driver quebrado" de "app que ignora":
+
+```bash
+bash scripts/aparelho.sh capacidades   # o que o kernel PROMETE emitir
+bash scripts/aparelho.sh input 20      # o que o kernel ENTREGOU
+```
+
+O mapa completo do X55, decodificado:
+
+| Dispositivo | `eventN` | Códigos declarados |
+| --- | --- | --- |
+| `rk805 pwrkey` | event0 | 116 `KEY_POWER` |
+| `gpio-keys-control` | event3 | 304-318 (13 botões) + 544-547 `BTN_DPAD_*` |
+| `gpio-keys-vol` | event4 | 114, 115 |
+
+**São 17 botões no controle**, que é exatamente o número que o cabeçalho do
+`buttons.map` do sistema cita. O direcional fica na faixa `BTN_` (0x220), não na
+faixa `KEY_` — e é por isso que `544..547` parecem códigos sem nome.
+
+Somando os três dispositivos: **20 códigos, todos com entrada em `code_for` e no
+`buttons.map`**. A cobertura é verificável em segundos; ver
+[ferramentas.md](ferramentas.md).
 
 O `KEY_POWER` também abre o menu pelo botão **START**, por decisão anterior;
 os dois caminhos coexistem.
@@ -260,6 +285,7 @@ launcher lê um mapa plano e não precisa conhecer modelo de hardware.
 | --- | --- |
 | 1 | Onde o gerenciador mora — recomendação acima, precisa confirmação |
 | 2 | Como o `home` segurado é detectado antes do mapeamento estar válido |
-| 3 | Analógico: precisa de `absinfo` (ioctl) para normalizar |
+| 3 | Analógico: precisa de `absinfo` (ioctl) para normalizar; a calibração `axis_*` já é parseada, os eixos não são lidos |
 | 4 | Mapa plano resolvido pelo sistema, ou seções lidas pelo launcher |
 | 5 | Limite de 10 s sem evento — valor certo? |
+| 6 | Qual driver a imagem usa: `adc-joystick` (mainline) ou `rocknix-joypad` (DTS do projeto). Muda a normalização por completo, e não há como descobrir pelo app |

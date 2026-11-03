@@ -39,6 +39,12 @@ SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8)
 SCP_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no)
 
 VERDE=$'\033[32m'; VERMELHO=$'\033[31m'; AMARELO=$'\033[33m'; NEGRITO=$'\033[1m'; ZERA=$'\033[0m'
+# Sem cor quando a saída não é um terminal. Sem isto, qualquer script que leia
+# esta saída (como a descoberta de IP do cross-compile) recebe `\x1b[32m` no meio
+# do endereço e o `grep` por IP deixa de casar.
+if [ ! -t 1 ]; then
+  VERDE=''; VERMELHO=''; AMARELO=''; NEGRITO=''; ZERA=''
+fi
 
 ok()     { printf '%s  ok%s   %s\n' "$VERDE" "$ZERA" "$*"; }
 falha()  { printf '%sFALHA%s %s\n' "$VERMELHO" "$ZERA" "$*"; }
