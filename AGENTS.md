@@ -325,6 +325,24 @@ bash scripts/compilar-launcher.sh
 cd app/launcher && cargo test --workspace
 ```
 
+Subir o launcher no aparelho (o `inittab` ainda não o inicia — ver
+`docs/contrato-app-sistema.md`):
+
+```bash
+ssh root@<ip> 'setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher > /tmp/giochi.log 2>&1 < /dev/null &'
+```
+
+Conferir que está desenhando de verdade, e não só vivo:
+
+```bash
+ssh root@<ip> 'P=$(pidof giochi-launcher); ls -l /proc/$P/fd | grep -E "dri|input"'
+# esperado: /dev/dri/card0 + renderD128 + os 5 /dev/input/event*
+```
+
+O IP muda quando o aparelho reinicia. Se `No route to host`, varrer a /24 em vez
+de assumir o endereço antigo.
+
 Para migrar as fontes do antecessor:
 
 ```bash
