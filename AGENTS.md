@@ -75,6 +75,17 @@ Acesso por `ssh root@192.168.1.6`.
   que o `giochi-init` espera.
 - `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
 - `capa.png` 320×320 gerada da paleta do tema (provisória).
+
+**O que ficou por confirmar nesta sessão:** o aparelho saiu da rede logo depois
+da instalação (`No route to host`, e um scan da /24 não o encontrou). O `scp`
+para `/opt/giochi/apps/launcher/bin/` concluiu e o `ls` remoto confirmou os
+432 KB, mas **não deu para executar o binário a partir desse caminho**. O
+executável testado foi o mesmo arquivo em `/tmp`, byte a byte. Ao retomar:
+
+```bash
+ssh root@<ip> 'SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher --dump-frame /tmp/x.bmp'
+```
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
   arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
   com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,
