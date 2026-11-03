@@ -16,6 +16,16 @@ use crate::state::{Game, Tab};
 const BACKSPACE: char = '\u{8}';
 
 pub fn reduce(state: State, cmd: Cmd) -> State {
+    // Fora de `Running`, entrada do usuário acorda — e é consumida pelo
+    // despertar. Sem isso, o botão que acorda também age: apertar A na tela de
+    // sono abriria o detalhe do jogo por baixo, e o usuário acordaria já com um
+    // overlay aberto que não pediu.
+    // `Boot` fica de fora de propósito: `BootDone` chega justamente nesse
+    // estado, e interceptar aqui impediria o launcher de sair do boot.
+    if matches!(state.screen, Screen::Sleeping | Screen::Shutdown) {
+        return from_locked_screen(state, cmd);
+    }
+
     match cmd {
         Cmd::Nav(dir) => nav(state, dir),
         Cmd::Confirm => confirm(state),
@@ -146,6 +156,37 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
 }
 
 // ── navegação ────────────────────────────────────────────────
+
+/// Tela bloqueada (sono ou desligado) → o que a entrada pode fazer.
+///
+/// A regra é uma só: **qualquer** entrada de pessoa tira a tela do estado
+/// travado, e nada além disso acontece naquele toque.
+fn from_locked_screen(state: State, cmd: Cmd) -> State {
+    match state.screen {
+        Screen::Sleeping => {
+            // A tela de sono promete "pressione qualquer botão para acordar";
+            // é isto que cumpre a promessa. `Wake` também passa por aqui.
+            if cmd.is_user_input() || cmd == Cmd::Wake {
+                State {
+                    screen: Screen::Running,
+                    ..state
+                }
+            } else {
+                state
+            }
+        }
+        // Qualquer botão reinicia, como diz o texto da tela de desligado.
+        Screen::Shutdown => {
+            if cmd.is_user_input() || cmd == Cmd::Reboot {
+                reboot(state)
+            } else {
+                state
+            }
+        }
+        // Inalcançável: só se entra aqui em `Sleeping` ou `Shutdown`.
+        Screen::Boot | Screen::Running => state,
+    }
+}
 
 fn nav(state: State, dir: Dir) -> State {
     // Ajustes rápidos: horizontal ajusta, não move.
@@ -702,6 +743,95 @@ mod tests {
 
         assert_eq!(s.carousel, 7, "índice fora da lista cai no último jogo");
         assert_eq!(s.focus, Focus::at(Zone::HomeCarousel, 7));
+    }
+
+    #[test]
+    fn qualquer_botao_acorda_a_tela() {
+        // Bug relatado no aparelho: dormia e nenhum botão voltava. A tela de
+        // sono promete "pressione qualquer botão para acordar".
+        for cmd in [
+            Cmd::Nav(Dir::Right),
+            Cmd::Confirm,
+            Cmd::Back,
+            Cmd::Options,
+            Cmd::TabNext,
+            Cmd::PowerHold,
+            Cmd::ToggleQuickSettings,
+            Cmd::FocusAt(Zone::HomeCarousel, 1),
+            Cmd::GoTab(Tab::Apps),
+        ] {
+            let mut s = demo();
+            s.screen = Screen::Sleeping;
+            s = reduce(s, cmd);
+            assert_eq!(s.screen, Screen::Running, "{cmd:?} não acordou a tela");
+        }
+    }
+
+    #[test]
+    fn o_botao_que_acorda_nao_age() {
+        let mut s = demo();
+        s.screen = Screen::Sleeping;
+        s.tab = Tab::Library;
+        s.focus = Focus::at(Zone::LibraryGrid, 2);
+
+        // A sobre um jogo da biblioteca: acorda, mas NÃO abre o detalhe.
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.screen, Screen::Running);
+        assert!(
+            s.overlays.is_empty(),
+            "o toque que acorda não pode abrir overlay"
+        );
+        assert_eq!(s.focus, Focus::at(Zone::LibraryGrid, 2), "foco intacto");
+
+        // Setas também não movem o foco durante o despertar.
+        let mut s = demo();
+        s.screen = Screen::Sleeping;
+        s.focus = Focus::at(Zone::HomeCarousel, 3);
+        let s = reduce(s, Cmd::Nav(Dir::Right));
+        assert_eq!(s.screen, Screen::Running);
+        assert_eq!(s.focus, Focus::at(Zone::HomeCarousel, 3));
+    }
+
+    #[test]
+    fn leitura_de_sistema_nao_acorda_a_tela() {
+        // Bateria chegando enquanto dorme não pode acender o aparelho.
+        for cmd in [
+            Cmd::TickHud,
+            Cmd::SetBattery(Some(80)),
+            Cmd::SetPad(true),
+            Cmd::HideToast,
+        ] {
+            let mut s = demo();
+            s.screen = Screen::Sleeping;
+            let s = reduce(s, cmd);
+            assert_eq!(
+                s.screen,
+                Screen::Sleeping,
+                "{cmd:?} não é entrada de usuário e não pode acordar"
+            );
+        }
+    }
+
+    #[test]
+    fn desligado_reinicia_com_qualquer_botao() {
+        let mut s = demo();
+        s.screen = Screen::Shutdown;
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.screen, Screen::Boot, "botão na tela de desligado reinicia");
+    }
+
+    #[test]
+    fn boot_ainda_conclui() {
+        // O guarda de tela travada não pode interceptar o fim do boot.
+        let mut s = demo();
+        s.screen = Screen::Boot;
+
+        let s = reduce(s, Cmd::BootDone);
+
+        assert_eq!(s.screen, Screen::Running);
     }
 
     #[test]

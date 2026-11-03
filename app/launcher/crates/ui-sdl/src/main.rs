@@ -6,11 +6,14 @@
 //!   giochi-launcher --font <ttf>    fonte alternativa
 //!   giochi-launcher --dump-frame <bmp>
 //!                                   desenha a Home num BMP e sai
+//!   giochi-launcher --testar-backlight
+//!                                   apaga o painel 2 s e restaura
 //!
 //! Para o aparelho (GLES2 sobre KMSDRM), defina `GIOCHI_GLES=1`. No PC deixe
 //! vazio: forçar `opengles2` no desktop costuma falhar.
 
 mod app;
+mod backlight;
 mod draw;
 mod icons;
 mod input_evdev;
@@ -41,6 +44,24 @@ fn main() -> Result<(), String> {
     if std::env::var("GIOCHI_GLES").is_ok() {
         // No aparelho o backend é GLES2; no desktop o padrão do SDL é melhor.
         sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
+    }
+
+    // Diagnóstico de campo: prova que o caminho do backlight funciona neste
+    // painel, sem precisar passar pelo menu de energia. A tela pisca de
+    // propósito — é o sinal de que escreveu no sysfs.
+    if args.iter().any(|a| a == "--testar-backlight") {
+        let mut bl = backlight::Backlight::discover();
+        if !bl.disponivel() {
+            eprintln!("nenhum /sys/class/backlight/*/brightness gravável");
+            return Err("sem backlight".into());
+        }
+        println!("apagando o painel por 2 s...");
+        bl.apagar();
+        std::thread::sleep(Duration::from_secs(2));
+        println!("restaurando...");
+        bl.restaurar();
+        println!("ok");
+        return Ok(());
     }
 
     let sdl = sdl2::init()?;

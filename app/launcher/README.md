@@ -82,7 +82,7 @@ cd app/launcher
 cargo run                     # janela 1280x720
 cargo run -- --fullscreen     # tela cheia
 cargo run -- --font caminho/para/fonte.ttf
-cargo test --workspace        # 63 testes, sem tela e sem placa
+cargo test --workspace        # 75 testes, sem tela e sem placa
 ```
 
 Fonte: **DejaVu Sans**. O código procura nesta ordem:
@@ -121,6 +121,8 @@ Verificado em 03/11/2026, no PC (x86-64) **e no aparelho** (aarch64, Buildroot
 | **aarch64** | **roda no aparelho** — `KMSDRM` real, frame capturado |
 | Rotação para painel retrato | **funciona** — 0 % de letterbox, 99,9 % igual à referência x86 |
 | Mapa de botões do aparelho | **parseia 13/13** (antes 1/13, por causa de comentário na linha) |
+| Despertar por botão | **corrigido** — qualquer entrada acorda e é consumida |
+| Backlight ao dormir | **apaga e restaura** — verificado no painel (833 → 0 → 833) |
 | Texto no aparelho | **não** — falta `libSDL2_ttf`; ver [docs/dependencias-aparelho.md](../../docs/dependencias-aparelho.md) |
 | Entrada por evdev no aparelho | não exercitada — 5 dispositivos existem, mas ninguém apertou botão |
 

@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **63/63** (48 no `core`, 15 no
+- `cargo test --workspace` em `app/launcher`: **75/75** (53 no `core`, 22 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 63 testes do launcher
+cd app/launcher && cargo test --workspace  # 75 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -376,7 +376,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 63/63
+- `cargo test --workspace` → 75/75
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -457,6 +457,35 @@ O crate `ui-sdl` compila em dois modos:
 Sem `texto`, `text_size` devolve altura aproximada para o layout não colapsar e
 `text` não desenha nada. Existe porque o aparelho **não tem** `SDL2_ttf` nem
 freetype nem fonte — ver `docs/dependencias-aparelho.md`.
+
+### Sono, despertar e backlight
+
+Três regras, todas nascidas de bug real no aparelho:
+
+1. **Qualquer entrada de pessoa acorda.** `Cmd::is_user_input` separa "um dedo
+   apertou" de "o sistema reportou" (bateria, HUD, presença de controle). O
+   reducer intercepta em `Sleeping`/`Shutdown` **antes** do `match`, e a entrada
+   é consumida pelo despertar — o botão que acorda não age. Antes disto, só
+   toque e teclado chamavam `Wake`; nenhum botão do gamepad acordava, embora a
+   tela de sono prometesse "pressione qualquer botão".
+2. **O botão segurado não pode vazar.** `poll_gamepad` roda `mapper.update`
+   mesmo dormindo (senão borda/repetição envelhecem e sai um `Confirm` fantasma
+   logo depois de acordar) e **descarta o resto do quadro** quando estava
+   travado.
+3. **Dormir apaga o backlight.** `crates/ui-sdl/src/backlight.rs` escreve em
+   `/sys/class/backlight/*/brightness`. Sem isso a tela mostrava a lua a 50 % de
+   brilho — o "bug de energia" que o usuário suspeitou era real. `apagar` é
+   idempotente (dormir duas vezes não salva 0 como "anterior"). Na abertura,
+   `destravar_tela_apagada` reacende se o valor veio 0 — proteção para o caso de
+   o processo morrer dormindo.
+
+Diagnóstico de campo, sem passar pelo menu de energia:
+
+```bash
+giochi-launcher --testar-backlight   # apaga 2 s e restaura
+```
+
+Verificado no X55: 833 → 0 → 833.
 
 ### Rotação
 

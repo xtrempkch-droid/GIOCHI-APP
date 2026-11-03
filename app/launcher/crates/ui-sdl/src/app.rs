@@ -11,6 +11,7 @@ use giochi_launcher_core::{
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 
+use crate::backlight::Backlight;
 use crate::draw::Painter;
 use crate::input_evdev::EvdevInput;
 use crate::theme;
@@ -49,6 +50,8 @@ pub struct App {
     last_minute: u64,
     /// Tempo restante até reconferir o arquivo de rotação.
     rotation_poll: f32,
+    /// Backlight: apagar ao dormir, restaurar ao acordar.
+    backlight: Backlight,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -77,14 +80,41 @@ impl App {
             toast_timer: 0.0,
             last_minute: 0,
             rotation_poll: 0.0,
+            backlight: Backlight::discover(),
         }
     }
 
     fn dispatch(&mut self, cmd: Cmd) {
+        let tela_antes = self.state.screen;
         let before = self.state.clone();
         self.state = giochi_launcher_core::update(self.state.clone(), cmd);
         if self.state != before {
             self.dirty = true;
+        }
+        self.sync_backlight(tela_antes, self.state.screen);
+    }
+
+    /// Apaga o painel ao dormir e devolve o brilho ao acordar.
+    ///
+    /// Fica aqui, e não no núcleo, porque é escrita em `sysfs`: o núcleo é puro
+    /// de propósito e precisa continuar testável sem hardware.
+    fn sync_backlight(&mut self, antes: Screen, agora: Screen) {
+        if antes == agora || !self.backlight.disponivel() {
+            return;
+        }
+        match agora {
+            Screen::Sleeping => {
+                self.backlight.apagar();
+                eprintln!("sono: backlight apagado");
+            }
+            // Só restaura quando sai do sono de fato. Ir para `Shutdown` ou
+            // `Boot` deixa a tela como está, senão a mensagem de desligado
+            // ficaria invisível.
+            Screen::Running if antes == Screen::Sleeping => {
+                self.backlight.restaurar();
+                eprintln!("acordado: backlight restaurado");
+            }
+            _ => {}
         }
     }
 
@@ -297,17 +327,44 @@ impl App {
         // `frame()` devolve valor, então o empréstimo de `evdev` termina antes de
         // `mapper` e `dispatch` precisarem de `&mut self`.
         let frame: GamepadFrame = self.evdev.frame();
+
+        // `update` roda mesmo com a tela dormindo: se ficasse de fora, a borda e
+        // a repetição internas envelheceriam e o primeiro quadro depois de
+        // acordar emitiria um `Confirm` fantasma — o usuário acordaria dentro de
+        // um jogo por causa do botão segurado.
         let commands = self.mapper.update(frame);
-        for cmd in commands {
-            self.dispatch(cmd);
-        }
 
         // `start` abre o menu de energia: ação de borda, fora do `Mapper`.
         let start_down = self.evdev.start_pressed();
-        if start_down && !self.start_was_down {
+        let start_edge = start_down && !self.start_was_down;
+        self.start_was_down = start_down;
+
+        // Dormindo ou desligado, a primeira entrada acorda — e só isso. O resto
+        // do quadro é descartado aqui para o botão que acorda não agir: era
+        // exatamente o caso relatado no aparelho, em que nenhum botão voltava
+        // porque só toque e teclado chamavam `Wake`.
+        match self.state.screen {
+            Screen::Sleeping | Screen::Shutdown => {
+                if !commands.is_empty() || start_edge {
+                    let cmd = if self.state.screen == Screen::Sleeping {
+                        Cmd::Wake
+                    } else {
+                        Cmd::Reboot
+                    };
+                    eprintln!("acordando: entrada com a tela travada");
+                    self.dispatch(cmd);
+                }
+                return;
+            }
+            Screen::Boot | Screen::Running => {}
+        }
+
+        for cmd in commands {
+            self.dispatch(cmd);
+        }
+        if start_edge {
             self.dispatch(Cmd::PowerHold);
         }
-        self.start_was_down = start_down;
     }
 
     pub fn render(&mut self) {
