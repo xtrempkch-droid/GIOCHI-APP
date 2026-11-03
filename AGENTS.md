@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **117/117** (60 no `core`, 57 no
+- `cargo test --workspace` em `app/launcher`: **121/121** (64 no `core`, 57 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 117 testes do launcher
+cd app/launcher && cargo test --workspace  # 121 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -394,7 +394,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 117/117
+- `cargo test --workspace` → 121/121
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.

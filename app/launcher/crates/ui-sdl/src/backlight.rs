@@ -19,6 +19,11 @@ pub struct Backlight {
     arquivo: Option<PathBuf>,
     /// Valor antes de apagar. `None` = não está apagado por nós.
     salvo: Option<u32>,
+    /// Arquivo onde a escolha do usuário fica gravada.
+    ///
+    /// Parametrizado para o teste poder apontar para um temporário: escrever em
+    /// `/user/.config` de verdade num teste mexeria na máquina que roda o teste.
+    arquivo_escolha: PathBuf,
 }
 
 impl Backlight {
@@ -39,7 +44,37 @@ impl Backlight {
 
         let mut bl = Self::com_arquivo(caminhos.into_iter().next());
         bl.destravar_tela_apagada();
+        bl.restaurar_salvo();
         bl
+    }
+
+    /// Reaplica o brilho que o usuário escolheu numa sessão anterior.
+    ///
+    /// O `giochi-init` deveria fazer isto no boot, mas **o `inittab` do aparelho
+    /// não o inicia** (ver docs/contrato-app-sistema.md). Enquanto isso, o app
+    /// faz — pelo mesmo motivo que já faz com o volume: sem isso a escolha do
+    /// usuário some a cada reinício e o painel volta ao padrão do hardware
+    /// (medido: arquivo 1332, hardware 833 depois de um boot).
+    ///
+    /// É idempotente com o `giochi-init`: quando ele voltar a rodar, os dois
+    /// aplicam o mesmo valor.
+    pub fn restaurar_salvo(&mut self) {
+        let Some(texto) = std::fs::read_to_string(&self.arquivo_escolha).ok() else {
+            return;
+        };
+        let Ok(valor) = texto.trim().parse::<u32>() else {
+            return;
+        };
+        // 0 nunca é intenção de brilho: é tela apagada por processo que morreu,
+        // já tratado por `destravar_tela_apagada`.
+        if valor == 0 {
+            return;
+        }
+        let valor = match self.maximo() {
+            Some(max) => valor.min(max),
+            None => valor,
+        };
+        self.escrever(valor);
     }
 
     /// Se o brilho veio a zero, alguém apagou o painel e não o acendeu de volta.
@@ -81,6 +116,7 @@ impl Backlight {
         Self {
             arquivo: None,
             salvo: None,
+            arquivo_escolha: PathBuf::from(BRILHO_SALVO),
         }
     }
 
@@ -89,6 +125,18 @@ impl Backlight {
         Self {
             arquivo,
             salvo: None,
+            arquivo_escolha: PathBuf::from(BRILHO_SALVO),
+        }
+    }
+
+    /// Igual a [`com_arquivo`](Self::com_arquivo), mas com o arquivo de escolha
+    /// também injetável.
+    #[cfg(test)]
+    pub fn com_arquivos(arquivo: Option<PathBuf>, escolha: PathBuf) -> Self {
+        Self {
+            arquivo,
+            salvo: None,
+            arquivo_escolha: escolha,
         }
     }
 
@@ -168,10 +216,10 @@ impl Backlight {
     }
 
     fn persistir(&self, valor: u32) {
-        if let Some(dir) = Path::new(BRILHO_SALVO).parent() {
+        if let Some(dir) = self.arquivo_escolha.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(BRILHO_SALVO, valor.to_string());
+        let _ = std::fs::write(&self.arquivo_escolha, valor.to_string());
     }
 }
 
@@ -249,6 +297,55 @@ mod tests {
         bl.destravar_tela_apagada();
 
         assert_eq!(ler(&dir.join("brightness")), "833", "volta para a metade");
+    }
+
+    #[test]
+    fn restaurar_salvo_reaplica_a_escolha_do_usuario() {
+        // Reproduz o que foi medido no aparelho: arquivo 1332, hardware 833
+        // depois de um boot, porque o `giochi-init` não roda.
+        let dir = dir_com_max("restaurar", 833, 1666);
+        let escolha = dir.join("escolha");
+        std::fs::write(&escolha, "1332").unwrap();
+
+        let mut bl = Backlight::com_arquivos(Some(dir.join("brightness")), escolha);
+        bl.restaurar_salvo();
+
+        assert_eq!(ler(&dir.join("brightness")), "1332");
+    }
+
+    #[test]
+    fn sem_escolha_salva_o_hardware_fica_intacto() {
+        let dir = dir_com_max("semescolha", 833, 1666);
+        let mut bl =
+            Backlight::com_arquivos(Some(dir.join("brightness")), dir.join("nao-existe"));
+        bl.restaurar_salvo();
+        assert_eq!(ler(&dir.join("brightness")), "833");
+    }
+
+    #[test]
+    fn escolha_salva_zero_nao_apaga_a_tela() {
+        // 0 no arquivo é tela apagada por processo que morreu, não intenção.
+        let dir = dir_com_max("zerosalvo", 833, 1666);
+        let escolha = dir.join("escolha");
+        std::fs::write(&escolha, "0").unwrap();
+
+        let mut bl = Backlight::com_arquivos(Some(dir.join("brightness")), escolha);
+        bl.restaurar_salvo();
+
+        assert_eq!(ler(&dir.join("brightness")), "833", "não pode apagar");
+    }
+
+    #[test]
+    fn escolha_acima_do_maximo_e_aparada() {
+        // Se o painel mudar em outra revisão, o valor antigo não estoura.
+        let dir = dir_com_max("aparar", 500, 1000);
+        let escolha = dir.join("escolha");
+        std::fs::write(&escolha, "1200").unwrap();
+
+        let mut bl = Backlight::com_arquivos(Some(dir.join("brightness")), escolha);
+        bl.restaurar_salvo();
+
+        assert_eq!(ler(&dir.join("brightness")), "1000");
     }
 
     #[test]

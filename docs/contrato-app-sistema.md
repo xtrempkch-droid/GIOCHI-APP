@@ -139,6 +139,12 @@ Dois arquivos, no diretório que o `giochi-init` já usa:
 boot; se o app não o escreve, a escolha do usuário some a cada reinício e o init
 restaura um valor que ninguém pediu — ou, pior, reacende com o padrão de código.
 
+**E o app também restaura.** Como o `inittab` não inicia o `giochi-init`, o
+brilho salvo nunca era aplicado no boot: medido no aparelho, arquivo `1332` e
+hardware em `833` (o padrão do painel). O app passou a reaplicar o arquivo na
+abertura, igual ao que já fazia com o volume. É idempotente: quando o `inittab`
+for corrigido, os dois aplicam o mesmo valor.
+
 ## Pendências de sistema, em ordem de impacto
 
 1. **`inittab` sem `::respawn:/usr/bin/giochi-init`** — a UI não sobe no boot e

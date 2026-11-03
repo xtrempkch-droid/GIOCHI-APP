@@ -87,7 +87,7 @@ cd app/launcher
 cargo run                     # janela 1280x720
 cargo run -- --fullscreen     # tela cheia
 cargo run -- --font caminho/para/fonte.ttf
-cargo test --workspace        # 117 testes, sem tela e sem placa
+cargo test --workspace        # 121 testes, sem tela e sem placa
 ```
 
 Fonte: **DejaVu Sans**. O código procura nesta ordem:
