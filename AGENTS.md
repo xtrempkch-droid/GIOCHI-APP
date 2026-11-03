@@ -217,7 +217,7 @@ Giochi app/
 │   ├── contrato-app-sistema.md
 │   ├── ferramentas.md
 │   ├── checklist-imagem.md
-│   └── mensagem-giochi-system.md
+│   └── mensagem-giochi-system.md   # ponteiro para o canal (fora do repo)
 └── .github/workflows/validate.yml
 ```
 
