@@ -130,7 +130,7 @@ O X35H é o **primeiro teste real da arquitetura**. A premissa deste repositóri
 que o mesmo binário serve em hardware diferente porque orientação, brilho, volume
 e mapa de botões vêm do sistema. Com um aparelho só (X55), isso era afirmação;
 com dois, é verificável. O roteiro — incluindo as previsões a falsificar — está
-em `docs/checklist-imagem.md` §7. **Não escrever conclusão sobre o X35H antes de
+em `docs/checklist-imagem.md` §8. **Não escrever conclusão sobre o X35H antes de
 rodar.**
 
 Duas coisas mudaram no ambiente e já estão no toolkit:

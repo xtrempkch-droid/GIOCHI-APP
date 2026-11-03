@@ -281,7 +281,33 @@ Ainda não cobertos por ferramenta:
   normalizados do `rocknix-joypad` (DTS do projeto). Qual dos dois a imagem usa
   muda a normalização por completo — ver `docs/controles.md`.
 
-## 7. Segundo aparelho: o teste da arquitetura
+## 7. Se precisarmos buildar a imagem
+
+Não é o nosso repositório, mas o dia em que for necessário buildar, esta
+armadilha aparece — relatada pela equipe do System em 03/11/2026:
+
+**CMake 4.x quebra o Buildroot 2024.02.**
+
+```text
+CMake Error at CMakeLists.txt:1 (CMAKE_MINIMUM_REQUIRED):
+  Compatibility with CMake < 3.5 has been removed from CMake.
+```
+
+O Buildroot 2024.02 é de fevereiro de 2024 e vários pacotes declaram mínimo 3.4;
+o CMake 4.0 removeu a compatibilidade. A mensagem de erro fala de CMake, não de
+versão do Buildroot — e **só aparece em build do zero**: com `work/` populado
+ninguém vê. Ou seja, **CI verde não garante build limpo**.
+
+Correção (a que o próprio CMake recomenda):
+
+```bash
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+Já está no `build-device.sh` do Giochi System, com aviso no log quando o CMake do
+host é 4.x.
+
+## 8. Segundo aparelho: o teste da arquitetura
 
 Toda a decisão de camadas deste repositório — orientação lida do sistema,
 brilho por `sysfs`, volume descoberto no mixer, sem nome de aparelho na lógica —

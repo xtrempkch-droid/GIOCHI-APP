@@ -16,7 +16,7 @@
     },
     "graphics_api_min": {
       "enum": ["gles2", "gles3", "vulkan"],
-      "description": "Default: gles3. 'vulkan' é sempre incompatível: o aparelho só tem GLES 3.0/2.0."
+      "description": "Default: gles3. 'vulkan' é sempre incompatível: o aparelho tem GLES 3.x (3.1 esperado no panfrost), não Vulkan."
     },
     "graphics_api_fallback": {
       "enum": ["gles2", "gles3"],
