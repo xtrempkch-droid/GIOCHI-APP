@@ -167,10 +167,14 @@ impl App {
     /// O núcleo só troca a tela: ele é puro e precisa continuar testável sem
     /// hardware. Quem chama `poweroff` é esta camada.
     ///
-    /// Se o comando falhar — no X55 acontece, porque o PMIC não declara
-    /// `system-power-controller` — a mensagem vai para a tela. Um aparelho que
+    /// Se o comando **falhar**, a mensagem vai para a tela — um aparelho que
     /// mostra "Sistema desligado" e continua ligado é pior que um que diz o que
     /// deu errado.
+    ///
+    /// Esta documentação já afirmou que "no X55 acontece, porque o PMIC não
+    /// declara `system-power-controller`". **É falso e foi medido:** o `poweroff`
+    /// do X55 corta a energia (03/11/2026). O tratamento de falha continua
+    /// correto e necessário; o que saiu foi a causa inventada.
     fn sync_sistema(&mut self, antes: Screen, agora: Screen) {
         // Qualquer saída das telas de sistema libera nova tentativa. Sem isso,
         // depois de uma falha o usuário não conseguiria pedir de novo.

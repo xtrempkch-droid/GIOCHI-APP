@@ -630,10 +630,14 @@ pub fn mensagem_central(p: &mut Painter, texto: &str) {
 
 /// Tela de falha ao desligar/reiniciar.
 ///
-/// Existe porque o X55 não consegue cortar a energia sozinho (o PMIC não declara
-/// `system-power-controller`): o `poweroff` para o sistema mas o painel
-/// continua alimentado. Mostrar "Sistema desligado" nessa situação é mentira —
-/// aqui o usuário lê o motivo e o que fazer.
+/// Existe para o caso em que o comando **falha** — `poweroff` que retorna com
+/// erro, binário ausente, permissão negada. Mostrar "Sistema desligado" nessa
+/// situação é mentira: aqui o usuário lê o motivo real, que vem de
+/// `system::executar`.
+///
+/// **Não** existe porque "o X55 não corta a energia". Isso já foi afirmado aqui
+/// e é falso: medido em 03/11/2026, o `poweroff` do X55 desliga de fato. A tela
+/// continua útil para qualquer falha — só não pressupõe uma causa específica.
 pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
     let w = 760;
     let x = (1280 - w) / 2;
