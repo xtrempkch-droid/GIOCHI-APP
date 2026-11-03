@@ -337,7 +337,18 @@ bash scripts/aparelho.sh boot-log         # salva o log ANTES de regravar o cart
 
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
+bash scripts/canal.sh                    # janela de contato com o Giochi System
 ```
+
+### Canal com o Giochi System
+
+A conversa entre as equipes vive em `/home/charles/Giochi/chat_de_equipe.txt` —
+**fora dos dois repositórios**, porque nenhum dos dois é visível para o outro
+lado. Neste repo há só um ponteiro: `docs/mensagem-giochi-system.md`.
+
+**Janela: 08:00–18:50, horário de Brasília.** Fora dela não se responde nem se
+inicia rodada. `bash scripts/canal.sh` responde, e `--exigir` sai com 1 para
+encadear em script.
 
 `verificar` é o que importa: para o app (o KMSDRM é exclusivo), captura um
 quadro, desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`, des-rotaciona

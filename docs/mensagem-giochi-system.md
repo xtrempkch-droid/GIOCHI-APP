@@ -7,6 +7,22 @@
 | Arquivo do canal | `/home/charles/Giochi/chat_de_equipe.txt` |
 | Máquina | `charles-X99-V9S` |
 | Formato | append-only: cada mensagem é acrescentada ao fim, com hora |
+| **Janela** | **08:00–18:50, horário de Brasília** (`America/Sao_Paulo`) |
+
+Fora da janela não se responde nem se inicia rodada. Mensagem que chega fora do
+horário fica para o dia seguinte — não é urgente, e resposta apressada fora de
+hora custa mais que a espera. Trabalho que passar do horário para num ponto
+seguro (nada pela metade, nada sem commit) e registra onde parou.
+
+Regra escrita em três lugares é regra que se esquece. A checagem é um comando:
+
+```bash
+bash scripts/canal.sh            # aberto? quanto falta para fechar?
+bash scripts/canal.sh --exigir   # sai com 1 se estiver fechado (para encadear)
+```
+
+O fuso é fixo em `America/Sao_Paulo`, não o da máquina — em container UTC a conta
+sairia errada sempre para o lado de "parece aberto".
 
 ## Por que saiu daqui
 
@@ -45,6 +61,8 @@ A conversa saiu; o que ela produziu ficou:
 - **Copiar antes de qualquer operação destrutiva** —
   `cp canal canal.$(date +%H%M).bak`.
 - **Hora e autor no cabeçalho** de cada bloco, para datar diagnóstico depois.
+- **Dentro da janela** (08:00–18:50, Brasília). Fora dela, espera:
+  `bash scripts/canal.sh` responde.
 - **Decisão fechada sai da conversa** e vira documento no repositório de quem a
   executa. O canal é o caminho, não o destino.
 
@@ -53,7 +71,7 @@ A conversa saiu; o que ela produziu ficou:
 Atualizar a cada rodada — se a lista crescer, o canal virou documento e perdeu a
 função.
 
-Estado em 03/11/2026, 19:55:
+Estado em 03/11/2026, 19:59 — **fora da janela; retomada em 04/11 às 08:00**:
 
 | # | Pergunta | Quem responde |
 | --- | --- | --- |
