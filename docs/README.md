@@ -12,6 +12,7 @@
 - [Dependências que faltam no aparelho](dependencias-aparelho.md) — o que pedir ao Giochi System: SDL2_ttf, freetype e uma fonte.
 - [Contrato app × sistema](contrato-app-sistema.md) — quem corrige o quê: características de aparelho no sistema, comportamento no app.
 - [Ferramentas](ferramentas.md) — `aparelho.sh`, `verificar-frame.mjs` e os scripts de compilação: o que cada um resolve e por que existe.
+- [Mensagem para o Giochi System](mensagem-giochi-system.md) — o handoff entre as equipes: o que o app precisa da imagem, o contrato de interfaces e o que pedir de informação.
 - [Checklist de imagem nova](checklist-imagem.md) — o que validar quando o Giochi System entrega uma imagem: em que ordem, e de quem é o problema quando falha.
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.

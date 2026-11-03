@@ -209,7 +209,8 @@ Giochi app/
 │   ├── dependencias-aparelho.md
 │   ├── contrato-app-sistema.md
 │   ├── ferramentas.md
-│   └── checklist-imagem.md
+│   ├── checklist-imagem.md
+│   └── mensagem-giochi-system.md
 └── .github/workflows/validate.yml
 ```
 
