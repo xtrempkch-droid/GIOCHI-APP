@@ -14,6 +14,7 @@ Levantado em 03/11/2026 com o aparelho `giochi-system-x55` em mãos.
 | Nenhum botão acordava da tela de sono | **app** | só toque e teclado chamavam `Wake`; o caminho do gamepad não. Nada de aparelho envolvido. |
 | Dormir não apagava o painel | **app** | o app nunca escreveu no backlight. `/sys/class/backlight` é interface genérica do Linux. |
 | Slider de brilho não fazia efeito | **app** | mudava `settings.brightness` e nada mais. |
+| Teclas de volume não faziam efeito | **app** | `volup`/`voldown` não estavam em `code_for`, então o mapa era descartado; e o volume nunca ia ao mixer. |
 | `buttons.map` parseava 1 de 13 botões | **app** | o formato do arquivo (`#` no fim da linha) está correto; quem não seguia era o parser. |
 | Rotação saía de cabeça para baixo | **app** (era remenda) | existia `DEFAULT_ROTATION = Ccw90` com o comentário "o X55 precisa". O sistema **já declara** a orientação; o app não lia. |
 | `inittab` sem `giochi-init` | **sistema** | o script existe e está correto, mas nada o chama no boot. |
@@ -29,6 +30,8 @@ estão documentados como pedido ao Giochi System.
 | --- | --- | --- |
 | Orientação do painel | `/sys/class/graphics/fbcon/rotate` (de `fbcon=rotate:N`) | **`3`** = 90° anti-horário |
 | Brilho do painel | `/sys/class/backlight/*/brightness` + `max_brightness` | **833 / 1666** |
+| Volume | mixer ALSA via `/dev/snd/controlC0` (libasound) | **`Master Playback Volume`, 0..255** |
+| Estado ALSA entre boots | — | **o sistema não guarda**; o app persiste |
 | Brilho salvo entre boots | `/user/.config/giochi/brightness` (lido pelo `giochi-init`) | existe o contrato, o arquivo ainda não |
 | Mapa de botões | `/etc/giochi/buttons.map` | presente, 19 teclas + calibração de eixos |
 | Dispositivos de entrada | `/dev/input/event*` | 5 |
@@ -85,6 +88,7 @@ Dois arquivos, no diretório que o `giochi-init` já usa:
 | --- | --- | --- | --- |
 | `/user/.config/giochi/brightness` | **app** (ao mudar o brilho) | `giochi-init` no boot | inteiro na escala do hardware (`0..max_brightness`) |
 | `/user/.config/giochi/rotation` | usuário/sistema | app, a cada segundo | `0`, `90`, `270` ou `ccw` |
+| `/user/.config/giochi/volume` | **app** | app na abertura | 0..100 |
 
 **O brilho precisa ser escrito pelo app.** O `giochi-init` restaura o arquivo no
 boot; se o app não o escreve, a escolha do usuário some a cada reinício e o init

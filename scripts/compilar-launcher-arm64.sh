@@ -19,6 +19,8 @@
 #     libgcc_s/libSDL2 **do próprio aparelho**, que é o alvo real.
 #  4. O aparelho não tem `libSDL2_ttf` → compila com `--no-default-features`
 #     (sem a feature `texto`). Ver docs/dependencias-aparelho.md.
+#  5. `libasound` (controle de volume) também é copiada do aparelho: a versão do
+#     sysroot do Ubuntu não é a que o codec dele espera.
 #
 # Requisitos: `ssh`/`scp` para o aparelho, `curl`, `dpkg-deb`, `rustup`.
 set -euo pipefail
@@ -74,7 +76,7 @@ fi
 # Não dá para usar as do Ubuntu: o libSDL2 do aparelho pede símbolos
 # `@GLIBC_2.38` que o sysroot 2.35 não tem, e o link falha.
 precisa_do_aparelho() {
-  [ -f "$LIBDIR/libSDL2.so" ] &&
+  [ -f "$LIBDIR/libSDL2.so" ] && [ -f "$LIBDIR/libasound.so" ] &&
     [ -f "$SYSROOT/usr/aarch64-linux-gnu/lib/libc.so.6" ] &&
     [ -f "$SYSROOT/usr/aarch64-linux-gnu/lib/libm.so.6" ]
 }
@@ -85,6 +87,7 @@ if ! precisa_do_aparelho; then
   mkdir -p "$LIBDIR"
   for par in \
     "/usr/lib/libSDL2-2.0.so.0.2800.5:$LIBDIR/libSDL2.so" \
+    "/usr/lib/libasound.so.2.0.0:$LIBDIR/libasound.so" \
     "/lib/libc.so.6:$SYSROOT/usr/aarch64-linux-gnu/lib/libc.so.6" \
     "/lib/libm.so.6:$SYSROOT/usr/aarch64-linux-gnu/lib/libm.so.6" \
     "/lib/libgcc_s.so.1:$LIBDIR/libgcc_s.so.1" \

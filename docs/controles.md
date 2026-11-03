@@ -106,7 +106,49 @@ não-zero é a palavra 1, bit 52 → `64 + 52 = 116` = `KEY_POWER`. Conferido co
 O `KEY_POWER` também abre o menu pelo botão **START**, por decisão anterior;
 os dois caminhos coexistem.
 
-## 3. O programa de gerenciamento
+## 3. Teclas de volume
+
+`gpio-keys-vol` (event4) emite `KEY_VOLUMEDOWN` (114) e `KEY_VOLUMEUP` (115).
+Diferente do botão de energia, **estas passam pelo `buttons.map`** — o sistema as
+declara como `volup` / `voldown`, e o app só consulta.
+
+| Gesto | Ação |
+| --- | --- |
+| Toque | um passo de 5 % |
+| Segurar | repete: 1 passo imediato, 400 ms de atraso, depois a cada 120 ms |
+
+O volume vai ao mixer de verdade: `Master Playback Volume` via libasound. Não é
+número de UI.
+
+### Por que o app controla ALSA
+
+O mixer é interface **padrão** do Linux (`/dev/snd/controlC0`), do mesmo jeito que
+o backlight é `/sys/class/backlight`. O elemento é **descoberto** (prefere
+`Master`, depois `PCM`, depois `Playback`, senão o primeiro com volume de
+reprodução) — fixar um nome seria remenda, porque o nome é decisão do codec.
+
+### Persistência
+
+O sistema **não** guarda estado ALSA: não há `alsactl` no init, `/var/lib/alsa`
+está vazio e não existe `/etc/asound.conf`. Então o volume voltaria ao padrão do
+codec a cada boot.
+
+O app grava `/user/.config/giochi/volume` e reaplica na abertura (mesmo contrato
+do brilho).
+
+### Diagnóstico
+
+```sh
+giochi-launcher --mostrar-volume    # o que o mixer diz agora
+giochi-launcher --volume 30         # aplica, pelo mesmo caminho da UI
+giochi-launcher --espiar-input 20   # mostra cada tecla que chega do kernel
+```
+
+O espião é o que separa "não chega ao sistema" de "chega e o app ignora": ele lê
+`/dev/input/event*` cru, sem mapa e sem tradução. A saída nomeia cada código, e
+no fim diz quantos eventos vieram.
+
+## 4. O programa de gerenciamento
 
 Pedido: "vamos precisar de alguma aplicação para gerenciar isso, mesmo que seja algo
 adicional".
@@ -188,7 +230,7 @@ launcher lê um mapa plano e não precisa conhecer modelo de hardware.
 
 ---
 
-## 4. Em aberto
+## 5. Em aberto
 
 | # | Assunto |
 | --- | --- |

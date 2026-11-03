@@ -68,6 +68,17 @@ if ! tem_sdl2; then
     if [ ! -e "$LIBDIR/libSDL2.so" ]; then
       ln -sf libSDL2-2.0.so.0 "$LIBDIR/libSDL2.so"
     fi
+
+    # `libasound` (volume) costuma existir só como `libasound.so.2`, que o
+    # linker não usa: ele procura `libasound.so`, que vem do pacote -dev.
+    if [ ! -e "$LIBDIR/libasound.so" ]; then
+      ASOUND="$(ldconfig -p 2>/dev/null | awk '/libasound\.so\.2 /{print $NF; exit}')"
+      if [ -n "$ASOUND" ]; then
+        ln -sf "$ASOUND" "$LIBDIR/libasound.so"
+      else
+        echo "aviso: libasound.so.2 ausente — o volume não vai linkar" >&2
+      fi
+    fi
   else
     erro "pkg-config não achou sdl2/SDL2_ttf. Instale libsdl2-dev e libsdl2-ttf-dev."
   fi

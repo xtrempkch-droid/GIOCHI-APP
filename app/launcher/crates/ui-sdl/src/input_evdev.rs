@@ -43,8 +43,10 @@ const ABS_HAT0Y: u16 = 0x11;
 /// Caminho padrão do mapa, instalado pelo Giochi System.
 pub const DEFAULT_MAP_PATH: &str = "/etc/giochi/buttons.map";
 
-/// `KEY_POWER` em `linux/input-event-codes.h`. Botão de energia do PMIC.
+/// Códigos `KEY_*` de `linux/input-event-codes.h` que o aparelho declara.
 pub const KEY_POWER: u16 = 116;
+pub const KEY_VOLUMEDOWN: u16 = 114;
+pub const KEY_VOLUMEUP: u16 = 115;
 
 /// Evento normalizado que sai das threads.
 enum Ev {
@@ -56,6 +58,21 @@ enum Ev {
 #[derive(Clone, Debug)]
 pub struct ButtonsMap {
     by_name: HashMap<String, u16>,
+    /// Calibração dos analógicos, declarada pelo sistema com chaves `axis_*`.
+    ///
+    /// Não são símbolos evdev: são a faixa real de cada eixo, que varia com o
+    /// ADC do aparelho (`adc-joystick`, faixa 15..1023 aqui). O laço ainda não
+    /// lê o analógico, mas **guardar a declaração** evita o descarte silencioso
+    /// e deixa o dado pronto para quando a leitura entrar.
+    calibragem: HashMap<String, i32>,
+    /// Símbolos que o arquivo declarou e esta build não conhece.
+    ///
+    /// O mapa é do **sistema**; o tradutor é do app. Quando o sistema declara
+    /// algo novo, o app precisa dizer que não sabe — antes disto o símbolo era
+    /// descartado em silêncio e o botão simplesmente não funcionava, sem
+    /// nenhuma pista. Aconteceu duas vezes: com comentário no fim da linha e com
+    /// `KEY_VOLUMEUP`.
+    desconhecidos: Vec<String>,
 }
 
 impl ButtonsMap {
@@ -68,6 +85,13 @@ impl ButtonsMap {
         match fs::read_to_string(path) {
             Ok(text) => {
                 let map = Self::parse(&text);
+                if !map.desconhecidos.is_empty() {
+                    eprintln!(
+                        "aviso: {} símbolo(s) do mapa não reconhecido(s): {}",
+                        map.desconhecidos.len(),
+                        map.desconhecidos.join(", ")
+                    );
+                }
                 if map.by_name.is_empty() {
                     Self::default_map()
                 } else {
@@ -80,6 +104,8 @@ impl ButtonsMap {
 
     pub fn parse(text: &str) -> Self {
         let mut by_name = HashMap::new();
+        let mut calibragem = HashMap::new();
+        let mut desconhecidos = Vec::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
@@ -94,11 +120,29 @@ impl ButtonsMap {
             // recebia `BTN_DPAD_UP        # gpio4 PA0` e descartava a entrada em
             // silêncio — o mapa do aparelho parseava 1 de 13 botões.
             let value = value.split('#').next().unwrap_or("").trim();
-            if let Some(code) = code_for(value) {
-                by_name.insert(name, code);
+            if name.starts_with("axis_") {
+                match value.parse::<i32>() {
+                    Ok(v) => {
+                        // Sem o prefixo: `eixo("x_min")`, não `eixo("axis_x_min")`.
+                        let chave = name.trim_start_matches("axis_").to_string();
+                        calibragem.insert(chave, v);
+                    }
+                    Err(_) => desconhecidos.push(format!("{name} = {value}")),
+                }
+                continue;
+            }
+            match code_for(value) {
+                Some(code) => {
+                    by_name.insert(name, code);
+                }
+                None => desconhecidos.push(format!("{name} = {value}")),
             }
         }
-        Self { by_name }
+        Self {
+            by_name,
+            calibragem,
+            desconhecidos,
+        }
     }
 
     /// Mapa padrão, igual ao `[default]` do antecessor.
@@ -121,7 +165,19 @@ impl ButtonsMap {
         ] {
             by_name.insert(name.to_string(), code);
         }
-        Self { by_name }
+        Self {
+            by_name,
+            calibragem: HashMap::new(),
+            desconhecidos: Vec::new(),
+        }
+    }
+
+    /// Faixa declarada de um eixo, ex.: `("x_min", 15)`.
+    ///
+    /// Fica público porque é o dado que a leitura do analógico vai precisar
+    /// para normalizar; hoje só o teste usa.
+    pub fn eixo(&self, nome: &str) -> Option<i32> {
+        self.calibragem.get(nome).copied()
     }
 
     pub fn code(&self, name: &str) -> Option<u16> {
@@ -133,6 +189,15 @@ impl ButtonsMap {
             .iter()
             .all(|name| self.by_name.contains_key(*name))
     }
+}
+
+/// Um botão do mapa está pressionado?
+///
+/// Livre (não método) para poder ser testado sem abrir `/dev/input`.
+fn pressionado(map: &ButtonsMap, estado: &HashMap<u16, bool>, nome: &str) -> bool {
+    map.code(nome)
+        .and_then(|c| estado.get(&c).copied())
+        .unwrap_or(false)
 }
 
 /// Nome de símbolo do kernel → código. Só o que o mapa usa.
@@ -155,6 +220,14 @@ fn code_for(symbol: &str) -> Option<u16> {
         "BTN_DPAD_DOWN" => 0x221,
         "BTN_DPAD_LEFT" => 0x222,
         "BTN_DPAD_RIGHT" => 0x223,
+        // Teclas KEY_*, usadas pelos botões de sistema do aparelho
+        // (`gpio-keys-vol`, `rk805 pwrkey`), não pelo controle.
+        "KEY_VOLUMEDOWN" => KEY_VOLUMEDOWN,
+        "KEY_VOLUMEUP" => KEY_VOLUMEUP,
+        "KEY_POWER" => KEY_POWER,
+        "KEY_HOME" => 102,
+        "KEY_MENU" => 139,
+        "KEY_BACK" => 158,
         _ => return None,
     })
 }
@@ -287,19 +360,27 @@ impl EvdevInput {
         self.pressed.get(&KEY_POWER).copied().unwrap_or(false)
     }
 
+    /// Estado dos botões de volume, lidos **pelo mapa**.
+    ///
+    /// Diferente do power (que é do PMIC e não passa pelo mapa), `volup` e
+    /// `voldown` estão declarados no `/etc/giochi/buttons.map` — então é o
+    /// sistema decidindo, e o app só consulta.
+    ///
+    /// Devolve `(cima, baixo)`.
+    pub fn volume_pressed(&self) -> (bool, bool) {
+        (
+            pressionado(&self.map, &self.pressed, "volup"),
+            pressionado(&self.map, &self.pressed, "voldown"),
+        )
+    }
+
     /// `start` abre o menu de energia; o núcleo trata fora do `Mapper`.
     pub fn start_pressed(&self) -> bool {
-        self.map
-            .code("start")
-            .and_then(|code| self.pressed.get(&code).copied())
-            .unwrap_or(false)
+        pressionado(&self.map, &self.pressed, "start")
     }
 
     pub fn home_pressed(&self) -> bool {
-        self.map
-            .code("home")
-            .and_then(|code| self.pressed.get(&code).copied())
-            .unwrap_or(false)
+        pressionado(&self.map, &self.pressed, "home")
     }
 }
 
@@ -403,9 +484,109 @@ mod tests {
     }
 
     #[test]
-    fn simbolo_desconhecido_e_ignorado() {
+    fn simbolo_desconhecido_e_ignorado_mas_reportado() {
         let map = ButtonsMap::parse("a = BTN_INVENTADO\n");
         assert_eq!(map.code("a"), None);
+        // O silêncio foi a causa de dois bugs reais. Agora tem que aparecer.
+        assert_eq!(map.desconhecidos, vec!["a = BTN_INVENTADO".to_string()]);
+    }
+
+    #[test]
+    fn tecla_de_volume_do_mapa_vira_estado_pressionado() {
+        // Cadeia completa do lado do app: linha do mapa → código evdev →
+        // consulta de estado. Sem isto, "o botão de volume não faz nada" fica
+        // sem saber se o problema é o mapa, o código ou o kernel.
+        let map = ButtonsMap::parse("volup = KEY_VOLUMEUP\nvoldown = KEY_VOLUMEDOWN\n");
+        let mut estado: HashMap<u16, bool> = HashMap::new();
+
+        assert!(!pressionado(&map, &estado, "volup"), "solto");
+
+        estado.insert(115, true);
+        assert!(pressionado(&map, &estado, "volup"), "KEY_VOLUMEUP apertado");
+        assert!(!pressionado(&map, &estado, "voldown"));
+
+        estado.insert(115, false);
+        estado.insert(114, true);
+        assert!(!pressionado(&map, &estado, "volup"), "soltou");
+        assert!(pressionado(&map, &estado, "voldown"));
+    }
+
+    #[test]
+    fn botao_fora_do_mapa_nunca_esta_pressionado() {
+        let map = ButtonsMap::parse("a = BTN_SOUTH\n");
+        let mut estado = HashMap::new();
+        estado.insert(0x130, true);
+        assert!(!pressionado(&map, &estado, "volup"), "não declarado no mapa");
+    }
+
+    #[test]
+    fn calibragem_dos_eixos_e_guardada_nao_descartada() {
+        // `axis_*` não é símbolo evdev: é a faixa real do ADC do aparelho.
+        let map = ButtonsMap::parse(
+            "axis_x_min = 15\naxis_x_max = 1023\naxis_y_deadzone = 30\n",
+        );
+        assert_eq!(map.eixo("x_min"), Some(15));
+        assert_eq!(map.eixo("x_max"), Some(1023));
+        assert_eq!(map.eixo("y_deadzone"), Some(30));
+        assert!(
+            map.desconhecidos.is_empty(),
+            "calibragem não é símbolo desconhecido: {:?}",
+            map.desconhecidos
+        );
+    }
+
+    #[test]
+    fn eixo_com_valor_invalido_e_reportado() {
+        let map = ButtonsMap::parse("axis_x_min = abc
+");
+        assert_eq!(map.eixo("x_min"), None);
+        assert_eq!(map.desconhecidos.len(), 1);
+    }
+
+    #[test]
+    fn teclas_de_sistema_do_mapa_sao_reconhecidas() {
+        // Linhas reais do /etc/giochi/buttons.map do aparelho.
+        let map = ButtonsMap::parse(
+            "volup   = KEY_VOLUMEUP       # gpio4 PA5\n\
+             voldown = KEY_VOLUMEDOWN     # gpio4 PA3\n",
+        );
+        assert_eq!(map.code("volup"), Some(115));
+        assert_eq!(map.code("voldown"), Some(114));
+        assert!(map.desconhecidos.is_empty(), "nada pode sobrar sem tradução");
+    }
+
+    #[test]
+    fn mapa_completo_do_aparelho_nao_tem_simbolo_orfao() {
+        // O mapa inteiro, como está no aparelho. Se o sistema acrescentar uma
+        // tecla que o app não conhece, este teste é o que avisa.
+        let mapa = "up = BTN_DPAD_UP # gpio4 PA0\n\
+             down = BTN_DPAD_DOWN # gpio4 PA1\n\
+             left = BTN_DPAD_LEFT # gpio3 PD6\n\
+             right = BTN_DPAD_RIGHT # gpio3 PD7\n\
+             a = BTN_EAST # gpio3 PD3\n\
+             b = BTN_SOUTH # gpio3 PD2\n\
+             x = BTN_NORTH # gpio3 PD5\n\
+             y = BTN_WEST # gpio3 PD4\n\
+             l = BTN_TL # gpio3 PD0\n\
+             r = BTN_TR # gpio3 PC6\n\
+             l2 = BTN_TL2 # gpio3 PD1\n\
+             r2 = BTN_TR2 # gpio3 PC7\n\
+             start = BTN_START # gpio4 PA2\n\
+             select = BTN_SELECT # gpio4 PA4\n\
+             home = BTN_MODE\n\
+             thumbl = BTN_THUMBL # gpio4 PA7\n\
+             thumbr = BTN_THUMBR # gpio4 PB0\n\
+             volup = KEY_VOLUMEUP # gpio4 PA5\n\
+             voldown = KEY_VOLUMEDOWN # gpio4 PA3\n";
+        let map = ButtonsMap::parse(mapa);
+        assert!(
+            map.desconhecidos.is_empty(),
+            "símbolos sem tradução: {:?}",
+            map.desconhecidos
+        );
+        assert!(map.is_complete());
+        assert_eq!(map.code("volup"), Some(115));
+        assert_eq!(map.code("voldown"), Some(114));
     }
 
     #[test]

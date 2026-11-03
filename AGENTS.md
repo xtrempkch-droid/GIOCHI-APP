@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **91/91** (53 no `core`, 38 no
+- `cargo test --workspace` em `app/launcher`: **107/107** (53 no `core`, 54 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 91 testes do launcher
+cd app/launcher && cargo test --workspace  # 107 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -394,7 +394,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 91/91
+- `cargo test --workspace` → 107/107
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -426,6 +426,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Brilho no painel | **confirmado** — `--brilho 20/70/50` → 333/1166/833, e persiste |
 | Despertar por botão | **confirmado no aparelho** — log registra o gesto |
 | Botão de energia físico | **confirmado no aparelho** — segurar 1 s abriu o menu |
+| Teclas de volume | **confirmado no aparelho** — 70→65→...→100 e `alsactl` em 255/255 |
+| Mixer ALSA | **confirmado** — `Master Playback Volume`, elemento descoberto |
 | GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -467,6 +469,25 @@ testes passaram a rodar:
 4. **`rows = 6` no painel rápido** era um número solto; o núcleo declara
    `QUICK_SETTINGS_ROWS = 8` (6 controles + 2 botões). Agora vem da constante.
 
+### Descarte silencioso no `buttons.map`
+
+O mapa é do **sistema**; o tradutor de símbolos é do app. Um símbolo que o app
+não conhece era descartado em silêncio, e o botão simplesmente não funcionava —
+sem pista nenhuma. Aconteceu **duas vezes**: com comentário no fim da linha
+(`up = BTN_DPAD_UP  # gpio4 PA0`, que deixava 1 de 13 botões) e com
+`KEY_VOLUMEUP`/`KEY_VOLUMEDOWN`.
+
+Hoje `ButtonsMap::parse` acumula `desconhecidos` e `load` avisa uma vez:
+
+```text
+aviso: 9 símbolo(s) do mapa não reconhecido(s): axis_x_min = 15, ...
+```
+
+Foi esse aviso que revelou que as chaves `axis_*` (calibração do analógico) eram
+declaradas pelo sistema e ignoradas pelo app. Agora são parseadas para
+`calibragem` e ficam prontas para quando a leitura do analógico entrar — sem
+voltar a aparecer como "desconhecido".
+
 ### Feature `texto`
 
 O crate `ui-sdl` compila em dois modos:
@@ -506,7 +527,13 @@ Três regras, todas nascidas de bug real no aparelho:
    o usuário segura sem nenhum sinal. Antes disto o `PowerHold` estava ligado
    apenas ao botão START, e o power não fazia nada.
    A medição vive em `crates/ui-sdl/src/power.rs` (puro, 7 testes).
-5. **O slider de brilho agora chega no painel.** Antes era decorativo: mudava
+5. **As teclas de volume funcionam e controlam o mixer.** `gpio-keys-vol`
+   (event4) emite `KEY_VOLUMEDOWN`/`KEY_VOLUMEUP` (114/115), declarados no
+   `buttons.map` — então passam pelo mapa, ao contrário do power. O volume vai
+   ao ALSA de verdade (`Master Playback Volume` via libasound), com passo de
+   5 % e repetição ao segurar (400 ms, depois 120 ms). Antes era só número na
+   tela.
+6. **O slider de brilho agora chega no painel.** Antes era decorativo: mudava
    `settings.brightness` e nada em `sysfs`. Agora `definir_fracao` converte para
    a escala do `max_brightness`, escreve e **grava
    `/user/.config/giochi/brightness`** — o arquivo que o `giochi-init` lê no
@@ -517,7 +544,13 @@ Diagnóstico de campo, no próprio aparelho:
 ```bash
 giochi-launcher --testar-backlight   # apaga 2 s e restaura
 giochi-launcher --brilho 40          # mesmo caminho do slider, e persiste
+giochi-launcher --mostrar-volume     # o que o mixer ALSA diz agora
+giochi-launcher --volume 30          # aplica pelo mesmo caminho da UI
+giochi-launcher --espiar-input 20    # cada tecla crua que chega do kernel
 ```
+
+`--espiar-input` é o que separa "o evento não chega ao sistema" de "chega e o
+app ignora". Lê `/dev/input/event*` cru, sem mapa, e nomeia cada código.
 
 O botão de energia deixa rastro no log, o que permite diagnosticar sem adivinhar:
 

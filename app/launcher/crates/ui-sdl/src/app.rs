@@ -14,6 +14,7 @@ use sdl2::keyboard::Keycode;
 use crate::backlight::Backlight;
 use crate::draw::Painter;
 use crate::power::{PowerAction, PowerWatch};
+use crate::volume::{abrir_mixer, MixerBox, Repeticao, Volume};
 use crate::input_evdev::EvdevInput;
 use crate::theme;
 use crate::views::{self, Hit, Layout};
@@ -55,6 +56,11 @@ pub struct App {
     backlight: Backlight,
     /// Botão de energia físico.
     power: PowerWatch,
+    /// Volume real do mixer (não só o número da UI).
+    volume: Volume<MixerBox>,
+    /// Repetição das teclas de volume enquanto seguradas.
+    rep_cima: Repeticao,
+    rep_baixo: Repeticao,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -79,6 +85,25 @@ impl App {
             state.settings.brightness = pct;
         }
 
+        // Volume: o sistema não guarda estado ALSA (não há `alsactl` no init),
+        // então a escolha do usuário vive em /user/.config/giochi/volume e é
+        // reaplicada aqui. Ler o hardware primeiro e o arquivo depois garante
+        // que a intenção do usuário vence o padrão do codec.
+        let mut volume = Volume::novo(abrir_mixer());
+        if volume.disponivel() {
+            volume.restaurar_salvo();
+        }
+        state.settings.volume = volume.atual();
+        eprintln!(
+            "volume: {}% ({})",
+            volume.atual(),
+            if volume.disponivel() {
+                "mixer ALSA encontrado"
+            } else {
+                "sem mixer; a UI funciona sem som"
+            }
+        );
+
         Self {
             state,
             mapper: Mapper::new(),
@@ -97,12 +122,16 @@ impl App {
             rotation_poll: 0.0,
             backlight,
             power: PowerWatch::novo(),
+            volume,
+            rep_cima: Repeticao::novo(),
+            rep_baixo: Repeticao::novo(),
         }
     }
 
     fn dispatch(&mut self, cmd: Cmd) {
         let tela_antes = self.state.screen;
         let brilho_antes = self.state.settings.brightness;
+        let volume_antes = self.state.settings.volume;
         let before = self.state.clone();
         self.state = giochi_launcher_core::update(self.state.clone(), cmd);
         if self.state != before {
@@ -110,6 +139,18 @@ impl App {
         }
         self.sync_backlight(tela_antes, self.state.screen);
         self.sync_brilho(brilho_antes, self.state.settings.brightness);
+        self.sync_volume(volume_antes, self.state.settings.volume);
+    }
+
+    /// Leva o volume da UI ao mixer.
+    ///
+    /// Antes disto o volume era só um número: mudar na tela não mudava o som.
+    fn sync_volume(&mut self, antes: u8, agora: u8) {
+        if antes == agora || !self.volume.disponivel() {
+            return;
+        }
+        let aplicado = self.volume.definir(agora);
+        eprintln!("volume: {antes}% -> {aplicado}%");
     }
 
     /// Leva o slider de brilho ao hardware.
@@ -403,6 +444,17 @@ impl App {
         }
         if start_edge {
             self.dispatch(Cmd::PowerHold);
+        }
+
+        // Teclas de volume do aparelho (`gpio-keys-vol`, declaradas no mapa).
+        let (cima, baixo) = self.evdev.volume_pressed();
+        let passos_cima = self.rep_cima.update(cima, delta_seconds);
+        let passos_baixo = self.rep_baixo.update(baixo, delta_seconds);
+        if passos_cima > 0 {
+            self.dispatch(Cmd::AdjustVolume(passos_cima as i8));
+        }
+        if passos_baixo > 0 {
+            self.dispatch(Cmd::AdjustVolume(-(passos_baixo as i8)));
         }
 
         match power_acao {
