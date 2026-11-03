@@ -224,10 +224,13 @@ static SEARCH: [Prim; 2] = [
 
 /// Devolve o ícone pelo nome usado nos dados do catálogo.
 pub fn get(name: &str) -> Option<&'static Icon> {
+    // `Icon` é só um fat pointer para dados estáticos: promovê-lo a `static`
+    // dentro do bloco evita devolver referência a um temporário.
     macro_rules! icon {
-        ($prims:ident) => {
-            Some(&Icon { prims: &$prims })
-        };
+        ($prims:ident) => {{
+            static ICON: Icon = Icon { prims: &$prims };
+            Some(&ICON)
+        }};
     }
     match name {
         "home" => icon!(HOME),

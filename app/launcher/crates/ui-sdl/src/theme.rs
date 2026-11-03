@@ -44,7 +44,6 @@ pub const TOPBAR_H: i32 = 56;
 pub const FOOTER_H: i32 = 54;
 pub const SAFE_X: i32 = 160;
 pub const SAFE_W: i32 = 960;
-pub const PAD: i32 = 6;
 
 pub const RADIUS_CARD: i32 = 18;
 pub const RADIUS_PANEL: i32 = 16;

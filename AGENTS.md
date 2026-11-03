@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 02/11/2026.
+> Atualizado em: 03/11/2026.
 
 ## 1. Objetivo
 
@@ -42,27 +42,37 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - Workflow de validação em PR e push.
 - Documentação em `docs/` (5 páginas).
 
-### Validado nesta sessão
+### Validado nesta sessão (03/11/2026, Linux com toolchain completa)
 
-- `node scripts/validate-app.mjs --all` passou: **6 apps**, todos em `scaffold`.
+- `node scripts/validate-app.mjs --all` passou: **7 apps**, todos em `scaffold`.
 - `node tests/run-all.mjs` passou: **39/39**.
+- `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
+  zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
+- `cargo test --workspace` em `app/launcher`: **54/54** (48 no `core`, 6 no
+  `ui-sdl`).
+- O launcher **roda**: Home desenhada de verdade e gravada em BMP com
+  `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
+- `bash -n scripts/migrar-do-antecessor.sh` e `bash -n
+  scripts/compilar-launcher.sh`: **sem erro de sintaxe**.
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
   arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
   com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,
   `bin/` ausente, nome de pasta inválido, `forge.json` inválido, licença em formato
   inválido e **GPL declarada na imagem assinada**.
 
-### Não executado / pendente
+### Ainda pendente
 
-- **Código-fonte dos apps NÃO foi migrado.** Nenhum `src/` tem conteúdo. O script
-  existe, mas nunca foi executado — não há `git` neste ambiente.
+- **Código-fonte dos apps não foi migrado.** Nenhum `src/` tem conteúdo. O script
+  existe e passa por `bash -n`, mas **nunca rodou de verdade** — falta um clone do
+  antecessor para apontar.
 - **Nenhum `bin/` tem conteúdo.** Os jogos são projetos Godot e precisam de export
   ARM64; as ferramentas são Python e precisam ser empacotadas.
 - **Nenhuma `capa.png`** existe: 320×320 não foi gerado para nenhum app.
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
-- **Repositório Git não criado.** `git` não está instalado neste ambiente.
-- **`scripts/migrar-do-antecessor.sh` nunca rodou** nem passou por `bash -n` —
-  mesmo risco do `build-device.sh` no Giochi System.
+- **Launcher: zero teste no alvo.** Tudo foi verificado em x86-64. Cross-build
+  aarch64, GLES2 sobre KMSDRM e leitura real de `/dev/input` seguem sem validação.
+- **`bash -n` no `build-device.sh`** — fica no **Giochi System**, fora deste
+  repositório, e continua sem verificação.
 
 ## 4. Estrutura
 
@@ -76,13 +86,18 @@ Giochi app/
 │   ├── arcade-volleyball/     # jogo padrão (image, godot)
 │   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
 │   ├── spacewar/              # jogo padrão (image, godot)
-│   └── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
+│   ├── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
+│   └── launcher/              # Rust + SDL2 (image, native)
+│       ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
+│       ├── crates/core/       # núcleo puro, sem SDL
+│       └── crates/ui-sdl/     # janela, desenho, evdev
 ├── schemas/
 │   ├── metadata.schema.json
 │   └── forge.schema.json
 ├── scripts/
 │   ├── validate-app.mjs
 │   ├── migrar-do-antecessor.sh
+│   ├── compilar-launcher.sh   # resolve SDL2 e compila o launcher
 │   └── lib/
 │       ├── apps.mjs
 │       └── png.mjs
@@ -96,7 +111,11 @@ Giochi app/
 │   ├── metadata.md
 │   ├── forge.md
 │   ├── pacote.md
-│   └── licenciamento.md
+│   ├── licenciamento.md
+│   ├── controles.md
+│   ├── integracao.md
+│   ├── diagnostico-prototipo.md
+│   └── compilar-launcher.md
 └── .github/workflows/validate.yml
 ```
 
@@ -190,7 +209,15 @@ node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
 node tests/run-all.mjs                    # 39 testes
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
+
+bash scripts/compilar-launcher.sh         # build do launcher, resolve o SDL2
+cd app/launcher && cargo test --workspace  # 54 testes do launcher
 ```
+
+`compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
+achar `sdl2`/`SDL2_ttf`: sem elas o **link** falha, mesmo com o `rustc`
+compilando sem erro. Em máquina sem root o script extrai os `.deb` num prefixo
+local. Passo a passo e armadilhas em `docs/compilar-launcher.md`.
 
 Não use `node --test tests/`: o runner spawna um processo por arquivo e sob
 sandbox falha com `spawn EPERM`. O runner próprio existe por isso.
@@ -238,28 +265,18 @@ Nenhuma das três etapas funciona hoje:
 ## 9. Como retomar
 
 ```bash
-cd "C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi app"
 node scripts/validate-app.mjs --all
 node tests/run-all.mjs
+bash scripts/compilar-launcher.sh
+cd app/launcher && cargo test --workspace
 ```
 
-Para migrar as fontes do antecessor (exige `git`):
+Para migrar as fontes do antecessor:
 
 ```bash
 git clone https://github.com/xtrempkch-droid/GIOCHI-KONSOL-OS.git ~/giochi-antigo
 bash scripts/migrar-do-antecessor.sh ~/giochi-antigo
 node scripts/validate-app.mjs --all
-```
-
-Para publicar no GitHub:
-
-```bash
-git init
-git add .
-git commit -m "Initial Giochi app structure"
-git branch -M main
-git remote add origin https://github.com/xtrempkch-droid/GIOCHI-APP.git
-git push -u origin main
 ```
 
 ## 10. Arquivos que não devem ser commitados
@@ -268,43 +285,51 @@ git push -u origin main
 `.vscode/`, `.idea/` e `target/` (build do Rust).
 
 **`bin/` deve ser commitado** — é exatamente o que vai para o aparelho.
-O `.gitignore` reflete isso.
+**`app/launcher/Cargo.lock` também** — o launcher é binário, e o lock fixa as
+versões que foram de fato compiladas.
+
+O `.gitignore` reflete isso. Ele já esteve errado: `target/` estava listado aqui
+mas ausente do arquivo, e o build do Rust entrou como não rastreado.
 
 ## 11. Ambiente desta sessão — o que dá e o que não dá para verificar
 
-Máquina: Windows, sem toolchain de desenvolvimento instalada. Situação real:
+Sessão de 03/11/2026: **Linux x86-64 com a toolchain completa**. Isto encerra a
+"era sem ferramentas" descrita nas versões anteriores deste arquivo.
 
 | Ferramenta | Estado | Consequência |
 | --- | --- | --- |
-| `node` | **disponível** (runtime do DSH) | validador e testes JS rodam e passam |
-| `rustc` / `cargo` | **ausente** | `crates/core/*.rs` **nunca foi compilado** |
-| `git` | ausente | nenhum repositório criado, nenhum commit |
-| `bash` | ausente | `migrar-do-antecessor.sh` nunca rodou nem passou por `bash -n` |
-| `rustup` | ausente | não há como instalar o toolchain sem baixar da internet |
+| `node` | 24.22.0 | validador e testes JS rodam |
+| `rustc` / `cargo` | 1.99.0 | launcher compila, linka, roda e testa |
+| `git` | 2.53.0 | repositório existe, commits possíveis |
+| `bash` | 5.3.9 | `bash -n` nos scripts passa |
+| SDL2 / SDL2_ttf | 2.32.10 / 2.24.0 | via prefixo local em `~/.cache/giochi-sdl2/root` |
+
+O que **continua sem verificação**:
+
+1. **Alvo aarch64.** Tudo rodou em x86-64. `cargo build --target
+   aarch64-unknown-linux-gnu`, GLES2 sobre KMSDRM e `/dev/input` real não foram
+   exercitados. É o próximo item de verdade.
+2. `bash -n` no `build-device.sh` do **Giochi System** — outro repositório.
+3. `scripts/migrar-do-antecessor.sh` — sintaxe ok, execução nunca testada (falta
+   um clone do antecessor).
 
 ### Regra de honestidade
 
-Nada aqui pode ser declarado "funciona" sem ter sido executado. O que está
-verificado:
+Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
+03/11/2026:
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
+- `cargo test --workspace` → 54/54
+- `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
-O que **não** está verificado e precisa de atenção no primeiro ambiente com
-ferramentas:
+"Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
+Para o aparelho, nenhuma das duas vale ainda.
 
-1. `cargo test` em `app/launcher` — 44 testes escritos, zero compilados. Rust que
-   não compila é código morto, então isto é o primeiro item.
-2. `bash -n scripts/migrar-do-antecessor.sh`
-3. `bash -n` no `build-device.sh` do **Giochi System**
-4. `prototipo/launcher.html` — este **funciona**: é HTML puro, sem build. Abrir no
-   navegador é a validação.
+### Sobre o protótipo HTML
 
-### Por que o HTML foi corrigido em vez de só documentado
-
-Sem toolchain, a única coisa executável nesta máquina é o HTML. Corrigi-lo dá uma
-referência que dá para **ver funcionando** agora, e serve de especificação
-visual para a UI em Rust. Ele não é o produto: o produto é o binário Rust.
+Continua sendo a referência visual e roda sem build. Ele não é o produto: o
+produto é o binário Rust.
 
 ## 12. Launcher — estado específico
 
@@ -314,23 +339,52 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 6 módulos, 44 testes | escrito, **não compilado** |
-| `crates/ui-sdl` — 6 módulos (~2.900 linhas) | escrito, **não compilado** |
-| Protótipo HTML corrigido | **funcional** — `app/launcher/prototipo/launcher.html` |
-| Fonte | **DejaVu Sans** — permissiva, ampla cobertura, já instalada em distros Linux. O TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`. |
+| `crates/core` — 6 módulos, 48 testes | **compila, testa e passa** |
+| `crates/ui-sdl` — 6 módulos, 6 testes | **compila, linka e roda** |
+| `cargo build --workspace` | zero erro, zero aviso |
+| Execução real | **roda** — `--dump-frame` grava a Home em BMP |
+| Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
+| Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
+| Cross-build aarch64 / KMSDRM / `/dev/input` | **não testado** — sem placa |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
-### Riscos abertos na compilação
+### Suposições de API do `sdl2` 0.37 — resolvidas
 
-Nada do Rust passou por `rustc`. Pontos onde a API do `sdl2` 0.37 foi assumida:
+As três anotadas como risco na sessão anterior foram verificadas na compilação:
 
-1. `Sdl2TtfContext::load_font` devolver `Font<'static, 'static>`. Se embutir o
-   tempo de vida do caminho, o cache de fontes precisa mudar de estratégia.
-2. `GameControllerSubsystem::open` recebendo `u32`.
-3. `Canvas::window_to_logical` existir na 0.37.
+1. `load_font` devolve `Font<'static, 'static>` — **procede**. O caminho é vazado
+   com `Box::leak` para satisfazer o tempo de vida.
+2. `GameControllerSubsystem::open` — **não é usado**: a entrada é por evdev.
+3. `Canvas::window_to_logical` — **não existe** na 0.37. A conversão foi refeita
+   em `Painter::window_to_logical`, com a mesma matemática do
+   `SDL_RenderWindowToLogical` (escala uniforme + letterbox centrado), sem
+   `unsafe`.
 
-O resto foi escrito de forma conservadora: sem macro avançada, sem trait
-genérica, sem `unsafe`.
+Outros pontos que o compilador cobrou e que mudaram a forma do código:
+
+- `TextureCreator` agora vive dentro do `Painter`. Antes era criado por chamada de
+  texto, e a `Texture` empresta dele — manter os dois vivos exigia guardá-lo.
+- `Event::TouchFingerDown` não existe; o evento é `Event::FingerDown`.
+- O macro de ícone devolvia referência a temporário; virou `static` local.
+
+### Bugs de comportamento que a compilação expôs
+
+Compilar não prova nada sobre o comportamento — estes só apareceram porque os
+testes passaram a rodar:
+
+1. **Quatro `use of moved value`** em `reduce.rs` (`AdjustVolume`,
+   `AdjustBrightness`, e dois em `nav`). Foi o único motivo de o crate não
+   compilar.
+2. **`carousel` dessincronizado do foco.** `views` desenha o cartão central por
+   `state.carousel`, mas só `nav` mantinha os dois juntos. Trocar de aba, voltar
+   de um overlay e tocar num cartão deixavam destaque e desenho divergentes.
+   Corrigido com o helper `focus_on`, por onde passam `FocusAt`, `GoTab`,
+   `tab_step` e `go_back`.
+3. **Toque em cartão lateral abria o jogo.** O protótipo centrava primeiro e só
+   abria se o cartão já era o central. O port abria direto — regressão silenciosa
+   que nenhum teste pegaria sem compilar.
+4. **`rows = 6` no painel rápido** era um número solto; o núcleo declara
+   `QUICK_SETTINGS_ROWS = 8` (6 controles + 2 botões). Agora vem da constante.
 
 ### Decisões de desenho
 

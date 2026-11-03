@@ -39,10 +39,9 @@ pub struct App {
     /// idênticos. Redesenhar 60 vezes por segundo uma tela que não mudou é gasto
     /// puro de CPU e bateria num portátil.
     ///
-    /// Escolhi isso em vez de cache de textura porque o `rust-sdl2` amarra
-    /// `Texture` ao `TextureCreator`, que por sua vez empresta o `Canvas` — manter
-    /// os dois na mesma struct exigiria `unsafe`. Não redesenhar resolve o mesmo
-    /// problema sem tocar nessa parede.
+    /// Só redesenhar quando algo muda é mais barato que cachear textura: o
+    /// catálogo é pequeno, mas o custo de recriar cada texto por quadro aparece
+    /// no RK3326. Como não há animação, dois quadros seguidos são idênticos.
     dirty: bool,
     /// Tempo restante do aviso na tela, em segundos.
     toast_timer: f32,
@@ -54,6 +53,11 @@ pub struct App {
 const TOAST_SECONDS: f32 = 2.2;
 
 impl App {
+    /// Grava o último quadro em BMP. Ver `Painter::save_frame`.
+    pub fn save_frame(&self, path: &str) -> Result<(), String> {
+        self.painter.save_frame(path)
+    }
+
     pub fn new(painter: Painter, state: State, evdev: EvdevInput) -> Self {
         Self {
             state,
@@ -107,7 +111,7 @@ impl App {
                 self.pointer(*x, *y);
             }
 
-            Event::TouchFingerDown { x, y, .. } => {
+            Event::FingerDown { x, y, .. } => {
                 // Coordenadas de toque vêm normalizadas (0..1).
                 let px = (x * self.window_size.0 as f32) as i32;
                 let py = (y * self.window_size.1 as f32) as i32;
@@ -150,7 +154,15 @@ impl App {
         match hit {
             Hit::Tab(tab) => self.dispatch(Cmd::GoTab(tab)),
             Hit::Filter(filter) => self.dispatch(Cmd::SetFilter(filter)),
-            Hit::Carousel(index) => self.dispatch(Cmd::OpenGame(index)),
+            Hit::Carousel(index) => {
+                // Igual ao protótipo: o cartão lateral entra no centro, e só o
+                // cartão central abre o detalhe.
+                if self.state.carousel == index {
+                    self.dispatch(Cmd::OpenGame(index));
+                } else {
+                    self.dispatch(Cmd::FocusAt(Zone::HomeCarousel, index));
+                }
+            }
             Hit::Game(slot) => {
                 // `slot` é a posição na lista filtrada, não no catálogo.
                 if let Some(game_index) = self.state.filtered_games().get(slot).copied() {

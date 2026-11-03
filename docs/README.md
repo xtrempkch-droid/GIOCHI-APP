@@ -8,6 +8,7 @@
 - [Requisitos do app](forge.md) — o `forge.json` e como a compatibilidade é calculada.
 - [Formato do pacote](pacote.md) — o arquivo `.giochi` que vai para a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
+- [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.

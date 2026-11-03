@@ -11,7 +11,9 @@
   "scripts": {
     "validate": "node scripts/validate-app.mjs --all",
     "validate:json": "node scripts/validate-app.mjs --all --json",
-    "test": "node tests/run-all.mjs"
+    "test": "node tests/run-all.mjs",
+    "build:launcher": "bash scripts/compilar-launcher.sh",
+    "test:launcher": "cd app/launcher && cargo test --workspace"
   },
   "keywords": [
     "giochi",

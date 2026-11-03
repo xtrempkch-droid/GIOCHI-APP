@@ -6,12 +6,13 @@
 //! Separar "desenhar" de "calcular posições" seria a receita para os dois
 //! saírem de sincronia.
 
-use giochi_launcher_core::state::{Filter, Overlay, Tab, KEYBOARD, KEYBOARD_COLS, SETTINGS_CATEGORIES};
+use giochi_launcher_core::state::{
+    Filter, Overlay, Tab, KEYBOARD, KEYBOARD_COLS, QUICK_SETTINGS_ROWS, SETTINGS_CATEGORIES,
+};
 use giochi_launcher_core::{State, Zone};
 use sdl2::rect::Rect;
 
 use crate::draw::{Clip, Painter};
-use crate::icons;
 use crate::theme;
 
 pub const SAFE_X: i32 = theme::SAFE_X;
@@ -418,8 +419,8 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
             break;
         };
         let game = &state.games[game_index];
-        let row = slot / cols;
-        let col = slot % cols;
+        let row = slot as i32 / cols;
+        let col = slot as i32 % cols;
         let x = SAFE_X + PAD + col * (cell_w + gap);
         let y = grid_top + row * (cell_h + gap);
 
@@ -467,8 +468,8 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
     let cell_h = (MAIN_H - PAD * 2 - gap * (rows - 1)) / rows;
 
     for (i, app) in state.apps.iter().enumerate() {
-        let row = i / cols;
-        let col = i % cols;
+        let row = i as i32 / cols;
+        let col = i as i32 % cols;
         if row >= rows {
             break;
         }
@@ -664,8 +665,9 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     let w = 520;
     let x = (1280 - w) / 2;
     let y = 140;
-    let rows = 6;
-    let h = 52 + rows * 46 + 60;
+    // 6 controles + 2 botões, igual ao `QUICK_SETTINGS_ROWS` do núcleo.
+    let rows = QUICK_SETTINGS_ROWS - 2;
+    let h = 52 + rows as i32 * 46 + 60;
     panel(p, x, y, w, h);
 
     p.text_left(x + 16, y + 16, "Ajustes rápidos", theme::F_BODY, theme::TEXT);
@@ -1040,5 +1042,3 @@ impl GameLabel for giochi_launcher_core::Game {
     }
 }
 
-/// Reexport para o `app` não depender de detalhes de layout.
-pub use giochi_launcher_core::Screen;

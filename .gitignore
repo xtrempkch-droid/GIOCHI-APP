@@ -25,3 +25,6 @@ desktop.ini
 *.translation
 
 # NÃO ignore bin/: é exatamente o que vai para o aparelho.
+
+# Rust — saída de build
+target/

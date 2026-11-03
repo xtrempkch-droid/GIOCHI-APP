@@ -66,12 +66,17 @@ dessincronizados.
 
 ## Rodar
 
+Da raiz do repositório, `bash scripts/compilar-launcher.sh` resolve o SDL2 (inclui
+o caso sem root) e compila. Detalhes em
+[docs/compilar-launcher.md](../../docs/compilar-launcher.md). Se o SDL2 já está
+instalado no sistema:
+
 ```bash
 cd app/launcher
 cargo run                     # janela 1280x720
 cargo run -- --fullscreen     # tela cheia
 cargo run -- --font caminho/para/fonte.ttf
-cargo test -p giochi-launcher-core
+cargo test --workspace        # 54 testes, sem tela e sem placa
 ```
 
 Fonte: **DejaVu Sans**. O código procura nesta ordem:
@@ -97,21 +102,29 @@ vazio.
 
 ## O que está verificado e o que não está
 
+Compilado e exercitado em 03/11/2026 (Linux x86-64, rustc 1.99, SDL2 2.32.10 +
+SDL2_ttf 2.24.0):
+
 | Item | Estado |
 | --- | --- |
-| `prototipo/launcher.html` | **funciona** — sintaxe JS validada com `node --check` |
-| `crates/core` + `crates/ui-sdl` | **não compilado** — não há `rustc`/`cargo` na máquina onde foi escrito |
+| `prototipo/launcher.html` | funciona — HTML puro, abre no navegador |
+| `crates/core` — 48 testes | **passam** |
+| `crates/ui-sdl` — 6 testes | **passam** |
+| `cargo build --workspace` | **sem erro e sem aviso** |
+| Execução real | **roda** — Home desenhada e gravada em BMP com `--dump-frame` |
+| Alvo aarch64 / KMSDRM | **não testado** — não há placa aqui |
 
-São ~3.900 linhas de Rust escritas sem compilador. Isso é o risco aberto número
-um do projeto: **`cargo test` antes de qualquer confiança.**
+As três suposições de API do `sdl2` 0.37 anotadas como risco foram resolvidas:
 
-Pontos onde a API do `sdl2` foi assumida e podem precisar de ajuste:
+1. `load_font` devolver `Font<'static, 'static>` — **procede**; o caminho vai para
+   `Box::leak` para satisfazer o tempo de vida.
+2. `GameControllerSubsystem::open` — **não é usado**: a entrada é por evdev.
+3. `Canvas::window_to_logical` — **não existe** na 0.37. A conversão foi refeita
+   em `Painter::window_to_logical`, com a mesma matemática do
+   `SDL_RenderWindowToLogical`.
 
-1. `Sdl2TtfContext::load_font` devolvendo `Font<'static, 'static>` — se a
-   assinatura embutir o tempo de vida do caminho, o cache de fontes precisa de
-   outra estratégia.
-2. `GameControllerSubsystem::open` recebendo `u32`.
-3. `Canvas::window_to_logical` existir na versão 0.37.
+Falta validar: cross-build aarch64, backend GLES2 sobre KMSDRM e a leitura real
+dos dispositivos em `/dev/input`.
 
 ## Relação com o protótipo
 
@@ -122,8 +135,8 @@ reinterpretação. O diagnóstico dos defeitos do mockup original está em
 
 ## O que falta
 
-- **Compilar e testar** (item 0 de tudo).
-- **Fonte TTF** com licença compatível.
+- **Cross-build aarch64** e teste na placa (o único alvo que importa).
+- **Fonte TTF** dentro do pacote, com licença compatível.
 - **Leitura real** de bateria, temperatura e apps instalados; hoje a UI mostra
   `—` onde não há sensor.
 - **Lançar apps de verdade** — o código registra a intenção e mostra aviso.

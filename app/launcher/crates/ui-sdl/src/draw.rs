@@ -17,11 +17,12 @@
 
 use std::collections::HashMap;
 
-use sdl2::pixels::Color;
+use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
-use sdl2::render::{BlendMode, Canvas, TextureCreator, WindowCanvas};
+use sdl2::surface::Surface;
+use sdl2::render::{BlendMode, TextureCreator, WindowCanvas};
 use sdl2::ttf::{Font, Sdl2TtfContext};
-use sdl2::video::Window;
+use sdl2::video::{Window, WindowContext};
 
 use crate::icons::{self, Prim};
 use crate::theme;
@@ -45,6 +46,9 @@ pub struct Clip {
 
 pub struct Painter {
     canvas: WindowCanvas,
+    /// Guardado porque `Texture` empresta do `TextureCreator`. Criar um por
+    /// texto obrigaria a manter os dois vivos ao mesmo tempo dentro da função.
+    creator: TextureCreator<WindowContext>,
     ttf: Option<&'static Sdl2TtfContext>,
     /// Fonte por tamanho. Guardadas sem empréstimo do `Painter`, por isso
     /// `'static`: ver `take_font`.
@@ -80,8 +84,11 @@ impl Painter {
         // O caminho precisa ser `'static` para a `Font` ser `'static`.
         let font_path: &'static str = Box::leak(font_path.to_string().into_boxed_str());
 
+        let creator = canvas.texture_creator();
+
         Ok(Self {
             canvas,
+            creator,
             ttf,
             fonts: HashMap::new(),
             font_path,
@@ -114,13 +121,53 @@ impl Painter {
         self.canvas.present();
     }
 
+    /// Tamanho do espaço de projeto, o que `set_logical_size` fixou.
+    ///
+    /// Não confundir com `output_size`, que é o tamanho real em pixels da
+    /// janela: é justamente a diferença entre os dois que define a escala.
     pub fn logical_size(&self) -> (u32, u32) {
-        self.canvas.output_size().unwrap_or((1280, 720))
+        let (w, h) = self.canvas.logical_size();
+        if w == 0 || h == 0 {
+            (1280, 720)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// Grava o quadro atual em BMP.
+    ///
+    /// Serve para conferir o desenho numa máquina sem tela, com
+    /// `SDL_VIDEODRIVER=dummy` — é a única forma de validar a UI aqui sem
+    /// hardware. Não é usado no aparelho.
+    pub fn save_frame(&self, path: &str) -> Result<(), String> {
+        let (w, h) = self.canvas.output_size()?;
+        let format = PixelFormatEnum::ABGR8888;
+        let mut pixels = self.canvas.read_pixels(None, format)?;
+        let pitch = w * format.byte_size_per_pixel() as u32;
+        let surface = Surface::from_data(&mut pixels, w, h, pitch, format)?;
+        surface.save_bmp(path)
     }
 
     /// Converte coordenada de janela (toque) para o espaço de projeto.
+    ///
+    /// O wrapper `Canvas::window_to_logical` **não existe** no `sdl2` 0.37, mas
+    /// o `SDL_RenderWindowToLogical` do C existe e faz exatamente esta conta.
+    /// Refazê-la aqui evita `unsafe` sobre o ponteiro cru do renderer, que é
+    /// privado no crate. É a mesma matemática: escala uniforme
+    /// (`min` dos dois eixos) e letterbox centrado.
     pub fn window_to_logical(&self, x: i32, y: i32) -> Option<(i32, i32)> {
-        self.canvas.window_to_logical(x, y).ok()
+        let (out_w, out_h) = self.canvas.output_size().ok()?;
+        let (lw, lh) = self.logical_size();
+        if out_w == 0 || out_h == 0 {
+            return None;
+        }
+        let scale = (out_w as f32 / lw as f32).min(out_h as f32 / lh as f32);
+        let off_x = (out_w as f32 - lw as f32 * scale) / 2.0;
+        let off_y = (out_h as f32 - lh as f32 * scale) / 2.0;
+        Some((
+            ((x as f32 - off_x) / scale).round() as i32,
+            ((y as f32 - off_y) / scale).round() as i32,
+        ))
     }
 
     // ── recorte ──────────────────────────────────────────────
@@ -430,8 +477,7 @@ impl Painter {
 
         if let Ok(surface) = rendered {
             width = surface.width() as i32;
-            let creator: TextureCreator<_> = self.canvas.texture_creator();
-            if let Ok(texture) = creator.create_texture_from_surface(&surface) {
+            if let Ok(texture) = self.creator.create_texture_from_surface(&surface) {
                 let dx = match align {
                     Align::Left => x,
                     Align::Center => x - width / 2,

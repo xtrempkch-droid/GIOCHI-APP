@@ -4,6 +4,8 @@
 //!   giochi-launcher                 janela 1280×720
 //!   giochi-launcher --fullscreen    tela cheia
 //!   giochi-launcher --font <ttf>    fonte alternativa
+//!   giochi-launcher --dump-frame <bmp>
+//!                                   desenha a Home num BMP e sai
 //!
 //! Para o aparelho (GLES2 sobre KMSDRM), defina `GIOCHI_GLES=1`. No PC deixe
 //! vazio: forçar `opengles2` no desktop costuma falhar.
@@ -22,6 +24,13 @@ use giochi_launcher_core::{App as AppEntry, Game, State};
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let fullscreen = args.iter().any(|a| a == "--fullscreen");
+    // Diagnóstico: desenha um quadro e sai. Serve para conferir a UI com
+    // `SDL_VIDEODRIVER=dummy`, numa máquina sem tela.
+    let dump_frame = args
+        .iter()
+        .position(|a| a == "--dump-frame")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
     let font_path = args
         .iter()
         .position(|a| a == "--font")
@@ -85,6 +94,13 @@ fn main() -> Result<(), String> {
 
         app.tick(delta.min(0.1));
         app.render();
+
+        if let Some(path) = dump_frame.as_deref() {
+            if app.state.screen == giochi_launcher_core::Screen::Running {
+                app.save_frame(path)?;
+                break;
+            }
+        }
 
         // Trava em ~60 Hz sem depender de vsync do backend.
         let frame = Duration::from_micros(16_666);

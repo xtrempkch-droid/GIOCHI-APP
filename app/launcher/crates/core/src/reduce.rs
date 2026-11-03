@@ -6,10 +6,11 @@
 
 use crate::cmd::{Cmd, Dir};
 use crate::focus::{navigate, Focus, Zone};
-use crate::state::{
-    Filter, Game, HUD, Overlay, Perf, Screen, Settings, State, Tab, Toast, GAME_DETAIL_ACTIONS,
-    KEYBOARD, KEYBOARD_COLS, POWER_ACTIONS,
-};
+use crate::state::{Filter, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS};
+// `Game` e `Tab` só aparecem na construção de estado de teste (`demo` e `mod
+// tests`); importá-los sempre geraria aviso no build de produção.
+#[cfg(test)]
+use crate::state::{Game, Tab};
 
 /// Backspace no teclado virtual.
 const BACKSPACE: char = '\u{8}';
@@ -75,10 +76,12 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
             ..state
         },
         Cmd::AdjustVolume(delta) => {
-            set_volume(state, state.settings.volume as i16 + delta as i16 * 5)
+            let value = state.settings.volume as i16 + delta as i16 * 5;
+            set_volume(state, value)
         }
         Cmd::AdjustBrightness(delta) => {
-            set_brightness(state, state.settings.brightness as i16 + delta as i16 * 5)
+            let value = state.settings.brightness as i16 + delta as i16 * 5;
+            set_brightness(state, value)
         }
         Cmd::SetVolume(value) => set_volume(state, value as i16),
         Cmd::SetBrightness(value) => set_brightness(state, value as i16),
@@ -97,14 +100,10 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
 
         // ── ponteiro/toque ───────────────────────────────────
         Cmd::FocusAt(zone, index) => {
-            let len = state.zone_len(zone);
-            if len == 0 {
+            if state.zone_len(zone) == 0 {
                 state
             } else {
-                State {
-                    focus: Focus::at(zone, index.min(len - 1)),
-                    ..state
-                }
+                focus_on(state, zone, index)
             }
         }
         Cmd::GoTab(tab) => {
@@ -113,11 +112,7 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
             }
             let zone = tab.zone();
             let index = state.saved_focus.get(&zone).copied().unwrap_or(0);
-            State {
-                tab,
-                focus: Focus::at(zone, index),
-                ..state
-            }
+            focus_on(State { tab, ..state }, zone, index)
         }
         Cmd::OpenGame(index) => {
             if index < state.games.len() {
@@ -157,8 +152,14 @@ fn nav(state: State, dir: Dir) -> State {
     if state.focus.zone == Zone::QuickSettings && matches!(dir, Dir::Left | Dir::Right) {
         let delta: i16 = if dir == Dir::Right { 5 } else { -5 };
         return match state.focus.index {
-            0 => set_volume(state, state.settings.volume as i16 + delta),
-            1 => set_brightness(state, state.settings.brightness as i16 + delta),
+            0 => {
+                let value = state.settings.volume as i16 + delta;
+                set_volume(state, value)
+            }
+            1 => {
+                let value = state.settings.brightness as i16 + delta;
+                set_brightness(state, value)
+            }
             2 => {
                 let step: isize = if dir == Dir::Right { 1 } else { -1 };
                 State {
@@ -378,11 +379,7 @@ fn go_back(state: State) -> State {
     };
     let index = state.saved_focus.get(&zone).copied().unwrap_or(0);
 
-    State {
-        overlays,
-        focus: Focus::at(zone, index),
-        ..state
-    }
+    focus_on(State { overlays, ..state }, zone, index)
 }
 
 fn open_detail(state: State) -> State {
@@ -437,6 +434,26 @@ fn toggle_quick_settings(state: State) -> State {
 
 // ── ciclo de vida ────────────────────────────────────────────
 
+/// Move o foco para `zone`/`index`, mantendo o carrossel coerente com o foco.
+///
+/// `carousel` é campo derivado: `views` desenha o item central por
+/// `state.carousel`, não por `focus.index`. Toda troca de zona passa por aqui
+/// para que o item destacado e o item desenhado não possam divergir.
+fn focus_on(state: State, zone: Zone, index: usize) -> State {
+    let len = state.zone_len(zone);
+    let index = if len == 0 { 0 } else { index.min(len - 1) };
+    let carousel = if zone == Zone::HomeCarousel {
+        index
+    } else {
+        state.carousel
+    };
+    State {
+        focus: Focus::at(zone, index),
+        carousel,
+        ..state
+    }
+}
+
 fn tab_step(state: State, delta: isize) -> State {
     if state.has_overlay() || state.screen != Screen::Running {
         return state;
@@ -449,12 +466,15 @@ fn tab_step(state: State, delta: isize) -> State {
     let zone = tab.zone();
     let index = saved_focus.get(&zone).copied().unwrap_or(0);
 
-    State {
-        tab,
-        saved_focus,
-        focus: Focus::at(zone, index),
-        ..state
-    }
+    focus_on(
+        State {
+            tab,
+            saved_focus,
+            ..state
+        },
+        zone,
+        index,
+    )
 }
 
 fn power_short(state: State) -> State {
@@ -637,6 +657,51 @@ mod tests {
         let s = reduce(s, Cmd::TabPrev);
         assert_eq!(s.tab, Tab::Home);
         assert_eq!(s.carousel, 5, "carrossel volta na posição anterior");
+    }
+
+    #[test]
+    fn tocar_num_cartao_lateral_traz_ele_para_o_centro() {
+        let s = demo();
+        assert_eq!(s.carousel, 0);
+
+        // `FocusAt` vem do toque: o cartão tocado precisa virar o central,
+        // senão o destaque e o desenho divergem.
+        let s = reduce(s, Cmd::FocusAt(Zone::HomeCarousel, 4));
+
+        assert_eq!(s.focus, Focus::at(Zone::HomeCarousel, 4));
+        assert_eq!(s.carousel, 4, "o cartão tocado passa a ser o desenhado");
+    }
+
+    #[test]
+    fn troca_de_aba_devolve_o_cartao_tocado() {
+        let s = demo();
+
+        let s = reduce(s, Cmd::FocusAt(Zone::HomeCarousel, 6));
+        let s = reduce(s, Cmd::TabNext);
+        let s = reduce(s, Cmd::TabPrev);
+
+        assert_eq!(s.tab, Tab::Home);
+        assert_eq!(s.carousel, 6, "voltar para a Home não perde a seleção");
+    }
+
+    #[test]
+    fn foco_fora_da_home_nao_mexe_no_carrossel() {
+        let s = demo();
+        let s = reduce(s, Cmd::FocusAt(Zone::HomeCarousel, 3));
+
+        let s = reduce(s, Cmd::TabNext);
+        let s = reduce(s, Cmd::FocusAt(Zone::LibraryGrid, 1));
+
+        assert_eq!(s.carousel, 3, "o carrossel guarda a posição da Home");
+    }
+
+    #[test]
+    fn cartao_alem_do_catalogo_e_limitado() {
+        let s = demo();
+        let s = reduce(s, Cmd::FocusAt(Zone::HomeCarousel, 99));
+
+        assert_eq!(s.carousel, 7, "índice fora da lista cai no último jogo");
+        assert_eq!(s.focus, Focus::at(Zone::HomeCarousel, 7));
     }
 
     #[test]

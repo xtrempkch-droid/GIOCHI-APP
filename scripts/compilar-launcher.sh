@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Compila o launcher (Rust + SDL2) resolvendo as bibliotecas de desenvolvimento.
+#
+# Uso:
+#   bash scripts/compilar-launcher.sh            # cargo build --workspace
+#   bash scripts/compilar-launcher.sh --release  # repassa o argumento ao cargo
+#
+# Por que este script existe: o `sdl2-sys` precisa de `pkg-config` para achar
+# `sdl2` e, com a feature `ttf`, de `SDL2_ttf`. Sem elas o `rustc` compila e o
+# **link** falha (`unable to find library -lSDL2`). Em máquina sem root, dá para
+# extrair os `.deb` num prefixo local e apontar `PKG_CONFIG_PATH`/`LIBRARY_PATH`
+# para lá, sem instalar nada no sistema.
+#
+# Variáveis:
+#   GIOCHI_SDL2_PREFIX  onde extrair os pacotes (padrão: ~/.cache/giochi-sdl2/root)
+#   GIOCHI_SDL2_DEB_URL base dos pacotes (padrão: archive.ubuntu.com)
+set -euo pipefail
+
+RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LAUNCHER="$RAIZ/app/launcher"
+PREFIXO="${GIOCHI_SDL2_PREFIX:-$HOME/.cache/giochi-sdl2/root}"
+BASE_URL="${GIOCHI_SDL2_DEB_URL:-https://archive.ubuntu.com/ubuntu/pool/universe}"
+
+# Versões verificadas em 03/11/2026 (Ubuntu 25.10 "resolute"). Atualizar aqui.
+SDL2_DEV_DEB="libsdl2/libsdl2-dev_2.32.10+dfsg-6_amd64.deb"
+SDL2_TTF_DEV_DEB="libsdl2-ttf/libsdl2-ttf-dev_2.24.0+dfsg-3_amd64.deb"
+SDL2_TTF_RUN_DEB="libsdl2-ttf/libsdl2-ttf-2.0-0_2.24.0+dfsg-3_amd64.deb"
+
+log() { printf '\033[1m%s\033[0m\n' "$*"; }
+erro() { printf '\033[31merro:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# `--exists` não serve aqui: o `SDL2_ttf.pc` declara `harfbuzz` e `freetype2`
+# em `Requires.private`, e o pkg-config valida isso mesmo quando o link é
+# dinâmico. O linker não precisa deles, então basta achar as versões.
+tem_sdl2() {
+  pkg-config --modversion sdl2 >/dev/null 2>&1 &&
+    pkg-config --modversion SDL2_ttf >/dev/null 2>&1
+}
+
+if ! command -v cargo >/dev/null; then
+  erro "cargo não encontrado. Instale o Rust: https://rustup.rs"
+fi
+
+if ! tem_sdl2; then
+  if command -v apt-get >/dev/null; then
+    log "SDL2 de desenvolvimento ausente — extraindo pacotes em $PREFIXO"
+    mkdir -p "$PREFIXO/debs"
+    for deb in "$SDL2_DEV_DEB" "$SDL2_TTF_DEV_DEB" "$SDL2_TTF_RUN_DEB"; do
+      nome="$(basename "$deb")"
+      if [ ! -f "$PREFIXO/debs/$nome" ]; then
+        log "  baixando $nome"
+        curl -fsSL --max-time 120 -o "$PREFIXO/debs/$nome" "$BASE_URL/$deb" \
+          || erro "falha ao baixar $BASE_URL/$deb"
+      fi
+      dpkg-deb -x "$PREFIXO/debs/$nome" "$PREFIXO" \
+        || erro "falha ao extrair $nome"
+    done
+
+    # `libSDL2.so` aponta para `libSDL2-2.0.so.0`, que vem do pacote de runtime
+    # (já instalado na maioria das máquinas). Se não resolver, o linker cai no
+    # `libSDL2.a` e falha com dezenas de símbolos do PulseAudio.
+    LIBDIR="$PREFIXO/usr/lib/x86_64-linux-gnu"
+    if [ ! -e "$LIBDIR/libSDL2-2.0.so.0" ]; then
+      SISTEMA="$(ldconfig -p 2>/dev/null | awk '/libSDL2-2\.0\.so\.0 /{print $NF; exit}')"
+      [ -n "$SISTEMA" ] || erro "libSDL2-2.0.so.0 não está instalada no sistema"
+      ln -sf "$SISTEMA" "$LIBDIR/libSDL2-2.0.so.0"
+    fi
+    if [ ! -e "$LIBDIR/libSDL2.so" ]; then
+      ln -sf libSDL2-2.0.so.0 "$LIBDIR/libSDL2.so"
+    fi
+  else
+    erro "pkg-config não achou sdl2/SDL2_ttf. Instale libsdl2-dev e libsdl2-ttf-dev."
+  fi
+
+  export PKG_CONFIG_PATH="$PREFIXO/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  export LIBRARY_PATH="$PREFIXO/usr/lib/x86_64-linux-gnu${LIBRARY_PATH:+:$LIBRARY_PATH}"
+  tem_sdl2 || erro "pkg-config continua sem achar sdl2/SDL2_ttf após extrair os pacotes"
+  log "SDL2 resolvido em $PREFIXO"
+else
+  log "SDL2 de desenvolvimento encontrado no sistema"
+fi
+
+cd "$LAUNCHER"
+log "cargo build --workspace $*"
+cargo build --workspace "$@"
+
+cat <<FIM
+
+Pronto. Para rodar, o carregador precisa achar o \`libSDL2_ttf.so.0\`:
+
+  export LD_LIBRARY_PATH=$PREFIXO/usr/lib/x86_64-linux-gnu\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
+  ./target/debug/giochi-launcher
+
+Sem tela (CI, servidor), dá para conferir o desenho num BMP:
+
+  SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \\
+    ./target/debug/giochi-launcher --dump-frame frame.bmp
+FIM
