@@ -54,6 +54,10 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
 - `bash -n scripts/migrar-do-antecessor.sh` e `bash -n
   scripts/compilar-launcher.sh`: **sem erro de sintaxe**.
+- O workflow ganhou `launcher-core` (testa os 48 do núcleo, sem SDL) e
+  `launcher-build` (compila o workspace com SDL2). Os dois comandos passam
+  localmente com `--locked`; o YAML foi parseado, mas os jobs **não rodaram no
+  GitHub** ainda.
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
   arquitetura inválida, campo desconhecido, entrypoint fora de `bin/`, entrypoint
   com `..`, entrypoint inexistente, capa fora de 320×320, capa que não é PNG,

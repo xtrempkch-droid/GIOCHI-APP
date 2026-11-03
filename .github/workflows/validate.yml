@@ -33,3 +33,38 @@ jobs:
 
       - name: Run tests
         run: node tests/run-all.mjs
+
+  # O núcleo do launcher não tem nenhuma dependência: compila e testa em
+  # qualquer runner, sem SDL, sem GPU, sem placa. É aqui que a lógica de
+  # navegação, foco e gamepad está — então é o teste que mais importa.
+  launcher-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Test core
+        working-directory: app/launcher
+        run: cargo test -p giochi-launcher-core --locked
+
+  # O `rustc` compila o `ui-sdl` sem SDL; quem falha é o link. Este job existe
+  # porque essa distinção já custou tempo: sem ele, o verde do job acima daria
+  # a impressão de que o launcher inteiro compila.
+  launcher-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev
+
+      - name: Build workspace
+        working-directory: app/launcher
+        run: cargo build --workspace --locked
