@@ -45,7 +45,8 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 ### Validado nesta sessão (03/11/2026, Linux com toolchain completa)
 
 - `node scripts/validate-app.mjs --all` passou: **7 apps**, todos em `scaffold`.
-- `node tests/run-all.mjs` passou: **39/39**.
+- `node tests/run-all.mjs` passou: **53/53** (39 de validação + 14 do verificador
+  de quadro).
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
 - `cargo test --workspace` em `app/launcher`: **121/121** (64 no `core`, 57 no
@@ -54,6 +55,11 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
 - `bash -n scripts/migrar-do-antecessor.sh` e `bash -n
   scripts/compilar-launcher.sh`: **sem erro de sintaxe**.
+- `bash scripts/aparelho.sh` — todos os subcomandos **executados contra o
+  aparelho real**: `procurar`, `diagnostico`, `instalar`, `subir`, `parar`,
+  `verificar`, `log`, `input`, `ajuda`. `verificar` fechou o ciclo completo:
+  capturou 720×1280, gerou a referência 1280×720 no PC e comparou com **99,9 %**
+  de acerto na rotação `ccw` e **10,9 %** em `cw`.
 - O workflow ganhou `launcher-core` (testa os 48 do núcleo, sem SDL) e
   `launcher-build` (compila o workspace com SDL2). Os dois comandos passam
   localmente com `--locked`; o YAML foi parseado, mas os jobs **não rodaram no
@@ -150,11 +156,15 @@ Giochi app/
 │   ├── validate-app.mjs
 │   ├── migrar-do-antecessor.sh
 │   ├── compilar-launcher.sh   # resolve SDL2 e compila o launcher
+│   ├── compilar-launcher-arm64.sh  # cross-compile + instala no aparelho
+│   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
+│   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   └── lib/
 │       ├── apps.mjs
 │       └── png.mjs
 ├── tests/
 │   ├── validate-app.test.mjs
+│   ├── verificar-frame.test.mjs
 │   └── run-all.mjs
 ├── docs/
 │   ├── README.md
@@ -167,7 +177,10 @@ Giochi app/
 │   ├── controles.md
 │   ├── integracao.md
 │   ├── diagnostico-prototipo.md
-│   └── compilar-launcher.md
+│   ├── compilar-launcher.md
+│   ├── dependencias-aparelho.md
+│   ├── contrato-app-sistema.md
+│   └── ferramentas.md
 └── .github/workflows/validate.yml
 ```
 
@@ -259,7 +272,7 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 39 testes
+node tests/run-all.mjs                    # 53 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
@@ -267,6 +280,35 @@ bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
 cd app/launcher && cargo test --workspace  # 121 testes do launcher
 ```
+
+### Ferramentas do aparelho
+
+O aparelho vive mudando de IP e não inicia a UI sozinho, então a operação dele
+tem script próprio. Guia completo em `docs/ferramentas.md`.
+
+```bash
+bash scripts/aparelho.sh procurar         # varre a /24, acha pelo hostname
+bash scripts/aparelho.sh diagnostico      # sistema, tela, áudio, entrada, libs
+bash scripts/aparelho.sh instalar         # compila, instala, confere sha256
+bash scripts/aparelho.sh subir            # inicia o launcher (o init não faz)
+bash scripts/aparelho.sh parar
+bash scripts/aparelho.sh verificar        # processo + DRM + frame comparado
+bash scripts/aparelho.sh log
+bash scripts/aparelho.sh input 15         # eventos crus de /dev/input
+
+node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
+```
+
+`verificar` é o que importa: para o app (o KMSDRM é exclusivo), captura um
+quadro, desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`, des-rotaciona
+pela orientação que o sistema declara e compara pixel a pixel. No X55 dá **99,9 %**
+de acerto; com a rotação oposta cai para **10,9 %**. É essa diferença que
+distingue "desenhou" de "desenhou de ponta a cabeça".
+
+Duas armadilhas que os scripts já tratam e que não devem ser reintroduzidas:
+`pkill -f giochi-launcher` mata a própria sessão SSH (use `pidof` + `kill`), e
+`--dump-frame` sob `x11` grava um BMP **preto** porque o swap esvazia o buffer
+(use `dummy` no PC, `kmsdrm` + `software` no aparelho).
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
 achar `sdl2`/`SDL2_ttf`: sem elas o **link** falha, mesmo com o `rustc`

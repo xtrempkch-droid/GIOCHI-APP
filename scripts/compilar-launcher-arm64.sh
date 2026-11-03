@@ -151,11 +151,18 @@ log "pronto: $RAIZ/app/launcher/bin/giochi-launcher ($(du -h "$BIN" | cut -f1))"
 # ── 6. instalar no aparelho ─────────────────────────────────
 if [ -n "$INSTALAR" ]; then
   DESTINO="/opt/giochi/apps/launcher/bin"
+  # O dropbear/openssh do aparelho avisa sobre criptografia pós-quântica a cada
+  # conexão. O aviso vai para stderr e polui a saída do script inteiro.
+  filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
+
   log "instalando em $INSTALAR:$DESTINO"
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" "mkdir -p $DESTINO"
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "$BIN" "$INSTALAR:$DESTINO/giochi-launcher"
+    "$BIN" "$INSTALAR:$DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" \
-    "chmod +x $DESTINO/giochi-launcher && ls -la $DESTINO/giochi-launcher"
-  log "instalado. O giochi-init inicia o launcher no próximo boot."
+    "chmod +x $DESTINO/giochi-launcher && ls -la $DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
+  # O `inittab` desta imagem não tem entrada para o `giochi-init`, então o app
+  # NÃO sobe no boot. Dizer o contrário aqui já custou um diagnóstico errado.
+  log "instalado. A interface NÃO sobe sozinha: o inittab não inicia o giochi-init."
+  log "suba com: bash scripts/aparelho.sh subir"
 fi
