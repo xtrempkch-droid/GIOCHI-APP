@@ -49,8 +49,9 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   de quadro + 13 de capacidades de entrada).
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **121/121** (64 no `core`, 57 no
-  `ui-sdl`).
+- `cargo test --workspace` em `app/launcher`: **126/126** (57 no `core`, 69 no
+  `ui-sdl`). As contagens estiveram invertidas por várias rodadas: quem tem mais
+  testes é o `ui-sdl`, não o `core`.
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
 - `bash -n scripts/migrar-do-antecessor.sh` e `bash -n
@@ -107,23 +108,29 @@ Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
   `bin/` ausente, nome de pasta inválido, `forge.json` inválido, licença em formato
   inválido e **GPL declarada na imagem assinada**.
 
-### Fila de validação (03/11/2026, 19h)
+### Fila de validação (03/11/2026, 19h — atualizado 19h45)
 
 **Uma imagem nova existe e um segundo aparelho existe — nenhum dos dois foi
-testado ainda.** A equipe do Giochi System está validando e o hardware está em
-uso; o teste foi adiado de propósito, não esquecido.
+testado em hardware.** A equipe do Giochi System está com o aparelho; o teste foi
+adiado de propósito, não esquecido.
+
+O que **já foi verificado**, sem tocar em hardware: o rootfs da imagem do X35H em
+`out/` foi extraído e inspecionado.
 
 | Item | Estado |
 | --- | --- |
-| Imagem nova do sistema | **entregue, não testada** |
-| Segundo aparelho (**r35h**, resolução menor) | **não testado** |
+| Texto na imagem nova (`SDL2_ttf` + harfbuzz + DejaVu) | **verificado no artefato** |
+| `::respawn:` no `inittab` da imagem nova | **FALTA** — imagem 14 min mais velha que a correção |
+| Imagem do **X55** com as correções | **não existe** (`out/powkiddy-x55/` vazio) |
+| Segundo aparelho (**X35H**, 640×480, rotação `0`) | **não testado em hardware** |
+| UI em 640×480 | **simulada no PC** — 25,00 % de letterbox, UI íntegra |
 | `giochi-selftest` com bloco "bibliotecas do launcher" | **existe na imagem nova** |
 
-O r35h é o **primeiro teste real da arquitetura**. A premissa deste repositório é
+O X35H é o **primeiro teste real da arquitetura**. A premissa deste repositório é
 que o mesmo binário serve em hardware diferente porque orientação, brilho, volume
 e mapa de botões vêm do sistema. Com um aparelho só (X55), isso era afirmação;
 com dois, é verificável. O roteiro — incluindo as previsões a falsificar — está
-em `docs/checklist-imagem.md` §7. **Não escrever conclusão sobre o r35h antes de
+em `docs/checklist-imagem.md` §7. **Não escrever conclusão sobre o X35H antes de
 rodar.**
 
 Duas coisas mudaram no ambiente e já estão no toolkit:
@@ -496,7 +503,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → **7 apps OK**
 - `node tests/run-all.mjs` → **66/66**
-- `cargo test --workspace` → **121/121**
+- `cargo test --workspace` → **126/126**
 - `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
 - `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
 - `aparelho.sh verificar` → frame 720×1280 comparado, **99,9 %** de acerto

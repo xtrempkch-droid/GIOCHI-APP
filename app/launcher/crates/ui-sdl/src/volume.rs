@@ -364,15 +364,6 @@ mod tests {
         }
     }
 
-    fn dir_temporario(nome: &str) -> String {
-        let p = std::env::temp_dir().join(format!(
-            "giochi-volume-{nome}-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p.to_string_lossy().into_owned()
-    }
-
     #[test]
     fn le_o_volume_atual_do_hardware() {
         let v = Volume::novo(Falso::novo(Some(42)));

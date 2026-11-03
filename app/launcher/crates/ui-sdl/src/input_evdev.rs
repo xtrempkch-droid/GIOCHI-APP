@@ -21,7 +21,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -73,7 +73,19 @@ pub struct ButtonsMap {
     /// nenhuma pista. Aconteceu duas vezes: com comentário no fim da linha e com
     /// `KEY_VOLUMEUP`.
     desconhecidos: Vec<String>,
+    /// Nomes marcados `OPCIONAL` pelo sistema: podem não existir no gabarito.
+    ///
+    /// Caso real: o botão `F` (`BTN_MODE`) da X55 está no DTS — revisões que o
+    /// têm funcionam sem rebuild — mas **não existe fisicamente** no aparelho
+    /// testado. Exigi-lo deixaria o mapa "incompleto" para sempre, e um aviso
+    /// permanente é pior que nenhum: esconde o dia em que um botão de verdade
+    /// quebrar.
+    ///
+    /// O marcador vem no comentário da linha, junto do GPIO:
+    /// `home = BTN_MODE  # gpio3 PB7 — OPCIONAL: nao existe fisicamente`
+    opcionais: HashSet<String>,
 }
+
 
 impl ButtonsMap {
     /// Carrega `buttons.map`, ou usa o padrão embutido se o arquivo não existir.
@@ -106,6 +118,7 @@ impl ButtonsMap {
         let mut by_name = HashMap::new();
         let mut calibragem = HashMap::new();
         let mut desconhecidos = Vec::new();
+        let mut opcionais = HashSet::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
@@ -119,6 +132,13 @@ impl ButtonsMap {
             // (cada botão anota o GPIO ao lado). Sem cortar aqui, `code_for`
             // recebia `BTN_DPAD_UP        # gpio4 PA0` e descartava a entrada em
             // silêncio — o mapa do aparelho parseava 1 de 13 botões.
+            //
+            // O comentário é lido **antes** de ser descartado: é nele que o
+            // sistema escreve o marcador `OPCIONAL`.
+            let comentario = value.split_once('#').map(|(_, c)| c).unwrap_or("");
+            if comentario.to_uppercase().contains("OPCIONAL") {
+                opcionais.insert(name.clone());
+            }
             let value = value.split('#').next().unwrap_or("").trim();
             if name.starts_with("axis_") {
                 match value.parse::<i32>() {
@@ -142,6 +162,7 @@ impl ButtonsMap {
             by_name,
             calibragem,
             desconhecidos,
+            opcionais,
         }
     }
 
@@ -169,6 +190,7 @@ impl ButtonsMap {
             by_name,
             calibragem: HashMap::new(),
             desconhecidos: Vec::new(),
+            opcionais: HashSet::new(),
         }
     }
 
@@ -184,9 +206,30 @@ impl ButtonsMap {
         self.by_name.get(name).copied()
     }
 
+    /// O sistema marcou este botão como `OPCIONAL`?
+    pub fn eh_opcional(&self, name: &str) -> bool {
+        self.opcionais.contains(name)
+    }
+
+    /// Os botões essenciais estão todos mapeados?
+    ///
+    /// `home` **não** é exigido, e isso não é tolerância: é o botão que varia
+    /// por revisão de hardware.
+    ///
+    /// - **X55**: o `BTN_MODE` está no DTS (via patch), mas o gabarito físico
+    ///   testado não tem o botão `F` — o sistema o marca `OPCIONAL`.
+    /// - **X35H**: não declara `home` de forma alguma; 16 botões, sem `BTN_MODE`.
+    ///
+    /// Exigi-lo geraria aviso permanente de "mapa incompleto" nos dois aparelhos,
+    /// e aviso permanente é pior que nenhum: esconde o dia em que um botão de
+    /// verdade quebrar — que foi exatamente o caso que o aviso existe para pegar.
+    ///
+    /// Botão marcado `OPCIONAL` pelo sistema também sai da cobrança, para
+    /// proteger qualquer outro que venha a ser variável.
     pub fn is_complete(&self) -> bool {
-        ["up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "select", "home"]
+        ["up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "select"]
             .iter()
+            .filter(|name| !self.eh_opcional(name))
             .all(|name| self.by_name.contains_key(*name))
     }
 }
@@ -457,6 +500,46 @@ mod tests {
     }
 
     #[test]
+    fn mapa_real_do_x35h_fica_completo() {
+        // Conteúdo real de `device/powkiddy x35h/buttons.map`: 16 botões, SEM
+        // `home`. Exigir `home` aqui daria aviso falso de mapa incompleto.
+        let map = ButtonsMap::parse(
+            "up      = BTN_DPAD_UP        # gpio4 PA0\n\
+             down    = BTN_DPAD_DOWN      # gpio4 PA1\n\
+             left    = BTN_DPAD_LEFT      # gpio3 PD6\n\
+             right   = BTN_DPAD_RIGHT     # gpio3 PD7\n\
+             a       = BTN_EAST           # gpio3 PD3\n\
+             b       = BTN_SOUTH          # gpio3 PD2\n\
+             x       = BTN_NORTH          # gpio3 PD5\n\
+             y       = BTN_WEST           # gpio3 PD4\n\
+             l       = BTN_TL             # gpio3 PD0\n\
+             r       = BTN_TR             # gpio3 PC6\n\
+             l2      = BTN_TL2            # gpio3 PD1\n\
+             r2      = BTN_TR2            # gpio3 PC7\n\
+             start   = BTN_START          # gpio4 PA2\n\
+             select  = BTN_SELECT         # gpio4 PA4\n\
+             thumbl  = BTN_THUMBL         # gpio4 PA7\n\
+             thumbr  = BTN_THUMBR         # gpio4 PB0\n\
+             volup   = KEY_VOLUMEUP       # gpio4 PA5\n\
+             voldown = KEY_VOLUMEDOWN     # gpio4 PA3\n\
+             axis_x_min = 15\n\
+             axis_x_max = 1023\n\
+             axis_y_min = 1023\n\
+             axis_y_max = 15\n\
+             axis_y_deadzone = 30\n",
+        );
+        assert!(map.is_complete(), "X35H não tem `home` e isso é normal");
+        assert!(map.desconhecidos.is_empty(), "{:?}", map.desconhecidos);
+        assert_eq!(map.code("home"), None);
+        assert_eq!(map.code("thumbl"), Some(0x13d));
+        // A calibração vem declarada; o kernel já entrega Y invertido (min > max),
+        // então quem ler o eixo NÃO deve inverter de novo.
+        assert_eq!(map.eixo("y_min"), Some(1023));
+        assert_eq!(map.eixo("y_max"), Some(15));
+        assert_eq!(map.eixo("y_deadzone"), Some(30));
+    }
+
+    #[test]
     fn mapa_do_aparelho_fica_completo() {
         // Conteúdo de /etc/giochi/buttons.map reduzido às 13 teclas exigidas.
         let map = ButtonsMap::parse(
@@ -475,6 +558,84 @@ mod tests {
              home = BTN_MODE\n",
         );
         assert!(map.is_complete(), "o mapa do aparelho precisa fechar");
+    }
+
+    #[test]
+    fn opcional_nao_e_exigido() {
+        // `home` marcado OPCIONAL pelo sistema: o botão `F` existe no DTS mas não
+        // no gabarito físico desta revisão. Sem tratar o marcador, o mapa fica
+        // "incompleto" para sempre e o aviso esconde um botão realmente quebrado.
+        let map = ButtonsMap::parse(
+            "up = BTN_DPAD_UP\n\
+             down = BTN_DPAD_DOWN\n\
+             left = BTN_DPAD_LEFT\n\
+             right = BTN_DPAD_RIGHT\n\
+             a = BTN_EAST\n\
+             b = BTN_SOUTH\n\
+             x = BTN_NORTH\n\
+             y = BTN_WEST\n\
+             l = BTN_TL\n\
+             r = BTN_TR\n\
+             start = BTN_START\n\
+             select = BTN_SELECT\n\
+             home = BTN_MODE  # gpio3 PB7 — OPCIONAL: nao existe fisicamente\n",
+        );
+        assert!(map.is_complete(), "OPCIONAL não pode ser exigido");
+        // Continua mapeado: em revisões que têm o botão, ele funciona.
+        assert_eq!(map.code("home"), Some(0x13c));
+        assert!(map.eh_opcional("home"));
+    }
+
+    #[test]
+    fn opcional_ausente_do_mapa_nao_reprova() {
+        // X35H: 16 botões, sem BTN_MODE declarado. O mapa não tem `home`.
+        let map = ButtonsMap::parse(
+            "up = BTN_DPAD_UP\n\
+             down = BTN_DPAD_DOWN\n\
+             left = BTN_DPAD_LEFT\n\
+             right = BTN_DPAD_RIGHT\n\
+             a = BTN_EAST\n\
+             b = BTN_SOUTH\n\
+             x = BTN_NORTH\n\
+             y = BTN_WEST\n\
+             l = BTN_TL\n\
+             r = BTN_TR\n\
+             start = BTN_START\n\
+             select = BTN_SELECT\n\
+             home = BTN_MODE  # OPCIONAL\n",
+        );
+        // Mesmo sem o código presente, o marcador tira a exigência.
+        assert!(map.is_complete());
+    }
+
+    #[test]
+    fn botao_normal_ausente_ainda_reprova() {
+        // A contraprova: sem OPCIONAL, faltar `a` é defeito de verdade.
+        let map = ButtonsMap::parse(
+            "up = BTN_DPAD_UP\n\
+             down = BTN_DPAD_DOWN\n\
+             left = BTN_DPAD_LEFT\n\
+             right = BTN_DPAD_RIGHT\n\
+             x = BTN_NORTH\n\
+             y = BTN_WEST\n\
+             l = BTN_TL\n\
+             r = BTN_TR\n\
+             start = BTN_START\n\
+             select = BTN_SELECT\n\
+             home = BTN_MODE\n",
+        );
+        assert!(!map.is_complete(), "faltar `a` sem OPCIONAL é erro");
+    }
+
+    #[test]
+    fn opcional_nao_suja_a_lista_de_desconhecidos() {
+        let map = ButtonsMap::parse("home = BTN_MODE  # OPCIONAL\n");
+        assert!(
+            map.desconhecidos.is_empty(),
+            "o marcador é conhecido: {:?}",
+            map.desconhecidos
+        );
+        assert!(map.eh_opcional("home"));
     }
 
     #[test]

@@ -331,3 +331,150 @@ três arquivos em `/user/.config/giochi/` (`brightness`, `volume`, `rotation`).
 - **O prazo é pedido em forma de "o que não vai entrar"**, não de data. Prazo duro
   entre equipes sem hierarquia comum costuma ser ignorado; "não vai entrar" é uma
   resposta que também libera nosso planejamento.
+
+---
+
+## 03/11/2026 (2) — Giochi app → Giochi System
+
+**Assunto:** podem gravar; nós reinjetamos. E uma verificação no artefato de vocês
+que muda o que esperar do boot.
+
+### 1. Sobre regravar: **gravem, nós reinjetamos**
+
+Resposta à pergunta de vocês sobre esperar: **pode gravar.** Reinjetar o launcher
+do nosso lado é um comando (`bash scripts/aparelho.sh instalar`), e depende só do
+aparelho estar na rede — não precisamos do conteúdo antigo do cartão.
+
+O backup de vocês em `out/app-team-backup-20261103/` está correto e completo para
+o que importa: `giochi-launcher` (511984 B), `buttons.map`, `brightness` (1332) e
+`volume` (80). Conferi os quatro. Não é preciso devolver nada ao cartão: o
+`brightness` e o `volume` são estado do usuário e o launcher reescreve os dois na
+primeira abertura.
+
+Uma observação sobre o `1332`: confere com o que medimos. O painel do X55 vai de
+0 a 1666 e o padrão de fábrica é 833; 1332 é alguém tendo subido o brilho pela
+UI — ou seja, o caminho `slider → sysfs → arquivo` funcionou no hardware.
+
+### 2. Verificamos a imagem de vocês no artefato, não na documentação
+
+Antes de responder, extraímos o rootfs de
+`out/powkiddy-x35h/giochi-system-powkiddy-x35h-sd.img` (partição 2) e conferimos
+o que está lá dentro. **Resultado: o texto está confirmado; o `respawn` não está.**
+
+| Afirmação | Verificado no rootfs | Veredito |
+| --- | --- | --- |
+| as cinco `.so` presentes | todas em `/usr/lib` | **confere** |
+| `SDL2_ttf` usa harfbuzz | `NEEDED libharfbuzz.so.0` no `.so` real | **confere** |
+| DejaVu Sans na imagem | `/usr/share/fonts/dejavu/DejaVuSans.ttf`, 757076 B | **confere** |
+| dropbear removido, só OpenSSH | `/usr/sbin/dropbear` ausente, `sshd` presente | **confere** |
+| `usb0` e bootlog | `S30usbnet`, `S10bootlog`, `S96bootlog` | **confere** |
+| `::respawn:/usr/bin/giochi-init` | **não está no `/etc/inittab`** | **falta** |
+
+A causa não é a correção — é o horário. O `inittab` da imagem não tem a linha, e o
+`build-info.txt` diz `built_at_utc=2026-11-03T22:17:56Z` (19:17 local), enquanto o
+`scripts/post-build.sh` foi alterado às 19:32. A imagem foi construída **antes** da
+correção. Confirmei também no commit `9bc36a3`, que é o que o `build-info` cita: ali
+o script ainda tinha `if [ ! -x "$LAUNCHER" ] && [ ! -f "$FORCE_MARKER" ]`.
+
+Ou seja: **a correção está certa e a imagem não a contém.** Rebuild resolve. Vale a
+pena conferir com um comando antes de gravar:
+
+```bash
+debugfs -R "cat /etc/inittab" rootfs.ext4 | grep giochi-init
+```
+
+Sem essa linha a interface não sobe no boot, e é exatamente o teste que não dávamos.
+
+### 3. Só existe imagem do X35H em `out/`
+
+`out/powkiddy-x55/` está **vazia**. Então, quando vocês falarem em "regravar o
+cartão com a de hoje": se for o X55, a imagem precisa ser construída primeiro; se
+for o X35H, ela existe mas é a de antes do `respawn`. Perguntamos porque a
+diferença muda o que vamos medir (720×1280 com `rotate:3` × 640×480 com `rotate:0`).
+
+### 4. Aceitamos os quatro pontos, e já implementamos um
+
+**`OPCIONAL`** — implementado, com testes sobre os mapas reais dos dois aparelhos.
+Detalhe que só apareceu ao verificar: o mapa do **X35H não tem `home` de forma
+alguma** (não é marcado `OPCIONAL`, simplesmente não declara `BTN_MODE`). Então
+tratar só o marcador não bastaria — `home` saiu da lista de botões exigidos, e o
+marcador protege qualquer outro que venha a variar. Botão de ação ausente
+(`a`, `start`) continua reprovando: é o falso negativo que o aviso existe para
+pegar.
+
+**Rotação** — `fbconRotate` vindo de `device.json` em vez de texto solto no script
+é o que o app já esperava: ele lê `/sys/class/graphics/fbcon/rotate` justamente
+para não ter sentido fixo. X35H com `0` cai no caminho sem giro, sem código novo.
+
+**`adc-joystick`, não `rocknix-joypad`** — corrigimos a documentação, que ainda
+tratava `rocknix-joypad` como hipótese viva. E o mais importante: o `abs-range` do
+Y e do RY vem com `min > max` no DTB, então **o kernel já entrega invertido**. Não
+vamos inverter de novo. Registrado para quem implementar a leitura do eixo, porque
+inverter duas vezes dá eixo ao contrário e parece problema de calibração.
+
+**ALSA** — "o app é o dono" era a nossa proposta preferida, então está fechado: o
+app persiste `/user/.config/giochi/volume` e escreve no mixer. Não pedimos
+`alsactl store` no init. Se um dia precisarem restaurar mixer por outro motivo,
+combinamos antes.
+
+### 5. X35H — o que já sabemos e o que vamos medir
+
+Agradecemos a correção do nome (**X35H**, não "r35h"). A confusão X35H/X35S
+(RK3566) × R35S/R36S (RK3326) é do tipo que custa uma rodada inteira, e nós a
+tínhamos registrado errado.
+
+Do `device.json` + DTB de vocês já sabemos: 640×480, `rotate:0`, 16 botões sem
+`BTN_MODE`, `adc-joystick` com faixa 15..1023 e Y/RY invertidos, `abs-flat`
+30. **Não precisamos perguntar mais nada antes de testar.**
+
+Uma previsão que registramos agora, para poder ser falsificada depois: 640×480 é
+4:3 e a UI é projetada em 1280×720 (16:9). A escala vem da largura
+(`640 / 1280 = 0,5`), a UI ocupa `720 × 0,5 = 360` px de altura e sobram
+`480 − 360 = 120` px — ou seja **25 % da altura em letterbox**, 60 px em cima e
+60 embaixo. Se for isso, é o comportamento correto do `set_logical_size`; se a
+tela encaixar sem faixa, é porque algo redimensionou — e aí queremos saber o quê.
+
+### 6. Uma frase que corrigimos do nosso lado, e que está no `post-build.sh` de vocês
+
+O comentário da linha 62 do `scripts/post-build.sh` diz:
+
+> `respawn` é o que mantém o launcher vivo quando um jogo termina (o launcher faz
+> exec, não fork, então ninguém sobra para redesenhar)
+
+O **argumento está certo**, mas o fato não: o launcher **não** faz `exec` hoje.
+Não há `exec` em lugar nenhum do código; o único uso de processo é
+`Command::status()` em `poweroff`/`reboot`, que cria filho e espera. O `exec` é
+decisão registrada no nosso `docs/integracao.md` para quando o lançamento de jogos
+entrar (ceder o processo para não disputar o DRM master), e **não está
+implementado**.
+
+Não muda a conclusão — `respawn` é necessário de qualquer forma, por dois motivos
+que valem hoje: recuperação se o launcher morrer, e pré-requisito para o `exec`
+futuro. Só vale corrigir o comentário para a próxima pessoa não procurar um `exec`
+que não existe. Nós tínhamos escrito isso errado e corrigimos nos três documentos
+que repetiam.
+
+### 7. O que fazemos agora
+
+**Não tocamos no aparelho** enquanto vocês estiverem gravando. Avisem quando o
+cartão estiver com a imagem que vocês querem validar, e nós:
+
+```bash
+bash scripts/aparelho.sh opcoes        # rede ou usb0, e autenticação
+bash scripts/aparelho.sh instalar      # compila aarch64 e instala o launcher
+bash scripts/aparelho.sh diagnostico   # resolução, rotação, PMIC, botões, libs
+bash scripts/aparelho.sh verificar     # frame comparado com a referência do PC
+bash scripts/aparelho.sh capacidades   # o que cada /dev/input declara
+```
+
+O `verificar` agora compara de verdade: captura o quadro, desenha o mesmo no PC e
+compara pixel a pixel. No X55 dá 99,9 % na rotação certa e 10,9 % na oposta — é a
+diferença que distingue "desenhou" de "desenhou de cabeça para baixo". No X35H a
+referência precisa ser gerada com a mesma build da feature `texto`, senão o
+letterbox e os glifos contam como diferença; já está previsto no nosso checklist.
+
+**Pergunta única, e é bloqueante para nós:** a imagem que vocês vão gravar no
+X55 será construída com o `post-build.sh` corrigido? Se sim, esperamos e testamos
+o boot completo. Se a do X55 não sair nesta rodada, testamos o X35H primeiro e
+deixamos o X55 para depois — mas queremos saber qual, para não medir o aparelho
+errado.

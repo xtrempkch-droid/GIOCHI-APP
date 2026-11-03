@@ -17,9 +17,15 @@ entre eles quebraria em qualquer clone isolado.
 
 ### Por que não a API de gamepad do SDL
 
-Os botões desses handhelds vêm de driver próprio (`rocknix-joypad`). O SDL só
-reconhece um controle se houver entrada no `SDL_GameControllerDB` — que não existe
-para aparelho custom. Resultado: **no PC o SDL funciona, no aparelho não**.
+Os botões desses handhelds não passam por driver de gamepad padrão: quem os
+registra é `gpio-keys` no device tree, e o analógico é o `adc-joystick` do
+mainline — **nos dois aparelhos** (X55 e X35H), confirmado em 03/11/2026 pelo DTB
+compilado e pelo mapa que o sistema entrega. `rocknix-joypad` (fora da árvore) era
+a hipótese alternativa do antecessor e **não** é o que roda.
+
+O SDL só reconhece um controle se houver entrada no `SDL_GameControllerDB` — que
+não existe para aparelho custom. Resultado: **no PC o SDL funciona, no aparelho
+não**.
 
 Segundo motivo, mais sutil: `buttons.map` mapeia por **código evdev**
 (`BTN_EAST`), mas o SDL entrega **índice de botão** (0, 1, 2…). Os dois não
@@ -88,6 +94,33 @@ O limiar é `PowerWatch::LIMIAR_PADRAO` em `crates/ui-sdl/src/power.rs`, com
 teste cobrindo cada caso (toque, segurar, soltar depois do menu, consumir ao
 acordar, quadro lento).
 
+### O marcador `OPCIONAL` no mapa
+
+Um botão pode estar no device tree e **não existir** no gabarito físico. É o caso
+do `F` (`BTN_MODE`) da X55: o nó continua no DTS — revisões que o têm funcionam sem
+rebuild — mas o aparelho testado tem 16 botões, não 17.
+
+O sistema marca a linha no comentário, e o app entende:
+
+```text
+home    = BTN_MODE           # gpio3 PB7 — OPCIONAL: nao existe fisicamente
+```
+
+Regras implementadas (`ButtonsMap::parse` / `is_complete`):
+
+| Situação | Antes | Agora |
+| --- | --- | --- |
+| botão marcado `OPCIONAL` ausente | mapa "incompleto" para sempre | não cobra |
+| `home` ausente **sem** marcador | mapa "incompleto" | não cobra — `home` varia por hardware |
+| botão de ação ausente (`a`, `start`…) | "incompleto" | **continua cobrando** |
+
+`home` saiu da lista de exigidos mesmo sem marcador porque o X35H simplesmente não
+declara `BTN_MODE`. Aviso permanente é pior que nenhum: esconde o dia em que um
+botão de verdade quebrar — que é justamente o que o aviso existe para pegar.
+
+O código continua mapeado quando existe: em revisão que tenha o botão, ele
+funciona sem recompilar.
+
 ### Como o código descobre o botão
 
 O código evdev vem do hardware, não de configuração. No X55:
@@ -130,6 +163,36 @@ Somando os três dispositivos: **20 códigos, todos com entrada em `code_for` e 
 
 O `KEY_POWER` também abre o menu pelo botão **START**, por decisão anterior;
 os dois caminhos coexistem.
+
+## 2b. Analógico — o que o DTB declara
+
+Medido no DTB compilado do **X35H** pela equipe do System em 03/11/2026, e igual
+no X55 (mesmo driver, mesmo nó):
+
+```text
+/adc-joystick          poll-interval = 60 ms
+  axis@0  ABS_X   (0)  abs-range 15 .. 1023
+  axis@1  ABS_Y   (1)  abs-range 1023 .. 15      ← invertido no DTB
+  axis@2  ABS_RX  (3)  abs-range 15 .. 1023
+  axis@3  ABS_RY  (4)  abs-range 1023 .. 15      ← invertido no DTB
+  abs-flat = 30 (deadzone)     abs-fuzz = 20
+```
+
+Três consequências que evitam erro:
+
+1. **Não inverter Y nem RY no app.** `min` maior que `max` no device tree significa
+   que o kernel **já entrega invertido**. Inverter de novo inverte duas vezes, e o
+   sintoma (eixo ao contrário) parece bug de calibração.
+2. **A deadzone é do sistema**, `abs-flat = 30`. Não é constante do app.
+3. **O centro cai de `(15 + 1023) / 2 = 519`**, e a meia-escala é `504`. A
+   normalização é `(valor - 519) / 504`, **sem** inversão.
+
+A calibração já é lida do mapa do sistema (`axis_*` → `ButtonsMap::calibragem`,
+com teste sobre o mapa real do X35H). O que falta é abrir o `absinfo` por ioctl —
+o número acima é do DTB, não de medição em execução.
+
+> O valor de `abs-flat` é declarado pelo DTS. Se a imagem mudar o nó, muda junto —
+> por isso ele é lido do mapa, e não fixado no código.
 
 ## 3. Teclas de volume
 
@@ -288,4 +351,4 @@ launcher lê um mapa plano e não precisa conhecer modelo de hardware.
 | 3 | Analógico: precisa de `absinfo` (ioctl) para normalizar; a calibração `axis_*` já é parseada, os eixos não são lidos |
 | 4 | Mapa plano resolvido pelo sistema, ou seções lidas pelo launcher |
 | 5 | Limite de 10 s sem evento — valor certo? |
-| 6 | Qual driver a imagem usa: `adc-joystick` (mainline) ou `rocknix-joypad` (DTS do projeto). Muda a normalização por completo, e não há como descobrir pelo app |
+| 6 | ~~Qual driver a imagem usa~~ — **respondido em 03/11/2026: `adc-joystick`, mainline, nos dois aparelhos.** Ver a seção de analógico abaixo |

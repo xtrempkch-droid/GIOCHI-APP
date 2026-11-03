@@ -12,26 +12,28 @@ validação quando a imagem nova chegar está em
 
 ## Resumo
 
-O launcher **já roda** no aparelho hoje: compila, linka, abre o KMSDRM e desenha
-na tela real. O que falta é **texto** — e texto é a maior parte da interface.
+**O texto está resolvido; o `respawn` ainda não, e por um motivo de horário.** O
+que resta é verificar em hardware — a verificação no artefato já foi feita, e
+está abaixo.
 
-| Item | Estado no aparelho | Consequência |
+| Item | Imagem antiga (X55 em uso) | Imagem nova (`out/`, 03/11 19h) |
 | --- | --- | --- |
-| `libSDL2-2.0.so.0` | **tem** (2.28.5) | janela, desenho, KMSDRM funcionam |
-| `libSDL2_image` | tem (2.8.2) | não usado pelo launcher |
-| `libSDL2_ttf` | **FALTA** | nenhum texto é desenhado |
-| `libfreetype` / `libharfbuzz` | **FALTA** | `SDL2_ttf` não teria como funcionar sem elas |
-| fonte TTF (`/usr/share/fonts`) | **FALTA** | mesmo com `SDL2_ttf`, não haveria o que carregar |
-| `/dev/input/event*` | tem 5 dispositivos | entrada por evdev funciona |
-| `/dev/dri/card0`, `renderD128` | tem | KMSDRM abriu e renderizou |
+| `libSDL2-2.0.so.0` | tem (2.28.5) | tem |
+| `libSDL2_ttf` | **falta** | **tem**, com `NEEDED libharfbuzz.so.0` |
+| `libfreetype` / `libharfbuzz` | **falta** | **têm** |
+| fonte TTF | **falta** | **`DejaVuSans.ttf`, 757076 bytes** |
+| `::respawn:` no `inittab` | **falta** | **falta também** — ver abaixo |
+| `/dev/input/event*` | 5 dispositivos | evdev |
+| `/dev/dri/card0` | tem | KMSDRM |
 
-> Esta tabela é o estado da **imagem anterior**. A imagem nova traz o bloco
-> **"bibliotecas do launcher"** no `giochi-selftest`, que responde a mesma
-> pergunta no próprio aparelho — e melhor, porque inclui o `readelf -d`. Ver
-> [checklist-imagem.md](checklist-imagem.md).
+> **A imagem do X35H em `out/` foi construída 14 minutos ANTES da correção do
+> `post-build.sh`.** Ela tem tudo de texto e **não** tem o `respawn`. Verificado
+> no `inittab` do rootfs extraído, não por leitura de código. Rebuild resolve —
+> e a imagem do X55 em `out/powkiddy-x55/` está vazia, então ela precisa ser
+> construída de qualquer forma.
 
-Evidência de que só falta o texto: frames reais capturados do aparelho em
-[`app/launcher/README.md`](../app/launcher/README.md) e a saída
+Evidência de que só falta o texto na imagem **antiga**: frames reais capturados
+do aparelho em [`app/launcher/README.md`](../app/launcher/README.md) e a saída
 
 ```text
 aviso: compilado sem a feature `texto`; nenhum texto será desenhado
@@ -39,22 +41,54 @@ aviso: compilado sem a feature `texto`; nenhum texto será desenhado
 
 ## O que pedir, em ordem de prioridade
 
-### 1. `SDL2_ttf` + `freetype` (necessário para texto no launcher)
+### 1. `SDL2_ttf` + `freetype` + `harfbuzz` (necessário para texto no launcher)
 
 No Buildroot do **Giochi System**, o `Config.in` precisa de:
 
 ```text
 BR2_PACKAGE_SDL2=y
 BR2_PACKAGE_SDL2_TTF=y
+BR2_PACKAGE_HARFBUZZ=y
+BR2_PACKAGE_DEJAVU_SANS=y
 ```
 
-`BR2_PACKAGE_SDL2_TTF` puxa `freetype` e `harfbuzz` automaticamente na versão de
-Buildroot em uso. A biblioteca resultante é `libSDL2_ttf-2.0.so.0`, instalada em
-`/usr/lib`.
+A biblioteca resultante é `libSDL2_ttf-2.0.so.0`, instalada em `/usr/lib`.
 
-> **Atenção:** `BR2_PACKAGE_SDL2_TTF` só existe se o Buildroot tiver o pacote
-> habilitado no menu de SDL2. Conferir em
-> `package/sdl2_ttf/Config.in` da árvore usada.
+**Três armadilhas, todas encontradas pela equipe do System em 03/11/2026** — cada
+uma produz build verde e imagem quebrada:
+
+| Armadilha | O que acontece |
+| --- | --- |
+| `sdl2_ttf` é **pacote à parte** | não é opção do `sdl2`; está em `package/sdl2_ttf/` |
+| `SDL2_TTF` faz `select FREETYPE`, mas **não** seleciona harfbuzz | harfbuzz tem de ser explícito |
+| `BR2_PACKAGE_DEJAVU=y` instala **zero** fontes | `dejavu.mk` só preenche dentro de `ifeq ($(BR2_PACKAGE_DEJAVU_SANS),y)` |
+
+A quarta armadilha é de build incremental, e é a mais traiçoeira:
+
+> **Acrescentar uma dependência não reconfigura um pacote já construído.**
+
+O `sdl2_ttf` estava compilado com `--disable-harfbuzz`; pôr
+`BR2_PACKAGE_HARFBUZZ=y` no `.config` não mudou nada. Só resolveu removendo
+`build/sdl2_ttf-*` antes de recompilar. Medido:
+
+```text
+TTF_USE_HARFBUZZ='0'   →   TTF_USE_HARFBUZZ='1'
+readelf -d libSDL2_ttf →   NEEDED libharfbuzz.so.0
+```
+
+**Estado em 03/11/2026: resolvido.** Verificado no artefato real (imagem do X35H
+em `out/`), não só na documentação:
+
+```text
+/usr/lib/libSDL2_ttf-2.0.so.0.2200.0   NEEDED libharfbuzz.so.0  ✔
+/usr/lib/libfreetype.so.6                                            ✔
+/usr/share/fonts/dejavu/DejaVuSans.ttf   757076 bytes                ✔
+```
+
+A lição que fica, e que vale dos dois lados: **biblioteca presente não prova uso.**
+Só `readelf -d` mostra as `DT_NEEDED`. Do nosso lado a mesma regra apareceu com
+outro nome — o dispositivo *declarar* um código de tecla e o kernel *entregar* o
+evento são fatos diferentes.
 
 ### 2. Uma fonte TTF com licença permissiva
 

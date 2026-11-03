@@ -153,7 +153,23 @@ fn main() -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
 
-    let mut builder = video.window("Giochi Launcher", 1280, 720);
+    // Tamanho do output. Existe para testar um painel que não temos em mãos:
+    // com `SDL_VIDEODRIVER=dummy` e `--tamanho 640x480`, o `set_logical_size`
+    // letterboxa exatamente como faria no X35H, e o quadro mostra o resultado.
+    let (mut largura, mut altura) = (1280u32, 720u32);
+    if let Some(i) = args.iter().position(|a| a == "--tamanho") {
+        let pedido = args.get(i + 1).ok_or("--tamanho precisa de LARGURAxALTURA")?;
+        let (l, a) = pedido
+            .split_once(['x', 'X'])
+            .ok_or("--tamanho espera LARGURAxALTURA, ex.: 640x480")?;
+        largura = l.trim().parse().map_err(|_| format!("largura inválida: {l}"))?;
+        altura = a.trim().parse().map_err(|_| format!("altura inválida: {a}"))?;
+        if largura == 0 || altura == 0 {
+            return Err("--tamanho não aceita zero".into());
+        }
+    }
+
+    let mut builder = video.window("Giochi Launcher", largura, altura);
     if fullscreen {
         builder.fullscreen_desktop();
     }
@@ -164,6 +180,15 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("janela: {e}"))?;
 
     let painter = draw::Painter::new(window, &font_path)?;
+    // O projeto é sempre 1280x720; o painel só muda o encaixe. Registrar a
+    // diferença evita confundir letterbox esperado com bug de desenho.
+    if (largura, altura) != (draw::DESIGN_W as u32, draw::DESIGN_H as u32) {
+        eprintln!(
+            "output {largura}x{altura} com projeto {}x{} — letterbox esperado",
+            draw::DESIGN_W,
+            draw::DESIGN_H
+        );
+    }
     let state = State::new(demo_games(), demo_apps());
 
     // Entrada por evdev: o SDL fica só com a janela e o desenho.

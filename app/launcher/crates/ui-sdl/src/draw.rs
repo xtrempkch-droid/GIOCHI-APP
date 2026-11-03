@@ -64,8 +64,8 @@ pub enum Rotation {
 
 /// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
 /// dispositivo quando a rotação é aplicada.
-const DESIGN_W: i32 = 1280;
-const DESIGN_H: i32 = 720;
+pub const DESIGN_W: i32 = 1280;
+pub const DESIGN_H: i32 = 720;
 
 // ── matemática da rotação (pura, testável sem SDL) ──────────
 

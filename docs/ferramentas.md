@@ -150,6 +150,37 @@ Quando a comparação falha com as dimensões certas, o script sugere o **outro*
 sentido, porque `cw` e `ccw` diferem exatamente 180° e essa é a única
 alternativa possível.
 
+### Testar um painel que não temos em mãos
+
+`--tamanho LxA` cria o output no tamanho pedido. Com `SDL_VIDEODRIVER=dummy`, o
+resultado é o `set_logical_size` letterboxando **exatamente como faria no
+aparelho** — dá para conferir uma resolução de hardware que não está aqui.
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+  ./target/debug/giochi-launcher --tamanho 640x480 --dump-frame /tmp/x.bmp
+node ../../scripts/verificar-frame.mjs --captura /tmp/x.bmp
+```
+
+Medido em 03/11/2026 no código real (a UI é projetada em 1280×720):
+
+| `--tamanho` | Proporção | Preto puro | Leitura |
+| --- | --- | --- | --- |
+| 1280×720 | 16:9 | **0,00 %** | nativo, sem faixa |
+| 640×480 | 4:3 | **25,00 %** | letterbox de 60 px por lado |
+| 1024×768 | 4:3 | **25,00 %** | idem, outra escala |
+| 800×480 | 5:3 | **5,83 %** | quase cheio |
+| 720×1280 | 9:16 | **68,13 %** | retrato **sem** giro — não é defeito |
+
+A coluna de preto é o que o `verificar-frame` mede. **`25 %` num painel 4:3 é o
+comportamento correto, não regressão** — é a previsão que o X35H vai produzir.
+
+A linha de 720×1280 parece errada e não é: no PC não existe
+`/sys/class/graphics/fbcon/rotate`, então o app não gira. No aparelho ele gira e
+o preto cai a 0 %. Isso serve de contraprova: o letterbox é consequência da
+**proporção**, e o giro é consequência da **declaração do sistema** — dois
+mecanismos independentes.
+
 ### A armadilha do driver de vídeo
 
 `--dump-frame` só produz conteúdo sob `SDL_VIDEODRIVER=dummy` no PC. No driver

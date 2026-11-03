@@ -295,20 +295,34 @@ remendo.
 
 ### O que o app já deveria fazer sozinho
 
+Os números do X35H já são conhecidos pela equipe do System (03/11/2026) e estão
+no `device.json` deles: **painel 640×480, rotação `0`, `adc-joystick`, 16 botões
+sem `BTN_MODE`**.
+
 | Diferença esperada | Mecanismo que responde | Se falhar |
 | --- | --- | --- |
-| painel paisagem em vez de retrato | `fbcon/rotate` = `0` → sem giro | app ignorou o sistema |
+| paisagem (`rotate:0`) em vez de retrato (`3`) | `fbcon/rotate` → sem giro | app ignorou o sistema |
 | outro sentido de giro | `fbcon/rotate` = `1` → `cw` | app fixou sentido |
-| resolução menor, mesma proporção | `set_logical_size` escala | app fixou pixel |
-| proporção diferente (4:3, 3:2) | letterbox do SDL | — é esperado, não é bug |
-| outro SoC, mesmo `aarch64` | binário é o mesmo | depende de libc do alvo |
-| botões com códigos diferentes | `/etc/giochi/buttons.map` do sistema | app descartou símbolo |
+| 640×480 em vez de 720×1280 | `set_logical_size` escala | app fixou pixel |
+| **4:3 em vez de 16:9** | letterbox do SDL | — **é esperado, não é bug** |
+| outro SoC, mesmo `aarch64` | binário é o mesmo (RK3566 nos dois) | depende de libc do alvo |
+| 16 botões, sem `home` | `is_complete()` não cobra `home` | app exigiu botão que não existe |
 
-**A proporção diferente é o caso onde "parece errado e está certo".** A UI é
-projetada em 1280×720 (16:9). Num painel 4:3 sobra faixa preta em cima e embaixo,
-porque o `set_logical_size` letterboxa em vez de distorcer. Se a comparação de
-frame acusar mais preto que o normal **e as proporções divergirem**, é isso — não
-é regressão de desenho.
+O caso **4:3** é o mais provável de gerar falso alarme: a UI é projetada em
+1280×720 (16:9) e num painel 640×480 sobra faixa preta em cima e embaixo. O
+`verificar` vai acusar mais preto que no X55 — **e estará certo**.
+
+```text
+escala      = 640 / 1280        = 0,5
+altura usada = 720 × 0,5         = 360 px
+letterbox   = 480 − 360          = 120 px  →  25 % da altura (60 px por lado)
+```
+
+Se a proporção do painel bater com a do projeto, aí sim desconfie de regressão.
+
+**Já verificado no PC, sem o aparelho**, com `--tamanho 640x480`: o frame saiu com
+**25,00 %** de preto puro e a UI íntegra. A conta acima é medição, não estimativa.
+O comando está em [ferramentas.md](ferramentas.md).
 
 ### Ordem de teste, quando a equipe liberar
 
@@ -332,15 +346,15 @@ O valor de testar o segundo aparelho é a **comparação**, então guarde a saí
 
 ```bash
 bash scripts/aparelho.sh diagnostico | tee dist/imagem-x55.txt     # o antigo
-bash scripts/aparelho.sh diagnostico | tee dist/imagem-r35h.txt    # o novo
-diff dist/imagem-x55.txt dist/imagem-r35h.txt
+bash scripts/aparelho.sh diagnostico | tee dist/imagem-x35h.txt   # o novo
+diff dist/imagem-x55.txt dist/imagem-x35h.txt
 ```
 
 O `diff` é o que mostra a diferença que o código teve (ou não) de absorver.
 Se o app subiu sem uma linha alterada, a arquitetura se paga; se exigiu mudança,
 o `diff` do código mostra exatamente qual premissa estava errada.
 
-> **Estado:** o r35h **não foi testado**. A equipe do System está validando a
+> **Estado:** o X35H **não foi testado**. A equipe do System está validando a
 > imagem e o aparelho está em uso. Nada nesta seção foi executado — é previsão,
 > escrita antes do teste para poder ser falsificada.
 
