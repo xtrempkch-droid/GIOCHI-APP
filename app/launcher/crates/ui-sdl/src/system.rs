@@ -6,24 +6,31 @@
 //! corretamente, não executa nada — ele é puro e testável sem hardware. Mas
 //! alguém precisa executar, e esse alguém é a camada de UI.
 //!
-//! ## `exec` em vez de `fork`
+//! ## Processo filho, não `exec`
 //!
-//! O launcher **não** cria um processo filho: ele chama `exec` e deixa de
-//! existir. Assim não sobram dois processos disputando o DRM durante o
-//! desligamento. Quando o sistema não desliga de fato (ver abaixo), o processo
-//! não volta — o que é melhor que voltar para uma tela que promete algo falso.
+//! O launcher **cria um processo filho** com `Command::status()` e espera por
+//! ele. Não usa `exec`, porque `exec` substituiria o próprio launcher: se o
+//! comando falhasse, não sobraria processo para mostrar o erro na tela.
 //!
-//! ## Desligar pode não cortar a energia
+//! A contrapartida é que durante o `poweroff` existem dois processos e os dois
+//! podem ter o DRM aberto. Na prática dura poucos milissegundos e o aparelho
+//! desliga antes de qualquer conflito — mas está aqui registrado, porque já
+//! esteve descrito ao contrário neste arquivo.
 //!
-//! Medido no X55: o nó do PMIC (`rockchip,rk817`) **não declara**
-//! `rockchip,system-power-controller`. Sem essa propriedade o kernel não tem
-//! como pedir ao PMIC para cortar a energia: ele desmonta os sistemas de
-//! arquivos e para, mas o hardware continua alimentado — a tela apaga por falta
-//! de varredura e o aparelho precisa de um power-off longo.
+//! ## Desligar corta a energia neste aparelho
 //!
-//! O app faz a parte dele (chama `poweroff`) e **registra o resultado**. A
-//! correção real é no device tree, e está documentada em
-//! `docs/contrato-app-sistema.md`.
+//! Medido no X55 em 03/11/2026: `poweroff` **desliga de fato** — o aparelho
+//! precisou ser religado pelo botão físico.
+//!
+//! A primeira versão deste comentário afirmava o contrário, deduzindo do device
+//! tree que, sem `rockchip,system-power-controller`, o hardware continuaria
+//! alimentado. A propriedade de fato **não existe** e o desligamento funciona
+//! assim mesmo: o driver do PMIC registra o caminho de outra forma. A conclusão
+//! foi escrita a partir de documentação, sem teste, e o teste a desmentiu.
+//!
+//! O app faz a parte dele (chama `poweroff`) e **registra o resultado**.
+//! `declaracao_de_energia()` abaixo continua existindo como informação sobre o
+//! device tree — nunca como previsão do que o comando fará.
 
 use std::process::Command;
 

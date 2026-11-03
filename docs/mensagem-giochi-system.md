@@ -3,9 +3,16 @@
 Documento de handoff entre as duas equipes. Serve para ser enviado a cada rodada
 de entrega de imagem, com as seções de estado atualizadas.
 
-**Como usar:** copie o bloco abaixo. O que muda a cada rodada é a seção 1 (estado)
-e a seção 6 (o que pedimos de informação). O resto é contrato e tende a ser
-estável.
+**Como usar:** há duas versões do mesmo conteúdo.
+
+| Versão | Onde | Serve para |
+| --- | --- | --- |
+| longa | `## Mensagem`, §1–§10 | e-mail, documento anexado, ou quando o detalhe importa |
+| curta | `## Versão curta` | WhatsApp, Telegram, chat |
+
+O que muda a cada rodada é a §1 (estado), a §7 (o que pedimos) e a §10 (prazo).
+O resto é contrato e tende a ser estável. **Ao atualizar, mexer nas duas versões**
+— divergir faz as equipes passarem a ter combinados diferentes.
 
 ---
 
@@ -33,12 +40,28 @@ São **dois itens**. Nada além disso.
 **(a) `::respawn:/usr/bin/giochi-init` no `/etc/inittab`**
 
 `/usr/bin/giochi-init` existe e está correto, mas hoje nada o chama. O launcher
-nunca sobe no boot — só por SSH. E `respawn` não é detalhe: o launcher usa `exec`
-para abrir jogo, então sem ele não sobra processo para redesenhar a interface
-quando o jogo termina.
+nunca sobe no boot — só por SSH.
 
-Como saber que resolveu: **ligar o aparelho e a interface aparecer, sem SSH.**
-É o teste mais importante da rodada, e é o único que não temos como simular.
+Pedimos **`respawn`** e não `once` por dois motivos:
+
+1. **Recuperação.** Se o launcher terminar — panic, falta de memória, erro ao
+   abrir o DRM —, `respawn` traz a interface de volta. Com `once`, o aparelho fica
+   numa tela preta sem saída que não seja SSH. Num handheld, isso é tijolo.
+
+2. **Pré-requisito do lançamento de jogos.** A decisão de arquitetura registrada
+   em `docs/integracao.md` é que o launcher **cede o processo** ao jogo (`exec`)
+   em vez de criar filho, porque só um processo pode ter o DRM master. Quando o
+   jogo termina, quem reinicia o launcher é o init. **Isso ainda não está
+   implementado** — hoje o launcher só chama `poweroff`/`reboot` com processo
+   filho e espera —, mas o `respawn` precisa existir antes de o lançamento
+   entrar.
+
+Distinguimos os dois de propósito: o item 1 é o que vale hoje; o item 2 é o que
+a imagem precisa ter para a etapa seguinte não travar.
+
+Como saber que resolveu: **ligar o aparelho e a interface aparecer, sem SSH** — é
+o teste mais importante da rodada, e o único que não temos como simular. Depois,
+matar o processo e ver se ele volta sozinho.
 
 **(b) `SDL2_ttf` + `freetype` + `harfbuzz` + uma fonte TTF**
 
@@ -104,8 +127,13 @@ valor e não há conflito.
 
 **Mas há um caso que precisamos combinar com vocês:** se a imagem nova passar a
 persistir estado ALSA (`alsactl`), o app e o sistema vão disputar o mixer. Um dos
-dois tem de ceder. Nossa proposta: o sistema guarda, o app só aplica a intenção do
-usuário e lê o valor real do mixer. Digam se preferem assim.
+dois tem de ceder.
+
+> **Isto é proposta nossa, não decisão tomada.** Uma divisão possível: o sistema
+> guarda o estado, e o app apenas aplica a intenção do usuário e lê o valor real
+> do mixer. Se preferirem o contrário — o app é o dono e o sistema não toca em
+> ALSA — funciona igual, e nesse caso pedimos que o `alsactl` fique fora do init.
+> O que não funciona é os dois escreverem sem saber um do outro.
 
 ### 5. O que já sabemos do X55 e vale para vocês
 
@@ -194,6 +222,84 @@ sistema escreve, e o que precisam saber de nós**. Especificamente:
 > A interface não sobe sozinha e não tem texto. O resto funciona, e o que
 > funciona está medido no hardware — não deduzido.
 
+### 10. Prazo — e o que fazemos enquanto isso
+
+Não temos data para parar o desenvolvimento, então a mensagem não tem prazo duro.
+O que ajuda de verdade é o inverso: **sabermos o que não vai entrar**, para parar
+de esperar.
+
+| Item | Se entrar em breve | Se ficar para depois |
+| --- | --- | --- |
+| `::respawn:` no `inittab` | testamos boot completo no r35h | seguimos subindo por SSH |
+| texto (`SDL2_ttf` etc.) | UI fica utilizável; testes de layout começam | UI continua sem rótulo |
+| changelog da imagem | uma rodada de teste direta | uma rodada só para descobrir o que mudou |
+
+**Pedido concreto:** uma frase de resposta por item — "entra na próxima", "não
+entra" ou "não sabemos". As três respostas nos servem; a ausência de resposta é o
+que custa uma rodada.
+
+Enquanto isso não voltamos a pedir nada: o app continua rodando com o que a
+imagem de hoje oferece, sem exigir mudança de vocês.
+
+---
+
+## Versão curta (para WhatsApp, Telegram ou chat)
+
+> Copie daqui até o fim da linha horizontal. Mesmo conteúdo da mensagem longa,
+> sem as tabelas — o detalhe fica no documento, que pode ir anexado ou por link.
+
+---
+
+**Giochi app → Giochi System**
+
+Sobre a imagem nova e o r35h: **não testamos nenhum dos dois**, porque entendemos
+que a validação está com vocês. Fica na nossa fila — e não vamos concluir nada
+sobre o r35h antes de rodar.
+
+Dois pedidos, e são os dois únicos que bloqueiam:
+
+**1. `::respawn:/usr/bin/giochi-init` no `/etc/inittab`.**
+O script existe e está correto, mas nada o chama — o launcher nunca sobe no boot,
+só por SSH. Dois motivos para ser `respawn` e não `once`: se o launcher terminar
+(panic, memória, erro no DRM), ele volta sozinho em vez de deixar tela preta sem
+saída além de SSH; e é pré-requisito do lançamento de jogos — o projeto é o
+launcher ceder o processo ao jogo com `exec`, porque só um processo pode ter o
+DRM master, e quem o reinicia depois é o init. (O lançamento ainda não está
+implementado; hoje o launcher só chama `poweroff`/`reboot` e espera.)
+
+**2. `SDL2_ttf` + `freetype` + `harfbuzz` + uma fonte TTF.**
+As quatro juntas — `SDL2_ttf` sozinho não desenha nada. A fonte pode ir dentro do
+nosso pacote (`assets/fonts/`); preferimos assim, mas funciona de qualquer jeito.
+
+Confirmando o achado de vocês: o `readelf -d` no `SDL2_ttf` foi a decisão certa.
+Biblioteca presente não prova uso — chegamos na mesma regra por outro caminho,
+com os botões: o dispositivo *declarar* um código e o kernel *entregar* o evento
+são fatos diferentes. Foi o que manteve o botão de energia sem função por
+rodadas.
+
+Do nosso lado já está pronto: `aparelho.sh capacidades` lê o bitmask do `/proc`,
+`aparelho.sh input` mostra o que o kernel entrega, `aparelho.sh boot-log` salva o
+log **antes** de regravar o cartão, e a rota `usb0` (10.55.0.2, senha) já é
+reconhecida pelo toolkit.
+
+Uma coisa que precisamos combinar: se a imagem passar a persistir ALSA, app e
+sistema disputam o mixer. É proposta nossa que o sistema guarde e o app só
+aplique — mas o contrário funciona igual, desde que só um escreva.
+
+E um pedido que vale mais que os outros na prática: **um changelog curto do que
+mudou** (kernel, pacotes, inittab, device tree, `buttons.map`). Sem isso gastamos
+uma rodada descobrindo o que mudou antes de testar o que interessa.
+
+Do r35h queremos saber, quando liberarem: resolução do painel, orientação
+declarada e **qual driver de analógico** — `adc-joystick` ou `rocknix-joypad`.
+Isso muda a normalização por completo e não temos como descobrir pelo app.
+
+Respondemos no mesmo formato sobre o que vocês precisam de nós: o app escreve só
+três arquivos em `/user/.config/giochi/` (`brightness`, `volume`, `rotation`).
+
+**E o que mais ajuda:** uma frase por item — "entra na próxima", "não entra" ou
+"não sabemos". As três nos servem; o silêncio é o que custa uma rodada.
+
 ---
 
 ## Notas internas (não enviar)
@@ -206,3 +312,22 @@ sistema escreve, e o que precisam saber de nós**. Especificamente:
   que compra credibilidade para os pedidos da seção 2.
 - A §7 é o pedido mais importante na prática: sem changelog, gastamos uma rodada
   descobrindo o que mudou antes de conseguir testar o que interessa.
+- **A versão curta não é resumo da longa, é a mesma mensagem sem tabela.** Manter
+  as duas em sincronia ao atualizar: o que entra numa tem de entrar na outra, senão
+  as duas equipes passam a ter versões diferentes do combinado.
+- **O ALSA está marcado como proposta** (§4) porque ainda não é acordo. Se eles
+  aceitarem, trocar o bloco por "acordado: o sistema guarda, o app aplica" — e
+  então vira fato, não sugestão.
+- **A admissão do erro do `poweroff`** (§5) é mantida de propósito: custa nada e
+  evita que eles tropecem no mesmo ponto. Se o objetivo for só assertividade, é a
+  primeira coisa a cortar.
+- **A §2(a) distingue "vale hoje" de "pré-requisito de projeto" de propósito.** A
+  primeira versão dizia que "o launcher usa `exec` para abrir jogo" — isso é
+  decisão registrada em `docs/integracao.md`, **não** código: o lançamento de jogo
+  não está implementado, e o único uso de processo hoje é `Command::status()` em
+  `poweroff`/`reboot`, que é filho e espera. Afirmar comportamento inexistente
+  para a outra equipe é o jeito mais rápido de perder credibilidade, e o
+  argumento verdadeiro (recuperação de crash + pré-requisito) é mais forte.
+- **O prazo é pedido em forma de "o que não vai entrar"**, não de data. Prazo duro
+  entre equipes sem hierarquia comum costuma ser ignorado; "não vai entrar" é uma
+  resposta que também libera nosso planejamento.

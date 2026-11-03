@@ -100,9 +100,20 @@ O próprio `giochi-init` documenta a entrada esperada:
 ::respawn:/usr/bin/giochi-init
 ```
 
-Sem `::respawn:`, além de não subir, perde-se o comportamento que o script foi
-escrito para dar: reiniciar o launcher quando um jogo termina (o launcher usa
-`exec`, então não sobra processo para redesenhar a UI).
+Sem `::respawn:`, além de não subir, perde-se a recuperação: se o launcher
+**terminar** — panic, falta de memória, erro ao abrir o DRM —, o aparelho fica
+numa tela preta sem saída a não ser SSH. Com `once` ele sobe uma vez e não volta;
+com `respawn` o init o reinicia.
+
+O launcher **não** usa `exec` hoje: ele cria processo filho e espera
+(`Command::status()` em `crates/ui-sdl/src/system.rs`), então sobrevive ao término
+de um comando. O argumento imediato para `respawn` é a morte do próprio launcher,
+não o fim de um jogo.
+
+A ressalva é a etapa seguinte: `docs/integracao.md` decide que, ao lançar um jogo,
+o launcher **cederá o processo** (`exec`) em vez de criar filho — só um processo
+pode ter o DRM master. Quando isso entrar, o `respawn` deixa de ser recuperação e
+passa a ser obrigatório para a interface voltar. Melhor já estar na imagem.
 
 Consequência prática enquanto isso não entra: para ver a interface é preciso
 subir o launcher à mão.

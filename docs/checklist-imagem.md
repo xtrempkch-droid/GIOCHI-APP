@@ -129,10 +129,22 @@ Sem isso, suba manualmente e siga:
 bash scripts/aparelho.sh subir
 ```
 
-**`::respawn:` é o que importa**, não só a linha existir. Sem `respawn`, o
-launcher não volta depois que um jogo termina — e o launcher usa `exec`, então
-não sobra processo para redesenhar a interface. Teste: saia da UI (menu →
-desligar, ou mate o processo com `aparelho.sh parar`) e veja se ela volta sozinha.
+**`::respawn:` é o que importa**, não só a linha existir. Duas diferenças:
+
+- com `once`, a interface sobe no boot mas **não volta** se o launcher terminar;
+- com `respawn`, o init a reinicia.
+
+O launcher **não** usa `exec` hoje: cria processo filho com `Command::status()` e
+espera, então sobrevive ao término de um comando. Ainda assim `respawn` é o que
+queremos, porque o caso que importa é o launcher **morrer** — panic, memória, erro
+ao abrir o DRM — e o aparelho ficar em tela preta sem saída além de SSH.
+
+Vale também para a etapa seguinte: `docs/integracao.md` decide que o launcher
+**cederá o processo** ao jogo (`exec`, por causa do DRM master), e aí quem o
+reinicia é o init. Quando o lançamento de jogos entrar, `respawn` vira obrigatório.
+
+Teste: mate o processo com `aparelho.sh parar` e veja se ele volta sozinho em
+alguns segundos.
 
 ## 2. O texto aparece?
 
