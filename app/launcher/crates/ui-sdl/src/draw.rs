@@ -99,6 +99,18 @@ pub fn rotate_rect(rot: Rotation, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, 
     }
 }
 
+/// Espaço lógico que o SDL deve usar para cada rotação.
+///
+/// Sem rotação é o espaço de projeto; com rotação é o do dispositivo, porque as
+/// primitivas já emitem coordenadas giradas e o encaixe passa a ser exato (o SDL
+/// só letterboxa se a proporção não bater).
+fn logical_size_for(rot: Rotation) -> (u32, u32) {
+    match rot {
+        Rotation::None => (DESIGN_W as u32, DESIGN_H as u32),
+        Rotation::Cw90 | Rotation::Ccw90 => (DESIGN_H as u32, DESIGN_W as u32),
+    }
+}
+
 /// Interpreta `0`, `90`, `270`/`ccw`. `None` = não configurado.
 fn rotacao_de_valor(valor: &str) -> Option<Rotation> {
     match valor.trim() {
@@ -116,15 +128,23 @@ fn rotacao_de_valor(valor: &str) -> Option<Rotation> {
 /// Fica no mesmo diretório do brilho salvo, que o init já usa.
 const ROTATION_FILE: &str = "/user/.config/giochi/rotation";
 
+/// Só o arquivo — a variável de ambiente é lida uma vez, na abertura.
+///
+/// Separado porque o laço quer exatamente isso: mudanças em disco, não em
+/// ambiente (que exigiria reiniciar o processo de qualquer forma).
+pub fn rotacao_do_arquivo() -> Option<Rotation> {
+    std::fs::read_to_string(ROTATION_FILE)
+        .ok()
+        .and_then(|t| rotacao_de_valor(&t))
+}
+
 fn rotacao_configurada() -> Option<Rotation> {
     if let Ok(v) = std::env::var("GIOCHI_ROTATE") {
         if let Some(rot) = rotacao_de_valor(&v) {
             return Some(rot);
         }
     }
-    std::fs::read_to_string(ROTATION_FILE)
-        .ok()
-        .and_then(|t| rotacao_de_valor(&t))
+    rotacao_do_arquivo()
 }
 
 /// Recorte retangular, para desenhar listas que rolam.
@@ -186,10 +206,7 @@ impl Painter {
         // Espaço de desenho fixo; o SDL letterboxa mantendo proporção. Com
         // rotação, o espaço lógico passa a ser o do dispositivo, porque as
         // primitivas já emitem coordenadas giradas e o encaixe é exato.
-        let (lw, lh) = match rot {
-            Rotation::None => (DESIGN_W as u32, DESIGN_H as u32),
-            Rotation::Cw90 | Rotation::Ccw90 => (DESIGN_H as u32, DESIGN_W as u32),
-        };
+        let (lw, lh) = logical_size_for(rot);
         canvas
             .set_logical_size(lw, lh)
             .map_err(|e| format!("logical size: {e}"))?;
@@ -258,6 +275,28 @@ impl Painter {
 
     pub fn present(&mut self) {
         self.canvas.present();
+    }
+
+    /// Rotação em uso agora.
+    pub fn rotation(&self) -> Rotation {
+        self.rot
+    }
+
+    /// Troca a rotação com o launcher já aberto.
+    ///
+    /// Existe para conferir o sentido no aparelho sem recompilar: quem olha a
+    /// tela sabe em um segundo se está certo, e os dois sentidos diferem 180°.
+    pub fn set_rotation(&mut self, rot: Rotation) -> Result<(), String> {
+        if rot == self.rot {
+            return Ok(());
+        }
+        self.rot = rot;
+        let (lw, lh) = logical_size_for(rot);
+        self.canvas
+            .set_logical_size(lw, lh)
+            .map_err(|e| format!("logical size: {e}"))?;
+        self.clip_stack.clear();
+        Ok(())
     }
 
     /// Tamanho do espaço de projeto, o que `set_logical_size` fixou.

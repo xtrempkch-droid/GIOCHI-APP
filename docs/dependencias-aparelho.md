@@ -76,6 +76,30 @@ O TTF **não está neste repositório** (arte de terceiro); copiar de
 aparelho. A compilação é feita no PC com cross-compile — ver
 [compilar-launcher.md](compilar-launcher.md).
 
+## Além de dependências: o `inittab` não inicia o launcher
+
+Achado ao investigar por que a tela ficava no console: **`/etc/inittab` do
+aparelho não tem entrada para o `giochi-init`.** O script existe em
+`/usr/bin/giochi-init` e está correto, mas nada o chama — então o launcher
+**nunca sobe no boot**. Hoje ele só aparece se alguém o executar por SSH.
+
+O próprio `giochi-init` documenta a entrada esperada:
+
+```text
+::respawn:/usr/bin/giochi-init
+```
+
+Sem `::respawn:`, além de não subir, perde-se o comportamento que o script foi
+escrito para dar: reiniciar o launcher quando um jogo termina (o launcher usa
+`exec`, então não sobra processo para redesenhar a UI).
+
+Consequência prática enquanto isso não entra: para ver a interface é preciso
+
+```sh
+setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher > /tmp/ui.log 2>&1 < /dev/null &
+```
+
 ## O que NÃO precisa ser pedido
 
 - **`libSDL2` com backend KMSDRM**: já está lá e funciona.

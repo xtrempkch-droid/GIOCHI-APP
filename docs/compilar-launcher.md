@@ -150,10 +150,16 @@ ambiente: sem ele, trocar o sentido exigiria recompilar. Fica junto do brilho
 salvo, que o init já usa.
 
 ```sh
-echo 270 > /user/.config/giochi/rotation   # anti-horário
+echo 270 > /user/.config/giochi/rotation   # anti-horário (correto no X55)
 echo 90  > /user/.config/giochi/rotation   # horário
 echo 0   > /user/.config/giochi/rotation   # sem rotação
 ```
+
+**O arquivo é relido com o launcher aberto**, uma vez por segundo. Não precisa
+reabrir: escrever o valor gira a tela na hora e o console registra
+`rotação alterada em tempo real: Ccw90`. É assim que se confere o sentido no
+aparelho — os dois diferem 180°, então quem olha sabe em um segundo. Só a
+variável `GIOCHI_ROTATE` exige reiniciar, porque é lida na abertura.
 
 Implementação: as primitivas recebem coordenadas de projeto e são mapeadas em
 `map_rect` / `map_point`. Cada função pública mapeia **uma vez** e delega para uma

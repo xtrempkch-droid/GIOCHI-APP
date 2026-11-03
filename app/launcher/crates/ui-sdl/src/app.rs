@@ -47,6 +47,8 @@ pub struct App {
     toast_timer: f32,
     /// Último minuto desenhado, para atualizar o relógio.
     last_minute: u64,
+    /// Tempo restante até reconferir o arquivo de rotação.
+    rotation_poll: f32,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -74,6 +76,7 @@ impl App {
             dirty: true,
             toast_timer: 0.0,
             last_minute: 0,
+            rotation_poll: 0.0,
         }
     }
 
@@ -210,6 +213,7 @@ impl App {
 
         self.poll_gamepad();
         self.tick_toast(delta_seconds);
+        self.tick_rotation(delta_seconds);
 
         self.fps_frames += 1;
         self.fps_elapsed += delta_seconds;
@@ -233,6 +237,34 @@ impl App {
         if minute != self.last_minute {
             self.last_minute = minute;
             self.dirty = true;
+        }
+    }
+
+    /// Relê `/user/.config/giochi/rotation` de vez em quando.
+    ///
+    /// Uma vez por segundo, porque ler arquivo a 60 Hz é desperdício e o efeito
+    /// desejado (girar a tela) é humano, não animação. Serve para conferir o
+    /// sentido **com a tela aberta**: os dois sentidos diferem 180°, então quem
+    /// olha sabe na hora se está certo.
+    fn tick_rotation(&mut self, delta_seconds: f32) {
+        self.rotation_poll -= delta_seconds;
+        if self.rotation_poll > 0.0 {
+            return;
+        }
+        self.rotation_poll = 1.0;
+
+        let Some(rot) = crate::draw::rotacao_do_arquivo() else {
+            return;
+        };
+        if rot == self.painter.rotation() {
+            return;
+        }
+        match self.painter.set_rotation(rot) {
+            Ok(()) => {
+                eprintln!("rotação alterada em tempo real: {rot:?}");
+                self.dirty = true;
+            }
+            Err(e) => eprintln!("aviso: não foi possível girar a tela ({e})"),
         }
     }
 

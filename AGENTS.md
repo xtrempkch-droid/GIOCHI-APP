@@ -72,12 +72,17 @@ Acesso por `ssh root@192.168.1.6`.
 - **Rotação para painel retrato**: antes ~40 % da tela era letterbox preto e a
   UI saía deitada; agora 0 % de preto e o layout encaixa.
 - **Instalado** em `/opt/giochi/apps/launcher/bin/giochi-launcher`, o caminho
-  que o `giochi-init` espera.
+  que o `giochi-init` espera, com sha256 idêntico ao do repositório.
+- **O `inittab` do aparelho NÃO inicia o `giochi-init`** — não há entrada
+  `::respawn:`. O launcher nunca sobe no boot; só por SSH. É do **Giochi
+  System**, registrado em `docs/dependencias-aparelho.md`.
 - `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
 - `capa.png` 320×320 gerada da paleta do tema (provisória).
 - **Corrigido o sentido da rotação**: o primeiro teste no aparelho mostrou a UI
   de cabeça para baixo. Horário e anti-horário diferem 180°; o X55 precisa de
   anti-horário. Confirmado por comparação de frame: 99,9 % igual à referência.
+- **Config de rotação com recarga ao vivo**: o arquivo é relido a cada segundo,
+  então trocar o sentido não exige reabrir o launcher.
 - **Corrigido um bug que impedia os botões de funcionar**: o
   `/etc/giochi/buttons.map` do aparelho tem comentário no fim de cada linha
   (`up = BTN_DPAD_UP  # gpio4 PA0`), e o parser não cortava o `#`. Resultado:
@@ -464,6 +469,12 @@ entrega a imagem invertida. O X55 precisa de **anti-horário** (`DEFAULT_ROTATIO
 Precedência: `GIOCHI_ROTATE` → `/user/.config/giochi/rotation` → automático.
 O arquivo existe porque o `giochi-init` inicia o launcher sem variáveis de
 ambiente; sem ele trocar o sentido exigiria recompilar.
+
+O arquivo é **relido a cada segundo com a tela aberta** (`App::tick_rotation`):
+`echo 270 > /user/.config/giochi/rotation` gira na hora e o console registra
+`rotação alterada em tempo real: Ccw90`. Foi assim que o sentido foi conferido
+sem recompilar entre tentativas. A variável de ambiente, ao contrário, é lida só
+na abertura.
 
 Cada primitiva pública mapeia a coordenada **uma vez** e delega para uma versão
 `*_dev` em espaço de dispositivo. Sem essa separação, `stroke_round_rect`
