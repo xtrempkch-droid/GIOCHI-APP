@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **54/54** (48 no `core`, 6 no
+- `cargo test --workspace` em `app/launcher`: **63/63** (48 no `core`, 15 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -75,6 +75,15 @@ Acesso por `ssh root@192.168.1.6`.
   que o `giochi-init` espera.
 - `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
 - `capa.png` 320×320 gerada da paleta do tema (provisória).
+- **Corrigido o sentido da rotação**: o primeiro teste no aparelho mostrou a UI
+  de cabeça para baixo. Horário e anti-horário diferem 180°; o X55 precisa de
+  anti-horário. Confirmado por comparação de frame: 99,9 % igual à referência.
+- **Corrigido um bug que impedia os botões de funcionar**: o
+  `/etc/giochi/buttons.map` do aparelho tem comentário no fim de cada linha
+  (`up = BTN_DPAD_UP  # gpio4 PA0`), e o parser não cortava o `#`. Resultado:
+  **1 de 13** botões parseados, os outros 12 descartados em silêncio. O aviso
+  "mapa de botões incompleto" no console era o único indício. Agora corta e
+  tem teste com o conteúdo real do mapa.
 
 **O que ficou por confirmar nesta sessão:** o aparelho saiu da rede logo depois
 da instalação (`No route to host`, e um scan da /24 não o encontrou). O `scp`
@@ -251,7 +260,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 54 testes do launcher
+cd app/launcher && cargo test --workspace  # 63 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -362,7 +371,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 54/54
+- `cargo test --workspace` → 63/63
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -388,7 +397,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
 | Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
 | **aarch64 no aparelho** | **roda** — KMSDRM real, frame capturado |
-| Rotação para painel retrato (720×1280) | **funciona** — automática |
+| Rotação para painel retrato (720×1280) | **funciona** — anti-horário, 99,9 % igual à referência |
+| Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço 10 s vivo |
 | GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -445,12 +455,24 @@ freetype nem fonte — ver `docs/dependencias-aparelho.md`.
 
 ### Rotação
 
-Painel é retrato (720×1280) e a UI é paisagem (1280×720). O `Painter` detecta
-pelo formato do output e gira 90° horário; `GIOCHI_ROTATE=0|90` força.
+Painel é retrato (720×1280) e a UI é paisagem (1280×720).
+
+**O sentido já esteve errado e o sintoma foi "de ponta a cabeça".** Horário e
+anti-horário diferem em exatamente 180°, então não há meio-termo: um dos dois
+entrega a imagem invertida. O X55 precisa de **anti-horário** (`DEFAULT_ROTATION`).
+
+Precedência: `GIOCHI_ROTATE` → `/user/.config/giochi/rotation` → automático.
+O arquivo existe porque o `giochi-init` inicia o launcher sem variáveis de
+ambiente; sem ele trocar o sentido exigiria recompilar.
 
 Cada primitiva pública mapeia a coordenada **uma vez** e delega para uma versão
 `*_dev` em espaço de dispositivo. Sem essa separação, `stroke_round_rect`
 chamaria `fill_rect` e giraria duas vezes. O toque desfaz em `unmap_point`.
+
+A matemática (`rotate_point`/`rotate_rect`/`unrotate_point`) é pura e testada sem
+SDL — 7 testes, incluindo ida-e-volta, cobertura do painel e a relação de 180°
+entre os sentidos. A verificação que vale é no aparelho: frame capturado,
+des-rotacionado e comparado com o render x86 → **99,9 % igual**.
 
 ### Decisões de desenho
 

@@ -48,14 +48,84 @@ pub enum Align {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rotation {
     None,
-    /// 90° no sentido horário: o projeto encaixa num painel retrato.
+    /// 90° no sentido horário: o topo do projeto vai para a direita do painel.
     Cw90,
+    /// 90° no sentido anti-horário: o topo do projeto vai para a esquerda do
+    /// painel. É o sentido que o X55 precisa — ver `DEFAULT_ROTATION`.
+    Ccw90,
 }
+
+/// Sentido usado quando o painel é retrato e `GIOCHI_ROTATE` não diz nada.
+///
+/// O X55 monta o painel DSI de modo que só o anti-horário entrega a imagem
+/// direita; com o horário a interface aparece de cabeça para baixo.
+const DEFAULT_ROTATION: Rotation = Rotation::Ccw90;
 
 /// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
 /// dispositivo quando a rotação é aplicada.
 const DESIGN_W: i32 = 1280;
 const DESIGN_H: i32 = 720;
+
+// ── matemática da rotação (pura, testável sem SDL) ──────────
+
+/// Ponto do espaço de projeto → espaço de dispositivo.
+pub fn rotate_point(rot: Rotation, x: i32, y: i32) -> (i32, i32) {
+    match rot {
+        Rotation::None => (x, y),
+        Rotation::Cw90 => (DESIGN_H - y, x),
+        Rotation::Ccw90 => (y, DESIGN_W - x),
+    }
+}
+
+/// Inverso de [`rotate_point`].
+pub fn unrotate_point(rot: Rotation, x: i32, y: i32) -> (i32, i32) {
+    match rot {
+        Rotation::None => (x, y),
+        Rotation::Cw90 => (y, DESIGN_H - x),
+        Rotation::Ccw90 => (DESIGN_W - y, x),
+    }
+}
+
+/// Retângulo do espaço de projeto → espaço de dispositivo.
+///
+/// Um retângulo alinhado aos eixos continua retângulo sob múltiplo de 90°, então
+/// largura e altura trocam e o canto é reposicionado. É isso que permite girar
+/// canto arredondado, borda e gradiente sem tratamento especial.
+pub fn rotate_rect(rot: Rotation, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+    match rot {
+        Rotation::None => (x, y, w, h),
+        Rotation::Cw90 => (DESIGN_H - y - h, x, h, w),
+        Rotation::Ccw90 => (y, DESIGN_W - x - w, h, w),
+    }
+}
+
+/// Interpreta `0`, `90`, `270`/`ccw`. `None` = não configurado.
+fn rotacao_de_valor(valor: &str) -> Option<Rotation> {
+    match valor.trim() {
+        "0" => Some(Rotation::None),
+        "90" | "cw" => Some(Rotation::Cw90),
+        "270" | "ccw" => Some(Rotation::Ccw90),
+        _ => None,
+    }
+}
+
+/// De onde ler a rotação configurada, na ordem de precedência.
+///
+/// O arquivo existe para o aparelho: `giochi-init` inicia o launcher sem
+/// variáveis de ambiente, então sem ele trocar o sentido exigiria recompilar.
+/// Fica no mesmo diretório do brilho salvo, que o init já usa.
+const ROTATION_FILE: &str = "/user/.config/giochi/rotation";
+
+fn rotacao_configurada() -> Option<Rotation> {
+    if let Ok(v) = std::env::var("GIOCHI_ROTATE") {
+        if let Some(rot) = rotacao_de_valor(&v) {
+            return Some(rot);
+        }
+    }
+    std::fs::read_to_string(ROTATION_FILE)
+        .ok()
+        .and_then(|t| rotacao_de_valor(&t))
+}
 
 /// Recorte retangular, para desenhar listas que rolam.
 #[derive(Clone, Copy, Debug)]
@@ -98,15 +168,15 @@ impl Painter {
 
         canvas.set_blend_mode(BlendMode::Blend);
 
-        // Rotação: `GIOCHI_ROTATE` manda; sem ela, deduz pelo formato do
-        // output. Painel retrato com projeto paisagem só fecha girando.
-        let rot = match std::env::var("GIOCHI_ROTATE").ok().as_deref() {
-            Some("0") => Rotation::None,
-            Some("90") => Rotation::Cw90,
-            _ => {
+        // Rotação: variável de ambiente, depois arquivo, depois dedução pelo
+        // formato do output. Painel retrato com projeto paisagem só fecha
+        // girando.
+        let rot = match rotacao_configurada() {
+            Some(rot) => rot,
+            None => {
                 let (ow, oh) = canvas.output_size().unwrap_or((DESIGN_W as u32, DESIGN_H as u32));
                 if oh > ow {
-                    Rotation::Cw90
+                    DEFAULT_ROTATION
                 } else {
                     Rotation::None
                 }
@@ -118,7 +188,7 @@ impl Painter {
         // primitivas já emitem coordenadas giradas e o encaixe é exato.
         let (lw, lh) = match rot {
             Rotation::None => (DESIGN_W as u32, DESIGN_H as u32),
-            Rotation::Cw90 => (DESIGN_H as u32, DESIGN_W as u32),
+            Rotation::Cw90 | Rotation::Ccw90 => (DESIGN_H as u32, DESIGN_W as u32),
         };
         canvas
             .set_logical_size(lw, lh)
@@ -283,25 +353,16 @@ impl Painter {
     /// trocam. Um retângulo continua retângulo, então canto arredondado, borda e
     /// gradiente não precisam de tratamento especial — basta entrar aqui.
     fn map_rect(&self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
-        match self.rot {
-            Rotation::None => (x, y, w, h),
-            Rotation::Cw90 => (DESIGN_H - y - h, x, h, w),
-        }
+        rotate_rect(self.rot, x, y, w, h)
     }
 
     fn map_point(&self, x: i32, y: i32) -> (i32, i32) {
-        match self.rot {
-            Rotation::None => (x, y),
-            Rotation::Cw90 => (DESIGN_H - y, x),
-        }
+        rotate_point(self.rot, x, y)
     }
 
     /// Inverso de `map_point`: do dispositivo para o projeto.
     fn unmap_point(&self, x: i32, y: i32) -> (i32, i32) {
-        match self.rot {
-            Rotation::None => (x, y),
-            Rotation::Cw90 => (y, DESIGN_H - x),
-        }
+        unrotate_point(self.rot, x, y)
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
@@ -527,10 +588,7 @@ impl Painter {
         let map = move |x: f32, y: f32| -> (i32, i32) {
             let px = cx - size / 2 + (x * scale).round() as i32;
             let py = cy - size / 2 + (y * scale).round() as i32;
-            match rot {
-                Rotation::None => (px, py),
-                Rotation::Cw90 => (DESIGN_H - py, px),
-            }
+            rotate_point(rot, px, py)
         };
 
         for prim in icon.prims {
@@ -716,4 +774,119 @@ fn intersect(a: Clip, b: Clip) -> Option<Clip> {
         w: right - x,
         h: bottom - y,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TODOS: [Rotation; 3] = [Rotation::None, Rotation::Cw90, Rotation::Ccw90];
+
+    #[test]
+    fn le_os_valores_de_configuracao() {
+        assert_eq!(rotacao_de_valor("0"), Some(Rotation::None));
+        assert_eq!(rotacao_de_valor("90"), Some(Rotation::Cw90));
+        assert_eq!(rotacao_de_valor("270"), Some(Rotation::Ccw90));
+        assert_eq!(rotacao_de_valor("270\n"), Some(Rotation::Ccw90), "aceita newline");
+        assert_eq!(rotacao_de_valor(" ccw "), Some(Rotation::Ccw90));
+        assert_eq!(rotacao_de_valor(""), None);
+        assert_eq!(rotacao_de_valor("lixo"), None);
+        assert_eq!(rotacao_de_valor("180"), None, "180 não é suportado");
+    }
+
+    #[test]
+    fn ida_e_volta_devolve_o_ponto() {
+        for rot in TODOS {
+            for (x, y) in [(0, 0), (1279, 0), (0, 719), (1279, 719), (640, 360)] {
+                let (dx, dy) = rotate_point(rot, x, y);
+                assert_eq!(
+                    unrotate_point(rot, dx, dy),
+                    (x, y),
+                    "{rot:?} perdeu ({x},{y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rotacao_cobre_o_painel_inteiro() {
+        // Os quatro cantos do projeto precisam cair nos quatro cantos do painel
+        // retrato: se algum sair fora, aparece tarja preta.
+        for rot in [Rotation::Cw90, Rotation::Ccw90] {
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            for (x, y) in [(0, 0), (DESIGN_W, 0), (0, DESIGN_H), (DESIGN_W, DESIGN_H)] {
+                let (dx, dy) = rotate_point(rot, x, y);
+                xs.push(dx);
+                ys.push(dy);
+            }
+            xs.sort_unstable();
+            ys.sort_unstable();
+            assert_eq!((xs[0], xs[3]), (0, DESIGN_H), "{rot:?} eixo X");
+            assert_eq!((ys[0], ys[3]), (0, DESIGN_W), "{rot:?} eixo Y");
+        }
+    }
+
+    #[test]
+    fn um_sentido_e_o_outro_mais_180_graus() {
+        // Esta é a relação que explica o sintoma: girar para o lado errado não
+        // "quase" acerta — entrega a imagem de cabeça para baixo, exatamente
+        // 180°. Um giro de 180° no painel é (dx,dy) → (ALT-dx, LARG-dy).
+        for (x, y) in [(0, 0), (100, 0), (0, 50), (1279, 719), (640, 360)] {
+            let (cwx, cwy) = rotate_point(Rotation::Cw90, x, y);
+            let (ccwx, ccwy) = rotate_point(Rotation::Ccw90, x, y);
+            let de_cabeca_para_baixo = (DESIGN_H - ccwx, DESIGN_W - ccwy);
+            assert_eq!(
+                (cwx, cwy),
+                de_cabeca_para_baixo,
+                "({x},{y}): horário deve ser o anti-horário virado 180°"
+            );
+        }
+    }
+
+    #[test]
+    fn retangulo_gira_trocando_largura_e_altura() {
+        // Barra do topo: 1280x56 em (0,0). Anti-horário põe o topo à esquerda.
+        let (x, y, w, h) = rotate_rect(Rotation::Ccw90, 0, 0, DESIGN_W, 56);
+        assert_eq!((w, h), (56, DESIGN_W));
+        assert_eq!(x, 0, "topo vai para a borda esquerda");
+        assert_eq!(y, 0);
+
+        // Rodapé: 1280x54 no fim do eixo Y.
+        let (x, _, w, h) = rotate_rect(Rotation::Ccw90, 0, DESIGN_H - 54, DESIGN_W, 54);
+        assert_eq!((w, h), (54, DESIGN_W));
+        assert_eq!(x, DESIGN_H - 54, "rodapé vai para a borda direita");
+    }
+
+    #[test]
+    fn retangulo_fica_dentro_do_painel() {
+        for rot in [Rotation::Cw90, Rotation::Ccw90] {
+            let (x, y, w, h) = rotate_rect(rot, 0, 0, DESIGN_W, DESIGN_H);
+            assert_eq!((x, y), (0, 0), "{rot:?} origem");
+            assert_eq!((w, h), (DESIGN_H, DESIGN_W), "{rot:?} tamanho");
+        }
+    }
+
+    #[test]
+    fn canto_do_retangulo_bate_com_o_ponto_girado() {
+        // O canto superior-esquerdo do retângulo girado tem de coincidir com o
+        // giro do canto superior-esquerdo do original — senão clip e desenho
+        // divergem sob rotação.
+        for rot in [Rotation::Cw90, Rotation::Ccw90] {
+            let (x, y, w, h) = (10, 20, 100, 40);
+            let (rx, ry, rw, rh) = rotate_rect(rot, x, y, w, h);
+            let (px, py) = rotate_point(rot, x, y);
+            // Sob rotação o "canto" que vira origem depende do sentido.
+            let origem_esperada = match rot {
+                Rotation::Cw90 => (rx + rw, ry),
+                Rotation::Ccw90 => (rx, ry + rh),
+                Rotation::None => (rx, ry),
+            };
+            assert_eq!(
+                (px, py),
+                origem_esperada,
+                "{rot:?}: ponto girado não casa com o retângulo girado"
+            );
+        }
+    }
 }

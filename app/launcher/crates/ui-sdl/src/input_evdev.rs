@@ -86,7 +86,12 @@ impl ButtonsMap {
                 continue;
             };
             let name = name.trim().to_lowercase();
-            if let Some(code) = code_for(value.trim()) {
+            // Comentário no fim da linha é o formato do `/etc/giochi/buttons.map`
+            // (cada botão anota o GPIO ao lado). Sem cortar aqui, `code_for`
+            // recebia `BTN_DPAD_UP        # gpio4 PA0` e descartava a entrada em
+            // silêncio — o mapa do aparelho parseava 1 de 13 botões.
+            let value = value.split('#').next().unwrap_or("").trim();
+            if let Some(code) = code_for(value) {
                 by_name.insert(name, code);
             }
         }
@@ -335,6 +340,41 @@ mod tests {
         );
         assert_eq!(map.code("up"), Some(0x220));
         assert_eq!(map.code("a"), Some(0x130));
+    }
+
+    #[test]
+    fn parse_aceita_comentario_no_fim_da_linha() {
+        // Formato real do /etc/giochi/buttons.map: o GPIO vem depois do `#`.
+        let map = ButtonsMap::parse(
+            "up      = BTN_DPAD_UP        # gpio4 PA0\n\
+             a       = BTN_EAST           # gpio3 PD3\n\
+             home    = BTN_MODE\n",
+        );
+        assert_eq!(map.code("up"), Some(0x220));
+        assert_eq!(map.code("a"), Some(0x131));
+        assert_eq!(map.code("home"), Some(0x13c));
+        assert!(map.is_complete() == false, "faltam botões de propósito");
+    }
+
+    #[test]
+    fn mapa_do_aparelho_fica_completo() {
+        // Conteúdo de /etc/giochi/buttons.map reduzido às 13 teclas exigidas.
+        let map = ButtonsMap::parse(
+            "up = BTN_DPAD_UP # gpio4 PA0\n\
+             down = BTN_DPAD_DOWN # gpio4 PA1\n\
+             left = BTN_DPAD_LEFT # gpio3 PD6\n\
+             right = BTN_DPAD_RIGHT # gpio3 PD7\n\
+             a = BTN_EAST # gpio3 PD3\n\
+             b = BTN_SOUTH # gpio3 PD2\n\
+             x = BTN_NORTH # gpio3 PD5\n\
+             y = BTN_WEST # gpio3 PD4\n\
+             l = BTN_TL # gpio3 PD0\n\
+             r = BTN_TR # gpio3 PC6\n\
+             start = BTN_START # gpio4 PA2\n\
+             select = BTN_SELECT # gpio4 PA4\n\
+             home = BTN_MODE\n",
+        );
+        assert!(map.is_complete(), "o mapa do aparelho precisa fechar");
     }
 
     #[test]

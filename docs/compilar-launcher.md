@@ -135,8 +135,25 @@ O painel do aparelho é **720×1280 (retrato)** e a UI é projetada em **1280×7
 Sem girar, o resultado é a interface deitada dentro de tarjas pretas — medido: o
 centro da tela saía `[0,0,0]`, ~40 % da área era letterbox.
 
-A rotação é automática: se o output é retrato, o `Painter` gira 90° no sentido
-horário. Forçar com `GIOCHI_ROTATE=90` ou desligar com `GIOCHI_ROTATE=0`.
+O sentido importa e errar não dá erro: os dois sentidos diferem em **exatamente
+180°**, então o sentido errado entrega a interface **de cabeça para baixo** — que
+foi exatamente o sintoma observado no primeiro teste no X55.
+
+A ordem de precedência é:
+
+1. `GIOCHI_ROTATE` (`0`, `90`, `270`/`ccw`)
+2. `/user/.config/giochi/rotation` com o mesmo valor
+3. automático: output retrato → `DEFAULT_ROTATION` (anti-horário no X55)
+
+O arquivo existe porque o `giochi-init` inicia o launcher **sem** variáveis de
+ambiente: sem ele, trocar o sentido exigiria recompilar. Fica junto do brilho
+salvo, que o init já usa.
+
+```sh
+echo 270 > /user/.config/giochi/rotation   # anti-horário
+echo 90  > /user/.config/giochi/rotation   # horário
+echo 0   > /user/.config/giochi/rotation   # sem rotação
+```
 
 Implementação: as primitivas recebem coordenadas de projeto e são mapeadas em
 `map_rect` / `map_point`. Cada função pública mapeia **uma vez** e delega para uma
@@ -146,7 +163,13 @@ vezes. O toque faz o caminho inverso (`unmap_point`).
 
 Resultado no aparelho, verificado por contagem de pixels no frame capturado:
 
-| Métrica | Antes | Depois |
-| --- | --- | --- |
-| pixels pretos puros (letterbox) | ~40 % | **0 %** |
-| faixa do rodapé na borda certa | — | 96,9 % |
+| Métrica | Sem rotação | Horário (errado) | Anti-horário (correto) |
+| --- | --- | --- | --- |
+| pixels pretos puros (letterbox) | ~40 % | 0 % | **0 %** |
+| barra do topo na borda esperada | — | colunas 664..719 | **colunas 0..55** |
+| comparação com a referência x86 | — | falha | **99,9 % igual** |
+
+A comparação final é a que vale: o frame do aparelho foi des-rotacionado com o
+inverso do anti-horário e comparado pixel a pixel com o render de 1280×720 do
+PC. 99,9 % de acerto com tolerância 12 confirma que o layout está na orientação
+certa, e não apenas "girou alguma coisa".
