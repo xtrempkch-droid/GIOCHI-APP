@@ -48,7 +48,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 - `node tests/run-all.mjs` passou: **39/39**.
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **75/75** (53 no `core`, 22 no
+- `cargo test --workspace` em `app/launcher`: **84/84** (53 no `core`, 31 no
   `ui-sdl`).
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
   `--dump-frame`, sem tela (`SDL_VIDEODRIVER=dummy`).
@@ -265,7 +265,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile para o aparelho
 bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.6
-cd app/launcher && cargo test --workspace  # 75 testes do launcher
+cd app/launcher && cargo test --workspace  # 84 testes do launcher
 ```
 
 `compilar-launcher.sh` existe porque o `sdl2-sys` precisa de `pkg-config` para
@@ -376,7 +376,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → 7 apps OK
 - `node tests/run-all.mjs` → 39/39
-- `cargo test --workspace` → 75/75
+- `cargo test --workspace` → 84/84
 - `--dump-frame` gera BMP de 1280×720 com conteúdo real — a UI desenha
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64.
@@ -403,7 +403,10 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
 | **aarch64 no aparelho** | **roda** — KMSDRM real, frame capturado |
 | Rotação para painel retrato (720×1280) | **funciona** — anti-horário, 99,9 % igual à referência |
-| Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço 10 s vivo |
+| Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço vivo |
+| Orientação lida do sistema | **confirmado** — `fbcon/rotate=3` → `Ccw90`, sem override |
+| Brilho no painel | **confirmado** — `--brilho 20/70/50` → 333/1166/833, e persiste |
+| Despertar por botão | **corrigido** no núcleo e no laço; falta apertar o botão |
 | GLES2 / `/dev/input` / desempenho | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -478,6 +481,18 @@ Três regras, todas nascidas de bug real no aparelho:
    idempotente (dormir duas vezes não salva 0 como "anterior"). Na abertura,
    `destravar_tela_apagada` reacende se o valor veio 0 — proteção para o caso de
    o processo morrer dormindo.
+4. **O slider de brilho agora chega no painel.** Antes era decorativo: mudava
+   `settings.brightness` e nada em `sysfs`. Agora `definir_fracao` converte para
+   a escala do `max_brightness`, escreve e **grava
+   `/user/.config/giochi/brightness`** — o arquivo que o `giochi-init` lê no
+   boot. Sem essa escrita a escolha do usuário sumia a cada reinício.
+
+Diagnóstico de campo, no próprio aparelho:
+
+```bash
+giochi-launcher --testar-backlight   # apaga 2 s e restaura
+giochi-launcher --brilho 40          # mesmo caminho do slider, e persiste
+```
 
 Diagnóstico de campo, sem passar pelo menu de energia:
 
@@ -487,17 +502,31 @@ giochi-launcher --testar-backlight   # apaga 2 s e restaura
 
 Verificado no X55: 833 → 0 → 833.
 
-### Rotação
+### Rotação — a orientação é fato do sistema
 
 Painel é retrato (720×1280) e a UI é paisagem (1280×720).
 
 **O sentido já esteve errado e o sintoma foi "de ponta a cabeça".** Horário e
-anti-horário diferem em exatamente 180°, então não há meio-termo: um dos dois
-entrega a imagem invertida. O X55 precisa de **anti-horário** (`DEFAULT_ROTATION`).
+anti-horário diferem exatamente 180°, não há meio-termo.
 
-Precedência: `GIOCHI_ROTATE` → `/user/.config/giochi/rotation` → automático.
-O arquivo existe porque o `giochi-init` inicia o launcher sem variáveis de
-ambiente; sem ele trocar o sentido exigiria recompilar.
+A primeira correção foi uma remenda: `DEFAULT_ROTATION = Ccw90` com o comentário
+"o X55 precisa". Isso ficaria errado na primeira revisão de hardware. Hoje o app
+**não contém nome de aparelho nem sentido fixo**: lê a orientação que o sistema
+declara em `/sys/class/graphics/fbcon/rotate` (de `fbcon=rotate:N` no cmdline).
+
+Precedência (`crates/ui-sdl/src/display.rs`): `GIOCHI_ROTATE` →
+`/user/.config/giochi/rotation` → **`fbcon/rotate`** → dedução pelo formato do
+output. O log na abertura diz a fonte:
+
+```text
+rotação: Ccw90 (fonte: sistema (fbcon/rotate)) [output 720x1280]
+```
+
+`fbcon=rotate:2` (180°) **não é suportado**: o app avisa e pede configuração
+manual, em vez de fingir que atendeu.
+
+O arquivo do usuário é relido a cada segundo (troca ao vivo, sem recompilar); a
+variável de ambiente é lida só na abertura.
 
 O arquivo é **relido a cada segundo com a tela aberta** (`App::tick_rotation`):
 `echo 270 > /user/.config/giochi/rotation` gira na hora e o console registra

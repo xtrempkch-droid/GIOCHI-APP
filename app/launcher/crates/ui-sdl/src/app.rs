@@ -63,7 +63,19 @@ impl App {
         self.painter.save_frame(path)
     }
 
-    pub fn new(painter: Painter, state: State, evdev: EvdevInput) -> Self {
+    pub fn new(painter: Painter, mut state: State, evdev: EvdevInput) -> Self {
+        // O `giochi-init` já restaurou o brilho salvo no boot. Ler o hardware
+        // evita a UI mostrar um número que não corresponde à tela — e evita o
+        // app sobrescrever a escolha do usuário com um padrão de código.
+        //
+        // Fica fora do literal da struct para poder mexer em `state` antes dele
+        // ser movido, e também porque a ordem importa: ler primeiro, montar
+        // depois.
+        let backlight = Backlight::discover();
+        if let Some(pct) = backlight.fracao_atual() {
+            state.settings.brightness = pct;
+        }
+
         Self {
             state,
             mapper: Mapper::new(),
@@ -80,18 +92,33 @@ impl App {
             toast_timer: 0.0,
             last_minute: 0,
             rotation_poll: 0.0,
-            backlight: Backlight::discover(),
+            backlight,
         }
     }
 
     fn dispatch(&mut self, cmd: Cmd) {
         let tela_antes = self.state.screen;
+        let brilho_antes = self.state.settings.brightness;
         let before = self.state.clone();
         self.state = giochi_launcher_core::update(self.state.clone(), cmd);
         if self.state != before {
             self.dirty = true;
         }
         self.sync_backlight(tela_antes, self.state.screen);
+        self.sync_brilho(brilho_antes, self.state.settings.brightness);
+    }
+
+    /// Leva o slider de brilho ao hardware.
+    ///
+    /// Antes disto o controle era decorativo: mudava o número na tela e nada no
+    /// painel. O núcleo guarda a intenção (`settings.brightness`); quem escreve
+    /// em `sysfs` é a camada de UI, porque o núcleo é puro e testável sem
+    /// hardware.
+    fn sync_brilho(&mut self, antes: u8, agora: u8) {
+        if antes == agora || !self.backlight.disponivel() {
+            return;
+        }
+        self.backlight.definir_fracao(agora);
     }
 
     /// Apaga o painel ao dormir e devolve o brilho ao acordar.

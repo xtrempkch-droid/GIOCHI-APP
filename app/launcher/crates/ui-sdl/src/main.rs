@@ -8,12 +8,14 @@
 //!                                   desenha a Home num BMP e sai
 //!   giochi-launcher --testar-backlight
 //!                                   apaga o painel 2 s e restaura
+//!   giochi-launcher --brilho 40     aplica 40% pelo mesmo caminho do slider
 //!
 //! Para o aparelho (GLES2 sobre KMSDRM), defina `GIOCHI_GLES=1`. No PC deixe
 //! vazio: forçar `opengles2` no desktop costuma falhar.
 
 mod app;
 mod backlight;
+mod display;
 mod draw;
 mod icons;
 mod input_evdev;
@@ -61,6 +63,26 @@ fn main() -> Result<(), String> {
         println!("restaurando...");
         bl.restaurar();
         println!("ok");
+        return Ok(());
+    }
+
+    // Exercita exatamente a função que o slider usa, para provar que o caminho
+    // chega ao painel — e que a escolha fica gravada para o `giochi-init`.
+    if let Some(i) = args.iter().position(|a| a == "--brilho") {
+        let pct: u8 = args
+            .get(i + 1)
+            .and_then(|v| v.parse().ok())
+            .ok_or("--brilho precisa de um valor de 0 a 100")?;
+        let mut bl = backlight::Backlight::discover();
+        if !bl.disponivel() {
+            return Err("nenhum /sys/class/backlight/*/brightness gravável".into());
+        }
+        let antes = bl.fracao_atual();
+        bl.definir_fracao(pct);
+        println!(
+            "brilho: {antes:?}% -> {:?}% (pedido {pct}%)",
+            bl.fracao_atual()
+        );
         return Ok(());
     }
 

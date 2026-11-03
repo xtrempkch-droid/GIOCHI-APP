@@ -51,15 +51,16 @@ pub enum Rotation {
     /// 90° no sentido horário: o topo do projeto vai para a direita do painel.
     Cw90,
     /// 90° no sentido anti-horário: o topo do projeto vai para a esquerda do
-    /// painel. É o sentido que o X55 precisa — ver `DEFAULT_ROTATION`.
+    /// painel.
     Ccw90,
 }
 
-/// Sentido usado quando o painel é retrato e `GIOCHI_ROTATE` não diz nada.
-///
-/// O X55 monta o painel DSI de modo que só o anti-horário entrega a imagem
-/// direita; com o horário a interface aparece de cabeça para baixo.
-const DEFAULT_ROTATION: Rotation = Rotation::Ccw90;
+// Não existe constante dizendo qual sentido este aparelho usa. A orientação é
+// um fato do sistema (montagem do painel), publicado em
+// `/sys/class/graphics/fbcon/rotate`, e é lida por `crate::display`. Um app que
+// carrega "o X55 precisa de anti-horário" fica errado na primeira revisão de
+// hardware — e esse é o tipo de erro que o usuário percebe como "de ponta a
+// cabeça" sem ter como diagnosticar.
 
 /// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
 /// dispositivo quando a rotação é aplicada.
@@ -138,13 +139,33 @@ pub fn rotacao_do_arquivo() -> Option<Rotation> {
         .and_then(|t| rotacao_de_valor(&t))
 }
 
-fn rotacao_configurada() -> Option<Rotation> {
+/// Rotação e a fonte que a decidiu, na ordem de precedência documentada em
+/// `crate::display`.
+///
+/// `formato_retrato` é o último recurso: só entra quando ninguém declarou nada.
+fn rotacao_configurada(formato_retrato: bool) -> (Rotation, crate::display::Fonte) {
+    use crate::display::{rotacao_do_sistema, Fonte};
+
     if let Ok(v) = std::env::var("GIOCHI_ROTATE") {
         if let Some(rot) = rotacao_de_valor(&v) {
-            return Some(rot);
+            return (rot, Fonte::Ambiente);
         }
     }
-    rotacao_do_arquivo()
+    if let Some(rot) = rotacao_do_arquivo() {
+        return (rot, Fonte::Usuario);
+    }
+    if let Some(rot) = rotacao_do_sistema() {
+        return (rot, Fonte::Sistema);
+    }
+
+    // Ninguém declarou. Se o painel é retrato, algo precisa ser escolhido;
+    // registra que foi palpite para não virar folclore depois.
+    let rot = if formato_retrato {
+        Rotation::Ccw90
+    } else {
+        Rotation::None
+    };
+    (rot, Fonte::Deduzido)
 }
 
 /// Recorte retangular, para desenhar listas que rolam.
@@ -191,17 +212,14 @@ impl Painter {
         // Rotação: variável de ambiente, depois arquivo, depois dedução pelo
         // formato do output. Painel retrato com projeto paisagem só fecha
         // girando.
-        let rot = match rotacao_configurada() {
-            Some(rot) => rot,
-            None => {
-                let (ow, oh) = canvas.output_size().unwrap_or((DESIGN_W as u32, DESIGN_H as u32));
-                if oh > ow {
-                    DEFAULT_ROTATION
-                } else {
-                    Rotation::None
-                }
-            }
-        };
+        let (ow, oh) = canvas
+            .output_size()
+            .unwrap_or((DESIGN_W as u32, DESIGN_H as u32));
+        let (rot, fonte) = rotacao_configurada(oh > ow);
+        eprintln!(
+            "rotação: {rot:?} (fonte: {}) [output {ow}x{oh}]",
+            fonte.descricao()
+        );
 
         // Espaço de desenho fixo; o SDL letterboxa mantendo proporção. Com
         // rotação, o espaço lógico passa a ser o do dispositivo, porque as

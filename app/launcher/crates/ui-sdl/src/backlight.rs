@@ -131,6 +131,48 @@ impl Backlight {
         };
         self.escrever(valor);
     }
+
+    fn maximo(&self) -> Option<u32> {
+        let dir = self.arquivo.as_ref()?.parent()?;
+        let texto = std::fs::read_to_string(dir.join("max_brightness")).ok()?;
+        texto.trim().parse::<u32>().ok().filter(|v| *v > 0)
+    }
+
+    /// Brilho atual em porcentagem, para a UI mostrar o valor do hardware.
+    pub fn fracao_atual(&self) -> Option<u8> {
+        let atual = self.ler()?;
+        let max = self.maximo()?;
+        Some(((atual as f32 / max as f32) * 100.0).round().clamp(0.0, 100.0) as u8)
+    }
+
+    /// Aplica um brilho de 0 a 100 e grava a escolha para o próximo boot.
+    ///
+    /// Grava no arquivo que o `giochi-init` lê (`/user/.config/giochi/brightness`)
+    /// porque é este o contrato: o init restaura no boot, mas quem sabe a
+    /// intenção do usuário é o app. Sem essa escrita, o brilho escolhido some a
+    /// cada reinício e o init restaura um valor que ninguém escolheu.
+    pub fn definir_fracao(&mut self, pct: u8) {
+        let Some(max) = self.maximo() else {
+            return;
+        };
+        let valor = ((pct.min(100) as u32 * max) / 100).max(1);
+        if !self.escrever(valor) {
+            return;
+        }
+        // Se a tela está apagada, isto vira o novo valor de retorno: o usuário
+        // acabou de dizer como quer a tela.
+        if self.salvo.is_some() {
+            self.salvo = Some(valor);
+        }
+        self.persistir(valor);
+    }
+
+    fn persistir(&self, valor: u32) {
+        if let Some(dir) = Path::new(BRILHO_SALVO).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(BRILHO_SALVO, valor.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +257,59 @@ mod tests {
         let mut bl = Backlight::com_arquivo(Some(caminho.clone()));
         bl.destravar_tela_apagada();
         assert_eq!(ler(&caminho), "416", "abrir com brilho normal não pode mexer");
+    }
+
+    fn dir_com_max(nome: &str, atual: u32, max: u32) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("giochi-bl-{nome}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("brightness"), atual.to_string()).unwrap();
+        std::fs::write(dir.join("max_brightness"), max.to_string()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn fracao_atual_reflete_o_hardware() {
+        let dir = dir_com_max("fracao", 833, 1666);
+        let bl = Backlight::com_arquivo(Some(dir.join("brightness")));
+        assert_eq!(bl.fracao_atual(), Some(50));
+    }
+
+    #[test]
+    fn definir_fracao_converte_para_a_escala_do_painel() {
+        let dir = dir_com_max("define", 833, 1666);
+        let mut bl = Backlight::com_arquivo(Some(dir.join("brightness")));
+
+        bl.definir_fracao(20);
+
+        // 20% de 1666 = 333
+        assert_eq!(ler(&dir.join("brightness")), "333");
+        assert_eq!(bl.fracao_atual(), Some(20));
+    }
+
+    #[test]
+    fn brilho_zero_vira_um_e_nao_apaga_de_vez() {
+        // Zero no slider é "o mais escuro possível", não "desligar a tela":
+        // desligar é função do sono. Deixar 0 aqui tornaria a tela
+        // irrecuperável sem teclado.
+        let dir = dir_com_max("zero", 833, 1666);
+        let mut bl = Backlight::com_arquivo(Some(dir.join("brightness")));
+
+        bl.definir_fracao(0);
+
+        assert_eq!(ler(&dir.join("brightness")), "1");
+    }
+
+    #[test]
+    fn mudar_brilho_dormindo_atualiza_o_valor_de_retorno() {
+        let dir = dir_com_max("dormindo", 800, 1600);
+        let mut bl = Backlight::com_arquivo(Some(dir.join("brightness")));
+
+        bl.apagar();
+        bl.definir_fracao(80); // usuário mexeu no slider dormindo
+        bl.restaurar();
+
+        // 80% de 1600 = 1280, não o 800 de antes.
+        assert_eq!(ler(&dir.join("brightness")), "1280");
     }
 
     #[test]
