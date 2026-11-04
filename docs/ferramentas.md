@@ -181,6 +181,36 @@ o preto cai a 0 %. Isso serve de contraprova: o letterbox é consequência da
 **proporção**, e o giro é consequência da **declaração do sistema** — dois
 mecanismos independentes.
 
+### A armadilha do viewport: o BMP não mostra a posição da faixa
+
+`--dump-frame` usa `read_pixels`, que **não respeita o deslocamento do
+viewport**. O SDL calcula o letterbox centrado e a tela mostra centrado, mas a
+leitura devolve o conteúdo a partir de (0,0).
+
+Consequência medida num painel 640×480 com projeto 1280×720:
+
+```text
+viewport que o SDL reporta   Rect { x: 0, y: 120, w: 1280, h: 720 }   <- centrado
+faixa no BMP                 0 px no topo, 120 px na base             <- artefato
+faixa na tela                60 px no topo, 60 px na base              <- correto
+```
+
+Isso já produziu um diagnóstico errado: medi "tudo embaixo" no arquivo e concluí
+que o conteúdo estava pendurado no topo. O usuário olhou a tela e disse "em cima
+**e** embaixo" — estava certo.
+
+`verificar-frame.mjs` agora **mede** a faixa e avisa quando ela parece
+assimétrica no arquivo, sem reprovar o quadro. O que continua válido:
+
+| Medida | Vale? |
+| --- | --- |
+| percentual de preto | **sim** — o total independe do offset |
+| comparação pixel a pixel com o PC | **sim** — o PC tem o mesmo artefato |
+| posição da faixa (topo × base) | **não** — confira no aparelho |
+
+Regra na mesma família de "biblioteca presente não prova uso": **o BMP prova o
+conteúdo, não a posição.**
+
 ### A armadilha do driver de vídeo
 
 `--dump-frame` só produz conteúdo sob `SDL_VIDEODRIVER=dummy` no PC. No driver

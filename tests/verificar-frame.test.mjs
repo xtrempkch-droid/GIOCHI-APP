@@ -15,6 +15,7 @@ import {
   desRotacionar,
   gravarPng,
   lerBmp,
+  medirFaixas,
 } from "../scripts/verificar-frame.mjs";
 
 const silencio = () => {};
@@ -257,5 +258,32 @@ test("gravarPng produz PNG válido com as cores de entrada", () => {
     // Confere que o leitor de PNG do validador entende o arquivo gerado.
     assert.equal(lido.readUInt32BE(16), 3);
     assert.equal(lido.readUInt32BE(20), 2);
+  });
+});
+
+test("medirFaixas mede letterbox de 4:3 em projeto 16:9", () => {
+  withTempDir((dir) => {
+    // 640x480 com conteúdo de 360 linhas: o resto é preto. É o caso do X35H.
+    const caminho = path.join(dir, "letterbox.bmp");
+    writeFileSync(
+      caminho,
+      bmpSintetico(64, 48, (_x, y) => (y < 36 ? [15, 31, 58] : [0, 0, 0])),
+    );
+    const r = medirFaixas(lerBmp(caminho));
+    // Conteúdo no topo, preto embaixo — o artefato que o `read_pixels` produz.
+    assert.equal(r.topo, 0);
+    assert.equal(r.base, 12);
+    assert.equal(Math.round(r.pct), 25);
+  });
+});
+
+test("medirFaixas dá zero quando não há faixa", () => {
+  withTempDir((dir) => {
+    const caminho = path.join(dir, "cheio.bmp");
+    writeFileSync(caminho, bmpSintetico(32, 32, (x) => [x * 8, 20, 30]));
+    const r = medirFaixas(lerBmp(caminho));
+    assert.equal(r.topo, 0);
+    assert.equal(r.base, 0);
+    assert.equal(r.pct, 0);
   });
 });

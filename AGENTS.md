@@ -128,44 +128,44 @@ instalada em `/root/.ssh/authorized_keys`, então o toolkit funciona sem senha. 
 host key muda quando a imagem é regravada — `ssh-keygen -R` resolve, e o erro que
 aparece antes disso fala de ataque MITM, não de chave nova.
 
-### A faixa preta no X35H: esperada na origem, torta na posição
+### A faixa preta no X35H: esperada, simétrica e correta
 
 Relatado pelo usuário como "o tamanho não parece certo, há faixa preta em cima e
-embaixo". Medido no frame real:
+embaixo". **A faixa é esperada e está centralizada.** Não é problema.
 
 ```text
-painel 640x480   conteudo 640x360 (= 16:9, escala exata)
-faixa preta:     0 px em cima  ·  120 px embaixo
+painel            640x480 (4:3)
+projeto da UI     1280x720 (16:9)
+escala            0.5   ->  conteúdo 640x360
+faixa             60 px em cima + 60 px embaixo = 25% da altura
+viewport do SDL   Rect { x: 0, y: 120, w: 1280, h: 720 } em unidades lógicas
+                  = y 60 px de device: centrado
+comparação com referência do PC   99,9%
+conteúdo cortado?                 não (última linha com cor em y=348)
 ```
 
-**A origem da faixa é esperada:** a UI é projetada em 1280×720 (16:9) e o painel é
-4:3, então 25% da altura vira faixa. O conteúdo está no tamanho certo — 640×360 é
-exatamente 16:9, sem distorção, e a comparação com a referência dá 99,9%.
+**O diagnóstico errado que quase ficou registrado aqui:** medi no BMP "0 px de
+faixa em cima, 120 embaixo" e concluí que o conteúdo estava pendurado no topo —
+que seria bug de renderização. Era **erro de instrumento**: `read_pixels`, usado
+por `--dump-frame`, **não respeita o deslocamento do viewport**. O SDL calcula o
+letterbox centrado e a tela mostra centrado; a leitura devolve o conteúdo a partir
+de (0,0).
 
-**A posição não é.** Letterbox deveria ser simétrico (60 px de cada lado). Ficou
-tudo embaixo, e é isso que faz parecer "tamanho errado" em vez de faixa
-intencional.
+O usuário olhou a tela e disse "em cima **e** embaixo" — estava certo. A
+ferramenta é que mentia, e eu quase escrevi uma conclusão a partir dela.
 
-Causa: `set_logical_size` do SDL2 2.32.10 alinha o conteúdo no topo em vez de
-centralizar. **Reproduzido no PC** com `--tamanho 640x480` e `SDL_VIDEODRIVER=dummy`
-— não é KMSDRM nem o aparelho.
+Regra que fica, na mesma família de "biblioteca presente não prova uso":
+**o BMP prova o conteúdo, não a posição.** Percentual de preto e comparação
+pixel a pixel continuam válidos (o PC tem o mesmo artefato, então compara 1:1);
+**posição de faixa, não**.
 
-Tentativa de correção que **não funcionou** e por que fica registrada: trocar
-`set_logical_size` por `set_scale` + `set_viewport` manual. O SDL **aceita** o
-viewport (lido de volta: `Rect { x: 0, y: 120, w: 1280, h: 720 }`) e mesmo assim
-desenha a partir de y=0. Três ordens de chamada testadas, mesmo resultado.
-Revertido para o estado que funciona.
-
-**O que resolve de verdade**, em ordem de custo:
+Se um dia a faixa precisar sumir, as opções são de layout, não de renderização:
 
 | Opção | Efeito | Custo |
 | --- | --- | --- |
-| aceitar a faixa | 25% da tela perdida, conteúdo correto | zero |
-| layout adaptativo a 4:3 | usa a tela inteira | refatorar `views.rs` para coordenadas relativas em vez de 1280×720 fixo |
-| segunda resolução de projeto | UI desenhada em 960×720 para painéis 4:3 | dois layouts para manter |
-
-Enquanto não houver decisão, a faixa é **conhecida e documentada** — não é bug de
-renderização e não indica conteúdo cortado.
+| aceitar a faixa | 25% da tela, conteúdo correto | zero |
+| layout adaptativo a 4:3 | usa a tela inteira | `views.rs` deixa de ser 1280×720 fixo |
+| segunda resolução de projeto | UI desenhada em 960×720 para 4:3 | dois layouts para manter |
 
 ### O que a imagem do X35H ainda NÃO tem
 

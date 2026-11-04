@@ -366,6 +366,27 @@ impl Painter {
     /// hardware. Não é usado no aparelho.
     pub fn save_frame(&self, path: &str) -> Result<(), String> {
         let (w, h) = self.canvas.output_size()?;
+        // **`read_pixels` NÃO respeita o deslocamento do viewport.** O SDL
+        // calcula o letterbox centrado (num painel 640x480 com projeto
+        // 1280x720: `viewport y = 120` lógicos = 60 px de device, simétrico) e
+        // a tela mostra assim, mas a leitura devolve o conteúdo a partir de
+        // (0,0). O BMP fica com a faixa toda embaixo mesmo estando centrada.
+        //
+        // Isto já causou um diagnóstico errado: medi "0 px em cima, 120
+        // embaixo" e concluí que o conteúdo estava pendurado no topo. O usuário
+        // olhou a tela e disse que a faixa era em cima **e** embaixo — estava
+        // certo, e a ferramenta é que mentia.
+        //
+        // Quem for comparar posição de faixa a partir de BMP precisa saber
+        // disto. O percentual de preto continua válido; a **posição** não.
+        if std::env::var("GIOCHI_DEBUG_FRAME").is_ok() {
+            eprintln!(
+                "frame: output {w}x{h}  logical_size {:?}  viewport {:?} (em unidades lógicas)  scale {:?}",
+                self.canvas.logical_size(),
+                self.canvas.viewport(),
+                self.canvas.scale()
+            );
+        }
         let format = PixelFormatEnum::ABGR8888;
         let mut pixels = self.canvas.read_pixels(None, format)?;
         let pitch = w * format.byte_size_per_pixel() as u32;

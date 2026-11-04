@@ -178,6 +178,28 @@ function analisar(img, emitir = console.log) {
   return { cores: cores.size, pctPreto };
 }
 
+/**
+ * Mede a faixa preta no topo e na base.
+ *
+ * Serve para dimensionar o letterbox, **não** para julgar alinhamento: o BMP
+ * não carrega o deslocamento do viewport (ver aviso em `principal`).
+ */
+function medirFaixas(img) {
+  const preto = (x, y) => {
+    const [r, g, b] = img.em(x, y);
+    return r === 0 && g === 0 && b === 0;
+  };
+  const linhaTodaPreta = (y) => {
+    for (let x = 0; x < img.largura; x += 8) if (!preto(x, y)) return false;
+    return true;
+  };
+  let topo = 0;
+  while (topo < img.altura && linhaTodaPreta(topo)) topo++;
+  let base = 0;
+  while (base < img.altura && linhaTodaPreta(img.altura - 1 - base)) base++;
+  return { topo, base, pct: (100 * (topo + base)) / Math.max(1, img.altura) };
+}
+
 function comparar(captura, referencia, rotacao, tolerancia, emitir = console.log) {
   const paisagem = desRotacionar(captura, rotacao);
   if (paisagem.largura !== referencia.largura || paisagem.altura !== referencia.altura) {
@@ -235,7 +257,7 @@ preto, ou menos de 90% de acerto na comparação.
 `);
 }
 
-export { analisar, comparar, desRotacionar, gravarPng, lerBmp };
+export { analisar, comparar, desRotacionar, gravarPng, lerBmp, medirFaixas };
 
 function principal() {
   let args;
@@ -264,6 +286,27 @@ function principal() {
   let problemas = [];
   if (cores < 8) problemas.push(`só ${cores} cores distintas — o render provavelmente parou cedo`);
   if (pctPreto > 90) problemas.push(`${pctPreto.toFixed(0)}% de preto — tela apagada ou letterbox`);
+
+  // Análise de POSIÇÃO de faixa é enganosa em BMP, e é melhor avisar do que
+  // deixar alguém concluir errado. `read_pixels` — que o `--dump-frame` usa —
+  // não respeita o deslocamento do viewport: o SDL centraliza o letterbox na
+  // tela, mas a leitura devolve o conteúdo a partir de (0,0). Num painel 4:3 a
+  // faixa aparece toda embaixo no arquivo, embora esteja simétrica na tela.
+  //
+  // O percentual de preto e a comparação continuam válidos: o PC tem o mesmo
+  // artefato, então as duas imagens se comparam 1:1.
+  const faixas = medirFaixas(captura);
+  if (faixas.topo > 4 || faixas.base > 4) {
+    console.log(
+      `  faixa:      ${faixas.topo}px no topo, ${faixas.base}px na base ` +
+        `(${faixas.pct.toFixed(1)}% da altura)`
+    );
+    if (Math.abs(faixas.topo - faixas.base) > 8) {
+      console.log("  aviso:      a faixa parece assimétrica NO ARQUIVO. Isso não prova");
+      console.log("              desalinhamento na tela: read_pixels ignora o offset do");
+      console.log("              viewport. Confira no aparelho antes de chamar de bug.");
+    }
+  }
 
   if (args.referencia) {
     console.log(`referência: ${args.referencia} (rotação ${args.rotacao})`);
