@@ -363,15 +363,17 @@ tela nenhuma.
 | `argv` | nenhum — o init chama `"$CONTROLLERS"` seco |
 | Quando roda | **antes** do launcher, e só se `/user/.config/giochi/controller-setup` existir |
 | Saída 0 | mapeamento salvo |
-| Saída ≠ 0 | *(ver nota)* |
+| Saída ≠ 0 | falha — o sinalizador **permanece** (fonte de 04/11; a imagem ainda tem a versão que apagava) |
 
-> **Atenção — o `giochi-init` da imagem de 04/11 apaga o sinalizador
-> independente do código de saída** (`rm -f "$SETUP_FLAG"` sem testar
-> `$status`). Se o configurador falhar, o pedido de socorro some e o usuário
-> fica com o mapa errado sem segunda chance. Pedido de correção de uma linha
-> enviado no canal (`[ "$status" -eq 0 ] && rm -f ...`); enquanto não entrar,
-> o `giochi-controllers` deve sair com 0 mesmo ao ser abortado, ou recriar o
-> sinalizador antes de sair.
+> **Corrigido no fonte em 04/11/2026, pendente na imagem.** A versão anterior
+> apagava `$SETUP_FLAG` independente do código de saída: um configurador que
+> falhasse perdia o pedido de socorro, e o usuário ficava com o mapa errado sem
+> segunda chance e sem SSH. O `giochi-init` da árvore agora testa `$status` e
+> mantém o sinalizador em falha — o contrato acima é o que está implementado.
+>
+> A imagem de 04/11 ainda tem a versão antiga: até ela ser regravada, o
+> `giochi-controllers` não deve **depender** de o sinalizador sobreviver a uma
+> falha. Na dúvida, saia com `0` e recrie o sinalizador você mesmo.
 
 ---
 

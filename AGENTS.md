@@ -963,11 +963,27 @@ o launcher deixa de existir no instante do jogo; se o aparelho desligar no meio
 dele, não há processo para desenhar interface nenhuma. Pergunta enviada no canal
 (`§3`): a lógica de `RESTART_MAX` pressupõe qual dos dois?
 
-**Bug conhecido no `giochi-init` de 04/11:** `run_controller_setup` apaga
-`controller-setup` sem testar `$status`. Um configurador que falhe perde o
-pedido de socorro e o usuário fica com o mapa errado sem segunda chance. Pedido
-de correção de uma linha no canal; enquanto não entrar, o `giochi-controllers`
-precisa sair com `0` mesmo abortado. Detalhes em `docs/controles.md`.
+**Resolvido em 04/11/2026, no fonte deles.** As três perguntas foram
+respondidas pelo próprio código, não por mensagem:
+
+| Pergunta | Resposta |
+| --- | --- |
+| `RESTART_MAX` pressupõe `exec` ou `fork`+`wait`? | **`fork`+`wait`** — o cabeçalho do `giochi-init` foi reescrito aceitando a medição, e `RESTART_MAX` passou a contar só saída **anormal** |
+| Aceitam `[ "$status" -eq 0 ] && rm -f ...`? | **sim** — implementado com log nos dois ramos |
+| argv/env/saída do `giochi-controllers` | **documentados no próprio script**, como eu havia proposto |
+
+Corrigiram também um off-by-one que eu não tinha visto: `restarts` era
+incrementado e comparado depois, então `RESTART_MAX=5` produzia "reinício 6 de
+5". Agora o limite é checado **antes** de rodar.
+
+A imagem de 04/11 ainda carrega a versão antiga dessas correções — até regravar,
+o `giochi-controllers` não deve depender de o sinalizador sobreviver a falha.
+Detalhes em `docs/controles.md`.
+
+**O `exec` continua sendo decisão futura nossa**, registrada em
+`docs/integracao.md` §4. Com `fork`+`wait` o ciclo funciona; trocar por `exec`
+só faz sentido junto com um `giochi-init` que conte o fim de cada jogo como
+saída normal.
 
 ### Índice interno não é dado do jogo
 
