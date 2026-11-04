@@ -14,10 +14,10 @@ verificável na sua máquina, onde o `git` existe.
 | --- | --- | --- |
 | `apps/forge/` | `app/forge/src/` | migrar |
 | `apps/store/` | `app/store/src/` | migrar |
-| `Jogos/Arcade Volleyball/godot/` | `app/arcade-volleyball/src/` | migrar |
-| `Jogos/Colossal Cave Adventure/godot/` | `app/colossal-cave-adventure/src/` | migrar |
-| `Jogos/Spacewar/godot/` | `app/spacewar/src/` | migrar |
-| `Jogos/Spacewar/Spacewar-1962-listing.pdp1` | `app/spacewar/assets/` | migrar (documentação) |
+| `Jogos/Arcade Volleyball/godot/` | `app/jogos/arcade-volleyball/src/` | migrar |
+| `Jogos/Colossal Cave Adventure/godot/` | `app/jogos/colossal-cave-adventure/src/` | migrar |
+| `Jogos/Spacewar/godot/` | `app/jogos/spacewar/src/` | migrar |
+| `Jogos/Spacewar/Spacewar-1962-listing.pdp1` | `app/jogos/spacewar/assets/` | migrar (documentação) |
 | `apps/launcher/` | — | **não vem** |
 | `Jogos/Shattered Pixel Dungeon/` | — | **não vem** |
 

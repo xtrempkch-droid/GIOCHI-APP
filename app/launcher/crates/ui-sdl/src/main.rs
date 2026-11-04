@@ -282,7 +282,7 @@ fn main() -> Result<(), String> {
         //
         // Antes desta checagem o botão "Jogar" só mostrava um aviso. Não havia
         // como testar a integração porque não havia jogo; agora há
-        // (`app/volley`), e sem este trecho ele continuaria inalcançável.
+        // (`app/jogos/volley`), e sem este trecho ele continuaria inalcançável.
         if let Some(id) = app.tomar_pedido_de_lancamento() {
             let alvo = catalogo.as_ref().and_then(|c| c.alvo(id)).cloned();
 

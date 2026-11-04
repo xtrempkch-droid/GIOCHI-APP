@@ -3,11 +3,23 @@
 ## 1. Copie o template
 
 ```bash
-cp -r app/_template app/meu-app
+cp -r app/_template app/meu-app          # ferramenta ou launcher
+cp -r app/_template app/jogos/meu-jogo   # jogo
 ```
 
 O nome da pasta é o `slug` do app: minúsculas, números e hífen. `Meu App` e
 `meu_app` são rejeitados pelo validador.
+
+**Onde criar:** jogos vão em `app/jogos/`; todo o resto fica solto em `app/`. A
+diferença é só organizacional — o que faz da pasta um app é o `metadata.json`,
+e o validador descobre grupo por isso. Registre com o mesmo caminho:
+
+```json
+{ "id": "meu-jogo", "folder": "jogos/meu-jogo", "runtime": "godot", "status": "scaffold" }
+```
+
+Grupo não precisa — e não deve — ter `metadata.json` próprio: pasta com o
+arquivo é app, e um grupo que se declara app vira um app quebrado.
 
 ## 2. Preencha o `metadata.json`
 

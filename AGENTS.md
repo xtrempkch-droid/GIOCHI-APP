@@ -225,7 +225,7 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
   antecessor para apontar.
 - **Nenhum `bin/` tem conteúdo, exceto o launcher e o volley.** Os jogos Godot
   precisam de export ARM64; as ferramentas são Python e precisam ser empacotadas.
-  `app/volley` é o único jogo que roda hoje — ver §12.
+  `app/jogos/volley` é o único jogo que roda hoje — ver §12.
 - **`capa.png` só existe no launcher e no volley.** Os outros cinco apps não têm
   320×320, então não podem ser publicados na loja (o validador avisa).
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
@@ -255,11 +255,12 @@ Giochi app/
 │   ├── _template/             # modelo para app novo
 │   ├── forge/                 # empacotador/classificador (host, roda no PC)
 │   ├── store/                 # loja (host, roda no PC)
-│   ├── arcade-volleyball/     # jogo padrão (image, godot)
-│   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
-│   ├── spacewar/              # jogo padrão (image, godot)
-│   ├── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
-│   ├── volley/                # JOGO NATIVO QUE RODA (Rust+SDL2, image) — ver §12
+│   ├── jogos/                 # GRUPO: não é app, não tem metadata.json
+│   │   ├── volley/            # JOGO NATIVO QUE RODA (Rust+SDL2) — ver §12
+│   │   ├── arcade-volleyball/     # jogo padrão (image, godot)
+│   │   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
+│   │   ├── spacewar/          # jogo padrão (image, godot)
+│   │   └── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
 │   └── launcher/              # Rust + SDL2 (image, native)
 │       ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
 │       ├── crates/core/       # núcleo puro, sem SDL
@@ -309,7 +310,7 @@ Giochi app/
 ### Anatomia de um app
 
 ```text
-app/<slug>/
+app/<slug>/            # ou app/jogos/<slug>/ para jogos
 ├── metadata.json     # identidade do pacote (obrigatório)
 ├── forge.json        # requisitos de hardware (opcional)
 ├── capa.png          # 320x320, capa da loja
@@ -333,17 +334,32 @@ arquivos editáveis dentro.
 {
   "schemaVersion": 1,
   "apps": [
-    { "id": "forge", "folder": "forge", "runtime": "native", "status": "scaffold" }
+    { "id": "forge", "folder": "forge", "runtime": "native", "status": "scaffold" },
+    { "id": "volley", "folder": "jogos/volley", "runtime": "native", "status": "ready" }
   ]
 }
 ```
 
 - `id` — slug kebab; é a identidade estável.
-- `folder` — pasta real em `app/`.
+- `folder` — pasta real em `app/`. **Pode ter um nível de grupo** (`jogos/volley`).
 - `runtime` — `godot`, `retroarch`, `proton` ou `native`.
 - `status` — `scaffold` ou `ready`.
 - `distribution` — `image`, `store` ou `host` (ver abaixo).
 - `license` — identificador SPDX ou `Proprietary`; precisa bater com o `metadata.json`.
+
+#### Grupos: `app/jogos/`
+
+Os jogos vivem em `app/jogos/<slug>`; ferramentas e launcher ficam soltos em
+`app/`. A separação é organizacional — muda onde o arquivo mora, não o que ele é.
+
+**O que distingue grupo de app é o `metadata.json`.** Pasta com o arquivo é app;
+pasta sem ele é grupo, e o validador desce um nível. Não há lista de grupos
+escrita à mão: quem cria a pasta e põe `metadata.json` dentro já disse o que ela
+é. Uma convenção que morasse em dois arquivos envelheceria diferente nos dois —
+que é a mesma razão pela qual `releaseYear` precisou entrar no schema nos três
+lugares de uma vez.
+
+Profundidade máxima: 2 (`app/grupo/app`). Mais que isso não é organização.
 
 ### `distribution` decide o destino e a licença
 
@@ -656,7 +672,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Renderer `opengles2` | **abre no X35H** — acelerado, textura máx 8192x8192 |
 | Leitura do catálogo (`index.json`) | **no aparelho** — `catálogo: 1 app(s)` |
 | Lançar jogo e voltar | **no aparelho** — volley rodou e o launcher voltou com texto |
-| Jogo instalável que roda | **`app/volley`** — o único; os Godot seguem sem `bin/` |
+| Jogo instalável que roda | **`app/jogos/volley`** — o único; os Godot seguem sem `bin/` |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -792,7 +808,7 @@ Então a integração não tinha como ser testada. Resolvido em três partes:
 
 | Peça | O que faz |
 | --- | --- |
-| `app/volley` | jogo nativo em Rust+SDL2, escrito aqui, que roda no aparelho |
+| `app/jogos/volley` | jogo nativo em Rust+SDL2, escrito aqui, que roda no aparelho |
 | `catalogo.rs` | lê `/opt/giochi/apps/index.json` e resolve `id → dir + entrypoint` |
 | `system::lancar` | executa o app com `cwd` e `GIOCHI_APP_ID`, espera e volta |
 

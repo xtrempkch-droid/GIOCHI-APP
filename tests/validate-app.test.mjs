@@ -458,3 +458,42 @@ test("aceita releaseYear e recusa ano fora de faixa", () => {
     }
   });
 });
+
+// ── grupos: app/jogos/<slug> ────────────────────────────────
+//
+// Os jogos passaram a viver em `app/jogos/`, e `app/jogos` é pasta mas não é
+// app. O que distingue um do outro é o `metadata.json` — não uma lista de
+// grupos escrita à mão, que envelheceria em outro lugar.
+
+test("listApps desce em grupo e não trata o grupo como app", () => {
+  withTempDir((dir) => {
+    makeApp(dir, "launcher");
+    makeApp(path.join(dir, "jogos"), "volley");
+    makeApp(path.join(dir, "jogos"), "spacewar");
+
+    const achados = listApps(dir).map((p) => path.relative(dir, p).split(path.sep).join("/"));
+    assert.deepEqual(achados, ["jogos/spacewar", "jogos/volley", "launcher"]);
+  });
+});
+
+test("listApps ignora pasta sem metadata.json no fundo", () => {
+  withTempDir((dir) => {
+    makeApp(dir, "launcher");
+    // Pasta de trabalho: existe, não é app, não tem metadata.json.
+    mkdirSync(path.join(dir, "rascunho", "assets"), { recursive: true });
+
+    const achados = listApps(dir).map((p) => path.basename(p));
+    assert.deepEqual(achados, ["launcher"]);
+  });
+});
+
+test("listApps ignora _template e pastas ocultas", () => {
+  withTempDir((dir) => {
+    makeApp(dir, "launcher");
+    makeApp(dir, "_template");
+    makeApp(dir, ".cache");
+
+    const achados = listApps(dir).map((p) => path.basename(p));
+    assert.deepEqual(achados, ["launcher"]);
+  });
+});

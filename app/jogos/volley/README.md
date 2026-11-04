@@ -49,7 +49,7 @@ Partida até 7 pontos; ao chegar lá o placar zera.
 ```bash
 # PC
 bash scripts/compilar-launcher.sh        # só para preparar o SDL2 do host
-cd app/volley && cargo build --release
+cd app/jogos/volley && cargo build --release
 
 # aparelho (aarch64)
 bash scripts/compilar-jogo-arm64.sh

@@ -517,13 +517,51 @@ export function validateApp(appDir, { status = "ready", distribution = "image" }
 }
 
 /**
- * Lista as pastas de app dentro de app/, ignorando _template.
+ * Lista as pastas de app dentro de `app/`, ignorando `_template`.
+ *
+ * ## Grupos
+ *
+ * Um jogo não é a mesma coisa que uma ferramenta, e a árvore diz isso:
+ * `app/launcher`, `app/forge` e `app/store` são apps soltos, enquanto os jogos
+ * vivem em `app/jogos/<slug>`. **O que distingue um do outro é o
+ * `metadata.json`** — o arquivo que, desde o começo do contrato, é o que faz de
+ * uma pasta um app.
+ *
+ * Por isso a varredura desce um nível apenas em pasta **sem** `metadata.json`.
+ * Não há lista de grupos escritos à mão em lugar nenhum: quem cria a pasta e
+ * põe `metadata.json` dentro já está dizendo o que ela é. Uma convenção que
+ * morasse em dois arquivos envelheceria diferente nos dois.
+ *
+ * A profundidade máxima é 2 (`app/grupo/app`). Mais que isso não é organização,
+ * é hierarquia inventada — e nada no contrato precisa dela.
  */
 export function listApps(appRoot) {
   if (!existsSync(appRoot)) return [];
-  return readdirSync(appRoot)
-    .filter((item) => !item.startsWith("_") && !item.startsWith("."))
-    .map((item) => path.join(appRoot, item))
-    .filter((item) => statSync(item).isDirectory())
-    .sort();
+  const encontrados = [];
+
+  const visitar = (dir, nivel) => {
+    for (const item of readdirSync(dir)) {
+      if (item.startsWith("_") || item.startsWith(".")) continue;
+      const completo = path.join(dir, item);
+      let ehDir = false;
+      try {
+        ehDir = statSync(completo).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!ehDir) continue;
+
+      if (existsSync(path.join(completo, "metadata.json"))) {
+        encontrados.push(completo);
+      } else if (nivel + 1 < 2) {
+        // Sem `metadata.json` e ainda no nível 1: é grupo. Desce.
+        visitar(completo, nivel + 1);
+      }
+      // Sem `metadata.json` e no fundo: não é app nem grupo. Ignora em silêncio
+      // — pode ser um diretório de trabalho de quem está montando um app.
+    }
+  };
+
+  visitar(appRoot, 0);
+  return encontrados.sort();
 }

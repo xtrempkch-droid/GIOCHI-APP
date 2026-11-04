@@ -365,7 +365,7 @@ bash scripts/compilar-jogo-arm64.sh
 bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2
 ```
 
-Mesmo alvo, mesmo binário de saída em `app/volley/bin/`. **Não redescobre nada:**
+Mesmo alvo, mesmo binário de saída em `app/jogos/volley/bin/`. **Não redescobre nada:**
 exige o cache de `~/.cache/giochi-arm64` que o script do launcher prepara e reusa
 o wrapper de `rust-lld` e as bibliotecas do aparelho. Se o cache não existir, ele
 para e diz qual comando rodar antes.

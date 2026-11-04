@@ -38,10 +38,15 @@ for (const error of index.errors) {
 
 if (all) {
   const registered = new Set();
+  // Caminhos de pasta registrados, relativos a `app/`. O nome do app nem sempre
+  // é o caminho: `volley` mora em `jogos/volley`, e comparar só o basename
+  // deixaria `app/volley` passar como registrado sem existir registro dele.
+  const pastasRegistradas = new Set();
 
   for (const [id, entry] of index.entries) {
     registered.add(id);
     const folder = entry.folder || id;
+    pastasRegistradas.add(folder.replace(/^\.\//, "").replace(/\/+$/, ""));
     const dir = path.join(APP_ROOT, folder);
 
     if (!existsSync(dir) || !statSync(dir).isDirectory()) {
@@ -71,16 +76,16 @@ if (all) {
 
   // Pasta na árvore sem registro no índice: fica invisível para a loja.
   for (const dir of listApps(APP_ROOT)) {
-    const name = path.basename(dir);
-    if (!registered.has(name)) {
+    const relativo = path.relative(APP_ROOT, dir).split(path.sep).join("/");
+    if (!pastasRegistradas.has(relativo)) {
       results.push({
         ok: false,
-        app: name,
+        app: relativo,
         status: "ready",
         errors: [
           {
             code: "app_nao_registrado",
-            path: `app/${name}`,
+            path: `app/${relativo}`,
             message: "pasta existe mas não está em app/apps.json",
           },
         ],

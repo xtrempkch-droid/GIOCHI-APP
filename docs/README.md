@@ -22,9 +22,9 @@
 
 Um app é **uma pasta**. Se precisa de mais que isso, o desenho está errado.
 
-Cada pasta `app/<slug>/` é autossuficiente: contrato (`metadata.json`), requisitos
-(`forge.json`), o que instala (`bin/`) e a arte-fonte (`assets/`). Nada de
-configuração espalhada pela raiz do repositório.
+Cada pasta `app/<slug>/` — ou `app/jogos/<slug>/` — é autossuficiente: contrato
+(`metadata.json`), requisitos (`forge.json`), o que instala (`bin/`) e a
+arte-fonte (`assets/`). Nada de configuração espalhada pela raiz do repositório.
 
 ## O que este repositório NÃO faz
 

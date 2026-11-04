@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compila o jogo (`app/volley`) para o aparelho (aarch64) e, opcionalmente,
+# Compila o jogo (`app/jogos/volley`) para o aparelho (aarch64) e, opcionalmente,
 # instala em `/opt/giochi/apps/volley/bin`.
 #
 # Uso:
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JOGO="$RAIZ/app/volley"
+JOGO="$RAIZ/app/jogos/volley"
 ALVO="aarch64-unknown-linux-gnu"
 CACHE="${GIOCHI_ARM64_CACHE:-$HOME/.cache/giochi-arm64}"
 SYSROOT="$CACHE/sysroot"
