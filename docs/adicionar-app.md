@@ -18,13 +18,18 @@ O nome da pasta é o `slug` do app: minúsculas, números e hífen. `Meu App` e
   "version": "1.0.0",
   "arch": "aarch64",
   "runtime": "godot",
-  "entrypoint": "bin/meu-app"
+  "entrypoint": "bin/meu-app",
+  "releaseYear": 2026
 }
 ```
 
 Campos obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`,
 `entrypoint`. Nenhum campo fora do schema é aceito — ver
 [metadata.md](metadata.md).
+
+`releaseYear` é opcional, mas **coloque**: é o ano que aparece no cartão e na
+ficha do jogo. Sem ele a UI mostra `—`, que é honesto, mas perde informação. O
+`developer` daqui é o mesmo fabricante que a ficha exibe.
 
 ## 3. Coloque o executável em `bin/`
 

@@ -78,12 +78,35 @@ function validateMetadata(metadata, appDir, errors) {
   for (const key of Object.keys(metadata)) {
     if (
       !REQUIRED_METADATA.includes(key) &&
-      !["graphics_api", "buttons_map", "license", "licenseUrl"].includes(key)
+      ![
+        "graphics_api",
+        "buttons_map",
+        "license",
+        "licenseUrl",
+        // O ano vem do publicador e é opcional: a loja repassa ao catálogo do
+        // aparelho. Sem ele no schema, um app que declare o ano era reprovado
+        // por `campo_desconhecido` e a informação não tinha por onde viajar.
+        "releaseYear",
+      ].includes(key)
     ) {
       errors.push({
         code: "campo_desconhecido",
         path: `metadata.json:${key}`,
         message: `campo não previsto no schema: ${key}`,
+      });
+    }
+  }
+
+  if (metadata.releaseYear !== undefined) {
+    const ano = metadata.releaseYear;
+    // Faixa larga de propósito: 1900..2199 aceita todo jogo plausível e recusa
+    // `2024` como string, ano de dois dígitos e índice de cartão (0, 1, 2) —
+    // que foi exatamente o que apareceu na tela quando o campo não existia.
+    if (!Number.isInteger(ano) || ano < 1900 || ano > 2199) {
+      errors.push({
+        code: "ano_invalido",
+        path: "metadata.json:releaseYear",
+        message: "releaseYear precisa ser inteiro de quatro dígitos (ex.: 1988)",
       });
     }
   }

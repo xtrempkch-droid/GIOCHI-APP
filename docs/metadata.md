@@ -14,6 +14,7 @@ Identidade de um app. Schema em [`schemas/metadata.schema.json`](../schemas/meta
 | `entrypoint` | string | sim | começa em `bin/`, não absoluto, sem `..` |
 | `graphics_api` | enum | não | `gles2` ou `gles3` |
 | `buttons_map` | objeto | não | mapeamento de botões específico |
+| `releaseYear` | inteiro | não | ano de lançamento, quatro dígitos (`1988`) |
 
 ## Por que `additionalProperties: false`
 
@@ -31,6 +32,36 @@ validação — que é exatamente a troca que este projeto escolheu fazer.
 **Consequência:** adicionar um campo novo exige mudar **três** lugares — este
 schema, o validador em `scripts/lib/apps.mjs` e a documentação. É de propósito:
 campo novo em contrato público é decisão, não detalhe.
+
+## Por que `releaseYear` existe
+
+O cartão da Home mostra `Spacewar • Ação • 1962`. O ano é **dado do programa**,
+publicado junto com ele — não algo que o launcher possa deduzir.
+
+Houve um período em que não havia campo nenhum, e o launcher preencheu o buraco
+com o id do jogo: o cartão desenhava `Spacewar • Ação • #002`. Lido na tela,
+parece informação; `002` é o índice do cartão. Foi o usuário que percebeu, não
+um teste.
+
+A cadeia é esta, e cada elo depende do anterior:
+
+```text
+metadata.json:releaseYear   →  índice da loja: year  →  catálogo: Game.year
+       1988                          "1988"                1988 (u16)
+```
+
+Sem o primeiro elo, a loja não tem o que repassar e o launcher não tem o que
+desenhar. Por isso o campo precisa ser aceito aqui **e** repassado adiante — ver
+[`docs/integracao.md`](integracao.md) §2.1.
+
+`0`/ausente é **desconhecido**, nunca "ano zero": a UI mostra `—`, o mesmo
+marcador que já usa para bateria e temperatura não lidas. Substituto de dado
+ausente precisa ser declarado ausente, não preenchido com número interno.
+
+O fabricante segue a mesma lógica e já existia: `developer` é obrigatório e é
+quem a ficha exibe. Não há campo separado de "publicadora" — se um dia houver
+diferença entre desenvolvedor e publicador, ela entra como campo novo, com a
+mesma regra dos três lugares.
 
 ## Por que `arch` tem um valor só
 

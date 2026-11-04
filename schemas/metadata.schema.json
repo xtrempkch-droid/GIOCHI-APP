@@ -16,7 +16,14 @@
     "developer": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 120
+      "maxLength": 120,
+      "description": "Quem publicou o app. É o fabricante que a loja e a ficha exibem."
+    },
+    "releaseYear": {
+      "type": "integer",
+      "minimum": 1900,
+      "maximum": 2199,
+      "description": "Opcional. Ano de lançamento, quatro dígitos. A loja repassa este campo ao catálogo do aparelho (`/opt/giochi/apps/index.json`) como `year`; o launcher mostra o ano na ficha e no cartão, e `—` quando o campo não existe. Nunca inferir do índice do app."
     },
     "version": {
       "type": "string",

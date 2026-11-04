@@ -435,3 +435,26 @@ test("readIndex recusa distribution inválida", () => {
     assert.ok(errors.some((item) => item.code === "indice_distribuicao_invalida"));
   });
 });
+
+// O ano do jogo é dado do publicador, não do launcher.
+//
+// A cadeia é metadata.json -> índice da loja -> catálogo do aparelho. O launcher
+// desenhava `#002` (o índice do cartão) porque o campo não existia em lugar
+// nenhum; sem aceitar `releaseYear` aqui, a loja não tem o que repassar e o
+// cartão volta a inventar.
+test("aceita releaseYear e recusa ano fora de faixa", () => {
+  withTempDir((dir) => {
+    const ok = validateApp(makeApp(dir, "a", { metadata: { releaseYear: 1988 } }));
+    assert.equal(ok.errors.length, 0, JSON.stringify(codes(ok)));
+
+    for (const ano of [0, 2, 1899, 2200, "1988", 1988.5]) {
+      withTempDir((sub) => {
+        const { errors } = validateApp(makeApp(sub, "a", { metadata: { releaseYear: ano } }));
+        assert.ok(
+          errors.some((e) => e.code === "ano_invalido"),
+          `releaseYear=${JSON.stringify(ano)} deveria reprovar`,
+        );
+      });
+    }
+  });
+});

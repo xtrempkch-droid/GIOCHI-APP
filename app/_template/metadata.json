@@ -4,5 +4,6 @@
   "version": "1.0.0",
   "arch": "aarch64",
   "runtime": "godot",
-  "entrypoint": "bin/executavel"
+  "entrypoint": "bin/executavel",
+  "releaseYear": 2026
 }

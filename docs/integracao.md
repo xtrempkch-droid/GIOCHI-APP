@@ -38,12 +38,47 @@ Formato, gerado pela fase `apps` do `Giochi os`:
 {
   "schemaVersion": 1,
   "apps": [
-    { "id": "launcher", "version": "0.1.0", "entrypoint": "bin/giochi-launcher", "dir": "/opt/giochi/apps/launcher" }
+    {
+      "id": "launcher",
+      "version": "0.1.0",
+      "entrypoint": "bin/giochi-launcher",
+      "dir": "/opt/giochi/apps/launcher",
+      "title": "Launcher",
+      "developer": "Giochi",
+      "year": 2026
+    }
   ]
 }
 ```
 
+**Campos que o launcher usa para desenhar:**
+
+| Campo | Obrigatório | Vai para | Ausente vira |
+| --- | --- | --- | --- |
+| `id` | sim | identidade, cor de destaque | — |
+| `dir` + `entrypoint` | sim | execução do app | app não aparece |
+| `title` | não | nome no cartão | `id` |
+| `developer` | não | ficha do jogo | `—` |
+| `year` | não | cartão e ficha | `—` |
+
+`developer` e `year` vêm do `metadata.json` do pacote (`developer` é obrigatório
+lá; `releaseYear` é opcional). **A loja apenas repassa** — ela não deve inventar
+nem derivar do índice. Ver [`docs/metadata.md`](metadata.md).
+
+Por que isso importa: o launcher já mostrou `Spacewar • Ação • #002` no cartão,
+porque não havia campo de ano e o port usou o id do jogo no lugar. Um número
+interno desenhado com a mesma tipografia de um dado real engana quem lê a tela.
+Se a loja não tiver o ano, o certo é omitir o campo — a UI mostra `—`.
+
 **Fallback:** arquivo ausente → grade de apps vazia com mensagem. Nunca quebra.
+
+> **Estado em 04/11/2026 — contrato escrito, leitura não implementada.** O
+> launcher ainda desenha `demo_games()`/`demo_apps()` do próprio binário; ele
+> **não abre** `index.json` nem `/opt/giochi/apps/`. No X35H o arquivo nem
+> existe. `Game.year` já é o campo certo e o cartão já o desenha, então o
+> trabalho que falta é só a leitura — trocar a origem dos dados, não a UI. Quem
+> mexer nisso: `Cmd::OpenGame` também ainda não lança processo (ver §4), e as
+> duas coisas são a mesma frente.
 
 **Cuidado:** `dir` vem do manifesto. O launcher deve resolver `entrypoint` **relativo
 a `dir`** e recusar caminho que escape (`..`, absoluto). Um manifesto corrompido não
@@ -142,30 +177,34 @@ real exige `rfkill`, que é `/dev/rfkill` — dispositivo de caractere, não arq
 
 **Decisão:** mostrar "adaptador presente / ausente". Não prometer mais que isso.
 
-### 2.8 Brilho — por Fn + e Fn −
+### 2.8 Brilho — slider de ajustes, e a tecla se existir
 
-**Decisão (02/11/2026): o brilho é controlado pelo combo Fn + / Fn −**, não pelo
-slider do painel de ajustes rápidos.
+**Decisão revista em 04/11/2026.** A decisão anterior (02/11) era "o brilho é
+controlado por Fn + / Fn −, não pelo slider". Ela não sobreviveu ao hardware.
 
-**De onde, para escrever:** `/sys/class/backlight/*/brightness`
+Medido nos dois aparelhos: **não existe tecla de brilho.** O `buttons.map` não
+tem `KEY_BRIGHTNESSDOWN`/`KEY_BRIGHTNESSUP`, e o kernel não declara esses
+códigos (X55: 20 códigos, X35H: 19 — nenhum é 224/225). Os combos `Fn` não são
+visíveis ao Linux: quem os resolveria é o EC, e estes handhelds não expõem isso.
 
+O que funciona, e foi exercitado:
+
+```bash
+giochi-launcher --brilho 40     # mesmo caminho do slider, e persiste
+giochi-launcher --testar-backlight   # apaga 2 s e restaura (X55: 833 → 0 → 833)
+```
+
+- **De onde:** `/sys/class/backlight/*/brightness`
 - Filtrar pelo diretório que tenha `brightness` **e** `max_brightness`.
-- Escrever valor entre 0 e `max_brightness`.
-- Passo de **10%** por toque; segurar repete (o mesmo `Mapper` de repetição serve).
+- **A escala é do painel, não de 0–100:** X55 `max_brightness` = 1666, X35H =
+  1666 também, mas o valor inicial difere (881 e 749). Escrever percentual cru
+  apagaria a tela. `Backlight::definir_fracao` converte.
+- **Persistir é obrigatório:** gravar `/user/.config/giochi/brightness`. O
+  `giochi-init` lê esse arquivo no boot; sem ele a escolha some a cada reinício.
+- `apagar`/`restaurar` são idempotentes — dormir duas vezes não pode salvar `0`
+  como "valor anterior", ou a tela não acende mais.
 
-**Brilho é o único recurso deste contrato que o launcher realmente controla.** É
-arquivo de texto, lê e escreve sem biblioteca.
-
-#### O problema do Fn
-
-"Fn" não é uma tecla que o Linux vê. Em handhelds, o combo Fn + algo costuma ser
-resolvido pelo **controlador de teclado** (EC), que emite um scancode próprio — ou
-pelo kernel, mapeado para `KEY_BRIGHTNESSDOWN`/`KEY_BRIGHTNESSUP`.
-
-Não temos o hardware para saber qual dos dois acontece aqui. Então:
-
-**Decisão: a tecla vira dado, não código.** O mapeamento `scancode → ação` fica em
-`buttons.map`, e o launcher só consulta.
+**Se um aparelho futuro tiver as teclas**, o mapeamento continua sendo dado:
 
 ```json
 {
@@ -174,9 +213,8 @@ Não temos o hardware para saber qual dos dois acontece aqui. Então:
 }
 ```
 
-Consequência: **o `buttons.map` do antecessor precisa ser revisto antes de migrar**
-(D5). É ele que traz o mapeamento real do aparelho. Sem isso, o código teria que
-adivinhar dois scancodes.
+O launcher só consulta o mapa. Nenhum aparelho atual declara essas chaves — o que
+existe é o slider, e é por ele que o usuário chega ao painel.
 
 **Se a tecla não chegar ao SDL**, o caminho alternativo é ler
 `/dev/input/event*` direto para a tecla, ou — último recurso — um `udev`-like no
@@ -467,12 +505,28 @@ São três itens de shell no repositório do sistema. **Nada disso existe hoje**
 ## 5. O que o launcher não faz
 
 - **Não monta partição, não formata, não atualiza o sistema.**
-- **Não gerencia energia** (suspender/desligar de verdade). Os botões existem na
-  UI, mas hoje só mudam o estado interno. Comandos reais (`logind`, `systemctl`,
-  ou `reboot(2)`) são do sistema.
 - **Não instala app.** Instalação é da loja, no PC.
-- **Não lê TDP.**
-- **Não controla volume** (ver §2.8).
+- **Não lê TDP.** Não há arquivo no sysfs que exponha watts nestes SoCs; a HUD
+  mostra `—`.
+- **Não lê bateria nem temperatura.** Os caminhos de §2.3/§2.4 existem no
+  contrato, mas nada foi implementado; a HUD mostra `—`.
+- **Não reinicia de forma confirmada.** `poweroff` foi medido nos dois aparelhos
+  e corta a energia; `reboot` usa o mesmo caminho mas **não foi exercitado**
+  separadamente.
+
+O que **saiu** desta lista (era "estado interno, não chega ao hardware"):
+
+| Item | Como está hoje | Evidência |
+| --- | --- | --- |
+| Desligar | `poweroff` real via `system.rs` | X55 cortou a energia — precisou religar no botão |
+| Dormir | apaga o backlight em `/sys/class/backlight/*/brightness` | X55: 833 → 0 → 833 |
+| Volume | mixer ALSA `Master Playback Volume` | X55 e X35H: 70→65→…→100, `alsactl` em 255/255 |
+| Brilho | sysfs + grava `/user/.config/giochi/brightness` | X55: 333/1166/833; X35H: 749/1666 |
+| Rotação | lê `/sys/class/graphics/fbcon/rotate` | X55: `rotate:3` → `Ccw90`, 99,9 %; X35H: `rotate:0` → `None` |
+
+A lição que ficou registrada: esta lista já esteve errada nos dois sentidos —
+declarou "não faz" o que fazia, e previu comportamento de `poweroff` a partir do
+device tree. **A lista de lacunas também envelhece, e também precisa de teste.**
 
 ---
 
@@ -480,17 +534,25 @@ São três itens de shell no repositório do sistema. **Nada disso existe hoje**
 
 Para este contrato funcionar, o sistema deve entregar:
 
-| Item | Caminho | Estado hoje |
+| Item | Caminho | Estado em 04/11/2026 |
 | --- | --- | --- |
-| Catálogo de apps | `/opt/giochi/apps/index.json` | gerado pelo overlay do `Giochi os` — **nunca testado** |
-| Identidade | `/proc/device-tree/model` | existe no kernel — não verificado |
-| Bateria | `/sys/class/power_supply/*` | depende do driver do gauge — não verificado |
+| Catálogo de apps | `/opt/giochi/apps/index.json` | **não existe** no X35H; o launcher ainda não o lê |
+| Identidade | `/proc/device-tree/model` | existe no kernel — não lido pelo app |
+| Bateria | `/sys/class/power_supply/*` | gauge presente; app não lê |
 | Temperatura | `/sys/class/thermal/*` | idem |
-| Brilho | `/sys/class/backlight/*` | depende de `BACKLIGHT_*` no kernel |
-| `giochi-init` | — | **não existe** |
+| Brilho | `/sys/class/backlight/*` | **verificado nos dois aparelhos** |
+| Rotação | `/sys/class/graphics/fbcon/rotate` | **verificado nos dois aparelhos** |
+| `giochi-init` no boot | `::respawn:` no `/etc/inittab` | **ausente nas duas imagens** — a UI não sobe sozinha |
 
-Nenhum desses caminhos foi verificado em hardware. O contrato está escrito; a
-verificação é do `Giochi System`, no primeiro boot real.
+O que é do sistema e já foi confirmado funcionar no hardware: `backlight`
+(833/1666 e 881/1666, escala diferente por painel — daí ler `max_brightness`),
+`fbcon/rotate`, `/dev/input/event*` (20 códigos no X55, 19 no X35H) e o mixer
+ALSA (`rk817_ext`, elemento `Master Playback Volume`).
+
+O que continua pendente **do lado do sistema**: a linha `::respawn:` do
+`giochi-init`, o `readelf` na imagem (o `giochi-selftest` usa e o binário não
+existe), o falso negativo do bloco "bibliotecas do launcher" e gerar o
+`index.json`.
 
 ---
 

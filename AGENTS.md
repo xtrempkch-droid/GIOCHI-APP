@@ -370,9 +370,16 @@ um app invisível para a loja é pior que um app quebrado.
 ### `metadata.json`
 
 Campos obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`,
-`entrypoint`. `additionalProperties: false` — campo desconhecido reprova.
+`entrypoint`. Opcionais: `graphics_api`, `buttons_map`, `license`, `licenseUrl`,
+`releaseYear`. `additionalProperties: false` — campo desconhecido reprova.
 
 Semver obrigatório (`1.0.0`, não `1.0`). `arch` só aceita `aarch64`.
+
+**`releaseYear` é opcional e é o ano que o cartão e a ficha mostram.** Ele viaja
+numa cadeia de três elos — `metadata.json` → índice da loja (`year`) → catálogo
+do launcher — e sem o primeiro elo os outros dois não têm o que repassar. `0` ou
+ausente é *desconhecido*, e a UI mostra `—`. Nunca derivar do índice do app: ver
+"índice interno não é dado do jogo" em §12.
 
 ### `forge.json`
 
