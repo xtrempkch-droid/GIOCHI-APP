@@ -329,16 +329,49 @@ duplicado. E, se quebrar, o launcher continua funcionando.
 
 ### O que o sistema precisa entregar
 
-| Item | Caminho | Estado |
+| Item | Caminho | Estado em 04/11/2026 |
 | --- | --- | --- |
-| Mapa padrão do aparelho | `/etc/giochi/buttons.map` | **não existe** |
-| O launcher e o gerenciador leem esse arquivo | — | — |
-| Sinalizador de setup | `/user/.config/giochi/controller-setup` | **não existe** |
-| `giochi-init` que decide o que iniciar | — | **não existe** |
+| Mapa padrão do aparelho | `/etc/giochi/buttons.map` | **existe** — 103 linhas, `0644`, copiado do staging |
+| O launcher e o gerenciador leem esse arquivo | — | o launcher lê; o gerenciador não existe ainda |
+| Sinalizador de setup | `/user/.config/giochi/controller-setup` | **não existe**; e **quem cria é o launcher** (§ abaixo) |
+| `giochi-init` que decide o que iniciar | `/usr/bin/giochi-init` | **existe**, com `::respawn:` no `inittab` das duas imagens de 04/11 |
 
-O mapa padrão deve ser **resolvido pelo sistema** para o aparelho (sem seções
+O mapa padrão é **resolvido pelo sistema** para o aparelho (sem seções
 `[default]`/`[x35s]`), porque quem sabe qual aparelho é esse é o `Giochi System`. O
 launcher lê um mapa plano e não precisa conhecer modelo de hardware.
+
+**Como conferi:** `debugfs` direto no `rootfs.ext4` de `out/powkiddy-x55` e
+`out/powkiddy-x35h`. A linha `::respawn:/usr/bin/giochi-init` está no
+`/etc/inittab` dos dois, depois do `rcS` e antes do getty. Fonte:
+`Giochi System/scripts/post-build.sh`.
+
+### Gatilho do sinalizador: é do launcher
+
+O desenho lista três formas de criar `controller-setup`, e a terceira — "nenhum
+evento em 10 s" — depende do launcher, não do sistema. É a que resolve o caso
+geral: aparelho novo com mapa errado, em que o usuário não consegue navegar até
+tela nenhuma.
+
+**Estado: não implementado.** O launcher hoje avisa no log quando não há
+`/dev/input`, mas não cria o sinalizador.
+
+### O contrato do `giochi-controllers`, do lado do `giochi-init`
+
+| Item | Valor |
+| --- | --- |
+| Executável | `$GIOCHI_CONTROLLERS`, padrão `/opt/giochi/apps/controllers/bin/giochi-controllers` |
+| `argv` | nenhum — o init chama `"$CONTROLLERS"` seco |
+| Quando roda | **antes** do launcher, e só se `/user/.config/giochi/controller-setup` existir |
+| Saída 0 | mapeamento salvo |
+| Saída ≠ 0 | *(ver nota)* |
+
+> **Atenção — o `giochi-init` da imagem de 04/11 apaga o sinalizador
+> independente do código de saída** (`rm -f "$SETUP_FLAG"` sem testar
+> `$status`). Se o configurador falhar, o pedido de socorro some e o usuário
+> fica com o mapa errado sem segunda chance. Pedido de correção de uma linha
+> enviado no canal (`[ "$status" -eq 0 ] && rm -f ...`); enquanto não entrar,
+> o `giochi-controllers` deve sair com 0 mesmo ao ser abortado, ou recriar o
+> sinalizador antes de sair.
 
 ---
 

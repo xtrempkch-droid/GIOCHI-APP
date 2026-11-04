@@ -105,8 +105,9 @@ Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
 - **Os 20 códigos de tecla declarados pelo kernel têm entrada no app.** O
   `B: KEY=` de `/proc/bus/input/devices` foi decodificado e cruzado com
   `code_for` e com o `buttons.map`: cobertura completa.
-- **O `inittab` NÃO inicia o `giochi-init`** — não há entrada `::respawn:`. O
-  launcher nunca sobe no boot; só por SSH. É do **Giochi System**.
+- **O `inittab` da imagem de 03/11 NÃO inicia o `giochi-init`** — não há entrada
+  `::respawn:`, então o launcher não sobe no boot; só por SSH. **Corrigido nas
+  imagens de 04/11** (conferido dentro do `rootfs.ext4`, ver §3).
 - `app/launcher/bin/giochi-launcher` versionado; o app passou a **`ready`**.
 - `capa.png` 320×320 gerada da paleta do tema (provisória).
 - O validador foi exercitado contra: versão fora de semver, runtime inválido,
@@ -180,11 +181,12 @@ mentia sobre a posição, porque `read_pixels` ignora o deslocamento do viewport
 Registrado em `docs/ferramentas.md`. O layout adaptativo resolve a faixa por
 outro caminho: não há mais letterbox porque o projeto acompanha o painel.
 
-### O que a imagem do X35H ainda NÃO tem### O que a imagem do X35H ainda NÃO tem
+### O que a imagem do X35H ainda NÃO tem
 
-- **`::respawn:` no `inittab`** — a imagem em uso é a de 03/11 19:17, anterior à
-  correção do `post-build` (19:32). Confirmado por `grep giochi /etc/inittab`.
-  A UI não sobe sozinha; só por SSH.
+- **`::respawn:` no `inittab`** — **só na imagem em uso.** Ela é a de 03/11
+  19:17, anterior à correção do `post-build` (19:32); a UI não sobe sozinha.
+  As imagens de 04/11 **têm a linha** nos dois aparelhos — verificado com
+  `debugfs` no `rootfs.ext4`, não no fonte. Falta gravar o cartão.
 - **`readelf`** — sem ele o `giochi-selftest` não consegue provar que o
   `SDL2_ttf` usa harfbuzz (fica `[SKIP]`).
 
@@ -204,7 +206,7 @@ hardware; depois o teste foi executado.
 | Item | Estado |
 | --- | --- |
 | Texto na imagem (`SDL2_ttf` + harfbuzz + DejaVu) | **funciona em hardware** nos dois aparelhos |
-| `::respawn:` no `inittab` da imagem em uso | **FALTA** nas duas imagens |
+| `::respawn:` no `inittab` | **falta só na imagem em uso**; as de 04/11 têm (verificado com `debugfs`) |
 | Imagem do **X55** com as correções | **existe em `out/` (04/11 21:22 UTC), NÃO está gravada** |
 | Segundo aparelho (**X35H**) | **testado**, 99,9% de acerto |
 | `giochi-selftest` bloco "bibliotecas do launcher" | **existe só na imagem nova**; a do X55 em uso não tem |
@@ -932,6 +934,40 @@ havia como voltar de um jogo.
 
 Verificação que depende de dedo não entra em rodada automatizada; foi por isso
 que o caminho ficou tanto tempo sem prova.
+
+### O contrato com o `giochi-init` — `fork`+`wait`, não `exec`
+
+O `giochi-init` (do **Giochi System**) é quem sobe a interface no boot, via
+`::respawn:/usr/bin/giochi-init` no `/etc/inittab`. Os caminhos batem com os
+nossos, e conferi no artefato:
+
+| Variável | Valor | Confere? |
+| --- | --- | --- |
+| `GIOCHI_LAUNCHER` | `/opt/giochi/apps/launcher/bin/giochi-launcher` | **sim** — é onde instalamos |
+| `GIOCHI_CONTROLLERS` | `/opt/giochi/apps/controllers/bin/giochi-controllers` | nome igual ao nosso desenho; binário não existe |
+| `GIOCHI_CONFIG_DIR` | `/user/.config/giochi` | **sim** — brilho, volume, rotação |
+
+**A divergência é o `exec`.** O cabeçalho do `giochi-init` afirma que o launcher
+faz `exec` no jogo; o `post-build.sh`, no mesmo repositório, diz que não. Medido
+nos dois aparelhos: **`fork`+`wait`** — o PID do launcher não muda enquanto o
+jogo roda.
+
+Consequência prática: com `fork`+`wait` o launcher **nunca sai** quando um jogo
+roda, então o `giochi-init` fica bloqueado no `"$LAUNCHER"` e a cadeia
+"jogo termina → init reinicia o launcher" não acontece — não precisa acontecer.
+Um watchdog escrito sobre a premissa do `exec` mataria um launcher saudável no
+meio de uma partida.
+
+**Não trocar para `exec` sem a linha do init confirmada em campo.** Com `exec`,
+o launcher deixa de existir no instante do jogo; se o aparelho desligar no meio
+dele, não há processo para desenhar interface nenhuma. Pergunta enviada no canal
+(`§3`): a lógica de `RESTART_MAX` pressupõe qual dos dois?
+
+**Bug conhecido no `giochi-init` de 04/11:** `run_controller_setup` apaga
+`controller-setup` sem testar `$status`. Um configurador que falhe perde o
+pedido de socorro e o usuário fica com o mapa errado sem segunda chance. Pedido
+de correção de uma linha no canal; enquanto não entrar, o `giochi-controllers`
+precisa sair com `0` mesmo abortado. Detalhes em `docs/controles.md`.
 
 ### Índice interno não é dado do jogo
 
