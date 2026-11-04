@@ -44,12 +44,13 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 
 ### Validado nesta sessão (03/11/2026, Linux com toolchain completa)
 
-- `node scripts/validate-app.mjs --all` passou: **7 apps**, todos em `scaffold`.
-- `node tests/run-all.mjs` passou: **66/66** (39 de validação + 14 do verificador
+- `node scripts/validate-app.mjs --all` passou: **7 apps** (6 em `scaffold`, o
+  launcher em `ready`).
+- `node tests/run-all.mjs` passou: **68/68** (39 de validação + 16 do verificador
   de quadro + 13 de capacidades de entrada).
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **126/126** (57 no `core`, 69 no
+- `cargo test --workspace` em `app/launcher`: **135/135** (57 no `core`, 78 no
   `ui-sdl`). As contagens estiveram invertidas por várias rodadas: quem tem mais
   testes é o `ui-sdl`, não o `core`.
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
@@ -389,12 +390,12 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 66 testes JS
+node tests/run-all.mjs                    # 68 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 121 testes do launcher
+cd app/launcher && cargo test --workspace  # 135 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -594,8 +595,8 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 03/11/2026, tudo rodado:
 
 - `node scripts/validate-app.mjs --all` → **7 apps OK**
-- `node tests/run-all.mjs` → **66/66**
-- `cargo test --workspace` → **126/126**
+- `node tests/run-all.mjs` → **68/68**
+- `cargo test --workspace` → **135/135**
 - `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
 - `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
 - `aparelho.sh verificar` → frame 720×1280 comparado, **99,9 %** de acerto
