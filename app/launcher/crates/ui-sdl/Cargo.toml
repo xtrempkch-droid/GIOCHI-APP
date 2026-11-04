@@ -16,6 +16,7 @@ giochi-launcher-core = { path = "../core" }
 # SDL2 sem wrapper extra: o desenho é feito com primitivas do SDL_Renderer.
 # Sem `image`, sem `gfx`: ícones são vetoriais desenhados por nós, não PNG.
 sdl2 = { version = "0.37" }
+serde_json = "1"
 
 [features]
 # `texto` é o padrão: onde `libSDL2_ttf` existe, o texto aparece.

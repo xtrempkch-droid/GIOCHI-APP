@@ -22,6 +22,7 @@
 
 mod app;
 mod backlight;
+mod catalogo;
 mod display;
 mod draw;
 mod icons;
@@ -192,28 +193,59 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("janela: {e}"))?;
 
     let painter = draw::Painter::new(window, &font_path)?;
-    // O projeto acompanha o painel (ver `draw::projecao`): a escala é sempre 1,0
-    // e o layout é que se adapta. Registrar o par evita confundir "projeto
-    // menor" com bug de desenho.
-    let (dw, dh) = painter.logical_size();
-    if (dw, dh) != (draw::DESIGN_W as u32, draw::DESIGN_H as u32) {
-        let m = views::Moldura::de(&painter);
-        // O painel vem do `Painter`, não de `largura`/`altura`: sob `kmsdrm` o
-        // SDL ignora o tamanho pedido e usa o modo do conector, então anunciar
-        // o pedido produzia "output 1280x720 desenha em projeto 640x480" —
-        // três números que se contradizem na mesma linha.
-        let (ow, oh) = painter.painel();
-        eprintln!(
-            "output {ow}x{oh} desenha em projeto {dw}x{dh} \
-             (escala 1,0; densidade {:.2}{})",
-            m.k,
-            if m.compacto { ", compacta" } else { "" }
-        );
-    }
-    let mut state = State::new(demo_games(), demo_apps());
+    informar_projecao(&painter);
+
+    // O catálogo vem do sistema. Sem ele, o launcher mostra o catálogo de
+    // demonstração — o aparelho continua utilizável, mas nenhum app é
+    // iniciável, porque não há caminho para executar.
+    let (mut state, catalogo) = {
+        let caminho = catalogo::caminho();
+        match catalogo::Catalogo::carregar(&caminho) {
+            Ok(c) if !c.vazio() => {
+                eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
+                (State::new(c.games.clone(), demo_apps()), Some(c))
+            }
+            Ok(_) => {
+                eprintln!("catálogo: vazio em {}; usando demonstração", caminho.display());
+                (State::new(demo_games(), demo_apps()), None)
+            }
+            Err(e) => {
+                eprintln!("catálogo: {e}; usando demonstração");
+                (State::new(demo_games(), demo_apps()), None)
+            }
+        }
+    };
+
     if let Some(tela) = tela_inicial.as_deref() {
         abrir_tela(&mut state, tela)?;
         eprintln!("tela forcada por --tela: {tela}");
+    }
+
+    // `--lancar <id|slug>`: pede o lançamento já na abertura.
+    //
+    // Existe porque o caminho "abrir display → rodar app → reabrir" não tem
+    // como ser exercitado de fora: `/dev/fb0` devolve lixo sob KMSDRM e
+    // `--dump-frame` abre processo novo. Sem isto, verificar o lançamento
+    // exigiria um dedo no aparelho, e verificação que depende de dedo não
+    // entra em rodada automatizada.
+    //
+    // Escreve em `state.lancar`, que é exatamente o campo que o reducer do
+    // botão "Jogar" preenche — então o teste percorre o mesmo código, não uma
+    // cópia dele.
+    if let Some(i) = args.iter().position(|a| a == "--lancar") {
+        let pedido = args.get(i + 1).ok_or("--lancar precisa de id ou slug")?;
+        let id = pedido
+            .parse::<u32>()
+            .ok()
+            .filter(|id| (*id as usize) < state.games.len())
+            .or_else(|| {
+                catalogo.as_ref().and_then(|c| {
+                    c.alvos.iter().position(|a| &a.slug == pedido).map(|p| p as u32)
+                })
+            })
+            .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))?;
+        state.lancar = Some(id);
+        eprintln!("--lancar: pedido de lançamento para o app {id} ({pedido})");
     }
 
     // Entrada por evdev: o SDL fica só com a janela e o desenho.
@@ -225,7 +257,7 @@ fn main() -> Result<(), String> {
             "aviso: mapa de botões incompleto; usando o padrão embutido onde faltar"
         );
     }
-    let evdev = input_evdev::EvdevInput::open(std::path::Path::new("/dev/input"), map);
+    let evdev = input_evdev::EvdevInput::open(std::path::Path::new("/dev/input"), map.clone());
     if evdev.device_count() == 0 {
         eprintln!(
             "aviso: nenhum dispositivo em /dev/input — o controle não responderá.\n\
@@ -243,6 +275,49 @@ fn main() -> Result<(), String> {
             if !app.handle_event(&event) {
                 break 'outer;
             }
+        }
+
+        // Pedido de lançamento: o núcleo decidiu *o que* abrir, e aqui é o
+        // único lugar que sabe *como* — fechar o display, rodar, reabrir.
+        //
+        // Antes desta checagem o botão "Jogar" só mostrava um aviso. Não havia
+        // como testar a integração porque não havia jogo; agora há
+        // (`app/volley`), e sem este trecho ele continuaria inalcançável.
+        if let Some(id) = app.tomar_pedido_de_lancamento() {
+            let alvo = catalogo.as_ref().and_then(|c| c.alvo(id)).cloned();
+
+            // Consome o `App`: o `Painter` morre aqui e o DRM master é liberado.
+            // Sem isso o filho recebe `kmsdrm not available` — medido no X35H.
+            let estado = app.encerrar();
+
+            let mut recado: Option<String> = None;
+            match alvo {
+                Some(alvo) => {
+                    if let Err(e) = system::lancar(&alvo) {
+                        recado = Some(e);
+                    }
+                }
+                None => {
+                    recado = Some(
+                        "este app não está no catálogo do sistema: sem caminho para executar"
+                            .to_string(),
+                    );
+                }
+            }
+
+            // Reabre a tela — o jogo pode ter deixado o conector em qualquer
+            // modo, então a janela é criada do zero, não "reaproveitada".
+            let painter = criar_painter(&video, largura, altura, fullscreen, &font_path)?;
+            informar_projecao(&painter);
+            let evdev = input_evdev::EvdevInput::open(
+                std::path::Path::new("/dev/input"),
+                map.clone(),
+            );
+            app = app::App::new(painter, estado, evdev);
+            if let Some(msg) = recado {
+                app.avisar(&msg);
+            }
+            last = Instant::now();
         }
 
         let now = Instant::now();
@@ -387,6 +462,52 @@ fn nome_de_tecla(codigo: u16) -> &'static str {
         0x13c => "BTN_MODE",
         _ => "?",
     }
+}
+
+/// Cria janela e painter. Existe como função porque isso acontece **duas
+/// vezes**: na abertura e a cada volta de um jogo.
+fn criar_painter(
+    video: &sdl2::VideoSubsystem,
+    largura: u32,
+    altura: u32,
+    fullscreen: bool,
+    font_path: &str,
+) -> Result<draw::Painter, String> {
+    let mut builder = video.window("Giochi Launcher", largura, altura);
+    if fullscreen {
+        builder.fullscreen_desktop();
+    }
+    let window = builder
+        .position_centered()
+        .resizable()
+        .build()
+        .map_err(|e| format!("janela: {e}"))?;
+    draw::Painter::new(window, font_path)
+}
+
+/// Registra no log o par painel × projeto.
+///
+/// O projeto acompanha o painel (ver `draw::projecao`): a escala é sempre 1,0 e
+/// o layout é que se adapta. Registrar o par evita confundir "projeto menor" com
+/// bug de desenho.
+///
+/// O painel vem do `Painter`, não do tamanho pedido: sob `kmsdrm` o SDL ignora o
+/// pedido e usa o modo do conector, e anunciar o pedido produzia
+/// "output 1280x720 desenha em projeto 640x480" — três números que se
+/// contradizem na mesma linha.
+fn informar_projecao(painter: &draw::Painter) {
+    let (dw, dh) = painter.logical_size();
+    if (dw, dh) == (draw::DESIGN_W as u32, draw::DESIGN_H as u32) {
+        return;
+    }
+    let m = views::Moldura::de(painter);
+    let (ow, oh) = painter.painel();
+    eprintln!(
+        "output {ow}x{oh} desenha em projeto {dw}x{dh} \
+         (escala 1,0; densidade {:.2}{})",
+        m.k,
+        if m.compacto { ", compacta" } else { "" }
+    );
 }
 
 fn default_font() -> String {

@@ -358,12 +358,22 @@ fn confirm(state: State) -> State {
 
         Zone::GameDetailActions => match index {
             0 => {
-                let title = state
+                // O "Jogar" mostrava `Iniciando X...` e não abria nada: era só
+                // um aviso, e o usuário apertava de novo. O pedido de verdade
+                // viaja em `state.lancar`; quem executa é o `ui-sdl`, que
+                // precisa liberar o DRM antes de ceder a tela.
+                let alvo = state
                     .selected_game
                     .and_then(|i| state.games.get(i))
-                    .map(|game| game.title.clone());
-                match title {
-                    Some(title) => toast(go_back(state), &format!("Iniciando {title}...")),
+                    .map(|game| (game.id, game.title.clone()));
+                match alvo {
+                    Some((id, title)) => {
+                        let s = toast(go_back(state), &format!("Iniciando {title}..."));
+                        State {
+                            lancar: Some(id),
+                            ..s
+                        }
+                    }
                     None => state,
                 }
             }
@@ -970,6 +980,45 @@ mod tests {
         s = reduce(s, Cmd::Confirm);
         assert_eq!(s.games[1].favorite, !before);
         assert!(s.toast.visible);
+    }
+
+    /// "Jogar" precisa **pedir o lançamento**, não só avisar.
+    ///
+    /// O botão exibia `Iniciando X...` e não abria nada: o reducer trocava o
+    /// toast e voltava para a Home, e o usuário apertava de novo. O aviso
+    /// sozinho é pior que nada, porque parece que funcionou.
+    #[test]
+    fn jogar_pede_o_lancamento_do_app() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.focus = Focus::at(Zone::LibraryGrid, 2);
+        s = reduce(s, Cmd::Confirm);
+        let id = s.games[2].id;
+
+        s.focus = Focus::at(Zone::GameDetailActions, 0);
+        s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.lancar, Some(id), "o id do jogo precisa ir no pedido");
+        // E volta para a Home: ao retornar do jogo o usuário cai na interface,
+        // não numa ficha de jogo que ele já iniciou.
+        assert!(s.overlays.is_empty());
+    }
+
+    /// Voltar e favoritar **não** pedem lançamento.
+    ///
+    /// Sem isto, um `lancar` grudado no estado faria o launcher tentar abrir o
+    /// jogo a cada ação na ficha.
+    #[test]
+    fn outras_acoes_da_ficha_nao_pedem_lancamento() {
+        for indice in [1usize, 2, 3] {
+            let mut s = demo();
+            s.tab = Tab::Library;
+            s.focus = Focus::at(Zone::LibraryGrid, 0);
+            s = reduce(s, Cmd::Confirm);
+            s.focus = Focus::at(Zone::GameDetailActions, indice);
+            let s = reduce(s, Cmd::Confirm);
+            assert_eq!(s.lancar, None, "ação {indice} não pode pedir lançamento");
+        }
     }
 
     #[test]

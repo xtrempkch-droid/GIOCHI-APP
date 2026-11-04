@@ -209,3 +209,55 @@ mod tests {
         }
     }
 }
+
+/// Resultado de uma tentativa de iniciar um app.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Lancamento {
+    /// O processo rodou e terminou. Devolve o código de saída, se houver —
+    /// `None` significa morto por sinal.
+    Terminou(Option<i32>),
+}
+
+/// Executa o app e espera.
+///
+/// ## Por que filho, e não `exec`
+///
+/// `docs/integracao.md` §4 decide por `exec` com o `giochi-init` reiniciando o
+/// launcher, e essa continua sendo a decisão **do produto**. Ela não pode ser
+/// usada aqui ainda por um motivo medido: o `/etc/inittab` do X35H e do X55
+/// **não tem** a linha `::respawn:` do `giochi-init`. Com `exec`, o jogo sairia
+/// para uma tela morta, sem ninguém para subir a interface de volta.
+///
+/// Enquanto o init não existir, o filho é o que dá o mesmo efeito observável:
+/// jogar, sair e voltar para o launcher. Quando a linha do init entrar na
+/// imagem, trocar isto por `exec` é uma mudança local — o contrato de caminho e
+/// ambiente abaixo já é o mesmo.
+///
+/// ## O display
+///
+/// Quem chama **precisa** ter destruído o `Painter` antes: com o launcher vivo
+/// segurando o DRM master, o filho recebe `kmsdrm not available` (medido). Esta
+/// função não tem como liberar o display por conta própria.
+pub fn lancar(alvo: &crate::catalogo::Alvo) -> Result<Lancamento, String> {
+    let executavel = alvo.executavel();
+    eprintln!("sistema: iniciando {} ({})", alvo.slug, executavel);
+
+    let status = Command::new(&executavel)
+        // `cwd` = diretório do app, para ele achar os próprios `assets/`
+        // sem precisar de caminho absoluto no código.
+        .current_dir(&alvo.dir)
+        // O `giochi-init` inicia o launcher sem variáveis. `GIOCHI_APP_ID`
+        // permite ao app saber quem é sem passar argumento — o contrato
+        // (`docs/integracao.md` §4) diz que `argv` é só o próprio caminho.
+        .env("GIOCHI_APP_ID", &alvo.slug)
+        .status()
+        .map_err(|e| format!("não consegui iniciar {}: {e}", alvo.slug))?;
+
+    let codigo = status.code();
+    eprintln!(
+        "sistema: {} terminou ({})",
+        alvo.slug,
+        codigo.map_or("sinal".to_string(), |c| format!("código {c}"))
+    );
+    Ok(Lancamento::Terminou(codigo))
+}

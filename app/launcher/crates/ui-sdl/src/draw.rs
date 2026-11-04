@@ -326,15 +326,40 @@ impl Painter {
 
         #[cfg(feature = "texto")]
         {
-            // `Sdl2TtfContext` fica vazado de propósito: precisa viver mais que
-            // as fontes, e o programa termina antes disso importar.
-            let ttf: Option<&'static Sdl2TtfContext> = match sdl2::ttf::init() {
-                Ok(context) => Some(Box::leak(Box::new(context))),
-                Err(e) => {
-                    eprintln!("aviso: TTF indisponível ({e}); o texto não será desenhado");
-                    None
+            // `Sdl2TtfContext` **não pode ser inicializado duas vezes**: o
+            // `SDL2_ttf` guarda estado global e a segunda chamada de
+            // `ttf::init()` devolve `SDL2_TTF has already been initialized`.
+            //
+            // Isso passou a importar quando o launcher começou a reabrir a
+            // janela ao voltar de um jogo: a primeira abertura inicializava o
+            // TTF, e a segunda **perdia todo o texto** — a interface voltava
+            // sem nenhum rótulo, e o único sinal era um aviso no log.
+            //
+            // Por isso o contexto é um singleton por thread (o desenho é todo
+            // na thread principal). `thread_local` evita exigir `Send`/`Sync`
+            // de um tipo que guarda ponteiro cru do SDL.
+            thread_local! {
+                static TTF: std::cell::RefCell<Option<&'static Sdl2TtfContext>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+
+            let ttf: Option<&'static Sdl2TtfContext> = TTF.with(|celula| {
+                let mut guardado = celula.borrow_mut();
+                if guardado.is_none() {
+                    match sdl2::ttf::init() {
+                        // Vazado de propósito: precisa viver mais que as
+                        // fontes, e o programa termina antes disso importar.
+                        Ok(contexto) => *guardado = Some(Box::leak(Box::new(contexto))),
+                        Err(e) => {
+                            eprintln!(
+                                "aviso: TTF indisponível ({e}); o texto não será desenhado"
+                            );
+                            return None;
+                        }
+                    }
                 }
-            };
+                *guardado
+            });
 
             // O caminho precisa ser `'static` para a `Font` ser `'static`.
             let font_path: &'static str = Box::leak(font_path.to_string().into_boxed_str());

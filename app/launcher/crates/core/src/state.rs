@@ -270,6 +270,15 @@ pub struct State {
     pub battery: Option<u8>,
     /// Controle detectado. A barra superior mostra o estado real.
     pub pad_connected: bool,
+    /// Id do app que a UI pediu para iniciar.
+    ///
+    /// O núcleo decide **que** iniciar; quem sabe abrir processo e liberar o
+    /// display é o `ui-sdl`. Por isso o pedido viaja como dado no estado, e não
+    /// como ação lateral do reducer — o reducer continua puro e testável.
+    ///
+    /// Quem consome é `App::tomar_pedido_de_lancamento`, com `take()`: o pedido
+    /// vale uma vez. Sem isso o launcher tentaria iniciar o jogo em todo quadro.
+    pub lancar: Option<u32>,
 }
 
 impl State {
@@ -292,6 +301,7 @@ impl State {
             toast: Toast::default(),
             battery: None,
             pad_connected: false,
+            lancar: None,
         }
     }
 

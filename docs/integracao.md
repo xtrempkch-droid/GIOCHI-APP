@@ -55,9 +55,10 @@ Formato, gerado pela fase `apps` do `Giochi os`:
 
 | Campo | Obrigatório | Vai para | Ausente vira |
 | --- | --- | --- | --- |
-| `id` | sim | identidade, cor de destaque | — |
-| `dir` + `entrypoint` | sim | execução do app | app não aparece |
+| `id` | sim | `GIOCHI_APP_ID` do processo | entrada ignorada |
+| `dir` + `entrypoint` | sim | execução do app | entrada ignorada |
 | `title` | não | nome no cartão | `id` |
+| `category` | não | categoria do cartão | `Aplicativo` |
 | `developer` | não | ficha do jogo | `—` |
 | `year` | não | cartão e ficha | `—` |
 
@@ -70,15 +71,23 @@ porque não havia campo de ano e o port usou o id do jogo no lugar. Um número
 interno desenhado com a mesma tipografia de um dado real engana quem lê a tela.
 Se a loja não tiver o ano, o certo é omitir o campo — a UI mostra `—`.
 
-**Fallback:** arquivo ausente → grade de apps vazia com mensagem. Nunca quebra.
+**Fallback:** arquivo ausente → catálogo de demonstração embutido (quatro
+títulos), e o botão "Jogar" avisa que o app não está no catálogo. Nunca quebra.
 
-> **Estado em 04/11/2026 — contrato escrito, leitura não implementada.** O
-> launcher ainda desenha `demo_games()`/`demo_apps()` do próprio binário; ele
-> **não abre** `index.json` nem `/opt/giochi/apps/`. No X35H o arquivo nem
-> existe. `Game.year` já é o campo certo e o cartão já o desenha, então o
-> trabalho que falta é só a leitura — trocar a origem dos dados, não a UI. Quem
-> mexer nisso: `Cmd::OpenGame` também ainda não lança processo (ver §4), e as
-> duas coisas são a mesma frente.
+**Validação do caminho.** `dir` precisa ser absoluto e sem `..`; `entrypoint`
+precisa começar em `bin/`, ser relativo e sem `..`. Entrada que não passa é
+**descartada com aviso**, não saneada: um manifesto corrompido não pode virar
+execução de binário arbitrário, e sanear esconderia que o arquivo está errado.
+
+**Estado em 04/11/2026 — implementado e verificado no X35H.** O launcher lê este
+arquivo (`crates/ui-sdl/src/catalogo.rs`), desenha o catálogo real e executa o
+`entrypoint`. Medido no aparelho: `catálogo: 1 app(s) de
+/opt/giochi/apps/index.json`, e o ciclo abrir jogo → sair → voltar funcionou com
+o app `volley`.
+
+Duas variáveis de ambiente existem para diagnóstico: `GIOCHI_CATALOGO` aponta
+outro arquivo (é como se testa no PC, onde `/opt` não existe) e
+`--lancar <id|slug>` pede o lançamento já na abertura.
 
 **Cuidado:** `dir` vem do manifesto. O launcher deve resolver `entrypoint` **relativo
 a `dir`** e recusar caminho que escape (`..`, absoluto). Um manifesto corrompido não
@@ -500,6 +509,32 @@ São três itens de shell no repositório do sistema. **Nada disso existe hoje**
 | `env` | herdado, mais `GIOCHI_APP_ID=<id>` |
 | Falha ao executar | volta ao launcher e mostra aviso; não reinicia |
 
+### Estado em 04/11/2026: filho, não `exec` — e por quê
+
+O contrato acima está implementado (`crates/ui-sdl/src/system.rs::lancar`),
+**menos uma linha**: o launcher usa `Command::status()` (processo filho, espera)
+em vez de `exec`.
+
+A decisão do produto continua sendo `exec` com o `giochi-init` reiniciando. Ela
+não pode ser usada ainda por um motivo **medido**, não suposto: o `/etc/inittab`
+do X35H e do X55 não tem a linha `::respawn:` do `giochi-init`. Com `exec`, o
+jogo sairia para uma tela morta — não haveria ninguém para subir a interface de
+volta.
+
+O filho dá o mesmo efeito observável hoje (jogar, sair, voltar ao launcher) e
+pode ser trocado por `exec` quando a linha do init entrar na imagem: o contrato
+de caminho, `cwd` e `env` já é o mesmo, então é uma mudança local.
+
+**O que o filho exige, e que custou um bug:** o display precisa ser liberado
+antes. Quem chama destrói o `Painter` (e com ele o `WindowCanvas`, dono do DRM
+master) e o recria depois. Sem isso o jogo recebe `kmsdrm not available` —
+medido no X35H com o launcher vivo.
+
+E recriar a janela expôs um bug que só aparece no **segundo** `Painter`:
+`ttf::init()` não pode ser chamado duas vezes, e o launcher voltava do jogo
+**sem nenhum texto**, com um único aviso no log. Corrigido com um contexto TTF
+por thread (`draw.rs`).
+
 ---
 
 ## 5. O que o launcher não faz
@@ -513,6 +548,10 @@ São três itens de shell no repositório do sistema. **Nada disso existe hoje**
 - **Não reinicia de forma confirmada.** `poweroff` foi medido nos dois aparelhos
   e corta a energia; `reboot` usa o mesmo caminho mas **não foi exercitado**
   separadamente.
+- **A grade de "apps" ainda é de demonstração.** O catálogo (`index.json`)
+  alimenta a Home e a biblioteca; a aba de aplicativos continua com a lista
+  embutida, porque o contrato não distingue jogo de app. Falta um campo
+  (`kind`) para separar os dois.
 
 O que **saiu** desta lista (era "estado interno, não chega ao hardware"):
 
@@ -536,7 +575,7 @@ Para este contrato funcionar, o sistema deve entregar:
 
 | Item | Caminho | Estado em 04/11/2026 |
 | --- | --- | --- |
-| Catálogo de apps | `/opt/giochi/apps/index.json` | **não existe** no X35H; o launcher ainda não o lê |
+| Catálogo de apps | `/opt/giochi/apps/index.json` | criado à mão no X35H e lido pelo launcher; **o sistema ainda não o gera** |
 | Identidade | `/proc/device-tree/model` | existe no kernel — não lido pelo app |
 | Bateria | `/sys/class/power_supply/*` | gauge presente; app não lê |
 | Temperatura | `/sys/class/thermal/*` | idem |

@@ -1,0 +1,10 @@
+{
+  "title": "Volley",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-volley",
+  "license": "Proprietary",
+  "releaseYear": 2026
+}

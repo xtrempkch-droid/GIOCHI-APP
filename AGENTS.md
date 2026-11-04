@@ -223,9 +223,11 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
 - **Código-fonte dos apps não foi migrado.** Nenhum `src/` tem conteúdo. O script
   existe e passa por `bash -n`, mas **nunca rodou de verdade** — falta um clone do
   antecessor para apontar.
-- **Nenhum `bin/` tem conteúdo.** Os jogos são projetos Godot e precisam de export
-  ARM64; as ferramentas são Python e precisam ser empacotadas.
-- **Nenhuma `capa.png`** existe: 320×320 não foi gerado para nenhum app.
+- **Nenhum `bin/` tem conteúdo, exceto o launcher e o volley.** Os jogos Godot
+  precisam de export ARM64; as ferramentas são Python e precisam ser empacotadas.
+  `app/volley` é o único jogo que roda hoje — ver §12.
+- **`capa.png` só existe no launcher e no volley.** Os outros cinco apps não têm
+  320×320, então não podem ser publicados na loja (o validador avisa).
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
 - **Texto: resolvido na imagem nova, ausente na antiga.** O X55 em uso roda a
   imagem de 03/11 (sem `SDL2_ttf`) com `--no-default-features`; o X35H roda a
@@ -257,10 +259,11 @@ Giochi app/
 │   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
 │   ├── spacewar/              # jogo padrão (image, godot)
 │   ├── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
+│   ├── volley/                # JOGO NATIVO QUE RODA (Rust+SDL2, image) — ver §12
 │   └── launcher/              # Rust + SDL2 (image, native)
 │       ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
 │       ├── crates/core/       # núcleo puro, sem SDL
-│       └── crates/ui-sdl/     # janela, desenho, evdev
+│       └── crates/ui-sdl/     # janela, desenho, evdev, catálogo
 ├── schemas/
 │   ├── metadata.schema.json
 │   └── forge.schema.json
@@ -269,6 +272,7 @@ Giochi app/
 │   ├── migrar-do-antecessor.sh
 │   ├── compilar-launcher.sh   # resolve SDL2 e compila o launcher
 │   ├── compilar-launcher-arm64.sh  # cross-compile + instala no aparelho
+│   ├── compilar-jogo-arm64.sh      # idem para o jogo volley (reusa o cache)
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   ├── verificar-telas.mjs    # as 9 telas em 3 tamanhos: cabe? ocupa quanto?
@@ -650,6 +654,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Ferramentas de teste | **9 subcomandos**, todos exercitados no aparelho — ver `docs/ferramentas.md` |
 | Layout em 640×480 (X35H) | **medido no aparelho** — 0,00% de preto, 99,4–99,9% igual à referência |
 | Renderer `opengles2` | **abre no X35H** — acelerado, textura máx 8192x8192 |
+| Leitura do catálogo (`index.json`) | **no aparelho** — `catálogo: 1 app(s)` |
+| Lançar jogo e voltar | **no aparelho** — volley rodou e o launcher voltou com texto |
+| Jogo instalável que roda | **`app/volley`** — o único; os Godot seguem sem `bin/` |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
@@ -772,6 +779,70 @@ Os 4 do direcional são `BTN_DPAD_UP/DOWN/LEFT/RIGHT` — faixa `BTN_` 0x220, n�
 faixa `KEY_`, e é por isso que parecem códigos sem nome. Somando: **20 códigos**,
 e os 20 têm entrada em `code_for` **e** no `buttons.map`. Cobertura completa, e
 agora há como provar isso em segundos em vez de conferir 20 linhas à mão.
+
+### Lançar um jogo: agora existe caminho, e existe jogo
+
+Até 04/11/2026 o botão **"Jogar"** mostrava `Iniciando Spacewar...` e não abria
+nada — o reducer só trocava o toast. Pior: não havia o que abrir. Os quatro jogos
+do catálogo eram projetos Godot nunca migrados (`bin/` com só `.gitkeep`) e o
+X35H **não tem runtime Godot** (nem Python, nem RetroArch, nem Lua — só binário
+nativo aarch64).
+
+Então a integração não tinha como ser testada. Resolvido em três partes:
+
+| Peça | O que faz |
+| --- | --- |
+| `app/volley` | jogo nativo em Rust+SDL2, escrito aqui, que roda no aparelho |
+| `catalogo.rs` | lê `/opt/giochi/apps/index.json` e resolve `id → dir + entrypoint` |
+| `system::lancar` | executa o app com `cwd` e `GIOCHI_APP_ID`, espera e volta |
+
+**O display precisa ser solto, e isso é medido.** Com o launcher vivo segurando
+o DRM master, um segundo processo recebe `kmsdrm not available` (testado no
+X35H). Por isso `App::encerrar()` **consome** o `App`: destruir o `Painter`
+destrói o `WindowCanvas`, que é quem segura o master. Não há como "pausar" o
+desenho e liberar o dispositivo — só fechar.
+
+Ciclo verificado no aparelho, ponta a ponta:
+
+```text
+catálogo: 1 app(s) de /opt/giochi/apps/index.json
+--lancar: pedido de lançamento para o app 0 (volley)
+sistema: iniciando volley (/opt/giochi/apps/volley/bin/giochi-volley)
+volley: 5 dispositivo(s) de entrada abertos
+volley: painel 640x480, renderer software
+volley: fim — jogador 0 x 1 cpu
+sistema: volley terminou (código 0)
+rotação: None … / renderer: software … / volume: 75%      ← launcher voltou
+```
+
+Quadro depois da volta: **279 cores, 0,00% de preto, 99,9%** igual à referência
+do PC.
+
+#### O bug que só aparece na segunda janela
+
+Recriar a janela expôs um defeito que a abertura única escondia: `ttf::init()`
+não pode ser chamado duas vezes. A segunda chamada devolve
+`SDL2_TTF has already been initialized`, o launcher voltava do jogo **sem
+nenhum texto** e o único sinal era uma linha de aviso no log.
+
+Corrigido com um `Sdl2TtfContext` por thread (`draw.rs`), guardado em
+`thread_local` para não exigir `Send`/`Sync` de um tipo que guarda ponteiro cru
+do SDL. Antes da correção o quadro voltava com ~70 cores; depois, 279.
+
+A lição é a mesma de sempre: **"abre" e "abre de novo" são afirmações
+diferentes.** O caminho de reabertura nunca tinha sido exercitado porque não
+havia como voltar de um jogo.
+
+#### Duas variáveis para diagnosticar sem dedo no aparelho
+
+- `GIOCHI_CATALOGO=<arquivo>` — aponta outro catálogo. Existe porque no PC não
+  há `/opt/giochi/apps/`, e testar exigiria root.
+- `--lancar <id|slug>` — pede o lançamento já na abertura. Escreve em
+  `state.lancar`, o **mesmo** campo que o botão "Jogar" preenche, então exercita
+  o mesmo código e não uma cópia.
+
+Verificação que depende de dedo não entra em rodada automatizada; foi por isso
+que o caminho ficou tanto tempo sem prova.
 
 ### Índice interno não é dado do jogo
 

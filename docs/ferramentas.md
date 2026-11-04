@@ -10,9 +10,11 @@ nenhum foi escrito "por completude".
 | --- | --- | --- |
 | `scripts/aparelho.sh` | PC | operação e diagnóstico do aparelho por SSH |
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
+| `scripts/verificar-telas.mjs` | PC | as 9 telas em 3 tamanhos: cabe? ocupa quanto? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
+| `scripts/compilar-jogo-arm64.sh` | PC | idem para o jogo `volley`, reusando o cache |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
 | `scripts/migrar-do-antecessor.sh` | PC | traz as fontes do repositório antecessor |
 
@@ -233,7 +235,7 @@ O `textura máx 0x0` no software é do próprio backend e não é erro. A linha 
 de `canvas.info()`, então responde "qual backend rodou", que é diferente de
 "qual foi pedido" — a mesma distinção entre existir, declarar e ser usado.
 
-### Um tamanho de painel por tela: `--tela` + `verificar-telas.mjs`
+### Um app por tela: `--tela` + `verificar-telas.mjs`
 
 `--dump-frame` sozinho só fotografa a Home, porque abre um **processo novo** que
 sempre desenha o estado inicial. `--tela <nome>` escolhe outra:
@@ -252,6 +254,35 @@ node scripts/verificar-telas.mjs          # 640x480, 800x600, 1280x720
 
 É o que prova layout adaptativo sem aparelho na mão. Não substitui o olho: mede
 **se cabe**, não se está legível.
+
+### Lançar um app sem apertar botão: `--lancar`
+
+O caminho "abrir display → rodar app → reabrir display" não tem como ser
+exercitado de fora: `/dev/fb0` devolve lixo sob KMSDRM e `--dump-frame` abre um
+processo novo. Sem uma chave, verificar o lançamento exigiria um dedo no
+aparelho — e verificação que depende de dedo não entra em rodada automatizada.
+
+```bash
+# no PC, com um catálogo de mentira e um filho de mentira
+GIOCHI_CATALOGO=/tmp/cat/index.json \
+  SDL_VIDEODRIVER=dummy ./giochi-launcher --tamanho 640x480 \
+  --lancar volley --dump-frame /tmp/depois.bmp
+
+# no aparelho, de verdade
+SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher --lancar volley --dump-frame /tmp/depois.bmp
+```
+
+Escreve em `state.lancar`, o **mesmo** campo que o botão "Jogar" preenche — então
+exercita o mesmo código, não uma cópia dele. O quadro gravado é o da **volta**,
+o que prova que a janela foi recriada e que o texto continua aparecendo.
+
+`GIOCHI_CATALOGO=<arquivo>` aponta outro catálogo; existe porque no PC não há
+`/opt/giochi/apps/` e testar exigiria root.
+
+**Cuidado com `| head` no `--dump-frame`.** O `head` fecha o pipe, o `SIGPIPE`
+mata o launcher antes de gravar, e o arquivo não aparece — o sintoma é "não
+gerou o quadro" com o programa retornando 0. Já aconteceu ao investigar.
 
 ## `capacidades-input.mjs`
 
@@ -327,6 +358,26 @@ Cross-compila para `aarch64-unknown-linux-gnu` e copia para
 `app/launcher/bin/`. Detalhes das quatro armadilhas de link em
 [compilar-launcher.md](./compilar-launcher.md).
 
+## `compilar-jogo-arm64.sh`
+
+```bash
+bash scripts/compilar-jogo-arm64.sh
+bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2
+```
+
+Mesmo alvo, mesmo binário de saída em `app/volley/bin/`. **Não redescobre nada:**
+exige o cache de `~/.cache/giochi-arm64` que o script do launcher prepara e reusa
+o wrapper de `rust-lld` e as bibliotecas do aparelho. Se o cache não existir, ele
+para e diz qual comando rodar antes.
+
+É a diferença entre um segundo lugar para envelhecer e um segundo consumidor do
+mesmo lugar. O jogo linka só contra `libSDL2` (sem `ttf`, sem `asound`), então é
+um teste mais simples do mesmo caminho.
+
+Ele também confere `PT_INTERP` com `readelf` **antes** de instalar: sem essa
+entrada o kernel mata o processo na largada e `file` ainda diz que o ELF é
+válido.
+
 ## `validate-app.mjs`
 
 ```bash
@@ -343,15 +394,18 @@ mecânica de GPL declarada em `distribution: "image"`. Ver
 ## O que ainda falta
 
 - **`aparelho.sh` depende de `ssh` e `scp` no PC.** Não há plano B.
-- **A rota `usb0` não foi exercitada.** O código existe e a montagem das opções
-  foi verificada com `opcoes`, mas nenhuma conexão real por `usb0` foi feita —
-  o aparelho estava em uso pela equipe do System. `sshpass` também não está
-  instalado nesta máquina, então o caminho com senha só foi validado até a
-  construção do comando.
+- **A rota `usb0` funciona** (exercitada em 04/11/2026: `10.55.0.2`, senha
+  `giochi-dev`). A chave pública foi instalada em `/root/.ssh/authorized_keys`,
+  então `BatchMode=yes` funciona e `sshpass` deixou de ser necessário. O host key
+  muda a cada regravação — `ssh-keygen -R 10.55.0.2` antes.
 - **Nenhuma ferramenta cobre áudio além de listar o mixer.** Testar volume fim a
   fim ainda é manual (`alsactl` + arquivo de persistência).
 - **Não há teste de toque.** Não existe `/dev/uinput` nem `evemu` no aparelho,
   então não dá para injetar evento: toque só se testa com o dedo.
+- **Injetar entrada é a lacuna que mais custa.** Sem `uinput`, cada verificação
+  interativa depende de alguém apertar botão. `--lancar` cobre o caminho de
+  lançamento, mas **navegar** (dpad, confirmar, abrir menu) continua manual. Um
+  módulo `uinput` na imagem do `Giochi System` transformaria isso em teste.
 - **O bitmask `ABS=` não é decodificado.** `capacidades-input.mjs` lê só `KEY=`.
   Os eixos analógicos declaram faixa em `ABS`, e os `axis_*_min/max` do
   `buttons.map` só podem ser conferidos contra isso — hoje é olho.

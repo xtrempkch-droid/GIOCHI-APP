@@ -29,6 +29,15 @@
       "note": "Rust + SDL2. Compila para x86-64 e aarch64, roda no aparelho via KMSDRM com rotação para painel retrato."
     },
     {
+      "id": "volley",
+      "folder": "volley",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo nativo em Rust+SDL2, escrito neste repositório. Existe para exercitar o caminho lançar/voltar do launcher num aparelho sem runtime Godot."
+    },
+    {
       "id": "arcade-volleyball",
       "folder": "arcade-volleyball",
       "runtime": "godot",

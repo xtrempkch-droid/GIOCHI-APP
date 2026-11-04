@@ -261,9 +261,40 @@ gerar_referencia() {
   rm -f "$destino"
   local args=(--dump-frame "$destino")
   [ -n "$tamanho" ] && args+=(--tamanho "$tamanho")
-  SDL_VIDEODRIVER=dummy \
-    LD_LIBRARY_PATH="${libs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    timeout 60 "$bin" "${args[@]}" >/dev/null 2>&1
+  # O catálogo entra na referência.
+  #
+  # Sem isto os dois lados desenham catálogos diferentes: o aparelho usa
+  # `/opt/giochi/apps/index.json` e o PC usava o catálogo de demonstração do
+  # binário. Medido no X35H em 04/11/2026: a comparação caiu de 99,4% para
+  # 97,8% **sem nenhuma regressão de desenho** — só porque a Home do aparelho
+  # tinha um jogo e a do PC tinha quatro. Comparação só vale com a mesma
+  # entrada dos dois lados.
+  local catalogo_pc=""
+  if [ -n "${HOST:-}" ]; then
+    catalogo_pc="$destino.catalogo.json"
+    "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q \
+      "root@$HOST:/opt/giochi/apps/index.json" "$catalogo_pc" 2>/dev/null || catalogo_pc=""
+  fi
+  # `env` explícito em vez de `VAR=... VAR=... comando`.
+  #
+  # A forma anterior usava `${env_catalogo[@]+"${env_catalogo[@]}"}` no meio da
+  # lista de atribuições, e o bash tratou `SDL_VIDEODRIVER=dummy` como **comando
+  # separado**: a referência era gerada sem o driver dummy, o SDL não abria
+  # janela e o script anunciava "não consegui gerar a referência" sem que nada
+  # estivesse errado com o launcher. Com `env`, cada variável é argumento e não
+  # há ambiguidade.
+  local ambiente=(
+    env
+    SDL_VIDEODRIVER=dummy
+    "LD_LIBRARY_PATH=${libs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  )
+  if [ -n "$catalogo_pc" ] && [ -s "$catalogo_pc" ]; then
+    ambiente+=("GIOCHI_CATALOGO=$catalogo_pc")
+  fi
+  timeout 60 "${ambiente[@]}" "$bin" "${args[@]}" >/dev/null 2>&1
+  # O catálogo baixado é temporário: fica ao lado do BMP, para quem for
+  # investigar, e não é reutilizado na próxima rodada (o aparelho pode ter
+  # mudado).
   [ -s "$destino" ]
 }
 

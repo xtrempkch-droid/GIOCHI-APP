@@ -135,6 +135,44 @@ impl App {
         }
     }
 
+    /// Mostra um aviso na tela a partir da camada de UI.
+    ///
+    /// Existe para o retorno de um jogo: quando o processo não pôde ser
+    /// iniciado, o motivo precisa aparecer — senão o usuário aperta "Jogar",
+    /// volta para a Home sem explicação e conclui que o botão está quebrado.
+    ///
+    /// O temporizador é do `App`, não do estado (ver `tick_toast`), então
+    /// precisa ser reiniciado aqui também.
+    pub fn avisar(&mut self, mensagem: &str) {
+        self.state.toast = giochi_launcher_core::Toast::show(mensagem);
+        self.toast_timer = TOAST_SECONDS;
+        self.dirty = true;
+    }
+
+    /// Pede o estado de volta e **libera a tela**.
+    ///
+    /// Consome o `App`, então o `Painter` é destruído no fim da função — e com
+    /// ele o `WindowCanvas`, que é quem segura o DRM master. É isso que permite
+    /// o jogo abrir o KMSDRM: medido no X35H, um segundo processo enquanto o
+    /// launcher vive recebe `kmsdrm not available`.
+    ///
+    /// Também é por isso que esta função existe em vez de um método que só
+    /// pausa o desenho: não há como "soltar" o master sem fechar o dispositivo.
+    pub fn encerrar(self) -> State {
+        // `..` descarta o resto: mapper (evita tecla presa ao voltar), layout,
+        // medidores de FPS e o watch de energia.
+        let Self { state, .. } = self;
+        state
+    }
+
+    /// Consome o pedido de lançamento, se houver.
+    ///
+    /// `take()` e não `clone()`: o pedido vale uma vez. Sem isso o launcher
+    /// tentaria iniciar o jogo em todo quadro e nunca mais desenharia nada.
+    pub fn tomar_pedido_de_lancamento(&mut self) -> Option<u32> {
+        self.state.lancar.take()
+    }
+
     fn dispatch(&mut self, cmd: Cmd) {
         // Rastro de entrada para diagnóstico em campo.
         //
