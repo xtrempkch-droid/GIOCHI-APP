@@ -169,6 +169,18 @@ fn main() -> Result<(), String> {
         }
     }
 
+    // `--tela` existe para poder olhar QUALQUER tela num tamanho de painel que
+    // não temos em mãos. Sem ele, `--dump-frame` só mostra a Home e a adaptação
+    // das outras telas fica sem como conferir.
+    let tela_inicial = match args.iter().position(|a| a == "--tela") {
+        Some(i) => Some(
+            args.get(i + 1)
+                .ok_or("--tela precisa de um nome")?
+                .to_ascii_lowercase(),
+        ),
+        None => None,
+    };
+
     let mut builder = video.window("Giochi Launcher", largura, altura);
     if fullscreen {
         builder.fullscreen_desktop();
@@ -180,16 +192,29 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("janela: {e}"))?;
 
     let painter = draw::Painter::new(window, &font_path)?;
-    // O projeto é sempre 1280x720; o painel só muda o encaixe. Registrar a
-    // diferença evita confundir letterbox esperado com bug de desenho.
-    if (largura, altura) != (draw::DESIGN_W as u32, draw::DESIGN_H as u32) {
+    // O projeto acompanha o painel (ver `draw::projecao`): a escala é sempre 1,0
+    // e o layout é que se adapta. Registrar o par evita confundir "projeto
+    // menor" com bug de desenho.
+    let (dw, dh) = painter.logical_size();
+    if (dw, dh) != (draw::DESIGN_W as u32, draw::DESIGN_H as u32) {
+        let m = views::Moldura::de(&painter);
+        // O painel vem do `Painter`, não de `largura`/`altura`: sob `kmsdrm` o
+        // SDL ignora o tamanho pedido e usa o modo do conector, então anunciar
+        // o pedido produzia "output 1280x720 desenha em projeto 640x480" —
+        // três números que se contradizem na mesma linha.
+        let (ow, oh) = painter.painel();
         eprintln!(
-            "output {largura}x{altura} com projeto {}x{} — letterbox esperado",
-            draw::DESIGN_W,
-            draw::DESIGN_H
+            "output {ow}x{oh} desenha em projeto {dw}x{dh} \
+             (escala 1,0; densidade {:.2}{})",
+            m.k,
+            if m.compacto { ", compacta" } else { "" }
         );
     }
-    let state = State::new(demo_games(), demo_apps());
+    let mut state = State::new(demo_games(), demo_apps());
+    if let Some(tela) = tela_inicial.as_deref() {
+        abrir_tela(&mut state, tela)?;
+        eprintln!("tela forcada por --tela: {tela}");
+    }
 
     // Entrada por evdev: o SDL fica só com a janela e o desenho.
     let map = input_evdev::ButtonsMap::load(std::path::Path::new(
@@ -228,7 +253,11 @@ fn main() -> Result<(), String> {
         app.render();
 
         if let Some(path) = dump_frame.as_deref() {
-            if app.state.screen == giochi_launcher_core::Screen::Running {
+            // Com `--tela` a tela pedida pode não ser `Running` (sono, desligar).
+            // Nesse caso grava no primeiro quadro, senão o laço nunca termina.
+            let alvo = app.state.screen == giochi_launcher_core::Screen::Running
+                || tela_inicial.is_some();
+            if alvo {
                 app.save_frame(path)?;
                 break;
             }
@@ -373,6 +402,51 @@ fn default_font() -> String {
     // Caminho que provavelmente não existe: o desenho continua, só sem texto,
     // e o aviso aparece uma vez no console, com a lista dos caminhos tentados.
     draw::CANDIDATOS_FONTE[0].to_string()
+}
+
+/// Leva o estado a uma tela nomeada, para `--tela` poder fotografá-la.
+///
+/// Os nomes são os das telas que existem, não invenção: cada valor precisa ter
+/// um `match` em `app::render`. Um nome desconhecido falha com a lista, em vez
+/// de desenhar a Home e fingir que atendeu.
+fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
+    use giochi_launcher_core::{Overlay, Screen, Tab};
+    // Toda tela é fotografada em `Screen::Running`: é o único estado em que o
+    // laço de `--dump-frame` grava.
+    state.screen = Screen::Running;
+    match nome {
+        "home" => state.tab = Tab::Home,
+        "biblioteca" | "library" => state.tab = Tab::Library,
+        "apps" => state.tab = Tab::Apps,
+        "ajustes" | "settings" => state.tab = Tab::Settings,
+        "busca" | "search" => {
+            state.tab = Tab::Home;
+            state.search_query = "spa".into();
+            state.overlays.push(Overlay::Search);
+        }
+        "rapido" | "quicksettings" => {
+            state.tab = Tab::Home;
+            state.overlays.push(Overlay::QuickSettings);
+        }
+        "detalhe" | "gamedetail" => {
+            state.tab = Tab::Home;
+            state.selected_game = Some(0);
+            state.overlays.push(Overlay::GameDetail);
+        }
+        "energia" | "power" => {
+            state.tab = Tab::Home;
+            state.overlays.push(Overlay::PowerPopup);
+        }
+        "sono" | "sleeping" => state.screen = Screen::Sleeping,
+        outro => {
+            return Err(format!(
+                "tela desconhecida: {outro}\n\
+                 use: home, biblioteca, apps, ajustes, busca, rapido, detalhe, \
+                 energia, sono"
+            ))
+        }
+    }
+    Ok(())
 }
 
 /// Catálogo de demonstração.

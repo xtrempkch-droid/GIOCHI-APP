@@ -406,6 +406,20 @@ impl Painter {
         (self.design.0.max(1) as u32, self.design.1.max(1) as u32)
     }
 
+    /// Tamanho real do painel, em pixels de dispositivo.
+    ///
+    /// Diferente de [`Self::logical_size`] quando há giro: o projeto é paisagem
+    /// e o painel é retrato. Serve para registrar no log o painel que o SDL
+    /// abriu de fato — que não é necessariamente o `--tamanho` pedido, porque
+    /// `kmsdrm` ignora o pedido e usa o modo do conector.
+    pub fn painel(&self) -> (u32, u32) {
+        let (dw, dh) = self.logical_size();
+        match self.rot {
+            Rotation::None => (dw, dh),
+            Rotation::Cw90 | Rotation::Ccw90 => (dh, dw),
+        }
+    }
+
     /// Grava o quadro atual em BMP.
     ///
     /// Serve para conferir o desenho numa máquina sem tela, com

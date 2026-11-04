@@ -154,7 +154,11 @@ procurar() {
 # Resolve o host: variável de ambiente, senão descoberta.
 resolver_host() {
   if [ -n "${GIOCHI_DEVICE:-}" ]; then
-    printf '%s' "$GIOCHI_DEVICE"
+    # `GIOCHI_DEVICE` é digitado das duas formas ("10.55.0.2" e
+    # "root@10.55.0.2"); todo o resto do script já prefixa `root@`, então o
+    # prefixo é removido aqui. Sem isto vira "root@root@10.55.0.2" e o ssh
+    # falha com uma mensagem que não diz nada sobre a causa.
+    printf '%s' "${GIOCHI_DEVICE#root@}"
     return 0
   fi
   local achado

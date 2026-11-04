@@ -136,6 +136,21 @@ impl App {
     }
 
     fn dispatch(&mut self, cmd: Cmd) {
+        // Rastro de entrada para diagnóstico em campo.
+        //
+        // Existe porque **não há como ver a tela de fora**: com KMSDRM o
+        // `/dev/fb0` não é o buffer que está sendo varrido (devolve lixo), e
+        // `--dump-frame` abre um processo novo, que sempre desenha o estado
+        // inicial — nenhum dos dois mostra a instância viva.
+        //
+        // Com `GIOCHI_DEBUG_CMDS=1` cada comando vira uma linha no log, então
+        // "apertei e nada aconteceu" deixa de ser adivinhação: se o comando
+        // aparece, o app reagiu e o problema é de desenho; se não aparece, o
+        // problema é antes do app (mapa, código, driver).
+        if std::env::var("GIOCHI_DEBUG_CMDS").is_ok() {
+            eprintln!("cmd: {cmd:?}  tela={:?}", self.state.screen);
+        }
+
         let tela_antes = self.state.screen;
         let brilho_antes = self.state.settings.brightness;
         let volume_antes = self.state.settings.volume;
@@ -544,14 +559,18 @@ impl App {
 
         // Brilho ambiente no topo, na cor do jogo em foco. Faixas de alfa
         // decrescente: sem shader, e o custo é uma dúzia de retângulos.
+        // As medidas saem de `Moldura`, não de 1280×720 fixo: num painel 4:3
+        // uma faixa de 1280 de largura passa da borda e o brilho fica torto.
         if let Some(game) = self.state.focused_game() {
             let glow = theme::game_accent(game.id);
+            let m = views::Moldura::de(&self.painter);
+            let faixa = m.e(22);
             let mut y = 0;
             let mut alpha = 46;
-            while y < 260 && alpha > 0 {
+            while y < m.e(260) && alpha > 0 {
                 self.painter
-                    .fill_rect(0, y, 1280, 22, theme::with_alpha(glow, alpha as u8));
-                y += 22;
+                    .fill_rect(0, y, m.w, faixa, theme::with_alpha(glow, alpha as u8));
+                y += faixa;
                 alpha -= 4;
             }
         }
