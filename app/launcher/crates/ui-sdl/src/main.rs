@@ -361,22 +361,18 @@ fn nome_de_tecla(codigo: u16) -> &'static str {
 }
 
 fn default_font() -> String {
-    // DejaVu Sans. Procura primeiro no pacote do app (o que vai para o
-    // aparelho), depois no sistema — em distro Linux ele já está instalado.
-    const CANDIDATES: [&str; 4] = [
-        "assets/fonts/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "app/launcher/assets/fonts/DejaVuSans.ttf",
-    ];
-    for candidate in CANDIDATES {
+    // A lista vive em `draw::CANDIDATOS_FONTE` porque o aviso de fonte não
+    // carregada precisa imprimi-la. Duas listas divergiriam na primeira
+    // correção — e a divergência apareceria como "fonte não encontrada" com o
+    // arquivo no lugar certo.
+    for candidate in draw::CANDIDATOS_FONTE {
         if std::path::Path::new(candidate).exists() {
             return candidate.to_string();
         }
     }
     // Caminho que provavelmente não existe: o desenho continua, só sem texto,
-    // e o aviso aparece uma vez no console.
-    CANDIDATES[0].to_string()
+    // e o aviso aparece uma vez no console, com a lista dos caminhos tentados.
+    draw::CANDIDATOS_FONTE[0].to_string()
 }
 
 /// Catálogo de demonstração.

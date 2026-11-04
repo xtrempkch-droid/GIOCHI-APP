@@ -62,6 +62,21 @@ pub enum Rotation {
 // hardware — e esse é o tipo de erro que o usuário percebe como "de ponta a
 // cabeça" sem ter como diagnosticar.
 
+/// Onde o app procura a fonte, em ordem.
+///
+/// Cobre Buildroot, Debian/Ubuntu e Arch — e o **Buildroot é o que importa**:
+/// no aparelho a fonte fica em `/usr/share/fonts/dejavu/`, que não estava nesta
+/// lista e fazia a UI aparecer sem nenhum rótulo, mesmo com a biblioteca e o
+/// arquivo presentes.
+pub const CANDIDATOS_FONTE: [&str; 6] = [
+    "assets/fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",          // Buildroot (Giochi System)
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", // Debian/Ubuntu
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",             // Arch
+    "/usr/share/fonts/dejavu-sans/DejaVuSans.ttf",     // algumas distros
+    "app/launcher/assets/fonts/DejaVuSans.ttf",
+];
+
 /// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
 /// dispositivo quando a rotação é aplicada.
 pub const DESIGN_W: i32 = 1280;
@@ -191,6 +206,14 @@ pub struct Painter {
     fonts: HashMap<u16, Font<'static, 'static>>,
     #[cfg(feature = "texto")]
     font_path: &'static str,
+    /// Já reclamamos da fonte que não carrega?
+    ///
+    /// `take_font` é chamado por tamanho de texto, a cada quadro. Sem esta
+    /// marca, um caminho errado imprime o mesmo aviso dezenas de vezes por
+    /// segundo e soterra o resto do log — no X35H foram 12 linhas iguais antes
+    /// de qualquer outra informação.
+    #[cfg(feature = "texto")]
+    avisou_fonte: bool,
     clip_stack: Vec<Option<Clip>>,
     rot: Rotation,
 }
@@ -253,6 +276,7 @@ impl Painter {
                 ttf,
                 fonts: HashMap::new(),
                 font_path,
+                avisou_fonte: false,
                 clip_stack: Vec::new(),
                 rot,
             })
@@ -278,7 +302,12 @@ impl Painter {
         match ttf.load_font(self.font_path, size) {
             Ok(font) => Some(font),
             Err(e) => {
-                eprintln!("aviso: fonte não carregada ({e})");
+                if !self.avisou_fonte {
+                    self.avisou_fonte = true;
+                    eprintln!("aviso: fonte não carregada ({e})");
+                    eprintln!("  procurei em: {}", CANDIDATOS_FONTE.join(", "));
+                    eprintln!("  passe --font <caminho> ou ponha o .ttf em assets/fonts/");
+                }
                 None
             }
         }

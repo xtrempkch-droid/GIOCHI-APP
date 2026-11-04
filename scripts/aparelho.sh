@@ -235,16 +235,42 @@ rotacao_do_aparelho() {
 # `SDL_VIDEODRIVER=dummy` é obrigatório: no driver x11 o SDL troca o buffer e a
 # leitura de volta vem preta, mesmo com a UI desenhada. Já aconteceu — o quadro
 # saiu 100% preto e parecia bug do app.
+# Desenha a mesma Home no PC, sem tela.
+#
+# O tamanho é o do **painel do aparelho**, não 1280x720 fixo. O `set_logical_size`
+# letterboxa igual nos dois lados, então gerar a referência no tamanho do painel
+# faz a comparação ser 1:1 — antes, um painel 640x480 dava "dimensões
+# incompatíveis" e o teste não dizia nada sobre o desenho.
+#
+#   gerar_referencia <destino.bmp> [LARGURAxALTURA]
 gerar_referencia() {
   local destino="$1"
+  local tamanho="${2:-}"
   local bin="$RAIZ/app/launcher/target/debug/giochi-launcher"
-  local libs="$RAIZ/app/launcher/vendor/sdl2/lib"
+  # Mesmo prefixo que `compilar-launcher.sh` usa (`GIOCHI_SDL2_PREFIX`). Antes
+  # apontava para `app/launcher/vendor/sdl2/lib`, que não existe — o binário
+  # então não achava `libSDL2` em runtime e a referência saía vazia, sem
+  # mensagem que dissesse por quê.
+  local libs="${GIOCHI_SDL2_PREFIX:-$HOME/.cache/giochi-sdl2/root}/usr/lib/x86_64-linux-gnu"
   [ -x "$bin" ] || return 1
+  [ -d "$libs" ] || return 1
   rm -f "$destino"
+  local args=(--dump-frame "$destino")
+  [ -n "$tamanho" ] && args+=(--tamanho "$tamanho")
   SDL_VIDEODRIVER=dummy \
     LD_LIBRARY_PATH="${libs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    timeout 60 "$bin" --dump-frame "$destino" >/dev/null 2>&1
+    timeout 60 "$bin" "${args[@]}" >/dev/null 2>&1
   [ -s "$destino" ]
+}
+
+# Resolução que o painel declara, como `LARGURAxALTURA`. Vazio se não der.
+resolucao_do_aparelho() {
+  local modo
+  modo=$(no_aparelho 'cat /sys/class/drm/card0-DSI-1/modes 2>/dev/null | head -1' | tr -d '\r')
+  case "$modo" in
+    [0-9]*x[0-9]*) printf '%s' "$modo" ;;
+    *) return 1 ;;
+  esac
 }
 
 # Sobe o launcher e imprime pid + log. Separado de `cmd_subir` porque `verificar`
@@ -572,7 +598,12 @@ cmd_verificar() {
       referencia="$RAIZ/app/launcher/target/debug/giochi-launcher"
       rotacao=$(rotacao_do_aparelho)
       if [ -x "$referencia" ]; then
-        if gerar_referencia "$tmp_captura/ref.bmp"; then
+        local resolucao
+        resolucao=$(resolucao_do_aparelho) || resolucao=""
+        if [ -z "$resolucao" ]; then
+          aviso "não li a resolução do painel — referência em 1280x720"
+        fi
+        if gerar_referencia "$tmp_captura/ref.bmp" "$resolucao"; then
           node "$RAIZ/scripts/verificar-frame.mjs" \
             --captura "$tmp_captura/frame.bmp" \
             --referencia "$tmp_captura/ref.bmp" \
