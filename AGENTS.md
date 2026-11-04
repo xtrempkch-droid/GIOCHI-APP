@@ -128,6 +128,45 @@ instalada em `/root/.ssh/authorized_keys`, então o toolkit funciona sem senha. 
 host key muda quando a imagem é regravada — `ssh-keygen -R` resolve, e o erro que
 aparece antes disso fala de ataque MITM, não de chave nova.
 
+### A faixa preta no X35H: esperada na origem, torta na posição
+
+Relatado pelo usuário como "o tamanho não parece certo, há faixa preta em cima e
+embaixo". Medido no frame real:
+
+```text
+painel 640x480   conteudo 640x360 (= 16:9, escala exata)
+faixa preta:     0 px em cima  ·  120 px embaixo
+```
+
+**A origem da faixa é esperada:** a UI é projetada em 1280×720 (16:9) e o painel é
+4:3, então 25% da altura vira faixa. O conteúdo está no tamanho certo — 640×360 é
+exatamente 16:9, sem distorção, e a comparação com a referência dá 99,9%.
+
+**A posição não é.** Letterbox deveria ser simétrico (60 px de cada lado). Ficou
+tudo embaixo, e é isso que faz parecer "tamanho errado" em vez de faixa
+intencional.
+
+Causa: `set_logical_size` do SDL2 2.32.10 alinha o conteúdo no topo em vez de
+centralizar. **Reproduzido no PC** com `--tamanho 640x480` e `SDL_VIDEODRIVER=dummy`
+— não é KMSDRM nem o aparelho.
+
+Tentativa de correção que **não funcionou** e por que fica registrada: trocar
+`set_logical_size` por `set_scale` + `set_viewport` manual. O SDL **aceita** o
+viewport (lido de volta: `Rect { x: 0, y: 120, w: 1280, h: 720 }`) e mesmo assim
+desenha a partir de y=0. Três ordens de chamada testadas, mesmo resultado.
+Revertido para o estado que funciona.
+
+**O que resolve de verdade**, em ordem de custo:
+
+| Opção | Efeito | Custo |
+| --- | --- | --- |
+| aceitar a faixa | 25% da tela perdida, conteúdo correto | zero |
+| layout adaptativo a 4:3 | usa a tela inteira | refatorar `views.rs` para coordenadas relativas em vez de 1280×720 fixo |
+| segunda resolução de projeto | UI desenhada em 960×720 para painéis 4:3 | dois layouts para manter |
+
+Enquanto não houver decisão, a faixa é **conhecida e documentada** — não é bug de
+renderização e não indica conteúdo cortado.
+
 ### O que a imagem do X35H ainda NÃO tem
 
 - **`::respawn:` no `inittab`** — a imagem em uso é a de 03/11 19:17, anterior à
