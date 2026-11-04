@@ -270,13 +270,19 @@ um valor **diferente** do arquivo: aí a escolha do usuário some a cada boot.
 
 Ainda não cobertos por ferramenta:
 
-- **GLES2** — nunca exercitado. Vale medir antes de prometer desempenho:
+- **GLES2** — medido no X35H em 04/11/2026: `opengles2` **abre** e se declara
+  acelerado (`textura máx 8192x8192`). O launcher agora imprime o backend na
+  abertura, porque `SDL_RENDER_DRIVER` inválido cai em silêncio para outro driver
+  e pedir não prova nada:
   ```bash
   ssh root@<ip> 'SDL_VIDEODRIVER=kmsdrm GIOCHI_GLES=1 \
-    /opt/giochi/apps/launcher/bin/giochi-launcher'
+    /opt/giochi/apps/launcher/bin/giochi-launcher'   # renderer: opengles2 (acelerado…)
+  ssh root@<ip> 'SDL_VIDEODRIVER=kmsdrm \
+    /opt/giochi/apps/launcher/bin/giochi-launcher'   # renderer: software (software…)
   ```
-- **FPS no RK3326** — não há contador no launcher. É a lacuna mais concreta das
-  ferramentas.
+  Abrir não é medir: **falta FPS comparado** entre os dois backends.
+- **FPS no RK3326** — o contador existe (`state.hud.fps`, visível com o HUD
+  ligado), mas nunca foi lido em campo. É a lacuna mais concreta das ferramentas.
 - **Analógico** — os eixos existem em `adc-joystick` (mainline) ou vêm
   normalizados do `rocknix-joypad` (DTS do projeto). Qual dos dois a imagem usa
   muda a normalização por completo — ver `docs/controles.md`.

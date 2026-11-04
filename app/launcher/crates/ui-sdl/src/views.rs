@@ -1458,9 +1458,15 @@ trait GameLabel {
 
 impl GameLabel for giochi_launcher_core::Game {
     fn year_label(&self) -> String {
-        // O núcleo não carrega ano: usa a categoria e o id como fallback
-        // estável até o catálogo trazer o campo.
-        format!("#{:03}", self.id)
+        // O ano vem do catálogo. Já foi `#{:03}` com o id: o cartão mostrava
+        // `Spacewar • Ação • #002`, que é o índice do cartão e não informação
+        // nenhuma — o usuário viu na tela e perguntou o que era. Um número
+        // interno não pode aparecer como se fosse dado do jogo.
+        if self.year > 0 {
+            self.year.to_string()
+        } else {
+            "—".to_string()
+        }
     }
 
     fn play_label(&self) -> String {
@@ -1528,5 +1534,25 @@ mod tests {
     #[test]
     fn grade_de_um_item_ocupa_tudo() {
         assert_eq!(grade_para(1, 468, 377, 5), (1, 1));
+    }
+
+    /// O rótulo de ano é do **jogo**, não do cartão.
+    ///
+    /// Já esteve errado: `year_label` devolvia `#{:03}` com o id e o cartão
+    /// mostrava `Spacewar • Ação • #002`. Lido na tela do X35H, isso passa por
+    /// informação do jogo — o usuário perguntou o que era. Índice interno não
+    /// pode chegar ao desenho.
+    #[test]
+    fn ano_do_jogo_nao_e_o_indice_do_cartao() {
+        use super::GameLabel;
+        use giochi_launcher_core::Game;
+
+        let g = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false).com_ano(1962);
+        assert_eq!(g.year_label(), "1962");
+        assert_ne!(g.year_label(), "#007");
+
+        // Sem ano no catálogo a UI diz que não sabe; não inventa número.
+        let sem_ano = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false);
+        assert_eq!(sem_ano.year_label(), "—");
     }
 }

@@ -230,8 +230,12 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
   imagem de 03/11 (sem `SDL2_ttf`) com `--no-default-features`; o X35H roda a
   imagem que tem as libs e desenha texto. O script detecta qual é o caso
   perguntando ao **aparelho**, não ao PC.
-- **GLES2 não exercitado.** O que rodou foi o renderer *software* sobre KMSDRM,
-  que é o plano B do RK3326. O backend acelerado nunca foi aberto.
+- **GLES2: medido no X35H, e é acelerado.** `GIOCHI_GLES=1` sobre KMSDRM abre
+  `opengles2` com `textura máx 8192x8192`; sem a variável, `software`. O launcher
+  anuncia qual backend abriu de fato na abertura (ver `Painter::new`), porque
+  `SDL_RENDER_DRIVER` inválido **cai em silêncio** para outro driver e pedir não
+  prova nada. O que continua sem medição é o **desempenho**: não há FPS em campo
+  no RK3326 — o contador do HUD existe, mas só aparece com `hud` ligado.
 - **Analógico não lido.** Os eixos estão declarados em `adc-joystick` e a
   calibração (`axis_*`) já é parseada, mas normalizar exige `absinfo` por ioctl
   e nada disso foi implementado. Os 13 botões, sim, funcionam.
@@ -266,6 +270,7 @@ Giochi app/
 │   ├── compilar-launcher-arm64.sh  # cross-compile + instala no aparelho
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
+│   ├── verificar-telas.mjs    # as 9 telas em 3 tamanhos: cabe? ocupa quanto?
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
 │   └── lib/
 │       ├── apps.mjs
@@ -411,6 +416,7 @@ bash scripts/aparelho.sh opcoes           # rota e autenticação (rede x usb0)
 bash scripts/aparelho.sh boot-log         # salva o log ANTES de regravar o cartão
 
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
+node scripts/verificar-telas.mjs         # as 9 telas em 640x480, 800x600, 1280x720
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
 bash scripts/canal.sh                    # janela de contato com o Giochi System
 ```
@@ -575,11 +581,11 @@ comando, `bash scripts/aparelho.sh procurar`.
 
 O que **continua sem verificação**:
 
-1. **Backend GLES2** sobre KMSDRM — só o renderer software foi exercitado.
+1. **Desempenho no RK3326** — os dois backends abrem (software e `opengles2`), mas
+   não há medição de FPS em campo.
 2. **Eixos analógicos** — declarados pelo kernel, não lidos pelo app.
-3. **Desempenho no RK3326** — sem medição de FPS.
-4. `bash -n` no `build-device.sh` do **Giochi System** — outro repositório.
-5. `scripts/migrar-do-antecessor.sh` — sintaxe ok, execução nunca testada (falta
+3. `bash -n` no `build-device.sh` do **Giochi System** — outro repositório.
+4. `scripts/migrar-do-antecessor.sh` — sintaxe ok, execução nunca testada (falta
    um clone do antecessor).
 
 ### Regra de honestidade
@@ -634,7 +640,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Mixer ALSA | **confirmado** — `Master Playback Volume`, elemento descoberto |
 | Cobertura do mapa de botões | **20/20** códigos do kernel têm entrada no app |
 | Ferramentas de teste | **9 subcomandos**, todos exercitados no aparelho — ver `docs/ferramentas.md` |
-| GLES2 / analógico / desempenho | **não exercitados** |
+| Layout em 640×480 (X35H) | **medido no aparelho** — 0,00% de preto, 99,4–99,9% igual à referência |
+| Renderer `opengles2` | **abre no X35H** — acelerado, textura máx 8192x8192 |
+| Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
@@ -756,6 +764,22 @@ Os 4 do direcional são `BTN_DPAD_UP/DOWN/LEFT/RIGHT` — faixa `BTN_` 0x220, n�
 faixa `KEY_`, e é por isso que parecem códigos sem nome. Somando: **20 códigos**,
 e os 20 têm entrada em `code_for` **e** no `buttons.map`. Cobertura completa, e
 agora há como provar isso em segundos em vez de conferir 20 linhas à mão.
+
+### Índice interno não é dado do jogo
+
+O cartão da Home mostrava `Spacewar • Ação • #002`. Aquilo parecia informação do
+jogo, mas era o **id** do `Game` — o índice do cartão. O protótipo HTML tem um
+campo `year` de verdade (1962, 1976, 1988, 2014) e o port nunca o implementou;
+no lugar dele, `year_label()` formatava `#{:03}` com o id.
+
+O usuário viu na tela e perguntou o que era. É o tipo de bug que nenhum teste
+pega sozinho: o desenho estava correto, o texto era legível, e só quem **lê a
+tela como usuário** percebe que ali não há informação.
+
+Corrigido com campo `year: u16` no `Game` (`0` = desconhecido, a UI mostra `—`),
+`Game::com_ano()` para o catálogo de demonstração, e um teste que reprova se
+`year_label()` voltar a devolver o índice. A regra: **substituto de dado ausente
+precisa ser declarado ausente, não preenchido com número interno.**
 
 ### Feature `texto`
 

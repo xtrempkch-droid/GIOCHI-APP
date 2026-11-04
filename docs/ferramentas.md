@@ -216,7 +216,42 @@ conteúdo, não a posição.**
 `--dump-frame` só produz conteúdo sob `SDL_VIDEODRIVER=dummy` no PC. No driver
 `x11` o SDL troca o buffer ao apresentar, e a leitura de volta vem **preta** com
 a UI desenhada — já aconteceu, e o quadro 100 % preto parecia bug do app. No
-aparelho, `kmsdrm` com `SDL_RENDER_DRIVER=software` funciona.
+aparelho, `kmsdrm` com `SDL_RENDER_DRIVER=software` funciona. Com `opengles2` a
+leitura também vem preta: o buffer fica na GPU.
+
+### O backend se anuncia na abertura
+
+`SDL_RENDER_DRIVER` **inválido cai em silêncio** para outro driver — não há erro.
+Por isso o launcher imprime o que o SDL abriu de fato:
+
+```text
+renderer: software (software, vsync; textura máx 0x0)          # X35H sem GIOCHI_GLES
+renderer: opengles2 (acelerado, vsync; textura máx 8192x8192)  # X35H com GIOCHI_GLES=1
+```
+
+O `textura máx 0x0` no software é do próprio backend e não é erro. A linha vem
+de `canvas.info()`, então responde "qual backend rodou", que é diferente de
+"qual foi pedido" — a mesma distinção entre existir, declarar e ser usado.
+
+### Um tamanho de painel por tela: `--tela` + `verificar-telas.mjs`
+
+`--dump-frame` sozinho só fotografa a Home, porque abre um **processo novo** que
+sempre desenha o estado inicial. `--tela <nome>` escolhe outra:
+
+```bash
+./giochi-launcher --tamanho 640x480 --tela busca --dump-frame busca.bmp
+# nomes: home, biblioteca, apps, ajustes, busca, rapido, detalhe, energia, sono
+```
+
+`verificar-telas.mjs` percorre as nove nos tamanhos que existem de fato e mede
+margem e ocupação de cada uma, reprovando quem toca a borda:
+
+```bash
+node scripts/verificar-telas.mjs          # 640x480, 800x600, 1280x720
+```
+
+É o que prova layout adaptativo sem aparelho na mão. Não substitui o olho: mede
+**se cabe**, não se está legível.
 
 ## `capacidades-input.mjs`
 

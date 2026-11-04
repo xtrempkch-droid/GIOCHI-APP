@@ -138,6 +138,10 @@ pub struct Game {
     pub id: u32,
     pub title: String,
     pub category: String,
+    /// Ano de lançamento. `0` significa **desconhecido** — o catálogo do
+    /// sistema pode não trazer o campo, e inventar um valor seria pior que
+    /// dizer que não se sabe.
+    pub year: u16,
     pub hours: f32,
     pub last_played: String,
     pub favorite: bool,
@@ -156,10 +160,20 @@ impl Game {
             id,
             title: title.to_string(),
             category: category.to_string(),
+            year: 0,
             hours,
             last_played: last_played.to_string(),
             favorite,
         }
+    }
+
+    /// Informa o ano de lançamento.
+    ///
+    /// Fica fora de `new` porque o ano vem do catálogo e é opcional: quem monta
+    /// um `Game` de teste não precisa saber que o ano existe.
+    pub fn com_ano(mut self, year: u16) -> Self {
+        self.year = year;
+        self
     }
 }
 

@@ -455,11 +455,13 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
 /// comerciais que não estão no catálogo. A leitura real virá de
 /// `apps.json` + `/apps` no aparelho.
 fn demo_games() -> Vec<Game> {
+    // Os anos são os do protótipo (`launcher.html`): eles existem como dado do
+    // jogo, não como decoração — é o que aparece no cartão e na ficha.
     vec![
-        Game::new(0, "Arcade Volleyball", "Esporte", 0.0, "nunca", true),
-        Game::new(1, "Colossal Cave Adventure", "Aventura", 0.0, "nunca", false),
-        Game::new(2, "Spacewar", "Ação", 0.0, "nunca", true),
-        Game::new(3, "Shattered Pixel Dungeon", "Roguelike", 0.0, "nunca", false),
+        Game::new(0, "Arcade Volleyball", "Esporte", 0.0, "nunca", true).com_ano(1988),
+        Game::new(1, "Colossal Cave Adventure", "Aventura", 0.0, "nunca", false).com_ano(1976),
+        Game::new(2, "Spacewar", "Ação", 0.0, "nunca", true).com_ano(1962),
+        Game::new(3, "Shattered Pixel Dungeon", "Roguelike", 0.0, "nunca", false).com_ano(2014),
     ]
 }
 

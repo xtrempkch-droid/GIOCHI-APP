@@ -297,6 +297,30 @@ impl Painter {
             .set_logical_size(lw, lh)
             .map_err(|e| format!("logical size: {e}"))?;
 
+        // Qual backend o SDL abriu de fato — não qual foi pedido.
+        //
+        // `SDL_RENDER_DRIVER=<inválido>` **cai em silêncio** para outro driver,
+        // então pedir `opengles2` não prova nada sobre o que rodou. No RK3326 a
+        // diferença é entre o backend acelerado e o software, que é o plano B:
+        // sem este registro, "GLES2 funciona" seria suposição.
+        let info = canvas.info();
+        eprintln!(
+            "renderer: {} ({}{}; textura máx {}x{})",
+            info.name,
+            if info.flags & 0x0000_0002 != 0 {
+                "acelerado"
+            } else {
+                "software"
+            },
+            if info.flags & 0x0000_0008 != 0 {
+                ", vsync"
+            } else {
+                ""
+            },
+            info.max_texture_width,
+            info.max_texture_height
+        );
+
         #[cfg(feature = "texto")]
         let creator = canvas.texture_creator();
 
