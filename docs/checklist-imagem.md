@@ -346,9 +346,25 @@ letterbox   = 480 − 360          = 120 px  →  25 % da altura (60 px por lado
 
 Se a proporção do painel bater com a do projeto, aí sim desconfie de regressão.
 
-**Já verificado no PC, sem o aparelho**, com `--tamanho 640x480`: o frame saiu com
-**25,00 %** de preto puro e a UI íntegra. A conta acima é medição, não estimativa.
-O comando está em [ferramentas.md](ferramentas.md).
+**Medido primeiro no PC** (`--tamanho 640x480`) e depois **no X35H real**
+(04/11/2026): **25,00 %** de preto puro e UI íntegra, **99,9 %** de acerto contra
+a referência. A conta acima é medição, não estimativa.
+
+### Linha de base dos dois aparelhos
+
+Comparar o aparelho novo com esta tabela antes de investigar qualquer coisa:
+
+| | X55 | X35H |
+| --- | --- | --- |
+| painel | 720×1280 (retrato) | **640×480** (paisagem) |
+| `fbcon/rotate` | `3` → `Ccw90` | `0` → `None` |
+| letterbox esperado | 0 % | **25 %** (4:3 contra 16:9) |
+| RAM | 1968 MB | **964 MB** |
+| códigos de tecla | 20 (com `BTN_MODE`) | **19** (sem `BTN_MODE`) |
+| PMIC | `rockchip,rk817` | idem |
+| backlight | 833/1666 | 833/1666 |
+
+Os dois rodaram o **mesmo binário**, sem nenhuma linha específica de aparelho.
 
 ### Ordem de teste, quando a equipe liberar
 
@@ -380,9 +396,11 @@ O `diff` é o que mostra a diferença que o código teve (ou não) de absorver.
 Se o app subiu sem uma linha alterada, a arquitetura se paga; se exigiu mudança,
 o `diff` do código mostra exatamente qual premissa estava errada.
 
-> **Estado:** o X35H **não foi testado**. A equipe do System está validando a
-> imagem e o aparelho está em uso. Nada nesta seção foi executado — é previsão,
-> escrita antes do teste para poder ser falsificada.
+> **Estado: TESTADO em 04/11/2026.** A previsão acima foi escrita antes e
+> **acertou**: 25,00 % de letterbox, `rotate:0` respeitado, mapa de 16 botões
+> aceito sem aviso, 99,9 % contra a referência do PC. O que ainda não foi
+> exercitado no X35H são os **botões apertados por uma pessoa** — os códigos
+> declarados foram lidos, o evento entregue não.
 
 ## Resumo em uma tela
 

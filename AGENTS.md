@@ -108,30 +108,59 @@ Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
   `bin/` ausente, nome de pasta inválido, `forge.json` inválido, licença em formato
   inválido e **GPL declarada na imagem assinada**.
 
-### Fila de validação (03/11/2026, 19h — atualizado 19h45)
+### X35H — PRIMEIRO TESTE EM HARDWARE (04/11/2026)
 
-**Uma imagem nova existe e um segundo aparelho existe — nenhum dos dois foi
-testado em hardware.** A equipe do Giochi System está com o aparelho; o teste foi
-adiado de propósito, não esquecido.
+**A arquitetura passou.** O mesmo binário, sem nenhuma linha específica de
+aparelho, roda no X35H: a orientação veio de `fbcon/rotate=0`, o letterbox de
+25% é o esperado para 4:3, e o mapa de 16 botões sem `home` foi aceito sem aviso.
 
-O que **já foi verificado**, sem tocar em hardware: o rootfs da imagem do X35H em
-`out/` foi extraído e inspecionado.
+| Medido | Valor |
+| --- | --- |
+| painel | **640×480** (4:3), `fbcon/rotate=0` → `Rotation::None` |
+| frame | 640×480, **25,00%** de preto (60 px por lado) |
+| comparação com a referência do PC | **99,9%** (34240 amostras) |
+| RAM | **964 MB** (a pergunta que faltava responder) |
+| códigos de tecla | **19**: 16 do controle + vol(2) + power(1) — **sem `BTN_MODE`** |
+| cores com texto / sem texto | **180 / 97** — prova que os glifos desenham |
+
+Acesso por **`usb0`**: `10.55.0.2`, senha `giochi-dev`. Nossa chave foi
+instalada em `/root/.ssh/authorized_keys`, então o toolkit funciona sem senha. O
+host key muda quando a imagem é regravada — `ssh-keygen -R` resolve, e o erro que
+aparece antes disso fala de ataque MITM, não de chave nova.
+
+### O que a imagem do X35H ainda NÃO tem
+
+- **`::respawn:` no `inittab`** — a imagem em uso é a de 03/11 19:17, anterior à
+  correção do `post-build` (19:32). Confirmado por `grep giochi /etc/inittab`.
+  A UI não sobe sozinha; só por SSH.
+- **`readelf`** — sem ele o `giochi-selftest` não consegue provar que o
+  `SDL2_ttf` usa harfbuzz (fica `[SKIP]`).
+
+### Um `FAIL` do selftest que era falso
+
+O `giochi-selftest` reporta as cinco bibliotecas como **ausentes**, e as cinco
+estão em `/usr/lib`. Causa: `ls /usr/lib/${lib}.so* /lib/${lib}.so*` — o segundo
+glob não casa (`/lib` é diretório real, não symlink) e o `ls` retorna 1 mesmo
+tendo listado o arquivo do primeiro. A correção é `||` entre dois `ls`, e foi
+validada no aparelho: as cinco passam a `PASS`.
+
+### Histórico da validação
+
+O rootfs da imagem do X35H em `out/` foi extraído e inspecionado antes de haver
+hardware; depois o teste foi executado.
 
 | Item | Estado |
 | --- | --- |
-| Texto na imagem nova (`SDL2_ttf` + harfbuzz + DejaVu) | **verificado no artefato** |
-| `::respawn:` no `inittab` da imagem nova | **FALTA** — imagem 14 min mais velha que a correção |
+| Texto na imagem (`SDL2_ttf` + harfbuzz + DejaVu) | **funciona em hardware** |
+| `::respawn:` no `inittab` da imagem em uso | **FALTA** — imagem de 03/11 19:17 |
 | Imagem do **X55** com as correções | **não existe** (`out/powkiddy-x55/` vazio) |
-| Segundo aparelho (**X35H**, 640×480, rotação `0`) | **não testado em hardware** |
-| UI em 640×480 | **simulada no PC** — 25,00 % de letterbox, UI íntegra |
-| `giochi-selftest` com bloco "bibliotecas do launcher" | **existe na imagem nova** |
+| Segundo aparelho (**X35H**) | **testado**, 99,9% de acerto |
+| `giochi-selftest` bloco "bibliotecas do launcher" | **existe, mas com bug** (§ acima) |
 
-O X35H é o **primeiro teste real da arquitetura**. A premissa deste repositório é
-que o mesmo binário serve em hardware diferente porque orientação, brilho, volume
-e mapa de botões vêm do sistema. Com um aparelho só (X55), isso era afirmação;
-com dois, é verificável. O roteiro — incluindo as previsões a falsificar — está
-em `docs/checklist-imagem.md` §8. **Não escrever conclusão sobre o X35H antes de
-rodar.**
+A premissa deste repositório era que o mesmo binário serve em hardware diferente
+porque orientação, brilho, volume e mapa de botões vêm do sistema. Com um
+aparelho só (X55) isso era afirmação; **com dois, ficou verificado**: o X35H
+rodou sem uma linha de código específica.
 
 Duas coisas mudaram no ambiente e já estão no toolkit:
 
@@ -152,9 +181,10 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
   ARM64; as ferramentas são Python e precisam ser empacotadas.
 - **Nenhuma `capa.png`** existe: 320×320 não foi gerado para nenhum app.
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
-- **Texto no aparelho.** Falta `libSDL2_ttf` (e freetype e fonte). O launcher
-  roda com `--no-default-features` e desenha tudo menos os glifos. Pedido
-  detalhado em `docs/dependencias-aparelho.md`. **É o bloqueio número um.**
+- **Texto: resolvido na imagem nova, ausente na antiga.** O X55 em uso roda a
+  imagem de 03/11 (sem `SDL2_ttf`) com `--no-default-features`; o X35H roda a
+  imagem que tem as libs e desenha texto. O script detecta qual é o caso
+  perguntando ao **aparelho**, não ao PC.
 - **GLES2 não exercitado.** O que rodou foi o renderer *software* sobre KMSDRM,
   que é o plano B do RK3326. O backend acelerado nunca foi aberto.
 - **Analógico não lido.** Os eixos estão declarados em `adc-joystick` e a
@@ -546,6 +576,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
 | Fonte | **DejaVu Sans** — o TTF **não está no repositório**: copiar para `assets/fonts/DejaVuSans.ttf`, ou o binário usa `/usr/share/fonts/...`. |
 | **aarch64 no aparelho** | **roda** — KMSDRM real, frame capturado |
+| **X35H (640×480, rotação 0)** | **roda sem código novo** — 99,9% de acerto, 25% de letterbox esperado |
+| **Texto no aparelho** | **funciona** — 180 cores com glifos contra 97 sem |
 | Rotação para painel retrato (720×1280) | **funciona** — anti-horário, 99,9 % igual à referência |
 | Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço vivo |
 | Orientação lida do sistema | **confirmado** — `fbcon/rotate=3` → `Ccw90`, sem override |
