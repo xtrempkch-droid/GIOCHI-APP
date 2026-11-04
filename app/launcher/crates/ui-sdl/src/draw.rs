@@ -77,28 +77,74 @@ pub const CANDIDATOS_FONTE: [&str; 6] = [
     "app/launcher/assets/fonts/DejaVuSans.ttf",
 ];
 
-/// Dimensões do espaço de projeto. `DESIGN_H` é o eixo que vira X do
-/// dispositivo quando a rotação é aplicada.
+/// Espaço de projeto de referência — a proporção (16:9), não o tamanho.
+///
+/// O espaço de projeto **real** é o do painel: ver [`projecao`]. Estas
+/// constantes ficam para os testes de rotação e como proporção de referência do
+/// layout.
 pub const DESIGN_W: i32 = 1280;
 pub const DESIGN_H: i32 = 720;
+
+/// Tamanhos envolvidos em desenhar num painel de tamanho qualquer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Projecao {
+    /// Espaço de projeto, em paisagem. É nele que o layout trabalha.
+    pub design: (i32, i32),
+    /// Espaço lógico que o SDL recebe. Igual ao output, então a escala é 1.
+    pub logico: (u32, u32),
+}
+
+/// Calcula o espaço de projeto para um painel de `out` pixels.
+///
+/// # Por que o projeto acompanha o painel
+///
+/// A versão anterior projetava sempre em 1280×720 e deixava o SDL escalar. Num
+/// painel 640×480 isso dá escala **0,5** — e aí `F_TINY` (9 px) vira **4,5 px**
+/// de device, ilegível. Medido no X35H: o texto encolhia pela metade em relação
+/// ao X55, onde a escala é 1,0.
+///
+/// Com o projeto = painel, a escala é **sempre 1,0**: a fonte de 9 px ocupa
+/// 9 px de device em qualquer aparelho, e o layout usa a tela inteira em vez de
+/// deixar faixa preta. O custo é que o layout precisa ser proporcional — é o que
+/// `views::Moldura` faz.
+pub fn projecao(rot: Rotation, out: (u32, u32)) -> Projecao {
+    let (ow, oh) = out;
+    match rot {
+        // Sem giro: o projeto é o painel como está. 4:3 usa 4:3 inteiro.
+        Rotation::None => Projecao {
+            design: (ow as i32, oh as i32),
+            logico: (ow, oh),
+        },
+        // Com giro: o painel é retrato e o projeto é paisagem, com as medidas
+        // trocadas. O espaço lógico continua sendo o do dispositivo (as
+        // primitivas emitem coordenadas já giradas), então escala 1,0 também.
+        Rotation::Cw90 | Rotation::Ccw90 => Projecao {
+            design: (oh as i32, ow as i32),
+            logico: (ow, oh),
+        },
+    }
+}
 
 // ── matemática da rotação (pura, testável sem SDL) ──────────
 
 /// Ponto do espaço de projeto → espaço de dispositivo.
-pub fn rotate_point(rot: Rotation, x: i32, y: i32) -> (i32, i32) {
+///
+/// `design` é o tamanho do projeto **em paisagem** (ver [`projecao`]); sob
+/// rotação ele é o que vira largura do dispositivo.
+pub fn rotate_point(rot: Rotation, design: (i32, i32), x: i32, y: i32) -> (i32, i32) {
     match rot {
         Rotation::None => (x, y),
-        Rotation::Cw90 => (DESIGN_H - y, x),
-        Rotation::Ccw90 => (y, DESIGN_W - x),
+        Rotation::Cw90 => (design.1 - y, x),
+        Rotation::Ccw90 => (y, design.0 - x),
     }
 }
 
 /// Inverso de [`rotate_point`].
-pub fn unrotate_point(rot: Rotation, x: i32, y: i32) -> (i32, i32) {
+pub fn unrotate_point(rot: Rotation, design: (i32, i32), x: i32, y: i32) -> (i32, i32) {
     match rot {
         Rotation::None => (x, y),
-        Rotation::Cw90 => (y, DESIGN_H - x),
-        Rotation::Ccw90 => (DESIGN_W - y, x),
+        Rotation::Cw90 => (y, design.1 - x),
+        Rotation::Ccw90 => (design.0 - y, x),
     }
 }
 
@@ -107,23 +153,18 @@ pub fn unrotate_point(rot: Rotation, x: i32, y: i32) -> (i32, i32) {
 /// Um retângulo alinhado aos eixos continua retângulo sob múltiplo de 90°, então
 /// largura e altura trocam e o canto é reposicionado. É isso que permite girar
 /// canto arredondado, borda e gradiente sem tratamento especial.
-pub fn rotate_rect(rot: Rotation, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+pub fn rotate_rect(
+    rot: Rotation,
+    design: (i32, i32),
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> (i32, i32, i32, i32) {
     match rot {
         Rotation::None => (x, y, w, h),
-        Rotation::Cw90 => (DESIGN_H - y - h, x, h, w),
-        Rotation::Ccw90 => (y, DESIGN_W - x - w, h, w),
-    }
-}
-
-/// Espaço lógico que o SDL deve usar para cada rotação.
-///
-/// Sem rotação é o espaço de projeto; com rotação é o do dispositivo, porque as
-/// primitivas já emitem coordenadas giradas e o encaixe passa a ser exato (o SDL
-/// só letterboxa se a proporção não bater).
-fn logical_size_for(rot: Rotation) -> (u32, u32) {
-    match rot {
-        Rotation::None => (DESIGN_W as u32, DESIGN_H as u32),
-        Rotation::Cw90 | Rotation::Ccw90 => (DESIGN_H as u32, DESIGN_W as u32),
+        Rotation::Cw90 => (design.1 - y - h, x, h, w),
+        Rotation::Ccw90 => (y, design.0 - x - w, h, w),
     }
 }
 
@@ -216,6 +257,9 @@ pub struct Painter {
     avisou_fonte: bool,
     clip_stack: Vec<Option<Clip>>,
     rot: Rotation,
+    /// Tamanho do espaço de projeto, em paisagem. Acompanha o painel: ver
+    /// [`projecao`]. É daqui que `views::Moldura` tira as proporções.
+    design: (i32, i32),
 }
 
 impl Painter {
@@ -244,10 +288,11 @@ impl Painter {
             fonte.descricao()
         );
 
-        // Espaço de desenho fixo; o SDL letterboxa mantendo proporção. Com
-        // rotação, o espaço lógico passa a ser o do dispositivo, porque as
-        // primitivas já emitem coordenadas giradas e o encaixe é exato.
-        let (lw, lh) = logical_size_for(rot);
+        // O espaço lógico é o do painel, então a escala é 1,0 e nada encolhe.
+        // O espaço de projeto acompanha o painel; quem posiciona é
+        // `views::Moldura`, em proporção — ver `projecao`.
+        let proj = projecao(rot, (ow, oh));
+        let (lw, lh) = proj.logico;
         canvas
             .set_logical_size(lw, lh)
             .map_err(|e| format!("logical size: {e}"))?;
@@ -279,6 +324,7 @@ impl Painter {
                 avisou_fonte: false,
                 clip_stack: Vec::new(),
                 rot,
+                design: proj.design,
             })
         }
 
@@ -338,25 +384,26 @@ impl Painter {
             return Ok(());
         }
         self.rot = rot;
-        let (lw, lh) = logical_size_for(rot);
+        let out = self
+            .canvas
+            .output_size()
+            .unwrap_or((DESIGN_W as u32, DESIGN_H as u32));
+        let proj = projecao(rot, out);
         self.canvas
-            .set_logical_size(lw, lh)
+            .set_logical_size(proj.logico.0, proj.logico.1)
             .map_err(|e| format!("logical size: {e}"))?;
+        self.design = proj.design;
         self.clip_stack.clear();
         Ok(())
     }
 
-    /// Tamanho do espaço de projeto, o que `set_logical_size` fixou.
+    /// Tamanho do espaço de projeto **em paisagem**.
     ///
-    /// Não confundir com `output_size`, que é o tamanho real em pixels da
-    /// janela: é justamente a diferença entre os dois que define a escala.
+    /// É o que o layout usa: num painel 640×480 dá `(640, 480)`; num 720×1280
+    /// girado dá `(1280, 720)`. Nunca é o espaço lógico do SDL quando há giro —
+    /// este é retrato, e o layout não raciocina em retrato.
     pub fn logical_size(&self) -> (u32, u32) {
-        let (w, h) = self.canvas.logical_size();
-        if w == 0 || h == 0 {
-            (1280, 720)
-        } else {
-            (w, h)
-        }
+        (self.design.0.max(1) as u32, self.design.1.max(1) as u32)
     }
 
     /// Grava o quadro atual em BMP.
@@ -460,16 +507,16 @@ impl Painter {
     /// trocam. Um retângulo continua retângulo, então canto arredondado, borda e
     /// gradiente não precisam de tratamento especial — basta entrar aqui.
     fn map_rect(&self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
-        rotate_rect(self.rot, x, y, w, h)
+        rotate_rect(self.rot, self.design, x, y, w, h)
     }
 
     fn map_point(&self, x: i32, y: i32) -> (i32, i32) {
-        rotate_point(self.rot, x, y)
+        rotate_point(self.rot, self.design, x, y)
     }
 
     /// Inverso de `map_point`: do dispositivo para o projeto.
     fn unmap_point(&self, x: i32, y: i32) -> (i32, i32) {
-        unrotate_point(self.rot, x, y)
+        unrotate_point(self.rot, self.design, x, y)
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
@@ -692,10 +739,11 @@ impl Painter {
         };
         let scale = size as f32 / 24.0;
         let rot = self.rot;
+        let design = self.design;
         let map = move |x: f32, y: f32| -> (i32, i32) {
             let px = cx - size / 2 + (x * scale).round() as i32;
             let py = cy - size / 2 + (y * scale).round() as i32;
-            rotate_point(rot, px, py)
+            rotate_point(rot, design, px, py)
         };
 
         for prim in icon.prims {
@@ -888,6 +936,8 @@ mod tests {
     use super::*;
 
     const TODOS: [Rotation; 3] = [Rotation::None, Rotation::Cw90, Rotation::Ccw90];
+    /// Projeto de referência (16:9) usado nos testes de matemática pura.
+    const REF: (i32, i32) = (DESIGN_W, DESIGN_H);
 
     #[test]
     fn le_os_valores_de_configuracao() {
@@ -905,9 +955,9 @@ mod tests {
     fn ida_e_volta_devolve_o_ponto() {
         for rot in TODOS {
             for (x, y) in [(0, 0), (1279, 0), (0, 719), (1279, 719), (640, 360)] {
-                let (dx, dy) = rotate_point(rot, x, y);
+                let (dx, dy) = rotate_point(rot, REF, x, y);
                 assert_eq!(
-                    unrotate_point(rot, dx, dy),
+                    unrotate_point(rot, REF, dx, dy),
                     (x, y),
                     "{rot:?} perdeu ({x},{y})"
                 );
@@ -923,7 +973,7 @@ mod tests {
             let mut xs = Vec::new();
             let mut ys = Vec::new();
             for (x, y) in [(0, 0), (DESIGN_W, 0), (0, DESIGN_H), (DESIGN_W, DESIGN_H)] {
-                let (dx, dy) = rotate_point(rot, x, y);
+                let (dx, dy) = rotate_point(rot, REF, x, y);
                 xs.push(dx);
                 ys.push(dy);
             }
@@ -940,8 +990,8 @@ mod tests {
         // "quase" acerta — entrega a imagem de cabeça para baixo, exatamente
         // 180°. Um giro de 180° no painel é (dx,dy) → (ALT-dx, LARG-dy).
         for (x, y) in [(0, 0), (100, 0), (0, 50), (1279, 719), (640, 360)] {
-            let (cwx, cwy) = rotate_point(Rotation::Cw90, x, y);
-            let (ccwx, ccwy) = rotate_point(Rotation::Ccw90, x, y);
+            let (cwx, cwy) = rotate_point(Rotation::Cw90, REF, x, y);
+            let (ccwx, ccwy) = rotate_point(Rotation::Ccw90, REF, x, y);
             let de_cabeca_para_baixo = (DESIGN_H - ccwx, DESIGN_W - ccwy);
             assert_eq!(
                 (cwx, cwy),
@@ -954,13 +1004,13 @@ mod tests {
     #[test]
     fn retangulo_gira_trocando_largura_e_altura() {
         // Barra do topo: 1280x56 em (0,0). Anti-horário põe o topo à esquerda.
-        let (x, y, w, h) = rotate_rect(Rotation::Ccw90, 0, 0, DESIGN_W, 56);
+        let (x, y, w, h) = rotate_rect(Rotation::Ccw90, REF, 0, 0, DESIGN_W, 56);
         assert_eq!((w, h), (56, DESIGN_W));
         assert_eq!(x, 0, "topo vai para a borda esquerda");
         assert_eq!(y, 0);
 
         // Rodapé: 1280x54 no fim do eixo Y.
-        let (x, _, w, h) = rotate_rect(Rotation::Ccw90, 0, DESIGN_H - 54, DESIGN_W, 54);
+        let (x, _, w, h) = rotate_rect(Rotation::Ccw90, REF, 0, DESIGN_H - 54, DESIGN_W, 54);
         assert_eq!((w, h), (54, DESIGN_W));
         assert_eq!(x, DESIGN_H - 54, "rodapé vai para a borda direita");
     }
@@ -968,7 +1018,7 @@ mod tests {
     #[test]
     fn retangulo_fica_dentro_do_painel() {
         for rot in [Rotation::Cw90, Rotation::Ccw90] {
-            let (x, y, w, h) = rotate_rect(rot, 0, 0, DESIGN_W, DESIGN_H);
+            let (x, y, w, h) = rotate_rect(rot, REF, 0, 0, DESIGN_W, DESIGN_H);
             assert_eq!((x, y), (0, 0), "{rot:?} origem");
             assert_eq!((w, h), (DESIGN_H, DESIGN_W), "{rot:?} tamanho");
         }
@@ -981,8 +1031,8 @@ mod tests {
         // divergem sob rotação.
         for rot in [Rotation::Cw90, Rotation::Ccw90] {
             let (x, y, w, h) = (10, 20, 100, 40);
-            let (rx, ry, rw, rh) = rotate_rect(rot, x, y, w, h);
-            let (px, py) = rotate_point(rot, x, y);
+            let (rx, ry, rw, rh) = rotate_rect(rot, REF, x, y, w, h);
+            let (px, py) = rotate_point(rot, REF, x, y);
             // Sob rotação o "canto" que vira origem depende do sentido.
             let origem_esperada = match rot {
                 Rotation::Cw90 => (rx + rw, ry),
@@ -995,5 +1045,34 @@ mod tests {
                 "{rot:?}: ponto girado não casa com o retângulo girado"
             );
         }
+    }
+
+    #[test]
+    fn projecao_acompanha_o_painel_e_nao_encolhe() {
+        // O bug real: projeto fixo 1280x720 num painel 640x480 dá escala 0,5 e
+        // F_TINY (9 px) vira 4,5 px. Com projeto = painel, escala é 1,0.
+        let p = projecao(Rotation::None, (640, 480));
+        assert_eq!(p.design, (640, 480), "projeto deve ser o painel");
+        assert_eq!(p.logico, (640, 480), "lógico = output ⇒ escala 1,0");
+        let escala = p.logico.0 as f32 / p.design.0 as f32;
+        assert_eq!(escala, 1.0);
+    }
+
+    #[test]
+    fn projecao_com_giro_troca_as_medidas() {
+        // Painel retrato 720x1280: projeto em paisagem 1280x720, lógico igual
+        // ao output (o SDL recebe o espaço do dispositivo).
+        let p = projecao(Rotation::Ccw90, (720, 1280));
+        assert_eq!(p.design, (1280, 720));
+        assert_eq!(p.logico, (720, 1280));
+    }
+
+    #[test]
+    fn projecao_de_16_9_nao_muda_nada() {
+        // Contraprova: num painel que já é 1280x720 o projeto é o mesmo de
+        // antes, então o layout não pode regredir.
+        let p = projecao(Rotation::None, (1280, 720));
+        assert_eq!(p.design, (1280, 720));
+        assert_eq!(p.logico, (1280, 720));
     }
 }

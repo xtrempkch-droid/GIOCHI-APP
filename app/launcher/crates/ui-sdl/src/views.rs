@@ -15,12 +15,78 @@ use sdl2::rect::Rect;
 use crate::draw::{Clip, Painter};
 use crate::theme;
 
-pub const SAFE_X: i32 = theme::SAFE_X;
-pub const SAFE_W: i32 = theme::SAFE_W;
-pub const PAD: i32 = 12;
-pub const TOP: i32 = theme::TOPBAR_H;
-pub const MAIN_H: i32 = 720 - theme::TOPBAR_H - theme::FOOTER_H;
-pub const FOOT_Y: i32 = theme::TOPBAR_H + MAIN_H;
+/// Medidas do layout para o painel atual, **em proporção**.
+///
+/// # Por que isto existe
+///
+/// O layout era escrito em coordenadas fixas de 1280×720. Num painel 640×480 o
+/// SDL escalava 0,5 e `F_TINY` (9 px) virava **4,5 px** — ilegível. Medido no
+/// X35H: o texto saía com metade do tamanho do X55.
+///
+/// Agora o espaço de projeto é o painel (ver `draw::projecao`), então a escala é
+/// sempre 1,0 e as fontes mantêm o tamanho em pixels. Em troca, as posições
+/// precisam ser calculadas: é o que esta struct faz.
+///
+/// Os números continuam sendo **os mesmos do desenho em 1280×720** — mudam por
+/// proporção, não por gosto. Num painel 1280×720 o resultado é idêntico ao
+/// anterior, o que permite conferir a mudança comparando frames.
+#[derive(Clone, Copy, Debug)]
+pub struct Moldura {
+    pub w: i32,
+    pub h: i32,
+    /// Escala em relação ao desenho de referência (1280×720).
+    pub k: f32,
+    /// Margem lateral confortável.
+    pub safe_x: i32,
+    /// Largura útil entre as margens.
+    pub safe_w: i32,
+    /// Topo da área de conteúdo (abaixo da barra superior).
+    pub top: i32,
+    /// Altura da área de conteúdo (entre a barra e o rodapé).
+    pub main_h: i32,
+    /// Y do rodapé.
+    pub foot_y: i32,
+    pub pad: i32,
+}
+
+impl Moldura {
+    pub fn de(p: &Painter) -> Self {
+        let (w, h) = p.logical_size();
+        let (w, h) = (w as i32, h as i32);
+        // A referência é 1280×720. `k` escala espessuras e raios (o que não dá
+        // para fazer só por proporção de largura/altura).
+        let k = (w as f32 / 1280.0).min(h as f32 / 720.0);
+        // Barras e margens acompanham a altura: num painel baixo, uma barra de
+        // 56 px come 12% da tela.
+        let barra = (theme::TOPBAR_H as f32 * k).round() as i32;
+        let rodape = (theme::FOOTER_H as f32 * k).round() as i32;
+        let margem = (theme::SAFE_X as f32 * k).round() as i32;
+        let top = barra;
+        let main_h = (h - barra - rodape).max(1);
+        Self {
+            w,
+            h,
+            k,
+            safe_x: margem,
+            safe_w: (w - margem * 2).max(1),
+            top,
+            main_h,
+            foot_y: barra + main_h,
+            pad: (12.0 * k).round().max(4.0) as i32,
+        }
+    }
+
+    /// Escala um comprimento do desenho de referência.
+    pub fn e(&self, v: i32) -> i32 {
+        (v as f32 * self.k).round() as i32
+    }
+
+    /// X para centralizar uma caixa de largura `w`.
+    pub fn centro(&self, w: i32) -> i32 {
+        (self.w - w) / 2
+    }
+}
+
 pub const LIB_PAGE: usize = 8;
 
 /// Ação disparada por um toque.
@@ -69,10 +135,11 @@ fn vcenter(y: i32, h: i32, text_h: i32) -> i32 {
 // BARRA SUPERIOR
 // ════════════════════════════════════════════════════════════
 pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
-    p.fill_rect(SAFE_X, TOP - 1, SAFE_W, 1, theme::LINE);
+    let m = Moldura::de(p);
+    p.fill_rect(m.safe_x, m.top - 1, m.safe_w, 1, theme::LINE);
 
     let blocked = state.has_overlay() || state.screen != giochi_launcher_core::Screen::Running;
-    let mut x = SAFE_X;
+    let mut x = m.safe_x;
 
     for tab in Tab::ALL {
         let label = tab.label();
@@ -102,7 +169,7 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     }
 
     // Lado direito: controle, wifi, bateria, relógio, energia.
-    let mut rx = SAFE_X + SAFE_W;
+    let mut rx = m.safe_x + m.safe_w;
 
     // Botão de energia.
     let power_w = 34;
@@ -191,7 +258,8 @@ fn current_clock() -> String {
 // RODAPÉ
 // ════════════════════════════════════════════════════════════
 pub fn chrome_foot(p: &mut Painter, state: &State) {
-    p.fill_rect(SAFE_X, FOOT_Y, SAFE_W, 1, theme::LINE);
+    let m = Moldura::de(p);
+    p.fill_rect(m.safe_x, m.foot_y, m.safe_w, 1, theme::LINE);
 
     let hints: &[(&str, &str)] = match state.top_overlay() {
         Some(Overlay::Search) => &[("↑↓←→", "Navegar"), ("A", "Selecionar"), ("B", "Voltar")],
@@ -207,8 +275,8 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
         ],
     };
 
-    let mut x = SAFE_X + 4;
-    let y = FOOT_Y + 18;
+    let mut x = m.safe_x + 4;
+    let y = m.foot_y + 18;
     for (key, label) in hints {
         let key_w = p.text_size(key, theme::F_TINY).0 + 10;
         p.fill_round_rect(x, y - 3, key_w, 16, 3, theme::with_alpha(theme::WHITE, 20));
@@ -220,22 +288,23 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
     }
 
     let build = format!("giochi-launcher 0.1.0 • {}", state.settings.perf.label());
-    p.text_right(SAFE_X + SAFE_W - 4, y, &build, theme::F_TINY, theme::FAINT);
+    p.text_right(m.safe_x + m.safe_w - 4, y, &build, theme::F_TINY, theme::FAINT);
 }
 
 // ════════════════════════════════════════════════════════════
 // HOME — carrossel
 // ════════════════════════════════════════════════════════════
 pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let n = state.games.len();
     if n == 0 {
-        p.text_center(SAFE_X + SAFE_W / 2, TOP + MAIN_H / 2, "Catálogo vazio.", theme::F_SMALL, theme::FAINT);
+        p.text_center(m.safe_x + m.safe_w / 2, m.top + m.main_h / 2, "Catálogo vazio.", theme::F_SMALL, theme::FAINT);
         return;
     }
 
-    let center_y = TOP + MAIN_H / 2 - 20;
-    let card_w = 520;
-    let card_h = 320;
+    let center_y = m.top + m.main_h / 2 - 20;
+    let card_w = m.e(520);
+    let card_h = m.e(320);
 
     // Desenha laterais primeiro, para o focado ficar por cima.
     for offset in [-1i32, 1, 0] {
@@ -245,7 +314,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
         let scale = if focused { 1.0 } else { 0.62 };
         let w = (card_w as f32 * scale) as i32;
         let h = (card_h as f32 * scale) as i32;
-        let cx = SAFE_X + SAFE_W / 2 + (offset * 420);
+        let cx = m.safe_x + m.safe_w / 2 + (offset * m.e(420));
         let x = cx - w / 2;
         let y = center_y - h / 2;
 
@@ -267,7 +336,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
 
         // Letra grande ao fundo, como no protótipo.
         let letter = game.title.chars().next().unwrap_or('?').to_string();
-        p.text_right(x + w - 24, y + 10, &letter, 120, theme::with_alpha(theme::WHITE, 16));
+        p.text_right(x + w - m.e(24), y + m.e(10), &letter, m.e(120) as u16, theme::with_alpha(theme::WHITE, 16));
 
         // Categoria.
         let cat = game.category.to_uppercase();
@@ -309,7 +378,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     let dots = state.games.len();
     let dot_gap = 11;
     let total = dots as i32 * dot_gap;
-    let mut dx = SAFE_X + SAFE_W / 2 - total / 2;
+    let mut dx = m.safe_x + m.safe_w / 2 - total / 2;
     let dy = center_y + card_h / 2 + 24;
     for i in 0..dots {
         if i == state.carousel {
@@ -324,7 +393,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     // Contexto abaixo dos pontos.
     if let Some(game) = state.focused_game() {
         let line = format!("{} • {} • {}", game.title, game.category, game.year_label());
-        p.text_center(SAFE_X + SAFE_W / 2, dy + 18, &line, theme::F_SMALL, theme::DIM);
+        p.text_center(m.safe_x + m.safe_w / 2, dy + 18, &line, theme::F_SMALL, theme::DIM);
     }
 }
 
@@ -356,6 +425,7 @@ fn split_title(text: &str, max_w: i32, measure: &mut impl FnMut(&str) -> i32) ->
 // BIBLIOTECA
 // ════════════════════════════════════════════════════════════
 pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let games = state.filtered_games();
     let focused_index = if state.focus.zone == Zone::LibraryGrid {
         Some(state.focus.index)
@@ -366,9 +436,9 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     let pages = games.len().div_ceil(LIB_PAGE).max(1);
 
     // Cabeçalho com filtros.
-    p.text_left(SAFE_X + 4, TOP + 12, "BIBLIOTECA", theme::F_TINY, theme::DIM);
+    p.text_left(m.safe_x + 4, m.top + 12, "BIBLIOTECA", theme::F_TINY, theme::DIM);
 
-    let mut fx = SAFE_X + SAFE_W - 4;
+    let mut fx = m.safe_x + m.safe_w - 4;
     for filter in Filter::ALL.iter().rev() {
         let label = filter.label();
         let w = p.text_size(label, theme::F_TINY).0 + 24;
@@ -378,33 +448,33 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
             && Filter::ALL.iter().position(|f| f == filter) == Some(state.focus.index);
 
         if active {
-            p.fill_round_rect(fx, TOP + 6, w, 30, 15, theme::CARD);
-            p.stroke_round_rect(fx, TOP + 6, w, 30, 15, theme::LINE2);
+            p.fill_round_rect(fx, m.top + 6, w, 30, 15, theme::CARD);
+            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::LINE2);
         }
         if focused {
-            p.stroke_round_rect(fx, TOP + 6, w, 30, 15, theme::ACCENT);
+            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::ACCENT);
         }
         let color = if active { theme::TEXT } else { theme::DIM };
-        let ty = vcenter(TOP + 6, 30, p.text_size(label, theme::F_TINY).1);
+        let ty = vcenter(m.top + 6, 30, p.text_size(label, theme::F_TINY).1);
         p.text_center(fx + w / 2, ty, label, theme::F_TINY, color);
         layout
             .hits
-            .push((Rect::new(fx, TOP + 6, w as u32, 30), Hit::Filter(*filter)));
+            .push((Rect::new(fx, m.top + 6, w as u32, 30), Hit::Filter(*filter)));
 
         fx -= 5;
     }
 
-    let grid_top = TOP + 48;
-    let grid_h = MAIN_H - 48 - 24;
+    let grid_top = m.top + 48;
+    let grid_h = m.main_h - 48 - 24;
     let cols = 4;
     let rows = 2;
     let gap = 9;
-    let cell_w = (SAFE_W - PAD * 2 - gap * (cols - 1)) / cols;
+    let cell_w = (m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols;
     let cell_h = (grid_h - gap * (rows - 1)) / rows;
 
     if games.is_empty() {
         p.text_center(
-            SAFE_X + SAFE_W / 2,
+            m.safe_x + m.safe_w / 2,
             grid_top + grid_h / 2,
             "Nenhum jogo nesta categoria",
             theme::F_SMALL,
@@ -421,7 +491,7 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
         let game = &state.games[game_index];
         let row = slot as i32 / cols;
         let col = slot as i32 % cols;
-        let x = SAFE_X + PAD + col * (cell_w + gap);
+        let x = m.safe_x + m.pad + col * (cell_w + gap);
         let y = grid_top + row * (cell_h + gap);
 
         let accent = theme::game_accent(game.id);
@@ -454,18 +524,19 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     }
 
     let pager = format!("{} jogo(s) • página {}/{}", games.len(), page + 1, pages);
-    p.text_center(SAFE_X + SAFE_W / 2, FOOT_Y - 20, &pager, theme::F_TINY, theme::DIM);
+    p.text_center(m.safe_x + m.safe_w / 2, m.foot_y - 20, &pager, theme::F_TINY, theme::DIM);
 }
 
 // ════════════════════════════════════════════════════════════
 // APPS
 // ════════════════════════════════════════════════════════════
 pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let cols = 4;
     let rows = 2;
     let gap = 9;
-    let cell_w = (SAFE_W - PAD * 2 - gap * (cols - 1)) / cols;
-    let cell_h = (MAIN_H - PAD * 2 - gap * (rows - 1)) / rows;
+    let cell_w = (m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols;
+    let cell_h = (m.main_h - m.pad * 2 - gap * (rows - 1)) / rows;
 
     for (i, app) in state.apps.iter().enumerate() {
         let row = i as i32 / cols;
@@ -473,8 +544,8 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
         if row >= rows {
             break;
         }
-        let x = SAFE_X + PAD + col * (cell_w + gap);
-        let y = TOP + PAD + row * (cell_h + gap);
+        let x = m.safe_x + m.pad + col * (cell_w + gap);
+        let y = m.top + m.pad + row * (cell_h + gap);
 
         p.fill_round_rect(x, y, cell_w, cell_h, theme::RADIUS_TILE, theme::PANEL2);
         let focused = state.focus.zone == Zone::AppsGrid && state.focus.index == i;
@@ -506,15 +577,16 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
 // CONFIGURAÇÕES
 // ════════════════════════════════════════════════════════════
 pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let side_w = 230;
-    let side_x = SAFE_X + PAD;
+    let side_x = m.safe_x + m.pad;
     let content_x = side_x + side_w + 14;
-    let content_w = SAFE_X + SAFE_W - PAD - content_x;
+    let content_w = m.safe_x + m.safe_w - m.pad - content_x;
 
     // Linha divisória.
-    p.fill_rect(side_x + side_w, TOP + 6, 1, MAIN_H - 16, theme::LINE);
+    p.fill_rect(side_x + side_w, m.top + 6, 1, m.main_h - 16, theme::LINE);
 
-    let mut y = TOP + 12;
+    let mut y = m.top + 12;
     for (i, name) in SETTINGS_CATEGORIES.iter().enumerate() {
         let active = state.settings_category == i;
         let focused = state.focus.zone == Zone::SettingsSidebar && state.focus.index == i;
@@ -544,7 +616,7 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
         .copied()
         .unwrap_or("appearance");
     let heading = label_for_category(category);
-    p.text_left(content_x, TOP + 12, &heading, theme::F_BODY, theme::TEXT);
+    p.text_left(content_x, m.top + 12, &heading, theme::F_BODY, theme::TEXT);
 
     let rows: Vec<(String, String)> = match category {
         "appearance" => vec![
@@ -585,13 +657,13 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
             "Onde não há leitura de sensor, a tela mostra — em vez de",
             "inventar um número.",
         ];
-        let mut ay = TOP + 40;
+        let mut ay = m.top + 40;
         for line in lines {
             p.text_left(content_x, ay, line, theme::F_SMALL, theme::DIM);
             ay += 20;
         }
     } else {
-        let mut ry = TOP + 40;
+        let mut ry = m.top + 40;
         for (title, value) in &rows {
             p.fill_round_rect(content_x, ry, content_w, theme::TOUCH, 8, theme::with_alpha(theme::BLACK, 70));
             p.stroke_round_rect(content_x, ry, content_w, theme::TOUCH, 8, theme::LINE);
@@ -624,7 +696,8 @@ fn label_for_category(name: &str) -> String {
 /// Usada no instante entre o pedido de desligar e o sistema parar, quando ainda
 /// há tempo de desenhar um quadro.
 pub fn mensagem_central(p: &mut Painter, texto: &str) {
-    p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+    let m = Moldura::de(p);
+    p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
     p.text_center(640, 350, texto, theme::F_BODY, theme::DIM);
 }
 
@@ -639,8 +712,9 @@ pub fn mensagem_central(p: &mut Painter, texto: &str) {
 /// e é falso: medido em 03/11/2026, o `poweroff` do X55 desliga de fato. A tela
 /// continua útil para qualquer falha — só não pressupõe uma causa específica.
 pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
+    let m = Moldura::de(p);
     let w = 760;
-    let x = (1280 - w) / 2;
+    let x = m.centro(w);
     let y = 430;
     let h = 120;
     p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::PANEL2);
@@ -670,12 +744,13 @@ pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
 }
 
 pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     if state.overlays.is_empty() && state.screen == giochi_launcher_core::Screen::Running {
         return;
     }
 
     // Escurece o fundo.
-    p.fill_rect(0, 0, 1280, 720, theme::with_alpha(theme::BLACK, 200));
+    p.fill_rect(0, 0, m.w, m.h, theme::with_alpha(theme::BLACK, 200));
 
     for overlay in &state.overlays {
         match overlay {
@@ -688,21 +763,21 @@ pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
 
     match state.screen {
         giochi_launcher_core::Screen::Sleeping => {
-            p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+            p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             p.icon("moon", 640, 320, 72, theme::with_alpha(theme::ACCENT, 130));
             p.text_center(640, 380, "Toque ou pressione qualquer botão para acordar.", theme::F_SMALL, theme::DIM);
         }
         giochi_launcher_core::Screen::Shutdown => {
-            p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+            p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             p.text_center(640, 350, "Sistema desligado.", theme::F_BODY, theme::FAINT);
             p.text_center(640, 374, "Pressione A para reiniciar.", theme::F_SMALL, theme::FAINT);
         }
         giochi_launcher_core::Screen::Reboot => {
-            p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+            p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             p.text_center(640, 350, "Reiniciando...", theme::F_BODY, theme::DIM);
         }
         giochi_launcher_core::Screen::Boot => {
-            p.fill_rect(0, 0, 1280, 720, theme::BLACK);
+            p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             p.text_center(640, 330, "GIOCHI", theme::F_LOGO, theme::ACCENT);
             p.text_center(640, 372, "launcher 0.1.0", theme::F_TINY, theme::FAINT);
         }
@@ -716,8 +791,9 @@ fn panel(p: &mut Painter, x: i32, y: i32, w: i32, h: i32) {
 }
 
 fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let w = 520;
-    let x = (1280 - w) / 2;
+    let x = m.centro(w);
     let y = 140;
     // 6 controles + 2 botões, igual ao `QUICK_SETTINGS_ROWS` do núcleo.
     let rows = QUICK_SETTINGS_ROWS - 2;
@@ -807,12 +883,13 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
 }
 
 fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let Some(game) = state.selected_game.and_then(|i| state.games.get(i)) else {
         return;
     };
 
     let w = 760;
-    let x = (1280 - w) / 2;
+    let x = m.centro(w);
     let y = 150;
     let hero_h = 210;
     let h = hero_h + 70;
@@ -881,8 +958,9 @@ fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
 }
 
 fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let w = 340;
-    let x = (1280 - w) / 2;
+    let x = m.centro(w);
     let y = 190;
     let h = 340;
     panel(p, x, y, w, h);
@@ -921,9 +999,10 @@ fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
 }
 
 fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
     let w = 900;
     let h = 520;
-    let x = (1280 - w) / 2;
+    let x = m.centro(w);
     let y = 110;
     panel(p, x, y, w, h);
 
@@ -1017,6 +1096,7 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
 // AVISOS
 // ════════════════════════════════════════════════════════════
 pub fn toast(p: &mut Painter, state: &State) {
+    let m = Moldura::de(p);
     if !state.toast.visible || state.toast.message.is_empty() {
         return;
     }
@@ -1025,7 +1105,7 @@ pub fn toast(p: &mut Painter, state: &State) {
     let w = tw + 60;
     let h = 38;
     let x = 640 - w / 2;
-    let y = 720 - 64 - h;
+    let y = m.h - m.e(64) - h;
 
     panel(p, x, y, w, h);
     p.icon("check", x + 22, y + h / 2, 14, theme::ACCENT);
@@ -1034,12 +1114,13 @@ pub fn toast(p: &mut Painter, state: &State) {
 }
 
 pub fn hud(p: &mut Painter, state: &State) {
+    let m = Moldura::de(p);
     if !state.settings.hud {
         return;
     }
     let w = 170;
     let h = 40;
-    let x = 1280 - 170 - 170;
+    let x = m.w - m.e(170) - m.e(170);
     let y = 66;
 
     p.fill_round_rect(x, y, w, h, 8, theme::with_alpha(theme::BLACK, 180));

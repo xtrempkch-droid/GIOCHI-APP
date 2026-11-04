@@ -347,8 +347,12 @@ letterbox   = 480 − 360          = 120 px  →  25 % da altura (60 px por lado
 Se a proporção do painel bater com a do projeto, aí sim desconfie de regressão.
 
 **Medido primeiro no PC** (`--tamanho 640x480`) e depois **no X35H real**
-(04/11/2026): **25,00 %** de preto puro e UI íntegra, **99,9 %** de acerto contra
-a referência. A conta acima é medição, não estimativa.
+(04/11/2026): **0,00 %** de preto e **99,8 %** de acerto contra a referência.
+
+O layout passou a ser **adaptativo**: o espaço de projeto acompanha o painel
+(`draw::projecao`), então a escala é 1,0 e não há letterbox em 4:3. A conta de
+25 % acima descreve o comportamento **anterior** e fica como referência histórica
+de por que a faixa existia.
 
 ### Linha de base dos dois aparelhos
 
@@ -358,7 +362,7 @@ Comparar o aparelho novo com esta tabela antes de investigar qualquer coisa:
 | --- | --- | --- |
 | painel | 720×1280 (retrato) | **640×480** (paisagem) |
 | `fbcon/rotate` | `3` → `Ccw90` | `0` → `None` |
-| letterbox esperado | 0 % | **25 %** (4:3 contra 16:9) |
+| letterbox esperado | 0 % | **0 %** (projeto acompanha o painel) |
 | RAM | 1968 MB | **964 MB** |
 | códigos de tecla | 20 (com `BTN_MODE`) | **19** (sem `BTN_MODE`) |
 | PMIC | `rockchip,rk817` | idem |

@@ -128,46 +128,52 @@ instalada em `/root/.ssh/authorized_keys`, então o toolkit funciona sem senha. 
 host key muda quando a imagem é regravada — `ssh-keygen -R` resolve, e o erro que
 aparece antes disso fala de ataque MITM, não de chave nova.
 
-### A faixa preta no X35H: esperada, simétrica e correta
+### Layout adaptativo: escala 1,0 em qualquer painel (04/11/2026)
 
-Relatado pelo usuário como "o tamanho não parece certo, há faixa preta em cima e
-embaixo". **A faixa é esperada e está centralizada.** Não é problema.
+**A faixa preta sumiu e o texto dobrou de tamanho**, resolvendo as duas queixas
+do usuário ("faixa em cima e embaixo", "fonte muito pequena em telas menores").
+
+A causa era uma só: o espaço de projeto era **fixo em 1280×720** e o SDL
+escalava. Num painel 640×480 isso dá escala **0,5** — e aí `F_TINY` (9 px) vira
+**4,5 px de device**, ilegível, além da faixa.
+
+| | antes | agora |
+| --- | --- | --- |
+| espaço de projeto | 1280×720 fixo | **o painel** (640×480) |
+| escala | 0,5 | **1,0** |
+| `F_TINY` no device | 4,5 px | **9 px** |
+| fração da largura | 0,70 % | **1,41 %** |
+| faixa preta | 25 % | **0 %** |
+
+`draw::projecao(rot, output)` devolve o espaço de projeto e o lógico:
+- **sem giro** → projeto = painel (4:3 usa 4:3 inteiro);
+- **com giro** → painel é retrato, projeto é paisagem com medidas trocadas.
+
+O espaço lógico continua sendo o do dispositivo, então a escala é 1,0 **sempre** —
+a fonte nunca encolhe. Em troca, o layout passou a ser proporcional:
+`views::Moldura` calcula margens, barras e espaçamentos a partir do tamanho do
+painel, usando o desenho de 1280×720 só como **proporção de referência**.
+
+Num painel 1280×720 o resultado é **idêntico** ao anterior (`k = 1,0`), o que
+permite conferir a mudança comparando frames. Medido:
 
 ```text
-painel            640x480 (4:3)
-projeto da UI     1280x720 (16:9)
-escala            0.5   ->  conteúdo 640x360
-faixa             60 px em cima + 60 px embaixo = 25% da altura
-viewport do SDL   Rect { x: 0, y: 120, w: 1280, h: 720 } em unidades lógicas
-                  = y 60 px de device: centrado
-comparação com referência do PC   99,9%
-conteúdo cortado?                 não (última linha com cor em y=348)
+640x480    640x480, 0,00% de preto, 351 cores, 99,8% de acerto contra o PC
+1280x720   1280x720, 0,00% de preto, 392 cores  (sem regressão)
+720x1280   720x1280 girado, 0,00% de preto, 348 cores  (X55, sem regressão)
 ```
 
-**O diagnóstico errado que quase ficou registrado aqui:** medi no BMP "0 px de
-faixa em cima, 120 embaixo" e concluí que o conteúdo estava pendurado no topo —
-que seria bug de renderização. Era **erro de instrumento**: `read_pixels`, usado
-por `--dump-frame`, **não respeita o deslocamento do viewport**. O SDL calcula o
-letterbox centrado e a tela mostra centrado; a leitura devolve o conteúdo a partir
-de (0,0).
+3 testes novos fixam a regra: `projecao_acompanha_o_painel_e_nao_encolhe`,
+`projecao_com_giro_troca_as_medidas`, `projecao_de_16_9_nao_muda_nada`.
 
-O usuário olhou a tela e disse "em cima **e** embaixo" — estava certo. A
-ferramenta é que mentia, e eu quase escrevi uma conclusão a partir dela.
+### O que aconteceu com o diagnóstico da faixa
 
-Regra que fica, na mesma família de "biblioteca presente não prova uso":
-**o BMP prova o conteúdo, não a posição.** Percentual de preto e comparação
-pixel a pixel continuam válidos (o PC tem o mesmo artefato, então compara 1:1);
-**posição de faixa, não**.
+A faixa era **esperada** (16:9 num painel 4:3) e estava **simétrica** — o BMP
+mentia sobre a posição, porque `read_pixels` ignora o deslocamento do viewport.
+Registrado em `docs/ferramentas.md`. O layout adaptativo resolve a faixa por
+outro caminho: não há mais letterbox porque o projeto acompanha o painel.
 
-Se um dia a faixa precisar sumir, as opções são de layout, não de renderização:
-
-| Opção | Efeito | Custo |
-| --- | --- | --- |
-| aceitar a faixa | 25% da tela, conteúdo correto | zero |
-| layout adaptativo a 4:3 | usa a tela inteira | `views.rs` deixa de ser 1280×720 fixo |
-| segunda resolução de projeto | UI desenhada em 960×720 para 4:3 | dois layouts para manter |
-
-### O que a imagem do X35H ainda NÃO tem
+### O que a imagem do X35H ainda NÃO tem### O que a imagem do X35H ainda NÃO tem
 
 - **`::respawn:` no `inittab`** — a imagem em uso é a de 03/11 19:17, anterior à
   correção do `post-build` (19:32). Confirmado por `grep giochi /etc/inittab`.

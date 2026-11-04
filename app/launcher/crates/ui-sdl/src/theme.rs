@@ -43,7 +43,10 @@ pub const WHITE: Color = rgb(0xffffff);
 pub const TOPBAR_H: i32 = 56;
 pub const FOOTER_H: i32 = 54;
 pub const SAFE_X: i32 = 160;
-pub const SAFE_W: i32 = 960;
+/// **Não usar no layout.** A largura útil agora é `Moldura::safe_w`, calculada
+/// do painel — esta constante era do desenho fixo de 1280×720 e converter os
+/// dois conceitos é o que reencolhe a fonte num painel pequeno.
+pub const SAFE_W_REF: i32 = 960;
 
 pub const RADIUS_CARD: i32 = 18;
 pub const RADIUS_PANEL: i32 = 16;
