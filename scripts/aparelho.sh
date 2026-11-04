@@ -258,6 +258,27 @@ gerar_referencia() {
   local libs="${GIOCHI_SDL2_PREFIX:-$HOME/.cache/giochi-sdl2/root}/usr/lib/x86_64-linux-gnu"
   [ -x "$bin" ] || return 1
   [ -d "$libs" ] || return 1
+
+  # A referência tem de estar no espaço de PROJETO, que é paisagem.
+  #
+  # `verificar-frame.mjs` des-rotaciona a captura e compara no espaço de projeto
+  # (ver `comparar`). Num painel retrato (X55: 720×1280, `rotate=3`) a captura é
+  # retrato, e depois de des-rotacionada fica 1280×720 — então a referência
+  # precisa ser gerada em 1280×720, não no modo do painel.
+  #
+  # Gerar no modo do painel dava "dimensões incompatíveis: captura 1280x720 vs
+  # referência 720x1280" e o launcher levava a culpa por uma conta da ferramenta.
+  # O launcher desenha em paisagem nos dois casos: `projecao()` troca as medidas
+  # quando há giro.
+  if [ -n "$tamanho" ]; then
+    local l a
+    l="${tamanho%x*}"
+    a="${tamanho#*x}"
+    if [ "$a" -gt "$l" ] 2>/dev/null; then
+      tamanho="${a}x${l}"
+    fi
+  fi
+
   rm -f "$destino"
   local args=(--dump-frame "$destino")
   [ -n "$tamanho" ] && args+=(--tamanho "$tamanho")

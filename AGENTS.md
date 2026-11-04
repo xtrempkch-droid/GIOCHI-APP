@@ -74,6 +74,12 @@ glibc 2.38, SDL2 2.28.5, PMIC `rk817`, painel DSI 720×1280, 1968 MB de RAM.
 Acesso por `ssh root@<ip>` — **o IP muda a cada boot** (DHCP), então use
 `bash scripts/aparelho.sh procurar` em vez de decorar um endereço.
 
+> **04/11/2026: o X55 apareceu em `192.168.1.6`, pela rede, sem `usb0`.** O
+> gadget USB dele está `not attached` (`giochi-selftest` → `UDC:
+> fcc00000.usb · estado not attached`), então a rota fixa `10.55.0.2` só
+> funciona quando o cabo de dados está no modo certo. `procurar` com
+> `GIOCHI_SUBREDE=192.168.1` acha os dois casos.
+
 - **Cross-compile aarch64 funciona**: `scripts/compilar-launcher-arm64.sh`
   gera o binário do zero (sysroot + libs do aparelho + wrapper de link).
 - **O launcher RODA no aparelho**: `SDL_VIDEODRIVER=kmsdrm` abre o DRM real,
@@ -197,11 +203,11 @@ hardware; depois o teste foi executado.
 
 | Item | Estado |
 | --- | --- |
-| Texto na imagem (`SDL2_ttf` + harfbuzz + DejaVu) | **funciona em hardware** |
-| `::respawn:` no `inittab` da imagem em uso | **FALTA** — imagem de 03/11 19:17 |
-| Imagem do **X55** com as correções | **não existe** (`out/powkiddy-x55/` vazio) |
+| Texto na imagem (`SDL2_ttf` + harfbuzz + DejaVu) | **funciona em hardware** nos dois aparelhos |
+| `::respawn:` no `inittab` da imagem em uso | **FALTA** nas duas imagens |
+| Imagem do **X55** com as correções | **existe em `out/` (04/11 21:22 UTC), NÃO está gravada** |
 | Segundo aparelho (**X35H**) | **testado**, 99,9% de acerto |
-| `giochi-selftest` bloco "bibliotecas do launcher" | **existe, mas com bug** (§ acima) |
+| `giochi-selftest` bloco "bibliotecas do launcher" | **existe só na imagem nova**; a do X55 em uso não tem |
 
 A premissa deste repositório era que o mesmo binário serve em hardware diferente
 porque orientação, brilho, volume e mapa de botões vêm do sistema. Com um
@@ -229,10 +235,21 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
 - **`capa.png` só existe no launcher e no volley.** Os outros cinco apps não têm
   320×320, então não podem ser publicados na loja (o validador avisa).
 - **Não há empacotador `.giochi`**, nem assinatura Ed25519.
-- **Texto: resolvido na imagem nova, ausente na antiga.** O X55 em uso roda a
-  imagem de 03/11 (sem `SDL2_ttf`) com `--no-default-features`; o X35H roda a
-  imagem que tem as libs e desenha texto. O script detecta qual é o caso
-  perguntando ao **aparelho**, não ao PC.
+- **Texto: o X55 em uso é a imagem ANTIGA (03/11) e não tem `SDL2_ttf`.** O
+  X35H roda a imagem nova, com as libs, e desenha texto sozinho. Não confie no
+  nome do aparelho para decidir: o `compilar-launcher-arm64.sh` **pergunta ao
+  aparelho** se `libSDL2_ttf` existe e compila com ou sem a feature conforme a
+  resposta.
+
+  **A imagem nova do X55 existe em `out/powkiddy-x55/` (04/11 21:22 UTC, mesmo
+  commit `70d86a1` da do X35H) e tem as 5 bibliotecas** — conferido com `debugfs`
+  no `rootfs.ext4`. Ela só não está gravada no cartão.
+
+  Enquanto isso, o X55 em uso foi desbloqueado copiando para `/usr/lib` as três
+   bibliotecas que faltavam (`libSDL2_ttf`, `libfreetype`, `libharfbuzz`) e a
+  fonte `DejaVuSans.ttf`, **extraídas do `rootfs.ext4` oficial** da imagem nova.
+   É medida temporária e reversível: gravar a imagem nova torna os arquivos
+   redundantes. Não é o caminho recomendado — é o que permite testar hoje.
 - **GLES2: medido no X35H, e é acelerado.** `GIOCHI_GLES=1` sobre KMSDRM abre
   `opengles2` com `textura máx 8192x8192`; sem a variável, `software`. O launcher
   anuncia qual backend abriu de fato na abertura (ver `Painter::new`), porque
@@ -461,9 +478,15 @@ encadear em script.
 
 `verificar` é o que importa: para o app (o KMSDRM é exclusivo), captura um
 quadro, desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`, des-rotaciona
-pela orientação que o sistema declara e compara pixel a pixel. No X55 dá **99,9 %**
-de acerto; com a rotação oposta cai para **10,9 %**. É essa diferença que
-distingue "desenhou" de "desenhou de ponta a cabeça".
+pela orientação que o sistema declara e compara pixel a pixel. No X55 dá
+**98,9 %** de acerto e no X35H **99,9 %**; com a rotação oposta cai para
+**10,9 %**. É essa diferença que distingue "desenhou" de "desenhou de ponta a
+cabeça".
+
+A comparação só vale com a **mesma entrada dos dois lados**: catálogo igual e
+referência no espaço de projeto (paisagem). As duas coisas já faltaram, e das
+duas vezes o launcher pareceu pior sem ter regredido — ver
+`docs/ferramentas.md`.
 
 `capacidades` responde a outra pergunta: o que o kernel **promete** emitir.
 Cruzando com `input`, que mostra o que ele **entregou**, separa-se driver/DTS
@@ -558,8 +581,8 @@ bash scripts/aparelho.sh verificar    # processo + DRM + frame comparado
 ```
 
 `verificar` é o que prova que está desenhando, e não só vivo: captura o quadro,
-gera a referência no PC e compara pixel a pixel (99,9 % em `ccw`, 10,9 % em
-`cw`). Guia completo em `docs/ferramentas.md`.
+gera a referência no PC e compara pixel a pixel (98,9 % no X55 e 99,9 % no
+X35H em `ccw`, 10,9 % em `cw`). Guia completo em `docs/ferramentas.md`.
 
 ### Quando chegar uma imagem nova do sistema
 
@@ -626,7 +649,9 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 - `cargo test --workspace` → **135/135**
 - `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
 - `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
-- `aparelho.sh verificar` → frame 720×1280 comparado, **99,9 %** de acerto
+- `aparelho.sh verificar` → frame 720×1280 comparado, **98,9 %** de acerto
+  (era 99,9 % antes de a referência passar a usar o catálogo real; a diferença é
+  o relógio da barra superior)
 
 "Compila" e "roda" são afirmações diferentes, e agora as duas valem para x86-64
 **e** para o aparelho. O que não vale para o aparelho é o **texto** — e isso é
@@ -657,7 +682,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | **aarch64 no aparelho** | **roda** — KMSDRM real, frame capturado |
 | **X35H (640×480, rotação 0)** | **roda sem código novo** — 99,9% de acerto, 25% de letterbox esperado |
 | **Texto no aparelho** | **funciona** — 180 cores com glifos contra 97 sem |
-| Rotação para painel retrato (720×1280) | **funciona** — anti-horário, 99,9 % igual à referência |
+| Rotação para painel retrato (720×1280) | **funciona** — anti-horário, 98,9 % igual à referência (relógio e bateria mudam entre as capturas) |
 | Execução do caminho instalado | **confirmado** — `/opt/giochi/apps/launcher/bin/`, laço vivo |
 | Orientação lida do sistema | **confirmado** — `fbcon/rotate=3` → `Ccw90`, sem override |
 | Brilho no painel | **confirmado** — `--brilho 20/70/50` → 333/1166/833, e persiste |
@@ -673,8 +698,10 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Leitura do catálogo (`index.json`) | **no aparelho** — `catálogo: 1 app(s)` |
 | Lançar jogo e voltar | **no aparelho** — volley rodou e o launcher voltou com texto |
 | Jogo instalável que roda | **`app/jogos/volley`** — o único; os Godot seguem sem `bin/` |
+| Jogo em painel retrato (X55) | **gira** — `projeto 1280x720 (Ccw90)`, preenche o painel |
+| Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
 | Analógico / desempenho (FPS) | **não exercitados** |
-| Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` |
+| Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` — **os dois aparelhos expõem os dois dados** (`bateria 0%`, `42C` no X55) |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
 
@@ -795,6 +822,52 @@ Os 4 do direcional são `BTN_DPAD_UP/DOWN/LEFT/RIGHT` — faixa `BTN_` 0x220, n�
 faixa `KEY_`, e é por isso que parecem códigos sem nome. Somando: **20 códigos**,
 e os 20 têm entrada em `code_for` **e** no `buttons.map`. Cobertura completa, e
 agora há como provar isso em segundos em vez de conferir 20 linhas à mão.
+
+### O jogo gira com o sistema, não com o aparelho
+
+O `volley` desenhava em paisagem num buffer que podia ser retrato. No X35H
+(640×480, `rotate=0`) funcionava por coincidência; no X55 (720×1280,
+`fbcon=rotate:3`) o conteúdo saía espremido nos primeiros 480 px de 1280 —
+medido no frame, 6 cores e uma faixa morta enorme.
+
+Agora ele lê `/sys/class/graphics/fbcon/rotate`, como o launcher, e desenha em
+espaço de projeto com os retângulos girados:
+
+```text
+X35H:  volley: painel 640x480,  projeto 640x480  (Nenhuma)
+X55:   volley: painel 720x1280, projeto 1280x720 (Ccw90)
+```
+
+`GIOCHI_ROTATE` sobrepõe, para testar no PC — mesma precedência do launcher
+(`display.rs`), de propósito: um comando que gira um app tem de girar o outro,
+senão o teste mente sobre um dos dois.
+
+A matemática de `rotate_rect` foi **copiada** do launcher, não transformada em
+dependência compartilhada. São apps diferentes; um não deve poder reclamar do
+outro quando quebrar. São 12 linhas com teste de ida e volta do lado do launcher.
+
+### O que a imagem do X55 revelou
+
+O X55 em uso roda a imagem de **03/11 17:22** (kernel `#2 SMP ... Tue Nov 3`), e
+não tem `SDL2_ttf`, `freetype`, `harfbuzz` nem fonte. A imagem nova **existe** em
+`GIOCHI-SYSTEM/out/powkiddy-x55/` (`rootfs.ext4`, 04/11 21:22 UTC, commit
+`70d86a1` — o mesmo da imagem do X35H) e tem as cinco bibliotecas: conferido com
+`debugfs` direto no `rootfs.ext4`.
+
+Ou seja: **o aparelho está atrasado, não o repositório.** O `boot-log` do X55
+também não existe nesta imagem, e o `giochi-selftest` dela não tem o bloco
+"bibliotecas do launcher" — o bloco é da imagem nova.
+
+O selftest do X55 mostra duas coisas que o launcher **não lê** e poderia:
+
+```text
+[PASS] bateria: 0% (Not charging)
+[PASS] temperatura: 42C
+```
+
+Os arquivos existem nos dois aparelhos; a UI mostra `—` porque ler
+`/sys/class/power_supply` e `/sys/class/thermal` nunca foi implementado. É
+trabalho de UI, não de sistema.
 
 ### Lançar um jogo: agora existe caminho, e existe jogo
 

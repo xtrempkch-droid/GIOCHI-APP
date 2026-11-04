@@ -56,8 +56,97 @@ const BTN_SELECT: u16 = 314;
 const EVENT_SIZE: usize = 24;
 const EV_KEY: u16 = 0x01;
 
-const LARGURA_LOGICA: f32 = 640.0;
-const ALTURA_LOGICA: f32 = 480.0;
+/// Rotação do painel, na mesma convenção do launcher.
+///
+/// ## Por que o jogo precisa disto
+///
+/// O jogo desenha em **espaço de projeto**, que é paisagem. O X35H tem painel
+/// 640×480 com `rotate=0` e serve a imagem como está; o X55 tem painel
+/// **720×1280 retrato** com `fbcon=rotate:3`, e sem girar o desenho o jogo saía
+/// espremido no canto superior do buffer — medido, 720×1280 com conteúdo nos
+/// primeiros 480 px.
+///
+/// A matemática é a mesma de `app/launcher/crates/ui-sdl/src/draw.rs`, que já
+/// tem teste de ida e volta. Duplicar 12 linhas é melhor que criar dependência
+/// entre o launcher e o jogo: são apps diferentes, e um não pode reclamar do
+/// outro quando quebrar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rotacao {
+    Nenhuma,
+    Cw90,
+    Ccw90,
+}
+
+impl Rotacao {
+    /// Lê a orientação: `GIOCHI_ROTATE` primeiro, depois o que o sistema
+    /// declara.
+    ///
+    /// A variável existe para testar num PC, onde não há
+    /// `/sys/class/graphics/fbcon/rotate`. É a mesma precedência do launcher
+    /// (`crates/ui-sdl/src/display.rs`), de propósito: um comando que gira um
+    /// app tem de girar o outro, senão o teste mente sobre um dos dois.
+    fn do_sistema() -> Self {
+        if let Ok(texto) = std::env::var("GIOCHI_ROTATE") {
+            match texto.trim().to_ascii_lowercase().as_str() {
+                "0" | "none" => return Rotacao::Nenhuma,
+                "90" | "cw" => return Rotacao::Cw90,
+                "270" | "ccw" => return Rotacao::Ccw90,
+                _ => {}
+            }
+        }
+        if let Ok(texto) = std::fs::read_to_string("/sys/class/graphics/fbcon/rotate") {
+            return match texto.trim() {
+                "1" => Rotacao::Cw90,
+                "3" => Rotacao::Ccw90,
+                // `rotate=2` (180°) não é suportado nem no launcher: girar
+                // meia volta exigiria desenhar de cabeça para baixo, e nenhum
+                // painel do projeto precisa disso.
+                _ => Rotacao::Nenhuma,
+            };
+        }
+        Rotacao::Nenhuma
+    }
+
+    /// Retângulo do espaço de projeto → espaço de dispositivo.
+    fn ret(self, design: (i32, i32), x: i32, y: i32, w: i32, h: i32) -> Rect {
+        match self {
+            Rotacao::Nenhuma => Rect::new(x, y, w.max(0) as u32, h.max(0) as u32),
+            // Girar 90° troca largura por altura: um retângulo alinhado aos
+            // eixos continua alinhado, então as medidas apenas invertem.
+            Rotacao::Cw90 => {
+                Rect::new(design.1 - y - h, x, h.max(0) as u32, w.max(0) as u32)
+            }
+            Rotacao::Ccw90 => {
+                Rect::new(y, design.0 - x - w, h.max(0) as u32, w.max(0) as u32)
+            }
+        }
+    }
+
+    /// Tamanho do espaço de projeto para um painel de `out` pixels.
+    fn design(self, out: (u32, u32)) -> (f32, f32) {
+        match self {
+            Rotacao::Nenhuma => (out.0 as f32, out.1 as f32),
+            _ => (out.1 as f32, out.0 as f32),
+        }
+    }
+}
+
+/// Pintor do jogo: guarda a rotação para que **nenhum** `fill_rect` precise
+/// saber dela.
+///
+/// Já esteve espalhado — cada chamada convertia à mão, e a primeira que
+/// esquecesse sairia torta sem aviso.
+struct Tela {
+    rot: Rotacao,
+    design: (i32, i32),
+}
+
+impl Tela {
+    fn retalho(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
+        self.rot
+            .ret(self.design, x as i32, y as i32, w as i32, h as i32)
+    }
+}
 
 fn main() -> Result<(), String> {
     if std::env::args().any(|a| a == "--versao" || a == "--version") {
@@ -75,7 +164,7 @@ fn main() -> Result<(), String> {
     // tamanho fixo num painel diferente do pedido produz letterbox ou recusa —
     // e o tamanho real só é conhecido depois de abrir.
     let janela = video
-        .window("Volley", LARGURA_LOGICA as u32, ALTURA_LOGICA as u32)
+        .window("Volley", 640, 480)
         .fullscreen_desktop()
         .position_centered()
         .build()
@@ -87,17 +176,31 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| format!("canvas: {e}"))?;
 
-    // Desenhamos direto no espaço lógico, que é o do painel: escala 1,0. Assim
-    // a raquete tem sempre o mesmo tamanho em pixel de tela, como no launcher.
+    // O espaço lógico é sempre o **do painel**, então a escala é 1,0 e nada
+    // encolhe. Quem se adapta é o espaço de projeto: num painel retrato ele é a
+    // paisagem de medidas trocadas, e cada retângulo é girado ao ser desenhado.
+    //
+    // Isto já esteve errado: o jogo desenhava paisagem num buffer retrato e o
+    // resultado no X55 foi conteúdo espremido nos primeiros 480 px de 1280.
     let (pw, ph) = canvas.output_size().map_err(|e| format!("output: {e}"))?;
     canvas
         .set_logical_size(pw, ph)
         .map_err(|e| format!("logical: {e}"))?;
 
-    let info = canvas.info();
-    eprintln!("volley: painel {pw}x{ph}, renderer {} ", info.name);
+    let rot = Rotacao::do_sistema();
+    let (dw, dh) = rot.design((pw, ph));
+    let tela = Tela {
+        rot,
+        design: (dw as i32, dh as i32),
+    };
 
-    let mut jogo = Jogo::novo(pw as f32, ph as f32);
+    let info = canvas.info();
+    eprintln!(
+        "volley: painel {pw}x{ph}, projeto {dw}x{dh} ({rot:?}), renderer {}",
+        info.name
+    );
+
+    let mut jogo = Jogo::novo(dw, dh);
     let mut events = sdl.event_pump()?;
     let mut ultimo = Instant::now();
 
@@ -113,7 +216,7 @@ fn main() -> Result<(), String> {
         for _ in 0..90 {
             jogo.atualizar(1.0 / 60.0, false, false, false);
         }
-        jogo.desenhar(&mut canvas);
+        jogo.desenhar(&mut canvas, &tela);
         salvar_quadro(&mut canvas, &destino)?;
         println!("quadro: {destino} ({pw}x{ph})");
         return Ok(());
@@ -151,7 +254,7 @@ fn main() -> Result<(), String> {
         }
 
         jogo.atualizar(dt, cima, baixo, saque);
-        jogo.desenhar(&mut canvas);
+        jogo.desenhar(&mut canvas, &tela);
         canvas.present();
     }
 
@@ -372,7 +475,7 @@ impl Jogo {
         self.pontos_cpu = 0;
     }
 
-    fn desenhar(&mut self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
+    fn desenhar(&mut self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>, tela: &Tela) {
         canvas.set_draw_color(Color::RGB(11, 12, 20));
         canvas.clear();
 
@@ -382,11 +485,11 @@ impl Jogo {
         let passo = (self.altura / 24.0).max(6.0);
         let mut y = 0.0;
         while y < self.altura {
-            let _ = canvas.fill_rect(Rect::new(
-                (self.largura / 2.0 - 1.0) as i32,
-                y as i32,
-                2,
-                (passo * 0.55) as u32,
+            let _ = canvas.fill_rect(tela.retalho(
+                self.largura / 2.0 - 1.0,
+                y,
+                2.0,
+                passo * 0.55,
             ));
             y += passo;
         }
@@ -394,29 +497,29 @@ impl Jogo {
         let espessura = (self.largura * 0.018).max(6.0);
 
         canvas.set_draw_color(Color::RGB(96, 165, 250));
-        let _ = canvas.fill_rect(Rect::new(
-            self.margem as i32,
-            (self.raquete_y - self.raquete_h / 2.0) as i32,
-            espessura as u32,
-            self.raquete_h as u32,
+        let _ = canvas.fill_rect(tela.retalho(
+            self.margem,
+            self.raquete_y - self.raquete_h / 2.0,
+            espessura,
+            self.raquete_h,
         ));
 
         canvas.set_draw_color(Color::RGB(248, 113, 113));
-        let _ = canvas.fill_rect(Rect::new(
-            (self.largura - self.margem - espessura) as i32,
-            (self.cpu_y - self.raquete_h / 2.0) as i32,
-            espessura as u32,
-            self.raquete_h as u32,
+        let _ = canvas.fill_rect(tela.retalho(
+            self.largura - self.margem - espessura,
+            self.cpu_y - self.raquete_h / 2.0,
+            espessura,
+            self.raquete_h,
         ));
 
         if self.em_jogo {
             canvas.set_draw_color(Color::RGB(241, 245, 249));
             let d = self.raio * 2.0;
-            let _ = canvas.fill_rect(Rect::new(
-                (self.bola_x - self.raio) as i32,
-                (self.bola_y - self.raio) as i32,
-                d as u32,
-                d as u32,
+            let _ = canvas.fill_rect(tela.retalho(
+                self.bola_x - self.raio,
+                self.bola_y - self.raio,
+                d,
+                d,
             ));
         }
 
@@ -426,6 +529,7 @@ impl Jogo {
         let branco = Color::RGB(203, 213, 225);
         numero(
             canvas,
+            tela,
             self.pontos_jogador,
             (self.largura * 0.30) as i32,
             topo,
@@ -434,6 +538,7 @@ impl Jogo {
         );
         numero(
             canvas,
+            tela,
             self.pontos_cpu,
             (self.largura * 0.62) as i32,
             topo,
@@ -450,6 +555,7 @@ impl Jogo {
 /// é a única coisa que precisa ser lida.
 fn numero(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    tela: &Tela,
     valor: u32,
     x: i32,
     y: i32,
@@ -482,7 +588,12 @@ fn numero(
         let g = (0, l / 2, h + t, t);
         for (i, seg) in [a, b, c, d, e, f, g].into_iter().enumerate() {
             if segmento_aceso(casa, i) {
-                let _ = canvas.fill_rect(Rect::new(ox + seg.0, y + seg.1, seg.2 as u32, seg.3 as u32));
+                let _ = canvas.fill_rect(tela.retalho(
+                    (ox + seg.0) as f32,
+                    (y + seg.1) as f32,
+                    seg.2 as f32,
+                    seg.3 as f32,
+                ));
             }
         }
         deslocamento = h + t * 3;

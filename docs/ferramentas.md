@@ -121,9 +121,10 @@ bash scripts/aparelho.sh verificar
    pixel a pixel com a referência;
 6. sobe o launcher de novo, se ele estava rodando antes.
 
-No X55 o resultado é **99,9 %** de acerto. Rodar com a rotação oposta cai para
-**10,9 %** — é essa diferença que separa "desenhou certo" de "desenhou de ponta
-a cabeça", e foi o que resolveu o bug de orientação.
+No X55 o resultado é **98,9 %** de acerto (99,9 % no X35H); o que difere é o
+relógio da barra superior, que muda entre as duas capturas. Rodar com a rotação
+oposta cai para **10,9 %** — é essa diferença que separa "desenhou certo" de
+"desenhou de ponta a cabeça", e foi o que resolveu o bug de orientação.
 
 Os quadros ficam em `dist/testes/<data>/frame.png` (ignorado pelo git), para
 inspeção visual depois.
@@ -212,6 +213,29 @@ assimétrica no arquivo, sem reprovar o quadro. O que continua válido:
 
 Regra na mesma família de "biblioteca presente não prova uso": **o BMP prova o
 conteúdo, não a posição.**
+
+### Duas coisas que a referência do PC precisa ter
+
+A comparação de `verificar` só vale se os dois lados desenharem **a mesma
+entrada no mesmo espaço**. As duas já estiveram erradas, e nos dois casos o
+launcher levou a culpa:
+
+1. **O mesmo catálogo.** Sem isto o aparelho desenhava `/opt/giochi/apps/index.json`
+   e o PC o catálogo de demonstração. Medido no X35H: 99,4% → **97,8%** sem
+   nenhuma regressão de desenho, só porque a Home tinha um jogo de um lado e
+   quatro do outro. `gerar_referencia` copia o `index.json` do aparelho e passa
+   por `GIOCHI_CATALOGO`.
+
+2. **O mesmo espaço — paisagem.** `comparar` des-rotaciona a captura e compara no
+   **espaço de projeto**. Num painel retrato (X55: 720×1280, `rotate=3`) a
+   captura é retrato e, des-rotacionada, fica 1280×720; gerar a referência no
+   modo do painel dá 720×1280 e o resultado é
+   `dimensões incompatíveis: captura 1280x720 vs referência 720x1280`.
+   `gerar_referencia` agora troca as medidas quando o tamanho é retrato, porque o
+   launcher desenha em paisagem nos dois casos (`projecao()` faz o mesmo).
+
+Depois das duas correções o X55 fecha em **98,9%** — o que falta é o relógio da
+barra superior e a bateria, que mudam entre as duas capturas.
 
 ### A armadilha do driver de vídeo
 
