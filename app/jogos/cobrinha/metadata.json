@@ -1,0 +1,10 @@
+{
+  "title": "Cobrinha",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-cobrinha",
+  "license": "Proprietary",
+  "releaseYear": 2026
+}

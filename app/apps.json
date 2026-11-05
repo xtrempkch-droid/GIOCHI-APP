@@ -38,6 +38,24 @@
       "note": "Jogo nativo em Rust+SDL2, escrito neste repositório. Existe para exercitar o caminho lançar/voltar do launcher num aparelho sem runtime Godot."
     },
     {
+      "id": "pacman",
+      "folder": "jogos/pacman",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo nativo em Rust+SDL2. Labirinto 21x21, quatro fantasmas com perseguicao distinta. Exercita ciclo de vida com estado."
+    },
+    {
+      "id": "cobrinha",
+      "folder": "jogos/cobrinha",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo nativo em Rust+SDL2. Grade 24 colunas, passos discretos. Segundo item do catalogo."
+    },
+    {
       "id": "arcade-volleyball",
       "folder": "jogos/arcade-volleyball",
       "runtime": "godot",

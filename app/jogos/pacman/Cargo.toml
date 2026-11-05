@@ -1,0 +1,22 @@
+[package]
+name = "giochi-pacman"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+rust-version = "1.75"
+description = "Pac-Man — jogo embarcado de exemplo do Giochi"
+
+[[bin]]
+name = "giochi-pacman"
+path = "src/main.rs"
+
+[dependencies]
+# Só SDL2, como o volley: sem ttf, sem asound, sem image. Três `NEEDED`.
+sdl2 = { version = "0.37" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,10 @@
+{
+  "title": "Pac-Man",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-pacman",
+  "license": "Proprietary",
+  "releaseYear": 2026
+}

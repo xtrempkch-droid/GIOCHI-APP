@@ -3,8 +3,9 @@
 # instala em `/opt/giochi/apps/volley/bin`.
 #
 # Uso:
-#   bash scripts/compilar-jogo-arm64.sh
-#   bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2
+#   bash scripts/compilar-jogo-arm64.sh                       # compila o volley
+#   bash scripts/compilar-jogo-arm64.sh --jogo pacman         # outro jogo
+#   bash scripts/compilar-jogo-arm64.sh --jogo cobrinha --instalar 10.55.0.2
 #
 # ## Por que um script separado, e não uma opção no do launcher
 #
@@ -25,7 +26,9 @@
 set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JOGO="$RAIZ/app/jogos/volley"
+# Padrão: o primeiro jogo, que é o que existe há mais tempo. `--jogo` escolhe
+# outro. Um script por jogo seria três scripts para o mesmo link.
+NOME_JOGO="volley"
 ALVO="aarch64-unknown-linux-gnu"
 CACHE="${GIOCHI_ARM64_CACHE:-$HOME/.cache/giochi-arm64}"
 SYSROOT="$CACHE/sysroot"
@@ -34,6 +37,8 @@ INSTALAR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --jogo) NOME_JOGO="${2:-}"; shift 2 ;;
+    --jogo=*) NOME_JOGO="${1#*=}"; shift ;;
     --instalar) INSTALAR="${2:-}"; shift 2 ;;
     --instalar=*) INSTALAR="${1#*=}"; shift ;;
     -h|--ajuda)
@@ -46,6 +51,10 @@ done
 VERDE=$'\033[32m'; VERMELHO=$'\033[31m'; ZERA=$'\033[0m'
 ok()  { printf '  %sok%s   %s\n' "$VERDE" "$ZERA" "$*"; }
 erro(){ printf '  %sERRO%s %s\n' "$VERMELHO" "$ZERA" "$*" >&2; exit 1; }
+
+JOGO="$RAIZ/app/jogos/$NOME_JOGO"
+BINARIO="giochi-$NOME_JOGO"
+[ -f "$JOGO/Cargo.toml" ] || erro "jogo desconhecido: $NOME_JOGO (esperado em app/jogos/<nome>)"
 
 # ── 1. o cache do cross-compile precisa existir ─────────────
 # Sem ele não há como linkar: `rust-lld` sozinho produz um ELF sem `PT_INTERP`
@@ -83,10 +92,10 @@ if [ -n "${GIOCHI_SDL2_PREFIX:-}" ] || [ -d "$HOME/.cache/giochi-sdl2/root" ]; t
 fi
 
 cd "$JOGO"
-echo "  compilando giochi-volley para $ALVO..."
+echo "  compilando $BINARIO para $ALVO..."
 cargo build --release --target "$ALVO" --offline 2>&1 | grep -vE "^\s*(Compiling|Finished|Downloading)" || true
 
-BIN="$JOGO/target/$ALVO/release/giochi-volley"
+BIN="$JOGO/target/$ALVO/release/$BINARIO"
 [ -f "$BIN" ] || erro "binário não gerado em $BIN"
 
 # Sem `PT_INTERP` o kernel mata o processo na hora, e `file` ainda diz que o ELF
@@ -99,26 +108,26 @@ if command -v readelf >/dev/null 2>&1; then
 fi
 
 mkdir -p "$JOGO/bin"
-cp "$BIN" "$JOGO/bin/giochi-volley"
-chmod +x "$JOGO/bin/giochi-volley"
-ok "pronto: $JOGO/bin/giochi-volley ($(du -h "$BIN" | cut -f1))"
+cp "$BIN" "$JOGO/bin/$BINARIO"
+chmod +x "$JOGO/bin/$BINARIO"
+ok "pronto: $JOGO/bin/$BINARIO ($(du -h "$BIN" | cut -f1))"
 
 # ── 3. instalar ─────────────────────────────────────────────
 if [ -n "$INSTALAR" ]; then
   HOST="${INSTALAR#root@}"
-  DESTINO="/opt/giochi/apps/volley/bin"
+  DESTINO="/opt/giochi/apps/$NOME_JOGO/bin"
   filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
 
   echo "  instalando em root@$HOST:$DESTINO"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "$JOGO/bin/giochi-volley" "root@$HOST:$DESTINO/giochi-volley" 2>&1 | filtrar_ruido
+    "$JOGO/bin/$BINARIO" "root@$HOST:$DESTINO/$BINARIO" 2>&1 | filtrar_ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
-    "chmod 755 $DESTINO/giochi-volley; sha256sum $DESTINO/giochi-volley" 2>&1 | filtrar_ruido
+    "chmod 755 $DESTINO/$BINARIO; sha256sum $DESTINO/$BINARIO" 2>&1 | filtrar_ruido
 
-  LOCAL=$(sha256sum "$JOGO/bin/giochi-volley" | cut -d' ' -f1)
+  LOCAL=$(sha256sum "$JOGO/bin/$BINARIO" | cut -d' ' -f1)
   REMOTO=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
-    "sha256sum $DESTINO/giochi-volley 2>/dev/null | cut -d' ' -f1" 2>/dev/null | filtrar_ruido)
+    "sha256sum $DESTINO/$BINARIO 2>/dev/null | cut -d' ' -f1" 2>/dev/null | filtrar_ruido)
   if [ "$LOCAL" = "$REMOTO" ]; then
     ok "sha256 idêntico (${LOCAL:0:16}…)"
   else

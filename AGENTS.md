@@ -275,7 +275,9 @@ Giochi app/
 │   ├── forge/                 # empacotador/classificador (host, roda no PC)
 │   ├── store/                 # loja (host, roda no PC)
 │   ├── jogos/                 # GRUPO: não é app, não tem metadata.json
-│   │   ├── volley/            # JOGO NATIVO QUE RODA (Rust+SDL2) — ver §12
+│   │   ├── pacman/            # nativo, labirinto 21x21, 4 fantasmas
+│   │   ├── cobrinha/          # nativo, grade discreta
+│   │   ├── volley/            # nativo (Rust+SDL2) — ver §12
 │   │   ├── arcade-volleyball/     # jogo padrão (image, godot)
 │   │   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
 │   │   ├── spacewar/          # jogo padrão (image, godot)
@@ -699,7 +701,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Renderer `opengles2` | **abre no X35H** — acelerado, textura máx 8192x8192 |
 | Leitura do catálogo (`index.json`) | **no aparelho** — `catálogo: 1 app(s)` |
 | Lançar jogo e voltar | **no aparelho** — volley rodou e o launcher voltou com texto |
-| Jogo instalável que roda | **`app/jogos/volley`** — o único; os Godot seguem sem `bin/` |
+| Jogos instaláveis que rodam | **3**: `pacman`, `cobrinha`, `volley` — os Godot seguem sem `bin/` |
+| Catálogo com 3 itens | **medido no X55** — `catálogo: 3 app(s)`, os 3 abrem por `--lancar` |
 | Jogo em painel retrato (X55) | **gira** — `projeto 1280x720 (Ccw90)`, preenche o painel |
 | Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
 | Analógico / desempenho (FPS) | **não exercitados** |
@@ -870,6 +873,28 @@ O selftest do X55 mostra duas coisas que o launcher **não lê** e poderia:
 Os arquivos existem nos dois aparelhos; a UI mostra `—` porque ler
 `/sys/class/power_supply` e `/sys/class/thermal` nunca foi implementado. É
 trabalho de UI, não de sistema.
+
+### PRIORIDADE: detecção automática de jogos
+
+**Pedido do dono do projeto em 04/11/2026. É a primeira coisa da próxima
+sessão.** Desenho completo em [`docs/teste-x35h.md`](docs/teste-x35h.md).
+
+Estado: o catálogo do aparelho (`/opt/giochi/apps/index.json`) é um JSON
+**escrito à mão**. Ele não deriva de nada — nem do `apps.json`, nem dos
+`metadata.json`. Instalei `cobrinha` e `pacman` hoje e o aparelho continuou
+mostrando **um** jogo até eu reescrever o arquivo à mão; um app instalado fora
+do JSON fica invisível sem erro nenhum.
+
+O que falta: `bash scripts/aparelho.sh catalogo`, que gera o índice a partir de
+`app/apps.json` + os `metadata.json` e envia por `scp`. **O catálogo é projeção,
+não segunda fonte da verdade** — é a mesma lição do `releaseYear`, que precisou
+entrar em três lugares para não divergir.
+
+Cinco armadilhas já mapeadas no documento, todas observadas hoje: `folder` com
+grupo (`jogos/pacman` → `id` `pacman`, `dir` `/opt/giochi/apps/pacman`), filtro
+por `status`, `distribution` (`host` e `store` não vão para a imagem),
+`entrypoint` que precisa existir no disco, e o `dir` do aparelho que **não** é
+derivável do caminho no repositório.
 
 ### Lançar um jogo: agora existe caminho, e existe jogo
 
