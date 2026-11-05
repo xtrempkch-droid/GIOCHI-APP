@@ -922,8 +922,35 @@ impl Painter {
                     Align::Center => x - width / 2,
                     Align::Right => x - width,
                 };
-                let dst = Rect::new(dx, y, surface.width(), surface.height());
-                let _ = self.canvas.copy(&texture, None, Some(dst));
+                // Texto é **desenho**: precisa girar como todo o resto.
+                //
+                // Já esteve fora da rotação — `copy` num retângulo de espaço de
+                // projeto, enquanto `fill_rect`/`stroke` passavam por
+                // `rotate_rect`. Num painel retrato o resultado era o pior tipo
+                // de bug: a interface desenhada deitada certa e o texto a 90°
+                // dela. Medido no X55 (720×1280, `rotate=3`), relatado por quem
+                // estava olhando a tela.
+                //
+                // Passou despercebido porque nenhuma verificação olhava para
+                // um glifo: a comparação pixel a pixel fechava em 98,9% (texto
+                // é pouca área) e a miniatura do quadro não mostra rotação de
+                // fonte. **Só se vê lendo.**
+                let r = rotate_rect(self.rot, self.design, dx, y, width, surface.height() as i32);
+                let dst = Rect::new(r.0, r.1, r.2.max(0) as u32, r.3.max(0) as u32);
+                match self.rot {
+                    Rotation::None => {
+                        let _ = self.canvas.copy(&texture, None, Some(dst));
+                    }
+                    // `copy_ex` gira a textura em torno do centro do
+                    // destino. Girar 90° troca largura por altura, e é
+                    // `rotate_rect` quem já fez essa troca.
+                    Rotation::Cw90 | Rotation::Ccw90 => {
+                        let angulo = if self.rot == Rotation::Cw90 { 90.0 } else { 270.0 };
+                        let _ = self.canvas.copy_ex(
+                            &texture, None, Some(dst), angulo, None, false, false,
+                        );
+                    }
+                }
             }
         }
 
