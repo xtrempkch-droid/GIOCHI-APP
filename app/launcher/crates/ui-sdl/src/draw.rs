@@ -916,39 +916,56 @@ impl Painter {
 
         if let Ok(surface) = rendered {
             width = surface.width() as i32;
+            let destino = match align {
+                Align::Left => x,
+                Align::Center => x - width / 2,
+                Align::Right => x - width,
+            };
+            // Texto é **desenho**: precisa girar como todo o resto.
+            //
+            // Já esteve fora da rotação — `copy` num retângulo de espaço de
+            // projeto enquanto `fill_rect`/`stroke` passavam por `rotate_rect`.
+            // Num painel retrato o resultado era o pior tipo de bug: interface
+            // deitada certa e texto a 90° dela. Medido no X55 e relatado por
+            // quem estava olhando a tela.
+            //
+            // ## Por que o retângulo de destino NÃO é o girado
+            //
+            // `SDL_RenderCopyEx` **escala a textura para caber no destino e só
+            // depois gira**. Passar aqui o retângulo de medidas trocadas (o que
+            // `rotate_rect` devolve para 90°) comprime o texto antes de girá-lo:
+            // ele sai deformado, e ainda "parece" um texto girado.
+            //
+            // O que denunciou foi contar pixels claros — **611 no aparelho
+            // contra 1275 no PC**, com a mesma caixa e o mesmo aspecto.
+            // Percentual de acerto não vê isso; olhar de longe também não.
+            //
+            // A saída é deixar o destino no tamanho **original** e ancorá-lo no
+            // **centro do retângulo girado**. Sem mudança de tamanho não há
+            // escala, e girar em torno do centro mantém o centro — então o
+            // resultado cai exatamente onde `rotate_rect` mandou.
+            let altura_txt = surface.height() as i32;
+            let girado = rotate_rect(self.rot, self.design, destino, y, width, altura_txt);
+            let (cx, cy) = (girado.0 + girado.2 / 2, girado.1 + girado.3 / 2);
+            let dst = match self.rot {
+                Rotation::None => Rect::new(destino, y, width as u32, altura_txt as u32),
+                _ => Rect::new(
+                    cx - width / 2,
+                    cy - altura_txt / 2,
+                    width.max(0) as u32,
+                    altura_txt.max(0) as u32,
+                ),
+            };
             if let Ok(texture) = self.creator.create_texture_from_surface(&surface) {
-                let dx = match align {
-                    Align::Left => x,
-                    Align::Center => x - width / 2,
-                    Align::Right => x - width,
-                };
-                // Texto é **desenho**: precisa girar como todo o resto.
-                //
-                // Já esteve fora da rotação — `copy` num retângulo de espaço de
-                // projeto, enquanto `fill_rect`/`stroke` passavam por
-                // `rotate_rect`. Num painel retrato o resultado era o pior tipo
-                // de bug: a interface desenhada deitada certa e o texto a 90°
-                // dela. Medido no X55 (720×1280, `rotate=3`), relatado por quem
-                // estava olhando a tela.
-                //
-                // Passou despercebido porque nenhuma verificação olhava para
-                // um glifo: a comparação pixel a pixel fechava em 98,9% (texto
-                // é pouca área) e a miniatura do quadro não mostra rotação de
-                // fonte. **Só se vê lendo.**
-                let r = rotate_rect(self.rot, self.design, dx, y, width, surface.height() as i32);
-                let dst = Rect::new(r.0, r.1, r.2.max(0) as u32, r.3.max(0) as u32);
                 match self.rot {
                     Rotation::None => {
                         let _ = self.canvas.copy(&texture, None, Some(dst));
                     }
-                    // `copy_ex` gira a textura em torno do centro do
-                    // destino. Girar 90° troca largura por altura, e é
-                    // `rotate_rect` quem já fez essa troca.
-                    Rotation::Cw90 | Rotation::Ccw90 => {
-                        let angulo = if self.rot == Rotation::Cw90 { 90.0 } else { 270.0 };
-                        let _ = self.canvas.copy_ex(
-                            &texture, None, Some(dst), angulo, None, false, false,
-                        );
+                    Rotation::Cw90 => {
+                        let _ = self.canvas.copy_ex(&texture, None, Some(dst), 90.0, None, false, false);
+                    }
+                    Rotation::Ccw90 => {
+                        let _ = self.canvas.copy_ex(&texture, None, Some(dst), 270.0, None, false, false);
                     }
                 }
             }

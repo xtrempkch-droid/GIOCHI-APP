@@ -12,6 +12,7 @@ import { test } from "node:test";
 import {
   analisar,
   comparar,
+  correlacaoDeTexto,
   desRotacionar,
   gravarPng,
   lerBmp,
@@ -286,4 +287,39 @@ test("medirFaixas dá zero quando não há faixa", () => {
     assert.equal(r.base, 0);
     assert.equal(r.pct, 0);
   });
+});
+
+// Orientação de texto: a medida que pega um bug que percentual não pega.
+//
+// O launcher desenhou a interface deitada certa e os glifos a 90° dela. A
+// comparação pixel a pixel fechava em 98,9% — texto é pouca área. O que
+// denuncia é o perfil: texto deitado tem picos nas LINHAS, girado, nas COLUNAS.
+test("correlação de texto separa deitado de girado", () => {
+  const W = 120;
+  const H = 120;
+  // Três faixas claras. `deitado` = horizontais; `girado` = as mesmas, a 90°.
+  const faixas = (vertical) => {
+    const tela = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = vertical ? x : y;
+        const claro = i % 20 < 8;
+        tela.push(claro ? [255, 255, 255] : [20, 20, 20]);
+      }
+    }
+    return { largura: W, altura: H, em: (x, y) => tela[y * W + x] };
+  };
+
+  const deitado = faixas(false);
+  const girado = faixas(true);
+
+  const igual = correlacaoDeTexto(deitado, deitado);
+  assert.ok(igual.porLinha > 0.99, `idêntico deveria dar ~1, deu ${igual.porLinha}`);
+
+  const virado = correlacaoDeTexto(girado, deitado);
+  assert.ok(
+    virado.porColuna > virado.porLinha,
+    `girado 90° deveria preferir colunas (linhas ${virado.porLinha.toFixed(2)}, ` +
+      `colunas ${virado.porColuna.toFixed(2)})`
+  );
 });

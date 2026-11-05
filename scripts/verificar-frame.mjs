@@ -200,6 +200,74 @@ function medirFaixas(img) {
   return { topo, base, pct: (100 * (topo + base)) / Math.max(1, img.altura) };
 }
 
+/**
+ * Correlação de perfil de linha entre captura e referência.
+ *
+ * ## Por que existe
+ *
+ * O launcher desenhava o texto **fora da rotação**: a interface saía deitada
+ * certa e os glifos a 90° dela. Isso passou por três verificações sem ser visto:
+ *
+ * - a comparação pixel a pixel fechava em 98,9% (texto é pouca área);
+ * - `verificar-telas.mjs` mede margem, não orientação de glifo;
+ * - a miniatura do quadro não mostra rotação de fonte.
+ *
+ * A medida que pega: contar pixels claros por **linha** nos dois lados e
+ * correlacionar. Texto deitado tem picos nas linhas; girado 90°, nas colunas.
+ * Medido no X55: **0,959** linhas×linhas contra **-0,059** linhas×colunas.
+ *
+ * Foi assim que um bug relatado como de tela se provou, e depois se corrigiu —
+ * e no caminho denunciou a primeira correção errada (`copy_ex` encolhia o
+ * texto: 611 pixels claros contra 1275 do PC, com a mesma caixa).
+ *
+ * @returns {{ porLinha: number, porColuna: number }}
+ */
+function correlacaoDeTexto(captura, referencia) {
+  const claro = (img, x, y) => {
+    const [r, g, b] = img.em(x, y);
+    return r > 195 && g > 195 && b > 195;
+  };
+  const perfil = (img, porLinha, largura, altura) => {
+    const n = porLinha ? altura : largura;
+    const m = porLinha ? largura : altura;
+    const out = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      let c = 0;
+      for (let j = 0; j < m; j++) {
+        if (porLinha ? claro(img, j, i) : claro(img, i, j)) c++;
+      }
+      out[i] = c;
+    }
+    return out;
+  };
+  const corr = (a, b) => {
+    const ma = a.reduce((s, v) => s + v, 0) / a.length;
+    const mb = b.reduce((s, v) => s + v, 0) / b.length;
+    let num = 0;
+    let da = 0;
+    let db = 0;
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i] - ma;
+      const y = b[i] - mb;
+      num += x * y;
+      da += x * x;
+      db += y * y;
+    }
+    return da && db ? num / Math.sqrt(da * db) : 0;
+  };
+  const { largura, altura } = referencia;
+  return {
+    porLinha: corr(
+      perfil(referencia, true, largura, altura),
+      perfil(captura, true, largura, altura)
+    ),
+    porColuna: corr(
+      perfil(referencia, true, largura, altura),
+      perfil(captura, false, largura, altura)
+    ),
+  };
+}
+
 function comparar(captura, referencia, rotacao, tolerancia, emitir = console.log) {
   const paisagem = desRotacionar(captura, rotacao);
   if (paisagem.largura !== referencia.largura || paisagem.altura !== referencia.altura) {
@@ -222,7 +290,19 @@ function comparar(captura, referencia, rotacao, tolerancia, emitir = console.log
   }
   const pct = (100 * iguais) / Math.max(1, total);
   emitir(`  comparação: ${pct.toFixed(1)}% de acerto (tolerância ${tolerancia}, ${total} amostras)`);
-  return { pctAcerto: pct };
+
+  // Orientação do texto. Percentual de acerto **não** aprova tipografia: um
+  // erro de rotação nos glifos move poucos pixels. Ver `correlacaoDeTexto`.
+  const texto = correlacaoDeTexto(paisagem, referencia);
+  if (texto.porLinha < 0.5 && texto.porColuna > texto.porLinha) {
+    emitir(
+      `  ATENÇÃO: o texto parece girado 90° (linhas ${texto.porLinha.toFixed(2)} ` +
+        `× colunas ${texto.porColuna.toFixed(2)})`
+    );
+  } else {
+    emitir(`  texto: orientação ok (linhas ${texto.porLinha.toFixed(2)})`);
+  }
+  return { pctAcerto: pct, texto };
 }
 
 // ── linha de comando ────────────────────────────────────────
@@ -257,7 +337,7 @@ preto, ou menos de 90% de acerto na comparação.
 `);
 }
 
-export { analisar, comparar, desRotacionar, gravarPng, lerBmp, medirFaixas };
+export { analisar, comparar, correlacaoDeTexto, desRotacionar, gravarPng, lerBmp, medirFaixas };
 
 function principal() {
   let args;
