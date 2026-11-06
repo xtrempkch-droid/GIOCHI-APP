@@ -79,6 +79,9 @@ for PACOTE in "$PASTA"/*.giochi; do
         FALHOU=$((FALHOU + 1))
         continue
       fi
+      # Confirma em voz alta, pelo mesmo motivo da assinatura: sem esta linha,
+      # "conferiu e passou" e "não conferiu" produzem a mesma saída.
+      echo "  $NOME: sha256 confere"
     else
       echo "  $NOME: aviso — manifesto sem sha256; seguindo só com a extração"
     fi

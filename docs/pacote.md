@@ -298,10 +298,15 @@ Com verificador **e** chave em `/etc/giochi/loja-publica.pem`, o
 `instalar-do-cartao.sh` recusa antes de extrair:
 
 ```text
+arcade-volleyball.giochi: sha256 confere
 arcade-volleyball.giochi: assinatura confere
 arcade-volleyball.giochi: instalado em /user/apps/arcade-volleyball
 RESUMO 1 instalado(s), 0 recusado(s), 1 encontrado(s)
 ```
+
+As duas verificações **falam** no sucesso. A primeira versão verificava em
+silêncio, e `OK` sem mensagem é indistinguível de "não verifiquei" — defeito
+espelhado do silêncio no fracasso.
 
 Pacote adulterado, no aparelho:
 
@@ -317,9 +322,8 @@ teste.giochi: aviso — sem verificador, assinatura não verificada
 teste.giochi: aviso — sem chave em /etc/giochi/loja-publica.pem, assinatura não verificada
 ```
 
-**Silêncio no sucesso era um defeito.** A primeira versão verificava e não dizia
-nada, o que torna "verificou e passou" indistinguível de "não verificou". Agora
-imprime `assinatura confere`.
+**Silêncio no sucesso era um defeito, nas duas verificações.** Ambas passaram a
+imprimir quando conferem.
 
 #### O que continua faltando
 

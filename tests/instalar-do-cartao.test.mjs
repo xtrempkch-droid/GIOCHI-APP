@@ -131,6 +131,7 @@ test("pacote íntegro é instalado e o catálogo é atualizado", () => {
     const { codigo, saida } = instalar({ cartao, apps, destino, launcher });
 
     assert.equal(codigo, 0, saida);
+    assert.match(saida, /teste\.giochi: sha256 confere/);
     assert.match(saida, /teste\.giochi: instalado em/);
     assert.match(saida, /RESUMO 1 instalado\(s\), 0 recusado\(s\)/);
     assert.ok(existsSync(path.join(destino, "teste", "metadata.json")), "app não foi extraído");
