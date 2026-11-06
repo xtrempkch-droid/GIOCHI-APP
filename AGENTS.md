@@ -236,21 +236,22 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
 - **Empacotador `.giochi` e assinatura Ed25519: feitos** (§13). O que falta é a
   **verificação da assinatura no aparelho** — hoje o instalador confere SHA-256,
   tamanho e a estrutura, mas o Ed25519 só é verificado no PC (`verificar-pacote.mjs`).
-- **Texto: o X55 em uso é a imagem ANTIGA (03/11) e não tem `SDL2_ttf`.** O
-  X35H roda a imagem nova, com as libs, e desenha texto sozinho. Não confie no
-  nome do aparelho para decidir: o `compilar-launcher-arm64.sh` **pergunta ao
-  aparelho** se `libSDL2_ttf` existe e compila com ou sem a feature conforme a
-  resposta.
+- **Texto: RESOLVIDO no X55 — ele já roda a imagem de 04/11.** Medido em
+  06/11/2026: `/proc/version` diz kernel compilado em `Wed Nov 4 21:04:03 UTC
+  2026`, e o `giochi-selftest` já tem o bloco "bibliotecas do launcher", que só
+  existe na imagem nova. As cinco `.so` de texto e o `DejaVuSans.ttf` são da
+  imagem — **não** são mais a cópia manual que esta seção registrava como
+  paliativo. O `readelf` continua ausente, então o selftest segue pulando a prova
+  de que o `SDL2_ttf` usa harfbuzz.
 
-  **A imagem nova do X55 existe em `out/powkiddy-x55/` (04/11 21:22 UTC, mesmo
-  commit `70d86a1` da do X35H) e tem as 5 bibliotecas** — conferido com `debugfs`
-  no `rootfs.ext4`. Ela só não está gravada no cartão.
+  A cópia manual de `libSDL2_ttf`/`libfreetype`/`libharfbuzz`/`DejaVuSans.ttf`
+  para `/usr/lib` foi o que permitiu testar enquanto o cartão não era regravado;
+  com a imagem nova gravada, ela se tornou redundante.
 
-  Enquanto isso, o X55 em uso foi desbloqueado copiando para `/usr/lib` as três
-   bibliotecas que faltavam (`libSDL2_ttf`, `libfreetype`, `libharfbuzz`) e a
-  fonte `DejaVuSans.ttf`, **extraídas do `rootfs.ext4` oficial** da imagem nova.
-   É medida temporária e reversível: gravar a imagem nova torna os arquivos
-   redundantes. Não é o caminho recomendado — é o que permite testar hoje.
+  Não confie no nome do aparelho para decidir: o `compilar-launcher-arm64.sh`
+  **pergunta ao aparelho** se `libSDL2_ttf` existe e compila com ou sem a feature
+  conforme a resposta. Foi essa pergunta que evitou um binário sem glifos quando
+  a resposta era "não".
 - **GLES2: medido no X35H, e é acelerado.** `GIOCHI_GLES=1` sobre KMSDRM abre
   `opengles2` com `textura máx 8192x8192`; sem a variável, `software`. O launcher
   anuncia qual backend abriu de fato na abertura (ver `Painter::new`), porque
@@ -1901,6 +1902,36 @@ número, significados opostos — então `--min-cores` passou a ser do chamador
 (padrão 3; use 8 para o launcher). A heurística saiu de dentro do `principal()`
 para `avaliarQuadro()`, que é pura e tem 4 testes; reintroduzir o limiar 8 faz o
 teste falhar, como manda a regra.
+
+### O jogo não pede nada à imagem — e isso é projeto, não sorte
+
+Medido **do processo vivo** (`/proc/<pid>/maps` de um `arcade-volleyball` rodando
+por KMSDRM), que separa "declara" de "usa". Quinze bibliotecas carregadas, **todas
+já na imagem**:
+
+| Diretas (as 6 `DT_NEEDED`) | Transitive (9, do SDL2/GLES) |
+| --- | --- |
+| `libSDL2-2.0.so.0` (2.28.5) | `libdrm.so.2`, `libgbm.so.1` |
+| `libstdc++.so.6` (6.0.30) | `libEGL.so.1`, `libGLESv2.so.2`, `libglapi.so.0` |
+| `libm.so.6`, `libgcc_s.so.1` | `dri/rockchip_dri.so` (Mesa do RK3566) |
+| `libc.so.6` (glibc 2.38) | `libz.so.1`, `libzstd.so.1`, `libexpat.so.1` |
+| `ld-linux-aarch64.so.1` | |
+
+**Diferença: zero.** A prova mais forte é o que o pacote instalou — três
+arquivos, nenhuma biblioteca (`metadata.json`, `capa.png`, `bin/arcade-volleyball`).
+
+O motivo é a decisão de desenho do port: **sem fonte e sem áudio**. O placar é
+desenhado em sete segmentos de retângulo, o resto são retângulos/linhas/círculo.
+Nenhuma chamada a `SDL_ttf`, nenhuma a `libasound`. Custa um placar menos bonito
+e economiza quatro dependências, uma fonte e a discussão de licença dela.
+
+| App | Precisa a mais |
+| --- | --- |
+| launcher | `SDL2_ttf`, `freetype`, `harfbuzz`, fonte TTF |
+| `arcade-volleyball`, `volley`, `pacman`, `cobrinha` | **nada** |
+
+Replicável: é a regra para jogo neste projeto. Detalhe em
+[`docs/dependencias-aparelho.md`](docs/dependencias-aparelho.md#o-que-o-arcade-volleyball-precisa-nada).
 
 ### Como reconstruir
 

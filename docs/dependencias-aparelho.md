@@ -26,6 +26,14 @@ está abaixo.
 | `/dev/input/event*` | 5 dispositivos | evdev |
 | `/dev/dri/card0` | tem | KMSDRM |
 
+> **Atualização de 06/11/2026: o X55 já roda a imagem de 04/11.** Medido pelo
+> `/proc/version` (kernel compilado em `Wed Nov 4 21:04:03 UTC 2026`) e pelo
+> `giochi-selftest`, que já tem o bloco "bibliotecas do launcher" — presente só
+> na imagem nova. Ou seja: a coluna "imagem antiga" abaixo é **histórico**, não o
+> estado do aparelho. As cinco bibliotecas de texto e o `DejaVuSans.ttf` estão na
+> imagem; `readelf` continua ausente. Ver
+> [o que o arcade-volleyball precisa](#o-que-o-arcade-volleyball-precisa-nada).
+
 > **A imagem do X35H em `out/` foi construída 14 minutos ANTES da correção do
 > `post-build.sh`.** Ela tem tudo de texto e **não** tem o `respawn`. Verificado
 > no `inittab` do rootfs extraído, não por leitura de código. Rebuild resolve —
@@ -165,6 +173,94 @@ setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
 
 **Um aparelho que só mostra interface por SSH não é um console** — este é o item
 de maior impacto da lista, acima até do texto.
+
+## O que o `arcade-volleyball` precisa: **nada**
+
+Levantado em 06/11/2026 no X55, e é a exceção que confirma a regra deste
+documento: o primeiro app que não pede nada à imagem.
+
+### Como foi medido
+
+Não por lista de cabeçalho, e sim **do processo vivo**: `/proc/<pid>/maps` de um
+`arcade-volleyball` rodando por KMSDRM. Isso separa "declara" de "usa" — a mesma
+distinção que o `giochi-selftest` faz com `readelf -d`, só que no sentido
+inverso: aqui a pergunta é o que o kernel de fato mapeou.
+
+```bash
+# no aparelho, com o jogo rodando
+grep '\.so' /proc/$(pidof arcade-volleyball)/maps | tr -s ' ' | rev | cut -d' ' -f1 | rev | sort -u
+```
+
+### As 15 bibliotecas carregadas
+
+**Diretas** (as 6 `DT_NEEDED` do ELF — conferidas com `readelf -d` no PC):
+
+| Biblioteca | Já existe no rootfs |
+| --- | --- |
+| `libSDL2-2.0.so.0` | sim — 2.28.5, o mesmo do launcher |
+| `libstdc++.so.6` | sim — 6.0.30 |
+| `libm.so.6` | sim |
+| `libgcc_s.so.1` | sim |
+| `libc.so.6` | sim — glibc 2.38 |
+| `ld-linux-aarch64.so.1` | sim |
+
+**Transitivas** (puxadas pelo SDL2 e pelo driver GLES, 9):
+
+| Biblioteca | Vem de |
+| --- | --- |
+| `libdrm.so.2.4.0` | backend KMSDRM do SDL2 |
+| `libgbm.so.1.0.0` | alocação de buffer para o scanout |
+| `libEGL.so.1.0.0` | contexto GLES |
+| `libGLESv2.so.2.0.0` | desenho acelerado |
+| `libglapi.so.0.0.0` | Mesa |
+| `dri/rockchip_dri.so` | driver Mesa do RK3566 |
+| `libz.so.1.3.1` / `libzstd.so.1.5.5` / `libexpat.so.1.9.1` | compressão e parsing, do Mesa |
+
+**Diferença: zero.** As 15 já estavam na imagem. A prova mais forte é o que o
+pacote instalou — três arquivos, nenhuma biblioteca:
+
+```text
+membros: metadata.json → capa.png → bin/ → bin/arcade-volleyball
+$ find /user/apps/arcade-volleyball -type f
+  /user/apps/arcade-volleyball/metadata.json
+  /user/apps/arcade-volleyball/bin/arcade-volleyball
+  /user/apps/arcade-volleyball/capa.png
+```
+
+### Por que ele não pede nada, e o launcher pede quatro coisas
+
+É decisão de projeto do port, não sorte: **o jogo não usa fonte nem áudio**. O
+placar é desenhado em sete segmentos de retângulo e todo o resto são retângulos,
+linhas e um círculo feito de spans. Nenhuma chamada a `SDL_ttf`, nenhuma a
+`libasound`.
+
+| App | Precisa a mais | Por quê |
+| --- | --- | --- |
+| launcher | `SDL2_ttf`, `freetype`, `harfbuzz`, fonte TTF | a UI é feita de texto |
+| `arcade-volleyball` | **nada** | desenha o placar em barras; sem áudio |
+
+Ou seja: a regra "não peça à imagem o que o app pode desenhar" custa um placar
+menos bonito e economiza quatro dependências, uma fonte e a discussão de licença
+dela. Para os jogos, é o caminho — e é replicável: `volley`, `pacman` e
+`cobrinha` também não pedem nada.
+
+### Uma correção de estado: o X55 já roda a imagem de 04/11
+
+Este documento foi escrito supondo a imagem de 03/11 no aparelho. Medido em
+06/11/2026:
+
+```text
+$ cat /proc/version
+Linux version 6.12.0 ... #2 SMP PREEMPT Wed Nov  4 21:04:03 UTC 2026
+
+$ giochi-selftest  → bloco "bibliotecas do launcher": existe
+```
+
+O kernel foi compilado em **04/11 21:04 UTC** e o `selftest` já tem o bloco que
+só a imagem nova possui. As cinco bibliotecas de texto e o `DejaVuSans.ttf`
+estão na imagem — **não** são mais a cópia manual que este documento registrava
+como paliativo. O `readelf` continua ausente, então o `selftest` segue pulando a
+prova de que o `SDL2_ttf` usa harfbuzz.
 
 ## O que NÃO precisa ser pedido
 
