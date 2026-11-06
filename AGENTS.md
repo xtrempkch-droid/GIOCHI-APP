@@ -445,7 +445,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 177 testes do launcher
+cd app/launcher && cargo test --workspace  # 189 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -682,8 +682,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 7 módulos, 72 testes | **compila, testa e passa** |
-| `crates/ui-sdl` — 13 módulos, 105 testes | **compila, linka e roda** |
+| `crates/core` — 7 módulos, 82 testes | **compila, testa e passa** |
+| `crates/ui-sdl` — 14 módulos, 107 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
@@ -711,6 +711,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Jogo em painel retrato (X55) | **gira** — `projeto 1280x720 (Ccw90)`, preenche o painel |
 | Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
 | `A` no cartão da Home lança | **no X55** — `giochi-cobrinha` com ppid do launcher |
+| L2/R2 trocam sub-aba | **no X55** — `r2,r2,r2` dá a volta nos filtros; `r2` cicla categoria |
+| L2/R2 físicos emitem evento | **não testado** — o kernel declara 312/313 e o app os lê, mas ninguém apertou os gatilhos |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
 | Aba de configurações | **navegável** — `Zone::SettingsContent` existe; anel de foco medido no X55 (x 446..1107) |
@@ -1172,6 +1174,54 @@ abre nada porque são de demonstração e não estão no catálogo).
 Teste que vale: `todo_caminho_de_iniciar_jogo_pede_lancamento` percorre os três
 caminhos, e `a_na_home_pede_o_lancamento_do_jogo_em_foco` é o caso relatado.
 Ambos verificados contra o bug reintroduzido — reprovam.
+
+#### L2/R2 trocam de sub-aba — e a sub-aba não arranca o usuário do lugar
+
+Pedido do usuário em 06/11/2026: *"aba jogos a navegação está como somente
+esquerda ou direita. acho interessante usar o L2 e R2 como trocar as sub abas."*
+
+Hierarquia de dois níveis, como no controle: **L1/R1 troca de aba, L2/R2 troca de
+sub-aba** dentro dela. Na Biblioteca a sub-aba é o filtro (Todos · Favoritos ·
+Recentes); nos Ajustes é a categoria. Home e Apps não têm sub-aba, então a tecla
+fica **inerte** — a mesma tecla com dois significados é pior que tecla morta.
+
+**Medido no X55:** `r2` → `filtro Favoritos`, `r2,r2` → `Recentes`,
+`r2,r2,r2` → `Todos` (dá a volta), `l2` → `Recentes` para trás. Nos Ajustes,
+`r2` de `appearance` → `sound` com o destaque acompanhando.
+
+Os dois gatilhos existiam e **eram descartados**: `l2 = BTN_TL2` / `r2 = BTN_TR2`
+estão no `buttons.map`, `code_for` os traduz, e o `GamepadFrame` não tinha campo
+para eles. Botão declarado, evento chegando, nada acontecendo — a mesma classe do
+`axis_*` que apareciam como "símbolo desconhecido".
+
+O kernel **declara** os dois códigos no X55. Bitmask do `gpio-keys-control`,
+decodificado com a última palavra como palavra 0:
+`f00000000 0 0 0 7fdb000000000000 0 0 0 0` → 304-308, **310-318**, 544-547.
+
+#### A regra que evita o atalho virar obstáculo
+
+`set_filter` — o caminho do `← →` **dentro** da faixa de filtros — move o foco
+para a faixa. Reusá-lo no gatilho faria cada toque arrancar o foco da grade: o
+usuário trocaria de filtro e teria de descer tudo de novo.
+
+Por isso `trocar_filtro` é separado e preserva a zona, apenas re-clampando o
+índice à lista nova. `gatilho_troca_o_filtro_e_o_foco_fica_na_grade` reprova se
+alguém "simplificar" de volta — verificado reintroduzindo o `set_filter` de
+propósito: reprova com `left: LibraryFilters`.
+
+Casos de borda, todos com teste: filtro mais curto re-clampa; categoria sem
+linhas ("Sobre") devolve o foco à coluna; overlay aberto bloqueia; Home/Apps
+inerte.
+
+#### O rodapé virou dado testável
+
+Ele já mentiu duas vezes (`A — Jogar` que não iniciava, `Jogar` na Biblioteca
+onde `A` abre a ficha). Um `match` enterrado no meio de 40 linhas de desenho não
+tem como ser testado, então a mentira só aparecia quando alguém desconfiava da
+tela. Agora é `views::dicas(state)` e há dois testes:
+`rodape_so_anuncia_gatilho_onde_ele_age` e
+`rodape_nao_promete_jogar_onde_a_apenas_abre`. Ambos verificados contra a versão
+mentirosa.
 
 #### O que ainda não foi provado
 

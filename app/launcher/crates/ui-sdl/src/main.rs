@@ -327,12 +327,28 @@ fn main() -> Result<(), String> {
                 "left" | "esquerda" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Left),
                 "right" | "direita" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Right),
                 "a" | "confirmar" => giochi_launcher_core::Cmd::Confirm,
+                "l2" | "subprev" => giochi_launcher_core::Cmd::SubPrev,
+                "r2" | "subnext" => giochi_launcher_core::Cmd::SubNext,
+                "l" | "tabprev" => giochi_launcher_core::Cmd::TabPrev,
+                "r" | "tabnext" => giochi_launcher_core::Cmd::TabNext,
                 "b" | "voltar" => giochi_launcher_core::Cmd::Back,
                 outra => return Err(format!("--teclas: tecla desconhecida: {outra}")),
             };
             state = giochi_launcher_core::update(state, cmd);
         }
-        eprintln!("--teclas: {lista} -> foco {:?} {}", state.focus.zone, state.focus.index);
+        // O filtro e a categoria entram no log porque "o gatilho trocou de
+        // sub-aba" é exatamente o que se quer provar — e o foco sozinho não
+        // mostra isso (ele fica na grade de propósito).
+        eprintln!(
+            "--teclas: {lista} -> foco {:?} {} | filtro {} | categoria {}",
+            state.focus.zone,
+            state.focus.index,
+            state.library_filter.label(),
+            giochi_launcher_core::SETTINGS_CATEGORIES
+                .get(state.settings_category)
+                .copied()
+                .unwrap_or("?")
+        );
     }
 
     // `--lancar <id|slug>`: pede o lançamento já na abertura.

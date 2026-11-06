@@ -35,6 +35,16 @@ pub enum Cmd {
     TabPrev,
     /// Próxima aba (R1 / ombro direito).
     TabNext,
+    /// Sub-aba anterior (L2 / gatilho esquerdo).
+    ///
+    /// Hierarquia igual à do controle: L1/R1 troca de aba, L2/R2 troca de
+    /// sub-aba dentro dela. Existe porque as sub-abas só eram alcançáveis
+    /// movendo o foco até a faixa delas e andando de lado — "a navegação está
+    /// como somente esquerda ou direita". Agora a troca funciona de qualquer
+    /// ponto da aba, sem tirar o usuário de onde ele está olhando.
+    SubPrev,
+    /// Sub-aba seguinte (R2 / gatilho direito).
+    SubNext,
 
     /// Abre/fecha o painel de ajustes rápidos (Select).
     ToggleQuickSettings,
@@ -154,6 +164,8 @@ impl Cmd {
             | Cmd::Search
             | Cmd::TabPrev
             | Cmd::TabNext
+            | Cmd::SubPrev
+            | Cmd::SubNext
             | Cmd::ToggleQuickSettings
             | Cmd::PowerShort
             | Cmd::PowerHold

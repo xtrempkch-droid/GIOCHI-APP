@@ -346,11 +346,19 @@ fn current_clock() -> String {
 // ════════════════════════════════════════════════════════════
 // RODAPÉ
 // ════════════════════════════════════════════════════════════
-pub fn chrome_foot(p: &mut Painter, state: &State) {
-    let m = Moldura::de(p);
-    p.fill_rect(m.safe_x, m.foot_y, m.safe_w, 1, theme::LINE);
-
-    let hints: &[(&str, &str)] = match state.top_overlay() {
+/// Dicas do rodapé para o estado atual.
+///
+/// ## Por que é função, e não um `match` no meio do desenho
+///
+/// O rodapé já mentiu duas vezes: dizia `A — Jogar` numa aba onde `A` não
+/// iniciava nada, e `Jogar` na Biblioteca, onde `A` abre a ficha. Um `match`
+/// enterrado em 40 linhas de desenho não tem como ser testado, então a mentira
+/// só aparece quando alguém olha a tela e desconfia.
+///
+/// Aqui a lista é dado: o teste pergunta "a Biblioteca anuncia L2/R2?" e
+/// reprova se a resposta mudar sem que a tecla mude junto.
+pub fn dicas(state: &State) -> &'static [(&'static str, &'static str)] {
+    match state.top_overlay() {
         Some(Overlay::Search) => &[("↑↓←→", "Navegar"), ("A", "Selecionar"), ("B", "Voltar")],
         Some(Overlay::QuickSettings) => &[("↑↓", "Navegar"), ("←→", "Ajustar"), ("B", "Fechar")],
         Some(Overlay::GameDetail) => &[("←→", "Ação"), ("A", "Confirmar"), ("B", "Voltar")],
@@ -365,7 +373,7 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
         // concluiu — com razão — que a aba não era navegável.
         None if state.tab == Tab::Settings && state.focus.zone == Zone::SettingsSidebar => &[
             ("→", "Entrar"),
-            ("↑↓", "Categoria"),
+            ("L2/R2", "Categoria"),
             ("LB/RB", "Aba"),
             ("Select", "Ajustes"),
         ],
@@ -375,12 +383,12 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
             && state.focus.zone == Zone::SettingsContent
             && settings_ajustavel(state.settings_category, state.focus.index) =>
         {
-            &[("←→", "Ajustar"), ("B", "Categorias"), ("↑↓", "Linha")]
+            &[("←→", "Ajustar"), ("L2/R2", "Categoria"), ("B", "Categorias")]
         }
         None if state.tab == Tab::Settings => &[
             ("A", "Abrir"),
+            ("L2/R2", "Categoria"),
             ("←", "Categorias"),
-            ("↑↓", "Linha"),
             ("B", "Voltar"),
         ],
         // O rodapé era um só para Home, Biblioteca e Apps — e as três fazem
@@ -395,10 +403,14 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
             ("LB/RB", "Aba"),
             ("Select", "Ajustes"),
         ],
+        // Biblioteca: os gatilhos trocam o filtro. A dica aparece porque o
+        // atalho não se descobre sozinho — a faixa de filtros também responde a
+        // ← →, então quem não sabe do L2/R2 nunca tenta.
         None if state.tab == Tab::Library => &[
             ("A", "Abrir"),
             ("X", "Detalhes"),
             ("Y", "Buscar"),
+            ("L2/R2", "Filtro"),
             ("LB/RB", "Aba"),
         ],
         // A grade de apps é de demonstração: os apps não estão no catálogo do
@@ -406,7 +418,14 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
         // tecla faz hoje, não o que faria com uma loja instalada.
         None if state.tab == Tab::Apps => &[("X", "Detalhes"), ("LB/RB", "Aba")],
         None => &[("LB/RB", "Aba")],
-    };
+    }
+}
+
+pub fn chrome_foot(p: &mut Painter, state: &State) {
+    let m = Moldura::de(p);
+    p.fill_rect(m.safe_x, m.foot_y, m.safe_w, 1, theme::LINE);
+
+    let hints = dicas(state);
 
     // Centralizado na faixa do rodapé. Antes era `foot_y + 18` fixo: num painel
     // de 480 px o chip de 16 px começava em y=468 e era cortado pela borda.
@@ -1594,6 +1613,57 @@ impl GameLabel for giochi_launcher_core::Game {
 #[cfg(test)]
 mod tests {
     use super::grade_para;
+
+    fn chaves(state: &giochi_launcher_core::State) -> Vec<&'static str> {
+        super::dicas(state).iter().map(|(k, _)| *k).collect()
+    }
+
+    /// O rodapé só pode anunciar o gatilho onde ele faz alguma coisa.
+    ///
+    /// O rodapé já mentiu duas vezes (`A — Jogar` que não iniciava, `Jogar` na
+    /// Biblioteca onde `A` abre a ficha). Anunciar "L2/R2" numa aba sem sub-aba
+    /// seria a terceira — e o usuário apertaria a tecla sem retorno nenhum.
+    #[test]
+    fn rodape_so_anuncia_gatilho_onde_ele_age() {
+        use giochi_launcher_core::{State, Tab};
+
+        let state = State::new(Vec::new(), Vec::new());
+
+        for tab in [Tab::Library, Tab::Settings] {
+            let s = State { tab, ..state.clone() };
+            assert!(
+                chaves(&s).contains(&"L2/R2"),
+                "{tab:?} tem sub-abas e o rodapé precisa dizer qual tecla as troca"
+            );
+        }
+
+        for tab in [Tab::Home, Tab::Apps] {
+            let s = State { tab, ..state.clone() };
+            assert!(
+                !chaves(&s).contains(&"L2/R2"),
+                "{tab:?} não tem sub-abas: anunciar o gatilho seria promessa vazia"
+            );
+        }
+    }
+
+    /// `A` só é anunciado como "Jogar" na Home, que é a única aba onde ele inicia.
+    #[test]
+    fn rodape_nao_promete_jogar_onde_a_apenas_abre() {
+        use giochi_launcher_core::{State, Tab};
+
+        let base = State::new(Vec::new(), Vec::new());
+        let acao = |tab: Tab| {
+            let s = State { tab, ..base.clone() };
+            super::dicas(&s)
+                .iter()
+                .find(|(k, _)| *k == "A")
+                .map(|(_, v)| v.to_string())
+        };
+
+        assert_eq!(acao(Tab::Home).as_deref(), Some("Jogar"));
+        assert_eq!(acao(Tab::Library).as_deref(), Some("Abrir"));
+        assert_eq!(acao(Tab::Apps), None, "nos Apps o A não faz nada");
+    }
 
     /// O núcleo e o desenho precisam concordar sobre quantas linhas a categoria
     /// tem.

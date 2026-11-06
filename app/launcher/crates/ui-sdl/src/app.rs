@@ -850,6 +850,10 @@ fn keyboard_command(key: Keycode) -> Option<Cmd> {
         Keycode::Y => Some(Cmd::Search),
         Keycode::Q => Some(Cmd::TabPrev),
         Keycode::E => Some(Cmd::TabNext),
+        // Equivalentes de teclado aos gatilhos, para testar no PC: `[` e `]`
+        // ficam ao lado direito, como L2/R2 no controle.
+        Keycode::LeftBracket => Some(Cmd::SubPrev),
+        Keycode::RightBracket => Some(Cmd::SubNext),
         Keycode::Tab => Some(Cmd::ToggleQuickSettings),
         Keycode::P => Some(Cmd::PowerShort),
         _ => None,

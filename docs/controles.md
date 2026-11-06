@@ -74,6 +74,54 @@ do dispositivo em vez de assumido.
 
 ---
 
+## 1b. Mapa de teclas do launcher
+
+Hierarquia de dois níveis, igual à do controle:
+
+| Tecla | Map symbol | evdev | O que faz |
+| --- | --- | --- | --- |
+| Direcional + analógico | `up/down/left/right` | `BTN_DPAD_*` | move o foco |
+| A | `a` | `BTN_EAST` (305) | confirma / na Home **inicia o jogo** |
+| B | `b` | `BTN_SOUTH` (304) | volta um nível (overlay, painel, aba) |
+| X | `x` | `BTN_NORTH` (307) | detalhes / ficha do jogo |
+| Y | `y` | `BTN_WEST` (308) | busca |
+| **L1 / R1** | `l` / `r` | `BTN_TL` / `BTN_TR` (310/311) | troca de **aba** |
+| **L2 / R2** | `l2` / `r2` | `BTN_TL2` / `BTN_TR2` (312/313) | troca de **sub-aba** |
+| Select | `select` | `BTN_SELECT` (314) | ajustes rápidos |
+| Start | `start` | `BTN_START` (315) | menu de energia |
+| Vol ↑ ↓ | declarado no mapa | `KEY_VOLUMEUP/DOWN` (115/114) | volume no mixer ALSA |
+| Power | **não** passa pelo mapa | `KEY_POWER` (116) | dormir / menu de energia |
+
+### Sub-abas: o que L2/R2 trocam
+
+| Aba | Sub-abas | Independe do foco? |
+| --- | --- | --- |
+| Jogos (Biblioteca) | Todos · Favoritos · Recentes | sim |
+| Ajustes | as 6 categorias | sim |
+| Home, Apps | não existem | a tecla fica inerte |
+
+**A troca não move o usuário de onde ele está olhando.** Se o foco está na grade
+de jogos, ele continua na grade; se está na faixa de filtros, acompanha o chip
+novo; se está na coluna de categorias, acompanha a categoria.
+
+Isso é decisão, e nasceu de um risco concreto: o caminho do `← →` **dentro** da
+faixa (`set_filter`) move o foco para a faixa. Reusá-lo no gatilho faria cada
+toque arrancar o foco da grade — o oposto de atalho, porque obrigaria a descer de
+novo toda vez. `trocar_filtro` existe separado por isso, e
+`gatilho_troca_o_filtro_e_o_foco_fica_na_grade` reprova se alguém "simplificar"
+de volta para `set_filter` (verificado reintroduzindo o erro de propósito).
+
+Casos de borda cobertos por teste:
+
+- filtro mais curto → o foco é re-clampado (`filtro_mais_curto_reclampa_o_foco`);
+- categoria sem linhas ("Sobre") → o foco volta para a coluna em vez de ficar num
+  painel vazio;
+- overlay aberto → o gatilho não troca nada por baixo;
+- Home/Apps → inerte, porque a mesma tecla com dois significados é pior que tecla
+  morta.
+
+No PC os equivalentes de teclado são `[` e `]`.
+
 ## 2. Botão de energia
 
 Não é botão de controle: é do PMIC (`rk805 pwrkey`), existe para ligar e

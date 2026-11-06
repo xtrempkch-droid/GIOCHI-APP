@@ -7,10 +7,12 @@
 use crate::cmd::{Cmd, Dir};
 use crate::focus::{navigate, Focus, Zone};
 use crate::state::{Filter, HUD, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS};
-// `Game` e `Tab` só aparecem na construção de estado de teste (`demo` e `mod
-// tests`); importá-los sempre geraria aviso no build de produção.
+// `Game` só aparece na construção de estado de teste (`demo` e `mod tests`);
+// importá-lo sempre geraria aviso no build de produção. `Tab` passou a ser
+// usado pelo reducer em si quando os gatilhos ganharam `sub_tab`.
 #[cfg(test)]
-use crate::state::{Game, Tab};
+use crate::state::Game;
+use crate::state::Tab;
 
 /// Backspace no teclado virtual.
 const BACKSPACE: char = '\u{8}';
@@ -37,6 +39,8 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         Cmd::Search => open_search(state),
         Cmd::TabPrev => tab_step(state, -1),
         Cmd::TabNext => tab_step(state, 1),
+        Cmd::SubPrev => sub_tab(state, -1),
+        Cmd::SubNext => sub_tab(state, 1),
         Cmd::ToggleQuickSettings => toggle_quick_settings(state),
         Cmd::PowerShort => power_short(state),
         Cmd::PowerHold => power_hold(state),
@@ -407,7 +411,9 @@ fn nav(state: State, dir: Dir) -> State {
             .position(|f| *f == state.library_filter)
             .unwrap_or(0);
         let next = (current as isize + step).rem_euclid(Filter::ALL.len() as isize) as usize;
-        return set_filter(state, Filter::ALL[next]);
+        // Mesma função do gatilho: aqui o foco já está na faixa, então o chip
+        // acompanha — que é o comportamento que sempre existiu neste caminho.
+        return trocar_filtro(state, Filter::ALL[next]);
     }
 
     match navigate(&state, dir) {
@@ -448,6 +454,86 @@ fn set_filter(state: State, filter: Filter) -> State {
         library_filter: filter,
         focus: Focus::at(Zone::LibraryFilters, index),
         ..state
+    }
+}
+
+/// Troca de sub-aba: filtros na Biblioteca, categorias nos Ajustes.
+///
+/// ## A regra que faz isto valer a pena
+///
+/// Quem troca de sub-aba **não sai do lugar onde está olhando**. Se o foco está
+/// na grade de jogos, ele fica na grade; se está na faixa de filtros, acompanha
+/// o chip novo; se está na coluna de categorias, acompanha a categoria.
+///
+/// Sem essa regra, `set_filter` (que existe para o `← →` **dentro** da faixa)
+/// arrancaria o usuário da grade a cada toque no gatilho — o oposto de atalho,
+/// porque obrigaria a voltar para baixo com o direcional toda vez.
+fn sub_tab(state: State, delta: isize) -> State {
+    if state.has_overlay() || state.screen != Screen::Running {
+        return state;
+    }
+
+    match state.tab {
+        Tab::Library => {
+            let atual = Filter::ALL
+                .iter()
+                .position(|f| *f == state.library_filter)
+                .unwrap_or(0);
+            let novo = (atual as isize + delta).rem_euclid(Filter::ALL.len() as isize) as usize;
+            trocar_filtro(state, Filter::ALL[novo])
+        }
+        Tab::Settings => trocar_categoria(state, delta),
+        // Home e Apps não têm sub-abas; o gatilho fica sem efeito em vez de
+        // fazer outra coisa, senão a mesma tecla teria dois significados.
+        _ => state,
+    }
+}
+
+/// Aplica o filtro preservando o lugar do usuário na tela.
+fn trocar_filtro(state: State, filtro: Filter) -> State {
+    let index = Filter::ALL.iter().position(|f| *f == filtro).unwrap_or(0);
+    let na_faixa = state.focus.zone == Zone::LibraryFilters;
+    let s = State {
+        library_filter: filtro,
+        ..state
+    };
+    if na_faixa {
+        focus_on(s, Zone::LibraryFilters, index)
+    } else {
+        // `focus_on` re-clampa o índice à nova lista: um filtro mais curto não
+        // pode deixar o foco apontando para um cartão que não existe mais.
+        let (zona, indice) = (s.focus.zone, s.focus.index);
+        focus_on(s, zona, indice)
+    }
+}
+
+/// Cicla a categoria das configurações preservando o painel em foco.
+fn trocar_categoria(state: State, delta: isize) -> State {
+    let total = crate::state::SETTINGS_CATEGORIES.len() as isize;
+    let atual = state.settings_category as isize;
+    let novo = (atual + delta).rem_euclid(total) as usize;
+
+    let s = State {
+        settings_category: novo,
+        ..state
+    };
+
+    match s.focus.zone {
+        // Na coluna: o destaque acompanha a categoria, como no `↑↓`.
+        Zone::SettingsSidebar => focus_on(s, Zone::SettingsSidebar, novo),
+        // No painel: fica no painel, mas re-clampado — uma categoria com menos
+        // linhas não pode deixar o foco numa linha que não existe.
+        Zone::SettingsContent => {
+            if crate::state::settings_rows(novo) == 0 {
+                // Categoria só de texto ("Sobre"): não há linha para focar,
+                // então o foco volta para a coluna em vez de sumir.
+                focus_on(s, Zone::SettingsSidebar, novo)
+            } else {
+                let indice = s.focus.index;
+                focus_on(s, Zone::SettingsContent, indice)
+            }
+        }
+        _ => s,
     }
 }
 
@@ -1357,6 +1443,149 @@ mod tests {
     /// — o mesmo substituto de ação que já tinha sido corrigido na ficha, uma
     /// camada acima. E o rodapé da Home anuncia `A — Jogar`, então a promessa
     /// estava escrita na tela.
+    /// `R2` na Biblioteca troca o filtro **sem tirar o usuário da grade**.
+    ///
+    /// `set_filter` (o caminho do `← →` dentro da faixa) move o foco para a
+    /// faixa. Reusá-lo aqui faria cada toque no gatilho arrancar o foco da
+    /// grade — o oposto de atalho: obrigaria a descer de novo toda vez.
+    #[test]
+    fn gatilho_troca_o_filtro_e_o_foco_fica_na_grade() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.focus = Focus::at(Zone::LibraryGrid, 2);
+
+        s = reduce(s, Cmd::SubNext);
+        assert_eq!(s.library_filter, Filter::Favorites);
+        assert_eq!(
+            s.focus.zone,
+            Zone::LibraryGrid,
+            "o gatilho não pode arrancar o foco da grade"
+        );
+        assert_eq!(s.focus.index, 2);
+
+        s = reduce(s, Cmd::SubPrev);
+        assert_eq!(s.library_filter, Filter::All);
+        assert_eq!(s.focus.zone, Zone::LibraryGrid);
+    }
+
+    #[test]
+    fn gatilho_na_faixa_de_filtros_acompanha_o_chip() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.focus = Focus::at(Zone::LibraryFilters, 0);
+
+        s = reduce(s, Cmd::SubNext);
+        assert_eq!(s.library_filter, Filter::Favorites);
+        assert_eq!(s.focus.zone, Zone::LibraryFilters);
+        assert_eq!(s.focus.index, 1, "o destaque segue o chip escolhido");
+    }
+
+    #[test]
+    fn gatilho_da_a_volta_nos_filtros() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.library_filter = Filter::All;
+        s.focus = Focus::at(Zone::LibraryGrid, 0);
+
+        s = reduce(s, Cmd::SubPrev);
+        assert_eq!(s.library_filter, Filter::Recent, "para trás dá a volta");
+        s = reduce(s, Cmd::SubNext);
+        assert_eq!(s.library_filter, Filter::All);
+    }
+
+    /// Filtro mais curto não pode deixar o foco num cartão que não existe.
+    ///
+    /// "Recentes" costuma ter menos itens que "Todos"; um índice alto ficaria
+    /// apontando para o vazio e o `A` não abriria nada — sem erro nenhum.
+    #[test]
+    fn filtro_mais_curto_reclampa_o_foco() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.library_filter = Filter::All;
+        s.focus = Focus::at(Zone::LibraryGrid, 7); // último de 8
+
+        s = reduce(s, Cmd::SubNext); // → Favoritos (só os pares: 4 itens)
+        let total = s.filtered_games().len();
+        assert!(total > 0);
+        assert!(
+            s.focus.index < total,
+            "foco {} fora da lista de {total}",
+            s.focus.index
+        );
+    }
+
+    /// Nos Ajustes o gatilho troca de categoria.
+    #[test]
+    fn gatilho_troca_a_categoria_dos_ajustes() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 0;
+        s.focus = Focus::at(Zone::SettingsSidebar, 0);
+
+        s = reduce(s, Cmd::SubNext);
+        assert_eq!(s.settings_category, 1);
+        assert_eq!(s.focus.index, 1, "na coluna, o destaque acompanha");
+
+        s = reduce(s, Cmd::SubPrev);
+        assert_eq!(s.settings_category, 0);
+    }
+
+    #[test]
+    fn gatilho_no_painel_de_ajustes_fica_no_painel() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 2; // rede, 2 linhas
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+
+        s = reduce(s, Cmd::SubNext); // → controle, 7 linhas
+        assert_eq!(s.settings_category, 3);
+        assert_eq!(s.focus.zone, Zone::SettingsContent, "continua no painel");
+    }
+
+    /// Categoria sem linhas ("Sobre") não pode deixar o foco num painel vazio.
+    #[test]
+    fn gatilho_para_categoria_sem_linhas_devolve_o_foco_a_coluna() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 4; // sistema, 2 linhas
+        s.focus = Focus::at(Zone::SettingsContent, 1);
+
+        s = reduce(s, Cmd::SubNext); // → sobre, 0 linhas
+        assert_eq!(s.settings_category, 5);
+        assert_eq!(
+            s.focus.zone,
+            Zone::SettingsSidebar,
+            "painel vazio prenderia o foco sem nada para onde ir"
+        );
+    }
+
+    /// Com overlay aberto o gatilho não troca nada por baixo.
+    #[test]
+    fn gatilho_nao_age_com_overlay_aberto() {
+        let mut s = demo();
+        s.tab = Tab::Library;
+        s.overlays.push(Overlay::QuickSettings);
+        s = reduce(s, Cmd::SubNext);
+        assert_eq!(s.library_filter, Filter::All);
+        assert_eq!(s.overlays.len(), 1);
+    }
+
+    /// Home e Apps não têm sub-aba: os gatilhos ficam inertes em vez de fazer
+    /// outra coisa. A mesma tecla com dois significados é pior que tecla morta.
+    #[test]
+    fn gatilho_nao_faz_nada_onde_nao_ha_sub_aba() {
+        for tab in [Tab::Home, Tab::Apps] {
+            let mut s = demo();
+            s.tab = tab;
+            s.focus = Focus::at(tab.zone(), 0);
+            let antes = s.clone();
+            s = reduce(s, Cmd::SubNext);
+            assert_eq!(s.library_filter, antes.library_filter);
+            assert_eq!(s.settings_category, antes.settings_category);
+            assert_eq!(s.tab, tab);
+        }
+    }
+
     #[test]
     fn a_na_home_pede_o_lancamento_do_jogo_em_foco() {
         let mut s = demo();

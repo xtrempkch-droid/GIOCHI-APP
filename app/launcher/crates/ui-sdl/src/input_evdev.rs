@@ -383,6 +383,11 @@ impl EvdevInput {
             search: down("y"),
             tab_prev: down("l"),
             tab_next: down("r"),
+            // L2/R2 vêm do mesmo mapa (`l2 = BTN_TL2`, `r2 = BTN_TR2`). Estavam
+            // traduzidos por `code_for` e **descartados** aqui: o botão existia,
+            // o evento chegava, e nada acontecia.
+            sub_prev: down("l2"),
+            sub_next: down("r2"),
             quick_settings: down("select"),
         }
     }

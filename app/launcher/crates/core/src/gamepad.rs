@@ -40,6 +40,9 @@ pub struct GamepadFrame {
     pub search: bool,
     pub tab_prev: bool,
     pub tab_next: bool,
+    /// Gatilhos: trocam de sub-aba dentro da aba atual.
+    pub sub_prev: bool,
+    pub sub_next: bool,
     pub quick_settings: bool,
 }
 
@@ -139,6 +142,8 @@ impl Mapper {
         edge(frame.search, self.previous.search, Cmd::Search);
         edge(frame.tab_prev, self.previous.tab_prev, Cmd::TabPrev);
         edge(frame.tab_next, self.previous.tab_next, Cmd::TabNext);
+        edge(frame.sub_prev, self.previous.sub_prev, Cmd::SubPrev);
+        edge(frame.sub_next, self.previous.sub_next, Cmd::SubNext);
         edge(
             frame.quick_settings,
             self.previous.quick_settings,
@@ -181,6 +186,30 @@ mod tests {
         assert_eq!(mapper.update(pressed), vec![Cmd::Confirm]);
         assert!(mapper.update(released).is_empty());
         assert_eq!(mapper.update(pressed), vec![Cmd::Confirm]);
+    }
+
+    /// L2/R2 trocam de sub-aba, com a mesma borda dos outros botões.
+    ///
+    /// Segurar R2 não pode varrer todos os filtros — o gatilho na mão de quem
+    /// joga fica apertado mais tempo que o necessário.
+    #[test]
+    fn gatilhos_trocam_sub_aba_uma_vez_por_apertada() {
+        let mut mapper = Mapper::new();
+        let r2 = GamepadFrame {
+            sub_next: true,
+            ..Default::default()
+        };
+        assert_eq!(mapper.update(r2), vec![Cmd::SubNext]);
+        assert!(mapper.update(r2).is_empty(), "segurar não repete");
+
+        assert!(mapper.update(GamepadFrame::default()).is_empty());
+        assert_eq!(mapper.update(r2), vec![Cmd::SubNext], "soltar e apertar volta a disparar");
+
+        let l2 = GamepadFrame {
+            sub_prev: true,
+            ..Default::default()
+        };
+        assert_eq!(mapper.update(l2), vec![Cmd::SubPrev]);
     }
 
     #[test]
