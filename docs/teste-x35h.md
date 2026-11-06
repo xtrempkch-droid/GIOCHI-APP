@@ -1,99 +1,63 @@
 # Testar esta versão no X35H
 
-> Escrito em 04/11/2026, depois de a versão nova rodar **só no X55**.
-> O X35H esteve fora da rede durante todo o trabalho de hoje.
-> **Nada do que está aqui foi verificado no X35H.**
+> Escrito em 04/11/2026, atualizado em 06/11/2026.
+> O X35H esteve fora da rede em todo o trabalho até agora.
+> **Nada do que está aqui foi verificado no X35H — só no X55.**
 
 ---
 
-## PRIORIDADE PARA A PRÓXIMA SESSÃO: detecção automática de jogos
+## FEITO: detecção automática de jogos (06/11/2026)
 
-Pedido do dono do projeto em 04/11/2026: *"temos que deixar a detecção de jogos
-de forma automática"*.
-
-### O que é manual hoje
-
-Três passos, e **todos os três são digitados à mão**:
-
-| Passo | Como está | Quem deveria fazer |
-| --- | --- | --- |
-| 1. compilar e instalar o binário | `bash scripts/compilar-jogo-arm64.sh --jogo pacman --instalar 10.55.0.2` | o passo já existe, mas é por jogo |
-| 2. **gerar `/opt/giochi/apps/index.json`** | **copiado à mão** de um arquivo escrito à mão (`/tmp/index3.json` nesta sessão) | ninguém: é o buraco |
-| 3. subir o launcher | `bash scripts/aparelho.sh subir` | já é automático |
-
-O passo 2 é o problema. Hoje o catálogo do aparelho é um JSON que eu escrevi
-num `heredoc`. Ele **não é derivado de nada**: nem do `apps.json`, nem dos
-`metadata.json`, nem do que existe em `/opt/giochi/apps/`. Consequências já
-observadas:
-
-- Instalei `cobrinha` e `pacman` e o aparelho continuou mostrando **um** jogo
-  até eu reescrever o JSON à mão.
-- O `year`, o `title` e o `category` do catálogo podem divergir do
-  `metadata.json` do pacote, e nada avisa.
-- Um app instalado mas fora do JSON fica **invisível** — e não há erro em lugar
-  nenhum.
-
-### O que "automático" deve significar
-
-Duas detecções diferentes, e a distinção importa:
-
-**(a) Descobrir o que existe no aparelho.** Varrer `/opt/giochi/apps/*/`, e para
-cada pasta com `metadata.json` + `entrypoint` executável, adicionar ao catálogo.
-Não perguntar ao PC o que está lá — perguntar ao aparelho. Isso resolve
-"instalei e não apareceu".
-
-**(b) Derivar o catálogo dos metadados.** `title`, `developer` e `year` saem do
-`metadata.json` do pacote, não de um JSON paralelo. O `id` sai do nome da pasta
-(ou do `metadata.json`). Regra: **o catálogo é uma projeção, não uma segunda
-fonte da verdade.** Já temos essa lição escrita em `docs/metadata.md`: campo que
-mora em dois lugares envelhece diferente nos dois.
-
-### Desenho sugerido, e por que
-
-```text
-app/apps.json + app/**/metadata.json   (fonte, versionada)
-            │
-            ▼  scripts/gerar-catalogo.mjs
-      index.json                        (artefato, gerado)
-            │
-            ▼  scp
-   /opt/giochi/apps/index.json          (no aparelho)
-```
-
-Um comando novo, `bash scripts/aparelho.sh catalogo`, que faz as duas coisas:
-gera a partir de `apps.json` + `metadata.json` e envia. Nada de escrever JSON à
-mão nunca mais.
-
-Detalhes que vão morder, na ordem em que vão morder:
-
-1. **`folder` pode ter grupo.** `jogos/pacman` → `id` é `pacman`, e o `dir` no
-   aparelho é `/opt/giochi/apps/pacman`. Não usar o caminho do repo como caminho
-   do aparelho.
-2. **Filtrar por `status`.** Só `ready` entra. `scaffold` tem `bin/` vazio e
-   `distribution: host` (`forge`, `store`) não vai para o aparelho. Hoje o
-   catálogo escrito à mão simplesmente omitia — automático precisa de regra.
-3. **`distribution: "host"` nunca vai**, e `"store"` também não (é instalado em
-   `/user`, não na imagem).
-4. **`entrypoint` precisa existir no disco** antes de entrar no catálogo. Um
-   catálogo que aponta para binário ausente é pior que catálogo vazio: o usuário
-   aperta e nada acontece.
-5. **O `dir` do aparelho não é derivável do repo.** É `/opt/giochi/apps/<id>`
-   por convenção do `Giochi System`. Isso tem de ficar explícito no gerador —
-   é a única informação que não vem nem do `apps.json` nem do `metadata.json`.
-
-### Teste que fecha a tarefa
-
-Instalar um jogo novo, rodar **um** comando, e ele aparecer na tela sem editar
-JSON nenhum:
+Era a prioridade pedida em 04/11. Está implementado e medido no X55.
 
 ```bash
-bash scripts/compilar-jogo-arm64.sh --jogo <novo> --instalar 10.55.0.2
-bash scripts/aparelho.sh catalogo          # <- o que falta
-# e o launcher mostra N+1 jogos
+bash scripts/aparelho.sh catalogo        # gera, confere no aparelho e publica
+node scripts/gerar-catalogo.mjs --lista  # quem entra e quem fica de fora
 ```
 
-Depois: remover um app do aparelho e o catálogo encolher na chamada seguinte.
-Projeção de verdade reflete remoção, não só adição.
+O catálogo deixou de ser JSON escrito à mão e virou **projeção** de
+`app/apps.json` + os `metadata.json`.
+
+**Prova de que é projeção e não cópia:** removi o binário do `cobrinha` do
+aparelho e o comando reduziu o catálogo de 3 para 2, dizendo o que tirou e como
+instalar; restaurei e voltou a 3. Reflete remoção, não só adição.
+
+Uma descoberta do próprio gerador: **o launcher entrava no seu próprio
+catálogo** — tem `status: ready`, `distribution: image` e binário no lugar. O
+cartão "Launcher" abriria um segundo launcher e os dois brigariam pelo DRM. Agora
+o papel é declarado (`role: "shell"`), não inferido do nome.
+
+Detalhes e as cinco armadilhas em [`AGENTS.md`](../AGENTS.md) §12.
+
+### O que sobrou de manual
+
+Ainda é preciso **instalar** o jogo antes de publicar o catálogo:
+
+```bash
+bash scripts/compilar-jogo-arm64.sh --jogo <nome> --instalar 10.55.0.2
+bash scripts/aparelho.sh catalogo
+```
+
+Dois comandos em vez de um. Dá para juntar, mas são operações diferentes
+(compilar é do PC, instalar é do aparelho) e falham por motivos diferentes —
+separar ajuda o diagnóstico. Se virar atrito, o próximo passo é um
+`aparelho.sh publicar` que encadeia os dois.
+
+---
+
+## O BOOT AUTOMÁTICO JÁ FOI VERIFICADO (06/11/2026)
+
+O item 1 do roteiro abaixo **já passou**, no X55:
+
+```text
+giochi-init     pid=216  ppid=1      <- ::respawn: do inittab
+giochi-launcher pid=224  ppid=216    <- filho do init
+```
+
+O launcher subiu sozinho 29 s depois do boot, sem SSH. Quadro: 351 cores,
+0,00% de preto, 99,5% de acerto, texto 0,99.
+
+**Falta repetir no X35H** — mesmo `inittab`, mas a tela é outra.
 
 ---
 

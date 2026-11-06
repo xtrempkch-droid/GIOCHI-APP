@@ -87,12 +87,31 @@ function validateMetadata(metadata, appDir, errors) {
         // aparelho. Sem ele no schema, um app que declare o ano era reprovado
         // por `campo_desconhecido` e a informação não tinha por onde viajar.
         "releaseYear",
+        // Mesmo motivo: o gênero aparece no cartão, e sem campo próprio o
+        // gerador de catálogo não teria de onde tirá-lo.
+        "category",
       ].includes(key)
     ) {
       errors.push({
         code: "campo_desconhecido",
         path: `metadata.json:${key}`,
         message: `campo não previsto no schema: ${key}`,
+      });
+    }
+  }
+
+  if (metadata.category !== undefined) {
+    if (typeof metadata.category !== "string" || metadata.category.trim() === "") {
+      errors.push({
+        code: "categoria_invalida",
+        path: "metadata.json:category",
+        message: "category precisa ser texto não vazio (ex.: Arcade)",
+      });
+    } else if (metadata.category.length > 40) {
+      errors.push({
+        code: "categoria_invalida",
+        path: "metadata.json:category",
+        message: "category tem no máximo 40 caracteres",
       });
     }
   }

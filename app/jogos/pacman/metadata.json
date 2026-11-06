@@ -6,5 +6,6 @@
   "runtime": "native",
   "entrypoint": "bin/giochi-pacman",
   "license": "Proprietary",
-  "releaseYear": 2026
+  "releaseYear": 2026,
+  "category": "Arcade"
 }

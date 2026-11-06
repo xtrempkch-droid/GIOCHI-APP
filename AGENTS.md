@@ -46,8 +46,8 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
 
 - `node scripts/validate-app.mjs --all` passou: **7 apps** (6 em `scaffold`, o
   launcher em `ready`).
-- `node tests/run-all.mjs` passou: **68/68** (39 de validação + 16 do verificador
-  de quadro + 13 de capacidades de entrada).
+- `node tests/run-all.mjs` passou: **86/86** (43 de validação + 17 do verificador
+  de quadro + 13 de capacidades de entrada + 13 do gerador de catálogo).
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
 - `cargo test --workspace` em `app/launcher`: **135/135** (57 no `core`, 78 no
@@ -438,7 +438,7 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 68 testes JS
+node tests/run-all.mjs                    # 86 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
@@ -463,7 +463,9 @@ bash scripts/aparelho.sh input 15         # eventos crus de /dev/input
 bash scripts/aparelho.sh capacidades      # códigos que cada dispositivo declara
 bash scripts/aparelho.sh opcoes           # rota e autenticação (rede x usb0)
 bash scripts/aparelho.sh boot-log         # salva o log ANTES de regravar o cartão
+bash scripts/aparelho.sh catalogo         # gera e publica o índice de apps
 
+node scripts/gerar-catalogo.mjs --lista   # quem entra no catálogo e quem fica fora
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
 node scripts/verificar-telas.mjs         # as 9 telas em 640x480, 800x600, 1280x720
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
@@ -649,7 +651,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 03/11/2026, tudo rodado:
 
 - `node scripts/validate-app.mjs --all` → **7 apps OK**
-- `node tests/run-all.mjs` → **68/68**
+- `node tests/run-all.mjs` → **86/86**
 - `cargo test --workspace` → **135/135**
 - `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
 - `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
@@ -874,27 +876,96 @@ Os arquivos existem nos dois aparelhos; a UI mostra `—` porque ler
 `/sys/class/power_supply` e `/sys/class/thermal` nunca foi implementado. É
 trabalho de UI, não de sistema.
 
-### PRIORIDADE: detecção automática de jogos
+### Catálogo é projeção, não segunda fonte da verdade
 
-**Pedido do dono do projeto em 04/11/2026. É a primeira coisa da próxima
-sessão.** Desenho completo em [`docs/teste-x35h.md`](docs/teste-x35h.md).
+**Feito em 06/11/2026** (era a prioridade pedida em 04/11).
 
-Estado: o catálogo do aparelho (`/opt/giochi/apps/index.json`) é um JSON
-**escrito à mão**. Ele não deriva de nada — nem do `apps.json`, nem dos
-`metadata.json`. Instalei `cobrinha` e `pacman` hoje e o aparelho continuou
-mostrando **um** jogo até eu reescrever o arquivo à mão; um app instalado fora
-do JSON fica invisível sem erro nenhum.
+Até aqui o `/opt/giochi/apps/index.json` do aparelho era **escrito à mão**. Instalei
+`cobrinha` e `pacman` e o aparelho continuou mostrando **um** jogo até eu
+reescrever o JSON — e um app instalado fora dele ficava invisível, sem erro em
+lugar nenhum: nem no app, nem no log, nem na tela.
 
-O que falta: `bash scripts/aparelho.sh catalogo`, que gera o índice a partir de
-`app/apps.json` + os `metadata.json` e envia por `scp`. **O catálogo é projeção,
-não segunda fonte da verdade** — é a mesma lição do `releaseYear`, que precisou
-entrar em três lugares para não divergir.
+Hoje o catálogo sai de `app/apps.json` + os `metadata.json`:
 
-Cinco armadilhas já mapeadas no documento, todas observadas hoje: `folder` com
-grupo (`jogos/pacman` → `id` `pacman`, `dir` `/opt/giochi/apps/pacman`), filtro
-por `status`, `distribution` (`host` e `store` não vão para a imagem),
-`entrypoint` que precisa existir no disco, e o `dir` do aparelho que **não** é
-derivável do caminho no repositório.
+```bash
+bash scripts/aparelho.sh catalogo      # gera, confere no aparelho e publica
+node scripts/gerar-catalogo.mjs --lista  # só mostra quem entra e quem fica de fora
+```
+
+#### O que ficou de fora, e por quê
+
+Cada regra existe por um motivo que já apareceu, não por simetria:
+
+| Regra | Por quê |
+| --- | --- |
+| `status: scaffold` fica fora | tem `bin/` vazio; cartão que não abre é pior que cartão ausente |
+| `distribution: host` fica fora | `forge` e `store` rodam no PC |
+| `distribution: store` fica fora | é instalado em `/user` pela loja, não faz parte da imagem |
+| `role: shell` fica fora | senão o launcher **lista a si mesmo** |
+| `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
+
+**O `role: shell` foi descoberto pelo próprio gerador.** O launcher tem
+`status: ready`, `distribution: image` e binário no lugar — entrava por todos os
+critérios, e o cartão "Launcher" abriria um **segundo** launcher, que brigaria
+com o primeiro pelo DRM master e falharia com `kmsdrm not available`. O papel é
+**declarado** no `apps.json`, não inferido do nome: fixar `id === "launcher"`
+funcionaria até alguém renomear a pasta.
+
+#### A conferência que faltava: no aparelho, não no repo
+
+O gerador checa o binário na **árvore do repositório**. Quem importa é o
+**aparelho**: um jogo presente no repo e não instalado entraria no catálogo e
+viraria cartão morto. `aparelho.sh catalogo` percorre cada `dir/entrypoint` por
+SSH e **reduz** o catálogo antes de publicar, dizendo o que tirou e como instalar.
+
+Medido: removi o binário do `cobrinha` do aparelho → `gerado: 3` virou
+`catálogo reduzido para 2`; restaurei → 3 de novo. **Projeção de verdade reflete
+remoção, não só adição.**
+
+#### O `dir` do aparelho não é derivável do repo
+
+`jogos/pacman` no repositório é `/opt/giochi/apps/pacman` no aparelho. É
+convenção do `Giochi System`, e a única informação do catálogo que não vem nem do
+`apps.json` nem do `metadata.json` — por isso está explícita em
+`scripts/lib/catalogo.mjs` e tem teste.
+
+#### `category` entrou no `metadata.json`
+
+O cartão mostra `Cobrinha · Arcade · 2026`. Sem campo de gênero no metadata, o
+gerador não tinha de onde tirar e todos diriam "Aplicativo". Entrou nos três
+lugares de sempre: schema, validador e docs — mesma regra do `releaseYear`.
+
+### O BOOT AUTOMÁTICO FUNCIONA — medido em 06/11/2026
+
+Este era o teste que **nunca tinha rodado em aparelho nenhum**: em todas as
+rodadas a interface foi iniciada por SSH. O X55 foi desligado e religado, e a
+cadeia inteira aconteceu sozinha.
+
+Evidência, lida do `/proc` e não do log:
+
+```text
+uptime                     141 s
+giochi-init   pid=216  ppid=1      <- ::respawn: do /etc/inittab
+giochi-launcher pid=224 ppid=216   <- filho do giochi-init
+início dos dois            29 s depois do boot
+```
+
+O `ppid` é o que prova: o launcher **não** foi iniciado por SSH, foi filho do
+`giochi-init`, que por sua vez é filho do busybox init. O `pidof` mente para
+scripts neste busybox — foi `ps` e `/proc/<pid>/stat` que responderam.
+
+Quadro no painel depois do boot, sem tocar em nada:
+
+```text
+351 cores · 0,00% de preto · 99,5% de acerto · texto 0,99
+```
+
+É o melhor resultado já medido no X55 (era 98,9% e 0,98).
+
+**O `pidof` não serve para `giochi-init`.** `pidof giochi-init` devolve vazio
+enquanto `ps` mostra o processo: ele é um script `sh` e o `pidof` casa pelo
+`comm`, que não é o nome do arquivo. Ontem eu li "AUSENTE" e quase abri um bug
+que não existia.
 
 ### Lançar um jogo: agora existe caminho, e existe jogo
 

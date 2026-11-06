@@ -26,7 +26,8 @@
       "status": "ready",
       "distribution": "image",
       "license": "Proprietary",
-      "note": "Rust + SDL2. Compila para x86-64 e aarch64, roda no aparelho via KMSDRM com rotação para painel retrato."
+      "note": "Rust + SDL2. Compila para x86-64 e aarch64, roda no aparelho via KMSDRM com rotação para painel retrato.",
+      "role": "shell"
     },
     {
       "id": "volley",

@@ -15,6 +15,7 @@ Identidade de um app. Schema em [`schemas/metadata.schema.json`](../schemas/meta
 | `graphics_api` | enum | não | `gles2` ou `gles3` |
 | `buttons_map` | objeto | não | mapeamento de botões específico |
 | `releaseYear` | inteiro | não | ano de lançamento, quatro dígitos (`1988`) |
+| `category` | string | não | gênero exibido no cartão (`Arcade`, `Esporte`), até 40 caracteres |
 
 ## Por que `additionalProperties: false`
 
@@ -32,6 +33,22 @@ validação — que é exatamente a troca que este projeto escolheu fazer.
 **Consequência:** adicionar um campo novo exige mudar **três** lugares — este
 schema, o validador em `scripts/lib/apps.mjs` e a documentação. É de propósito:
 campo novo em contrato público é decisão, não detalhe.
+
+## Por que `category` existe
+
+O cartão da Home mostra `Cobrinha · Arcade · 2026`. O gênero é dado do programa,
+como o ano — e, como o ano, precisa de campo próprio: sem ele o gerador de
+catálogo não tem de onde tirar e todos os cartões diriam "Aplicativo".
+
+Ele entra na mesma cadeia de três elos do `releaseYear`:
+
+```text
+metadata.json:category  →  índice da loja: category  →  cartão
+       Arcade                    "Arcade"                 Arcade
+```
+
+Ausente é aceitável: a UI cai em "Aplicativo". Não é o caso de `—`, porque um
+gênero genérico é honesto — diferente de um número inventado.
 
 ## Por que `releaseYear` existe
 

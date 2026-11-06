@@ -24,6 +24,7 @@
 #   bash scripts/aparelho.sh capacidades [filtro]
 #   bash scripts/aparelho.sh opcoes
 #   bash scripts/aparelho.sh boot-log   (salva ANTES de regravar o cartão)
+#   bash scripts/aparelho.sh catalogo   (gera e envia o índice de apps)
 #
 # Variáveis:
 #   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
@@ -517,6 +518,108 @@ cmd_log() {
   no_aparelho "if [ -f $LOG ]; then tail -40 $LOG; else echo '(sem log — o app nunca subiu nesta sessão)'; fi"
 }
 
+# Gera o catálogo do aparelho a partir dos metadados e envia.
+#
+# ## Por que este subcomando existe
+#
+# Até 04/11/2026 o `/opt/giochi/apps/index.json` era escrito **à mão**. Instalei
+# `cobrinha` e `pacman` e o aparelho continuou mostrando **um** jogo até eu
+# reescrever o JSON — e um app instalado fora dele fica invisível, sem erro em
+# lugar nenhum: nem no app, nem no log, nem na tela.
+#
+# Agora o catálogo é **projeção** de `app/apps.json` + os `metadata.json`. Quem
+# gera é `scripts/gerar-catalogo.mjs`, que também diz o que ficou de fora e por
+# quê — a parte que faltava para "instalei e não apareceu" deixar de ser mistério.
+#
+# Ordem: gera primeiro, envia depois. Se a geração falhar, o aparelho continua
+# com o catálogo anterior em vez de ficar sem nenhum.
+cmd_catalogo() {
+  exigir_aparelho
+  titulo "catálogo"
+
+  local temp
+  temp=$(mktemp "${TMPDIR:-/tmp}/giochi-catalogo.XXXXXX.json")
+
+  # `--lista` vai para stderr do gerador; aqui interessa o que ele decide.
+  if ! node "$RAIZ/scripts/gerar-catalogo.mjs" --saida "$temp" 2>"$temp.avisos"; then
+    falha "não consegui gerar o catálogo"
+    sed 's/^/  /' "$temp.avisos" >&2 2>/dev/null
+    rm -f "$temp" "$temp.avisos"
+    return 1
+  fi
+
+  local quantos
+  quantos=$(node -e "const d=require('$temp');console.log(d.apps.length)" 2>/dev/null || echo '?')
+  ok "gerado: $quantos app(s)"
+  # Os avisos são o que responde "por que meu app não aparece".
+  sed 's/^/  /' "$temp.avisos" 2>/dev/null
+  rm -f "$temp.avisos"
+
+  # ── conferência NO APARELHO ────────────────────────────────────────────
+  #
+  # O gerador checa o binário na árvore do repositório. Quem importa é o
+  # aparelho: um jogo presente no repo e **não instalado** entraria no catálogo
+  # e viraria cartão morto — o usuário aperta e nada acontece, sem mensagem.
+  #
+  # É a mesma regra que já vale do lado do repo ("catálogo apontando para
+  # binário ausente é pior que catálogo vazio"), aplicada onde ela decide.
+  local pares
+  pares=$(node -e "
+    const d = require('$temp');
+    for (const a of d.apps) console.log([a.id, a.dir, a.entrypoint].join('|'));
+  " 2>/dev/null)
+
+  local faltando="" linha
+  while IFS='|' read -r _id dir entry; do
+    [ -n "${entry:-}" ] || continue
+    if ! no_aparelho "[ -x '$dir/$entry' ] && echo SIM" | grep -q SIM; then
+      faltando="$faltando $_id"
+    fi
+  done <<< "$pares"
+
+  if [ -n "$faltando" ]; then
+    aviso "não instalado(s) no aparelho:$faltando"
+    printf '  esses saem do catálogo — cartão que abre nada é pior que cartão ausente\n'
+    printf '  instale com: bash scripts/compilar-jogo-arm64.sh --jogo <nome> --instalar %s\n' "$HOST"
+    node -e "
+      const fs = require('fs');
+      const p = '$temp';
+      const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const fora = new Set('$faltando'.trim().split(/\\s+/));
+      d.apps = d.apps.filter((a) => !fora.has(a.id));
+      fs.writeFileSync(p, JSON.stringify(d, null, 2) + '\n');
+      console.error('  catálogo reduzido para ' + d.apps.length + ' app(s)');
+    " || { falha "não consegui filtrar o catálogo"; rm -f "$temp"; return 1; }
+  fi
+
+  local destino="/opt/giochi/apps/index.json"
+  no_aparelho "mkdir -p /opt/giochi/apps" >/dev/null 2>&1
+
+  # Envia para um temporário e move: um `scp` interrompido no meio deixaria
+  # JSON truncado no lugar do catálogo bom, e o launcher leria lixo.
+  if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "$temp" "root@$HOST:$destino.novo" 2>/dev/null &&
+     no_aparelho "chmod 644 $destino.novo && mv $destino.novo $destino && echo MOVIDO" |
+       grep -q MOVIDO; then
+    ok "publicado em $destino"
+  else
+    falha "não consegui publicar em $destino"
+    rm -f "$temp"
+    return 1
+  fi
+  rm -f "$temp"
+
+  # Conferência pelo lado do aparelho: quantos apps o launcher vai ver.
+  local visto
+  visto=$(no_aparelho "grep -c '\"id\"' $destino 2>/dev/null || echo 0")
+  case "$visto" in
+    0) aviso "catálogo vazio no aparelho — nenhum app vai aparecer na tela" ;;
+    *) ok "$visto app(s) no catálogo do aparelho" ;;
+  esac
+
+  printf '\n  o launcher lê o catálogo na abertura. Se ele já está rodando e você\n'
+  printf '  quer ver a lista nova: bash scripts/aparelho.sh parar && bash scripts/aparelho.sh subir\n'
+}
+
 # Traz o log de boot do aparelho.
 #
 # **Regravar o cartão apaga `/root/giochi-boot.log`** — o mesmo cartão serve os
@@ -702,6 +805,7 @@ case "${1:-ajuda}" in
   capacidades) shift; cmd_capacidades "${1:-}" ;;
   opcoes)      cmd_opcoes ;;
   boot-log)    cmd_boot_log ;;
+  catalogo)    cmd_catalogo ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.
@@ -709,7 +813,7 @@ case "${1:-ajuda}" in
     ;;
   *)
     falha "subcomando desconhecido: $1"
-    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log\n'
+    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log | catalogo\n'
     exit 1
     ;;
 esac

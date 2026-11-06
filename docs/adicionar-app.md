@@ -31,7 +31,8 @@ arquivo é app, e um grupo que se declara app vira um app quebrado.
   "arch": "aarch64",
   "runtime": "godot",
   "entrypoint": "bin/meu-app",
-  "releaseYear": 2026
+  "releaseYear": 2026,
+  "category": "Arcade"
 }
 ```
 
@@ -39,9 +40,15 @@ Campos obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`,
 `entrypoint`. Nenhum campo fora do schema é aceito — ver
 [metadata.md](metadata.md).
 
-`releaseYear` é opcional, mas **coloque**: é o ano que aparece no cartão e na
-ficha do jogo. Sem ele a UI mostra `—`, que é honesto, mas perde informação. O
-`developer` daqui é o mesmo fabricante que a ficha exibe.
+`releaseYear` e `category` são opcionais, mas **coloque os dois**: são o ano e o
+gênero que aparecem no cartão. Sem o ano a UI mostra `—`; sem o gênero, mostra
+"Aplicativo". O `developer` daqui é o mesmo fabricante que a ficha exibe.
+
+Depois de instalar, publique o catálogo — senão o app existe e não aparece:
+
+```bash
+bash scripts/aparelho.sh catalogo
+```
 
 ## 3. Coloque o executável em `bin/`
 
