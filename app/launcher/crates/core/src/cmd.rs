@@ -80,6 +80,12 @@ pub enum Cmd {
 
     /// Atualizar o nível de bateria. `None` = sem leitura.
     SetBattery(Option<u8>),
+    /// Temperatura do SoC em °C. `None` = sem sensor; a HUD mostra `—`.
+    ///
+    /// Comando separado de `SetBattery` porque as duas leituras falham por
+    /// motivos diferentes (gauge ausente × zona térmica ausente) e a UI precisa
+    /// poder mostrar uma sem a outra.
+    SetTemperature(Option<u16>),
     /// Informar se há controle conectado.
     SetPad(bool),
 
@@ -136,10 +142,11 @@ impl Cmd {
             | Cmd::OpenApp(_)
             | Cmd::GoSettingsCat(_) => true,
 
-            // Relógio do HUD, bateria, presença de controle, boot e o próprio
-            // despertar não vêm de um dedo ou de um botão.
+            // Relógio do HUD, bateria, temperatura, presença de controle, boot
+            // e o próprio despertar não vêm de um dedo ou de um botão.
             Cmd::TickHud
             | Cmd::SetBattery(_)
+            | Cmd::SetTemperature(_)
             | Cmd::SetPad(_)
             | Cmd::BootDone
             | Cmd::HideToast

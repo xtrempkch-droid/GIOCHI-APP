@@ -53,6 +53,14 @@ pub struct App {
     last_minute: u64,
     /// Tempo restante até reconferir o arquivo de rotação.
     rotation_poll: f32,
+    /// Bateria e temperatura do sistema. Ver `crate::energia`.
+    energia: crate::energia::Energia,
+    /// Tempo restante até a próxima leitura de energia.
+    ///
+    /// Separado da rotação de propósito: bateria muda em minutos, e girar a
+    /// tela é uma ação humana. Um intervalo só para os dois obrigaria a escolher
+    /// entre reler bateria rápido demais ou girar devagar demais.
+    energia_poll: f32,
     /// Backlight: apagar ao dormir, restaurar ao acordar.
     backlight: Backlight,
     /// Botão de energia físico.
@@ -125,6 +133,10 @@ impl App {
             toast_timer: 0.0,
             last_minute: 0,
             rotation_poll: 0.0,
+            energia: crate::energia::Energia::discover(),
+            // Zero no primeiro quadro: a barra superior abre com a leitura já
+            // feita, em vez de mostrar `—` por dois segundos.
+            energia_poll: 0.0,
             backlight,
             power: PowerWatch::novo(),
             volume,
@@ -429,6 +441,7 @@ impl App {
         self.poll_gamepad(delta_seconds);
         self.tick_toast(delta_seconds);
         self.tick_rotation(delta_seconds);
+        self.tick_energia(delta_seconds);
 
         self.fps_frames += 1;
         self.fps_elapsed += delta_seconds;
@@ -453,6 +466,60 @@ impl App {
             self.last_minute = minute;
             self.dirty = true;
         }
+    }
+
+    /// Lê bateria e temperatura do sistema a cada 5 s.
+    ///
+    /// ## Por que 5 s e não a cada quadro
+    ///
+    /// São quatro arquivos de `sysfs` por `power_supply`/`thermal_zone`, abertos
+    /// e lidos. A 60 Hz isso são centenas de `open`/`read`/`close` por segundo
+    /// num RK3566 — e a bateria não muda entre dois quadros. A temperatura
+    /// também não.
+    ///
+    /// ## Por que comando e não escrita direta
+    ///
+    /// O estado é do núcleo. Escrever daqui deixaria duas rotas para o mesmo
+    /// campo, e a que ninguém está olhando envelhece diferente.
+    fn tick_energia(&mut self, delta_seconds: f32) {
+        self.energia_poll -= delta_seconds;
+        if self.energia_poll > 0.0 {
+            return;
+        }
+        self.energia_poll = 5.0;
+
+        let bateria = self.energia.bateria();
+        let nivel = bateria
+            .as_ref()
+            .and_then(|b| b.percentual)
+            .map(|p| p.round() as u8);
+
+        let temperatura = self.energia.temperatura();
+
+        // Só registra quando o valor muda: log a cada 5 s afogaria o resto.
+        //
+        // A temperatura entra na **mesma** linha de propósito. Antes ela era
+        // silenciosa, e uma leitura que falha (sensor some, caminho muda) ficava
+        // invisível: a HUD mostrava `—` e ninguém sabia se era ausência real ou
+        // bug. O log tem de cobrir os dois lados.
+        if nivel != self.state.battery || temperatura.map(|t| t as u16) != Some(self.state.hud.temp_c)
+        {
+            eprintln!(
+                "energia: bateria {} · temperatura {}",
+                match (&bateria, nivel) {
+                    (Some(b), Some(n)) => format!("{n}% ({})", b.status),
+                    (Some(b), None) => format!("sem leitura ({})", b.status),
+                    _ => "sem medidor".to_string(),
+                },
+                match temperatura {
+                    Some(t) => format!("{t}C"),
+                    None => "sem sensor".to_string(),
+                }
+            );
+        }
+
+        self.dispatch(Cmd::SetBattery(nivel));
+        self.dispatch(Cmd::SetTemperature(temperatura));
     }
 
     /// Relê `/user/.config/giochi/rotation` de vez em quando.

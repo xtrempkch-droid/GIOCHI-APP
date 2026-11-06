@@ -25,6 +25,7 @@ mod backlight;
 mod catalogo;
 mod display;
 mod draw;
+mod energia;
 mod icons;
 mod input_evdev;
 mod power;

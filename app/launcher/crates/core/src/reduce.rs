@@ -6,7 +6,7 @@
 
 use crate::cmd::{Cmd, Dir};
 use crate::focus::{navigate, Focus, Zone};
-use crate::state::{Filter, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS};
+use crate::state::{Filter, HUD, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS};
 // `Game` e `Tab` só aparecem na construção de estado de teste (`demo` e `mod
 // tests`); importá-los sempre geraria aviso no build de produção.
 #[cfg(test)]
@@ -104,6 +104,13 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         Cmd::TickHud => state,
         Cmd::SetBattery(level) => State {
             battery: level,
+            ..state
+        },
+        Cmd::SetTemperature(celsius) => State {
+            hud: HUD {
+                temp_c: celsius.unwrap_or(0),
+                ..state.hud
+            },
             ..state
         },
         Cmd::SetPad(connected) => State {

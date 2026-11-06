@@ -543,8 +543,14 @@ por thread (`draw.rs`).
 - **Não instala app.** Instalação é da loja, no PC.
 - **Não lê TDP.** Não há arquivo no sysfs que exponha watts nestes SoCs; a HUD
   mostra `—`.
-- **Não lê bateria nem temperatura.** Os caminhos de §2.3/§2.4 existem no
-  contrato, mas nada foi implementado; a HUD mostra `—`.
+- **Temperatura: implementada** (`crates/ui-sdl/src/energia.rs`), lida de
+  `thermal_zone*` em miligraus, com preferência pela zona de `cpu`. Medido:
+  `40C` no X55.
+- **Bateria: implementada mas não julgada.** O X55 não tem célula — foi
+  removida para dar acesso à serial, e o `rk817-battery` continua no sysfs
+  publicando `0% / Not charging` porque o nó existe. Quem valida bateria é o
+  outro aparelho, que tem bateria.
+- **Não lê TDP.**
 - **Não reinicia de forma confirmada.** `poweroff` foi medido nos dois aparelhos
   e corta a energia; `reboot` usa o mesmo caminho mas **não foi exercitado**
   separadamente.

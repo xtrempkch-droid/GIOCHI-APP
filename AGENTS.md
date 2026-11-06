@@ -50,7 +50,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP` (a criar
   de quadro + 13 de capacidades de entrada + 13 do gerador de catálogo).
 - `cargo build --workspace` em `app/launcher`: **compila e linka**, zero erro e
   zero aviso (rustc 1.99, SDL2 2.32.10, SDL2_ttf 2.24.0).
-- `cargo test --workspace` em `app/launcher`: **135/135** (57 no `core`, 78 no
+- `cargo test --workspace` em `app/launcher`: **153/153** (59 no `core`, 94 no
   `ui-sdl`). As contagens estiveram invertidas por várias rodadas: quem tem mais
   testes é o `ui-sdl`, não o `core`.
 - O launcher **roda**: Home desenhada de verdade e gravada em BMP com
@@ -443,7 +443,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 135 testes do launcher
+cd app/launcher && cargo test --workspace  # 153 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -652,7 +652,7 @@ Nada aqui pode ser declarado "funciona" sem ter sido executado. Estado em
 
 - `node scripts/validate-app.mjs --all` → **7 apps OK**
 - `node tests/run-all.mjs` → **86/86**
-- `cargo test --workspace` → **135/135**
+- `cargo test --workspace` → **153/153**
 - `cargo build --workspace` → zero erro, zero aviso, nos dois modos de feature
 - `--dump-frame` no PC e no aparelho → BMP com conteúdo real (135 cores)
 - `aparelho.sh verificar` → frame 720×1280 comparado, **98,9 %** de acerto
@@ -708,7 +708,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Jogo em painel retrato (X55) | **gira** — `projeto 1280x720 (Ccw90)`, preenche o painel |
 | Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
 | Analógico / desempenho (FPS) | **não exercitados** |
-| Leitura real de bateria/temperatura/TDP | ausente; a UI mostra `—` — **os dois aparelhos expõem os dois dados** (`bateria 0%`, `42C` no X55) |
+| Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
 
@@ -934,6 +934,46 @@ convenção do `Giochi System`, e a única informação do catálogo que não ve
 O cartão mostra `Cobrinha · Arcade · 2026`. Sem campo de gênero no metadata, o
 gerador não tinha de onde tirar e todos diriam "Aplicativo". Entrou nos três
 lugares de sempre: schema, validador e docs — mesma regra do `releaseYear`.
+
+### Bateria e temperatura: o dado existia e ninguém lia
+
+**Feito em 06/11/2026.** A HUD mostrava `—` nos dois campos enquanto o
+`giochi-selftest` do sistema imprimia `bateria: 0%` e `temperatura: 42C`. Não era
+difícil — nunca ninguém tinha ligado as duas pontas.
+
+`crates/ui-sdl/src/energia.rs` lê `/sys/class/power_supply` e
+`/sys/class/thermal`, e `App::tick_energia` despacha `Cmd::SetBattery` e
+`Cmd::SetTemperature` a cada **5 s** (ler 4 arquivos de sysfs a 60 Hz seria
+desperdício, e nenhum dos dois valores muda entre dois quadros).
+
+Medido no X55:
+
+```text
+energia: bateria 0% (Not charging) · temperatura 40C
+```
+
+#### Eu errei sobre a bateria, e o dono do projeto corrigiu
+
+Registrei que `0% (Not charging)` era "leitura válida com valor ruim". **Não é:**
+o X55 **não tem bateria**. Ela foi removida fisicamente para dar acesso à serial
+(TTL). O `rk817-battery` continua no sysfs publicando `0%` porque o nó do PMIC
+existe — não porque haja célula atrás dele.
+
+Consequência que fica: **este módulo não pode ser julgado no X55.** Quem valida
+bateria é o outro aparelho, que tem célula. O que dá para conferir aqui é
+temperatura, que é sensor do SoC e independe da bateria — e essa fecha:
+`cpu-thermal = 39444` no sysfs contra `40C` na tela.
+
+A lição é a de sempre, e é a terceira vez nesta semana: **um número no sysfs não
+prova que o hardware existe.** Existir, declarar e ser usado são fatos
+diferentes, e aqui o primeiro enganava o segundo.
+
+#### Por que a temperatura entra na mesma linha de log
+
+A primeira versão logava só quando a **bateria** mudava. Uma leitura de
+temperatura que falhasse (sensor ausente, caminho diferente) ficava invisível: a
+HUD mostrava `—` e nada dizia se era ausência real ou bug. Agora os dois valores
+saem juntos quando qualquer um muda.
 
 ### O BOOT AUTOMÁTICO FUNCIONA — medido em 06/11/2026
 
