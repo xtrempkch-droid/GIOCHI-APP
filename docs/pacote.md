@@ -213,6 +213,28 @@ depende do Giochi System.
 | Item | Estado |
 | --- | --- |
 | verificação de assinatura **no aparelho** | **não** — o PC verifica antes de enviar; o aparelho confia no cabo |
-| `.giochi` lido de pendrive pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
+| `.giochi` lido de pendrive/SD pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
 | loja (download, OAuth, butlerd) | **não** — ver [`loja.md`](loja.md) |
 | app Godot empacotado | **não** — falta export ARM64 |
+
+#### O cartão SD muda o modelo de confiança
+
+"O aparelho confia no cabo" era aceitável enquanto o único caminho era
+`aparelho.sh instalar-pacote`: quem envia, controla. Com jogos em **cartão SD**
+(que é o plano para dois slots + eMMC) o arquivo chega ao aparelho **sem passar
+pelo PC**, e aí confiar sem verificar deixa de ser conveniência e vira risco.
+
+O que falta, e por que ainda não está feito:
+
+- `scripts/lib/extrair-pacote.sh` hoje **não verifica nada**: nem o SHA-256 do
+  manifesto, nem a assinatura. Ele extrai, confere que o `entrypoint` existe e
+  que ficou executável. Corrupção por cópia parcial passa.
+- Verificar no aparelho exige `openssl` (ou uma implementação de Ed25519) e
+  `sha256sum` no rootfs. **Não medi se existem** — o X55 está offline, e
+  escrever verificação sem executá-la seria exatamente o que este repositório
+  evita declarar.
+- O caminho barato, quando houver aparelho: conferir o SHA-256 do manifesto com
+  `sha256sum`, e a assinatura com `openssl pkeyutl -verify -rawin -sigfile`
+  contra `/etc/giochi/loja-publica.pem` — as duas ferramentas que o formato do
+  `.sig` (64 bytes crus) já atende de propósito. Se faltar `openssl`, o
+  verificador tem de **dizer que não verificou**, não passar em silêncio.
