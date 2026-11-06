@@ -21,6 +21,7 @@
 //! sem placa de som. O `unsafe` fica confinado em [`AlsaMixer`] e é a única
 //! parte que depende de hardware.
 
+#[cfg(target_os = "linux")]
 use std::cell::RefCell;
 
 /// Onde o volume escolhido é gravado.
@@ -119,41 +120,149 @@ fn ler_salvo() -> Option<u8> {
 // ── ALSA ────────────────────────────────────────────────────
 //
 // FFI manual em vez do crate `alsa`: o crate exige pkg-config e cabeçalhos de
-// desenvolvimento no alvo, que o aparelho não tem. Estas dez funções são a
+// desenvolvimento no alvo, que o aparelho não tem. Estas doze funções são a
 // superfície mínima do mixer e existem em qualquer libasound 2.x.
+
+// ## Por que `dlopen`, e não `#[link(name = "asound")]`
+//
+// Porque ligar contra a biblioteca é dependência **dura de carregamento**: sem
+// `libasound.so.2` no alvo, o binário nem abre —
+//
+//     error while loading shared libraries: libasound.so.2
+//
+// Medido no **R35S** em 06/11/2026: ele tem `/dev/snd` (com `timer`) e **não
+// tem `libasound`**. O menu de volume degradaria para `—` de qualquer forma; o
+// que não podia era o app inteiro não carregar por causa de um controle que ele
+// já sabe dispensar.
+//
+// A primeira solução foi uma feature (`som`), decidida por aparelho no build.
+// Resolvia o R35S e **quebrava o X55**: lá o `libasound` existe, e o binário
+// compilado sem a feature perdia o mixer. Um binário que só serve em um aparelho
+// de cada vez anula a premissa do projeto. Resolver os símbolos em tempo de
+// execução custa uma tabela e devolve as duas coisas ao mesmo binário.
 
 #[cfg(target_os = "linux")]
 mod alsa {
     use super::Mixer;
-    use std::ffi::CString;
-    use std::ffi::{c_char, c_int, c_long, c_void};
+    use std::ffi::{c_char, c_int, c_long, c_void, CStr, CString};
+    use std::sync::OnceLock;
 
-    #[link(name = "asound")]
+    /// `RTLD_NOW`: resolver tudo na abertura. Com `RTLD_LAZY`, um símbolo
+    /// faltante viraria salto para o vazio no meio do laço da UI.
+    const RTLD_NOW: c_int = 2;
+
+    // ## Por que sem `#[link(name = "dl")]`
+    //
+    // A partir da glibc 2.34 as funções `dl*` vivem na própria libc, e as três
+    // imagens medidas (X55, X35H, R35S) são glibc 2.38. Pedir `-ldl` no
+    // cross-compile exigiria o symlink de desenvolvimento no sysroot, que o
+    // rootfs do Buildroot não tem — exatamente o motivo pelo qual o ALSA é
+    // `dlopen` em vez de `-lasound`.
     extern "C" {
-        fn snd_mixer_open(mixer: *mut *mut c_void, mode: c_int) -> c_int;
-        fn snd_mixer_attach(mixer: *mut c_void, name: *const c_char) -> c_int;
-        fn snd_mixer_selem_register(
-            mixer: *mut c_void,
-            options: *mut c_void,
-            classp: *mut *mut c_void,
-        ) -> c_int;
-        fn snd_mixer_load(mixer: *mut c_void) -> c_int;
-        fn snd_mixer_first_elem(mixer: *mut c_void) -> *mut c_void;
-        fn snd_mixer_elem_next(elem: *mut c_void) -> *mut c_void;
-        fn snd_mixer_selem_has_playback_volume(elem: *mut c_void) -> c_int;
-        fn snd_mixer_selem_get_name(elem: *mut c_void) -> *const c_char;
-        fn snd_mixer_selem_get_playback_volume(
-            elem: *mut c_void,
-            channel: c_int,
-            value: *mut c_long,
-        ) -> c_int;
-        fn snd_mixer_selem_get_playback_volume_range(
-            elem: *mut c_void,
-            min: *mut c_long,
-            max: *mut c_long,
-        ) -> c_int;
-        fn snd_mixer_selem_set_playback_volume_all(elem: *mut c_void, value: c_long) -> c_int;
-        fn snd_mixer_close(mixer: *mut c_void) -> c_int;
+        fn dlopen(arquivo: *const c_char, modo: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, simbolo: *const c_char) -> *mut c_void;
+        fn dlerror() -> *mut c_char;
+    }
+
+    type FnOpen = unsafe extern "C" fn(*mut *mut c_void, c_int) -> c_int;
+    type FnAttach = unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int;
+    type FnRegister = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> c_int;
+    type FnLoad = unsafe extern "C" fn(*mut c_void) -> c_int;
+    type FnFirst = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type FnNext = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type FnHasVolume = unsafe extern "C" fn(*mut c_void) -> c_int;
+    type FnName = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+    type FnGetVolume = unsafe extern "C" fn(*mut c_void, c_int, *mut c_long) -> c_int;
+    type FnRange = unsafe extern "C" fn(*mut c_void, *mut c_long, *mut c_long) -> c_int;
+    type FnSetVolume = unsafe extern "C" fn(*mut c_void, c_long) -> c_int;
+    type FnClose = unsafe extern "C" fn(*mut c_void) -> c_int;
+
+    /// Tabela de símbolos, resolvida uma vez por processo.
+    struct Simbolos {
+        open: FnOpen,
+        attach: FnAttach,
+        register: FnRegister,
+        load: FnLoad,
+        first: FnFirst,
+        next: FnNext,
+        has_playback_volume: FnHasVolume,
+        name: FnName,
+        get_volume: FnGetVolume,
+        range: FnRange,
+        set_volume: FnSetVolume,
+        close: FnClose,
+    }
+
+    // Ponteiros de função são `Send`/`Sync`; a tabela é imutável depois de
+    // resolvida, então compartilhá-la entre threads não muda nada.
+    unsafe impl Send for Simbolos {}
+    unsafe impl Sync for Simbolos {}
+
+    static SIMBOLOS: OnceLock<Option<Simbolos>> = OnceLock::new();
+
+    /// A biblioteca fica aberta pelo resto do processo: não há `dlclose`.
+    /// Fechá-la com um `AlsaMixer` vivo deixaria os ponteiros pendurados, e o
+    /// ganho seria de alguns KB num aparelho de 1 GB.
+    fn simbolos() -> Option<&'static Simbolos> {
+        SIMBOLOS
+            .get_or_init(|| {
+                let handle = abrir_libasound()?;
+                // `unsafe`: `dlsym` é seguro com um handle válido, e o handle
+                // veio de um `dlopen` que não falhou.
+                unsafe { resolver(handle) }
+            })
+            .as_ref()
+    }
+
+    /// Procura `libasound` no formato versionado e depois no genérico.
+    ///
+    /// O `.so.2` vem primeiro porque é o que existe no rootfs: o symlink `.so`
+    /// é coisa de pacote `-dev`, que a imagem não instala.
+    fn abrir_libasound() -> Option<*mut c_void> {
+        for nome in ["libasound.so.2", "libasound.so"] {
+            let Ok(nome) = CString::new(nome) else {
+                continue;
+            };
+            let h = unsafe { dlopen(nome.as_ptr(), RTLD_NOW) };
+            if !h.is_null() {
+                return Some(h);
+            }
+        }
+        None
+    }
+
+    /// Resolve a tabela. `None` quando algum símbolo falta — e nesse caso o
+    /// mixer é `Ausente`, não um pânico: uma `libasound` futura pode renomear
+    /// algo, e perder o controle de volume é melhor que perder o app.
+    unsafe fn resolver(handle: *mut c_void) -> Option<Simbolos> {
+        unsafe fn pega<T: Copy>(handle: *mut c_void, nome: &str) -> Option<T> {
+            let nome = CString::new(nome).ok()?;
+            let p = dlsym(handle, nome.as_ptr());
+            if p.is_null() {
+                // `dlerror()` consome o erro pendente; sem isso a próxima
+                // mensagem seria a antiga.
+                let _ = dlerror();
+                return None;
+            }
+            // Ponteiro de função e `*mut c_void` têm o mesmo tamanho; o cast é
+            // o único caminho sem `bindgen`.
+            Some(std::mem::transmute_copy(&p))
+        }
+
+        Some(Simbolos {
+            open: pega(handle, "snd_mixer_open")?,
+            attach: pega(handle, "snd_mixer_attach")?,
+            register: pega(handle, "snd_mixer_selem_register")?,
+            load: pega(handle, "snd_mixer_load")?,
+            first: pega(handle, "snd_mixer_first_elem")?,
+            next: pega(handle, "snd_mixer_elem_next")?,
+            has_playback_volume: pega(handle, "snd_mixer_selem_has_playback_volume")?,
+            name: pega(handle, "snd_mixer_selem_get_name")?,
+            get_volume: pega(handle, "snd_mixer_selem_get_playback_volume")?,
+            range: pega(handle, "snd_mixer_selem_get_playback_volume_range")?,
+            set_volume: pega(handle, "snd_mixer_selem_set_playback_volume_all")?,
+            close: pega(handle, "snd_mixer_close")?,
+        })
     }
 
     /// `SND_MIXER_SCHN_FRONT_LEFT`.
@@ -168,6 +277,7 @@ mod alsa {
 
     /// Conexão viva com o mixer do `card0`.
     pub struct AlsaMixer {
+        sim: &'static Simbolos,
         mixer: *mut c_void,
         /// Elemento escolhido. Copiado do ponteiro devolvido pela libasound,
         /// que só é válido enquanto `mixer` estiver aberto.
@@ -180,64 +290,66 @@ mod alsa {
 
     impl AlsaMixer {
         pub fn abrir(card: &str) -> Option<Self> {
+            let sim = simbolos()?;
             let nome = CString::new(card).ok()?;
             let mut mixer: *mut c_void = std::ptr::null_mut();
 
             unsafe {
-                if snd_mixer_open(&mut mixer, 0) < 0 || mixer.is_null() {
+                if (sim.open)(&mut mixer, 0) < 0 || mixer.is_null() {
                     return None;
                 }
-                if snd_mixer_attach(mixer, nome.as_ptr()) < 0 {
-                    snd_mixer_close(mixer);
+                if (sim.attach)(mixer, nome.as_ptr()) < 0 {
+                    (sim.close)(mixer);
                     return None;
                 }
-                if snd_mixer_selem_register(mixer, std::ptr::null_mut(), std::ptr::null_mut()) < 0 {
-                    snd_mixer_close(mixer);
+                if (sim.register)(mixer, std::ptr::null_mut(), std::ptr::null_mut()) < 0 {
+                    (sim.close)(mixer);
                     return None;
                 }
-                if snd_mixer_load(mixer) < 0 {
-                    snd_mixer_close(mixer);
+                if (sim.load)(mixer) < 0 {
+                    (sim.close)(mixer);
                     return None;
                 }
 
-                let Some(elem) = Self::escolher(mixer) else {
-                    snd_mixer_close(mixer);
+                let Some(elem) = Self::escolher(sim, mixer) else {
+                    (sim.close)(mixer);
                     return None;
                 };
-                Some(Self { mixer, elem })
+                Some(Self { sim, mixer, elem })
             }
         }
 
         /// Prefere Master, depois PCM, depois Playback; senão o primeiro que
         /// tenha volume de reprodução.
-        unsafe fn escolher(mixer: *mut c_void) -> Option<*mut c_void> {
+        unsafe fn escolher(
+            sim: &'static Simbolos,
+            mixer: *mut c_void,
+        ) -> Option<*mut c_void> {
             let mut primeiro: Option<*mut c_void> = None;
-            let mut elem = snd_mixer_first_elem(mixer);
+            let mut elem = (sim.first)(mixer);
 
             while !elem.is_null() {
-                if snd_mixer_selem_has_playback_volume(elem) > 0 {
+                if (sim.has_playback_volume)(elem) > 0 {
                     if primeiro.is_none() {
                         primeiro = Some(elem);
                     }
-                    let nome_ptr = snd_mixer_selem_get_name(elem);
+                    let nome_ptr = (sim.name)(elem);
                     if !nome_ptr.is_null() {
-                        if let Ok(nome) = std::ffi::CStr::from_ptr(nome_ptr).to_str() {
+                        if let Ok(nome) = CStr::from_ptr(nome_ptr).to_str() {
                             if PREFERIDOS.contains(&nome) {
                                 return Some(elem);
                             }
                         }
                     }
                 }
-                elem = snd_mixer_elem_next(elem);
+                elem = (sim.next)(elem);
             }
             primeiro
         }
 
         fn faixa(&self) -> Option<(i64, i64)> {
             let (mut min, mut max): (c_long, c_long) = (0, 0);
-            let rc = unsafe {
-                snd_mixer_selem_get_playback_volume_range(self.elem, &mut min, &mut max)
-            };
+            let rc = unsafe { (self.sim.range)(self.elem, &mut min, &mut max) };
             if rc < 0 || max <= min {
                 return None;
             }
@@ -250,7 +362,7 @@ mod alsa {
             let (min, max) = self.faixa()?;
             let mut valor: c_long = 0;
             let rc = unsafe {
-                snd_mixer_selem_get_playback_volume(self.elem, CANAL_FRENTE_ESQ, &mut valor)
+                (self.sim.get_volume)(self.elem, CANAL_FRENTE_ESQ, &mut valor)
             };
             if rc < 0 {
                 return None;
@@ -264,7 +376,7 @@ mod alsa {
             };
             let alvo = min + (pct.min(100) as i64 * (max - min)) / 100;
             unsafe {
-                snd_mixer_selem_set_playback_volume_all(self.elem, alvo as c_long);
+                (self.sim.set_volume)(self.elem, alvo as c_long);
             }
         }
     }
@@ -281,7 +393,7 @@ mod alsa {
         fn drop(&mut self) {
             if !self.mixer.is_null() {
                 unsafe {
-                    snd_mixer_close(self.mixer);
+                    (self.sim.close)(self.mixer);
                 }
             }
         }
@@ -326,6 +438,11 @@ impl Mixer for MixerBox {
     }
 
     fn set(&self, pct: u8) {
+        // Fora do Linux não há ALSA: o `let _` evita aviso de variável sem uso,
+        // e aviso em build de release esconde o próximo, que pode ser de
+        // verdade.
+        #[cfg(not(target_os = "linux"))]
+        let _ = pct;
         match self {
             #[cfg(target_os = "linux")]
             MixerBox::Alsa(m) => m.borrow().set(pct),

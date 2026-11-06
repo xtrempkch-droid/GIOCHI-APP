@@ -26,8 +26,11 @@
 #     ao aparelho e compila com ou sem ela; presumir custa uma rodada, porque o
 #     binário sem texto roda igual no aparelho que tem a biblioteca — só que sem
 #     rótulo nenhum, sem erro. `--com-texto` / `--sem-texto` sobrepõem.
-#  5. `libasound` (controle de volume) também é copiada do aparelho: a versão do
-#     sysroot do Ubuntu não é a que o codec dele espera.
+#  5. `libasound` **não** é copiada e não é exigida no link: o mixer é resolvido
+#     com `dlopen` (ver `app/launcher/crates/ui-sdl/src/volume.rs`), então o
+#     mesmo binário serve no aparelho com a biblioteca e no que não tem — lá o
+#     volume mostra `—` e o resto funciona. Copiá-la do aparelho só para linkar
+#     foi o que quebrou o R35S, que não a tem.
 #
 # Requisitos: `ssh`/`scp` para o aparelho, `curl`, `dpkg-deb`, `rustup`.
 set -euo pipefail
@@ -133,11 +136,34 @@ if [ -z "$TEM_TEXTO" ]; then
 fi
 TEM_TEXTO_PEDIDO="$TEM_TEXTO"
 
+# ── 3b. ALSA (só informativo) ───────────────────────────────
+#
+# O mixer **não** é mais dependência de link: `volume.rs` resolve
+# `libasound.so.2` com `dlopen` e, se não achar, o volume mostra `—` e o resto
+# funciona. Não há feature nem cópia da biblioteca para o cache.
+#
+# A pergunta continua sendo feita porque "volume vai funcionar neste aparelho?"
+# é a primeira coisa que alguém quer saber ao instalar, e a resposta só o
+# aparelho tem. Medido no R35S (06/11/2026): tem `/dev/snd`, **não** tem a
+# biblioteca — e o binário ligado contra ela nem abria.
+TEM_SOM=""
+if [ -z "$INSTALAR" ]; then
+  resolver_aparelho
+fi
+if [ -n "$HOST_SSH" ] && ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=8 "$HOST_SSH" \
+    'ls /usr/lib/libasound.so* >/dev/null 2>&1 || ls /lib/libasound.so* >/dev/null 2>&1' 2>/dev/null; then
+  TEM_SOM="sim"
+else
+  TEM_SOM="nao"
+fi
+
 # ── 3. bibliotecas do aparelho (glibc 2.38 + SDL2) ──────────
 # Não dá para usar as do Ubuntu: o libSDL2 do aparelho pede símbolos
 # `@GLIBC_2.38` que o sysroot 2.35 não tem, e o link falha.
 precisa_do_aparelho() {
-  [ -f "$LIBDIR/libSDL2.so" ] && [ -f "$LIBDIR/libasound.so" ] &&
+  # `libasound` não entra mais no cache: o link não a pede (ver 3b).
+  [ -f "$LIBDIR/libSDL2.so" ] &&
     [ -f "$SYSROOT/usr/aarch64-linux-gnu/lib/libc.so.6" ] &&
     [ -f "$SYSROOT/usr/aarch64-linux-gnu/lib/libm.so.6" ] &&
     # Sem o SDL2_ttf no cache o link com a feature `texto` falha, e o erro é
@@ -157,7 +183,6 @@ if ! precisa_do_aparelho; then
   # Um symlink que não exista no aparelho vira erro explícito abaixo.
   for par in \
     "/usr/lib/libSDL2.so:$LIBDIR/libSDL2.so" \
-    "/usr/lib/libasound.so:$LIBDIR/libasound.so" \
     "/usr/lib/libSDL2_ttf.so:$LIBDIR/libSDL2_ttf.so" \
     "/lib/libc.so.6:$SYSROOT/usr/aarch64-linux-gnu/lib/libc.so.6" \
     "/lib/libm.so.6:$SYSROOT/usr/aarch64-linux-gnu/lib/libm.so.6" \
@@ -210,17 +235,20 @@ export RUSTFLAGS="-C linker=$RAIZ_CACHE/cc-aarch64.sh \
 -C link-arg=-L$SYSROOT/lib \
 -C link-arg=-L$SYSROOT/usr/lib"
 
+# Só o `texto` é feature: `SDL2_ttf` é dependência de **link**, e sem ela o
+# link falha. O mixer é `dlopen` e não entra nesta conta.
+FEATURES="--no-default-features"
 if [ "$TEM_TEXTO" = "sim" ]; then
-  log "aparelho TEM libSDL2_ttf — compilando COM a feature texto"
-  FEATURES=""
+  FEATURES="$FEATURES --features texto"
+  log "features do aparelho: texto"
 else
-  if [ -n "$HOST_SSH" ]; then
-    log "aparelho SEM libSDL2_ttf — compilando sem a feature texto"
-    log "  (a UI desenha tudo menos os glifos: ver docs/dependencias-aparelho.md)"
-  else
-    log "aparelho não alcançado — compilando sem texto, que é o seguro"
-  fi
-  FEATURES="--no-default-features"
+  log "aparelho SEM libSDL2_ttf — sem glifos"
+  [ -z "$HOST_SSH" ] && log "  (aparelho não alcançado: build sem texto é o seguro)"
+fi
+if [ "$TEM_SOM" = "nao" ]; then
+  log "  sem libasound: o volume mostra — (o binário roda igual)"
+else
+  log "  com libasound: controle de volume ativo"
 fi
 
 cd "$LAUNCHER"
@@ -248,8 +276,18 @@ if [ -n "$INSTALAR" ]; then
     "$BIN" "$INSTALAR:$DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" \
     "chmod +x $DESTINO/giochi-launcher && ls -la $DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
-  # O `inittab` desta imagem não tem entrada para o `giochi-init`, então o app
-  # NÃO sobe no boot. Dizer o contrário aqui já custou um diagnóstico errado.
-  log "instalado. A interface NÃO sobe sozinha: o inittab não inicia o giochi-init."
-  log "suba com: bash scripts/aparelho.sh subir"
+  # **Perguntar ao aparelho**, não afirmar. A mensagem dizia sempre "o inittab
+  # não inicia o giochi-init", verdade na imagem do X55 de 03/11 e **falsa** nas
+  # de 04/11 e na do R35S — onde o `::respawn:` existe e a interface sobe sozinha.
+  #
+  # Uma mensagem fixa sobre o estado de outra pessoa envelhece calada, e o custo
+  # é diagnosticar "não sobe" quando sobe.
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$INSTALAR" \
+      'grep -qE "^[^#]*respawn:.*giochi-init" /etc/inittab' 2>/dev/null; then
+    log "instalado. O inittab TEM respawn do giochi-init: a interface sobe no boot."
+    log "  para ver agora sem reiniciar: bash scripts/aparelho.sh subir"
+  else
+    log "instalado. O inittab NÃO tem respawn do giochi-init nesta imagem."
+    log "  suba com: bash scripts/aparelho.sh subir   (e relate ao Giochi System)"
+  fi
 fi

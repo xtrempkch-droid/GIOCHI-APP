@@ -3051,3 +3051,147 @@ arquivo, e concatenar todos antes deslocaria os códigos dos seguintes.
 `None` (não medido) ≠ lista vazia (medido, não declara nada): no PC não há
 `/sys/class/input/event*`, e o launcher **não avisa** — só avisa quando mediu e
 o código não está lá.
+
+## 23. Instalar o launcher no R35S: USB, e o que ele não tinha (06/11/2026)
+
+O R35S ganhou **USB**: `usb0` subiu, aparelho em `10.55.0.2`, host em
+`10.55.0.1` pela interface `enx0247494f4348`. A partir daí o `aparelho.sh`
+inteiro funciona nele — mas o primeiro `ssh` falhou com aviso de **ataque MITM**:
+a host key em cache era a do X55, porque o IP é o mesmo. `ssh-keygen -R
+10.55.0.2` resolve; o erro não falava de chave nova.
+
+### `libasound` não existe nele, e isso não é degradação
+
+Instalado com `compilar-launcher-arm64.sh --instalar root@10.55.0.2` (728 KB), o
+binário **não abriu**:
+
+```text
+libasound.so.2: cannot open shared object file: No such file or directory
+```
+
+O aparelho tem `/dev/snd` e drivers de áudio; não tem a biblioteca. **Biblioteca
+ausente é falha de carga**: o processo não sobe "sem som", ele não sobe.
+
+A primeira correção foi uma feature `som`, decidida por aparelho no build — e ela
+**quebrava o X55**, que tem `libasound` e perdia o mixer com um binário compilado
+sem a feature. Binário que só serve em um aparelho de cada vez anula a premissa
+do projeto. `volume.rs` passou a resolver os símbolos com
+`dlopen("libasound.so.2")`: achando, controla o mixer; não achando, `Ausente` e o
+volume mostra `—`. **Um binário, sem feature, e o `NEEDED` não lista `libasound`.**
+
+Medido no R35S com o mesmo arquivo que roda no X55:
+
+```text
+$ giochi-launcher --mostrar-volume
+sem mixer com volume de reprodução
+```
+
+Resultado no R35S: `opengles2 acelerado`, `640x480 → 640x480 escala 1,0`,
+`volume: 50% (sem mixer)`, e o aviso de `KEY_POWER` ausente disparando.
+
+### `--dump-frame` com GLES grava BMP preto
+
+De novo, e agora está medido neste aparelho: com `opengles2` o quadro sai preto;
+com `GIOCHI_GLES=0` sai com 1365 cores. É o swap esvaziando o buffer antes da
+leitura, como no X35H. Para capturar, force software.
+
+### A verificação
+
+```text
+640x480, 326 cores, 0.00% de preto, 99.2% de acerto, texto ok
+```
+
+E o ciclo de vida, que é o que faltava provar:
+
+```text
+pid=438 ppid=159 drm=3     # 159 = /bin/sh /usr/bin/giochi-init
+pid=957 ppid=159 drm=3     # depois de outra rodada: respawn funcionando
+```
+
+### Um `cfg` que nunca é compilado é código que não existe
+
+`cargo build --no-default-features` **não compilava**: faltava `design` no
+inicializador do `Painter` na ramificação `not(feature = "texto")`, esquecido
+quando o layout adaptativo entrou. Só o build padrão rodava, então ninguém viu —
+e o caminho "aparelho sem SDL2_ttf" estava quebrado desde aquele dia. O job
+`launcher-build` passou a construir as duas combinações (`""` e `texto`) — o
+mixer não entra nessa conta, porque é `dlopen`. Adaptado de: "um `cfg` que nunca
+é compilado é código que não existe".
+
+### `ps` mente nesta imagem
+
+```text
+$ ps
+  169 ttyS2  sh
+  184 ttyS2  ps
+$ ls -d /proc/[0-9]* | wc -l
+94
+```
+
+94 processos, dois listados — e entre os invisíveis estavam o `init`, o `sshd`,
+o `giochi-init` **e o launcher**. As ferramentas passaram a ler
+`/proc/*/cmdline`; o `pidof` também não acha script `sh`. Conclusão errada que
+isso quase produziu: "o launcher não está rodando" quando ele estava, com 99,2 %
+de acerto na tela.
+
+### Quem manda no launcher é o `giochi-init`
+
+`verificar` parava o launcher, capturava e tentava retomar com `nohup`. O
+`giochi-init` reiniciava o dele primeiro, o nosso perdia o DRM (exclusivo) e
+imprimia `Error: "kmsdrm not available"` — que **parece** falha do retomar,
+quando o retomar tinha acontecido por outra mão. Agora `subir`, `parar` e o passo
+final do `verificar` perguntam se há supervisor: com ele, esperam (e imprimem
+`ppid` e `drm=`); sem ele, o `nohup` continua sendo o único caminho. `parar` com
+supervisor avisa que o app volta, em vez de dizer "parado".
+
+### Um reboot que ninguém pediu
+
+Depois de matar o launcher por SSH, a conexão caiu e o aparelho voltou com
+**uptime 245 s** — reiniciou. O `::respawn:` funcionou depois disso (PID 438 com
+`ppid 159`), então o respawn não foi o culpado. Fica registrado como **não
+explicado**.
+
+E há outra coisa em aberto, do lado do **Giochi System**: o console recebe
+
+```text
+energia: bateria sem medidor · temperatura sem sensor
+```
+
+a cada ~5 s (8 vezes em 40 s). O texto pertence ao `/usr/bin/giochi-selftest`
+(`grep -c energia` = 2 lá, 0 no `giochi-init`), mas **não é syslog** — a linha
+não aparece em `/var/log/messages` — e no instante da amostra nenhum processo
+com `selftest` no `cmdline` existia. Ainda é observação, não diagnóstico: o que
+se sabe é que **não é código deste repositório** (`grep -rn` aqui não acha a
+frase) e que ela suja a console serial, que é o único canal quando o USB não
+sobe.
+
+### O `giochi-init` desiste — e a cota é pequena
+
+`RESTART_MAX=5` quedas dentro de `RESTART_WINDOW`: depois disso o `giochi-init`
+**para de reiniciar** e dorme para sempre (`while :; do sleep 3600; done`),
+mantendo-se vivo só para o kernel não ficar sem init. Cada `verificar` derruba o
+launcher uma vez — então **seis rodadas seguidas deixam o aparelho sem
+interface** até alguém reiniciar o supervisor ou o aparelho. Aconteceu aqui.
+
+`subir` e `verificar` passaram a tratar isso: se o launcher não aparece em 30 s,
+o script mata o `giochi-init` (o `::respawn:` do inittab o reinicia com
+`restarts=0`) e espera mais 60 s. Medido:
+
+```text
+aviso o giochi-init (pid 159) parou de reiniciar — provável RESTART_MAX
+  reiniciando o supervisor (o inittab o respawna com a cota zerada)
+ok   pid=1663 ppid=1659 drm=3
+supervisor: giochi-init (pid 1659) — reiniciado por este script
+```
+
+### Dois `grep` de processo que casaram consigo mesmos
+
+O `pid_do_giochi_init` procurava o supervisor com `case "$c" in
+*" /usr/bin/giochi-init"*)`. O `sh -c` que executa o próprio comando carrega
+essa string no `argv`, então o padrão casava **consigo mesmo** e devolvia o pid
+do `ssh` — a ferramenta então "esperava" o processo errado e concluía que o
+launcher não tinha voltado. Agora a comparação é **exata**
+(`"/bin/sh /usr/bin/giochi-init "`), não por substring.
+
+É a mesma família de `pkill -f giochi-launcher` matando a sessão SSH: **o
+processo que procura também aparece na lista**.

@@ -384,6 +384,10 @@ impl Painter {
                 canvas,
                 clip_stack: Vec::new(),
                 rot,
+                // Esquecido quando `design` entrou (layout adaptativo): o build
+                // sem texto ficou sem compilar e ninguém viu, porque o caminho
+                // exercitado era sempre o com texto.
+                design: proj.design,
             })
         }
     }

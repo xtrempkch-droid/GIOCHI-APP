@@ -68,3 +68,23 @@ jobs:
       - name: Build workspace
         working-directory: app/launcher
         run: cargo build --workspace --locked
+
+      # O `texto` é feature porque `SDL2_ttf` é dependência de **link**: a
+      # imagem antiga do X55 não a tinha, e sem a feature o launcher desenha
+      # tudo menos os glifos. Cada combinação precisa compilar — a de "sem
+      # texto" esteve quebrada (`missing field design`, esquecido quando o
+      # layout adaptativo entrou) sem ninguém notar, porque só o build padrão
+      # rodava. Um `cfg` que nunca é compilado é código que não existe.
+      #
+      # O mixer ALSA não aparece aqui: ele é `dlopen` em tempo de execução, sem
+      # feature e sem `-lasound`.
+      - name: Build com e sem texto
+        working-directory: app/launcher/crates/ui-sdl
+        run: |
+          set -e
+          echo "::group::padrão (com texto)"
+          cargo build --locked
+          echo "::endgroup::"
+          echo "::group::sem texto"
+          cargo build --locked --no-default-features
+          echo "::endgroup::"

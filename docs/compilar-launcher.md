@@ -129,6 +129,12 @@ Sem a feature `texto`, tudo é desenhado menos os glifos. O detalhamento do que
 pedir ao Giochi System está em
 [dependencias-aparelho.md](dependencias-aparelho.md).
 
+**E o mixer ALSA?** Não tem feature e não entra no link: `volume.rs` resolve
+`libasound.so.2` com `dlopen` e, se não achar, o volume mostra `—`. O mesmo
+binário serve no R35S (sem a biblioteca) e no X55 (com). A primeira tentativa foi
+uma feature `som` — resolvia o R35S e tirava o mixer do X55, que é a definição de
+solução que não serve.
+
 ## Rotação para painel retrato
 
 O painel do aparelho é **720×1280 (retrato)** e a UI é projetada em **1280×720**.

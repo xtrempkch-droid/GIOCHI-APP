@@ -262,6 +262,45 @@ estão na imagem — **não** são mais a cópia manual que este documento regis
 como paliativo. O `readelf` continua ausente, então o `selftest` segue pulando a
 prova de que o `SDL2_ttf` usa harfbuzz.
 
+## O R35S: inventário medido (06/11/2026)
+
+Terceiro aparelho, e o mais pobre dos três. Medido pela **console serial** (ele
+não tem rádio; depois o USB entrou) e depois por SSH em `10.55.0.2`.
+
+| Item | R35S | Consequência |
+| --- | --- | --- |
+| painel | 640×480, `fbcon/rotate` = 0 | mesma orientação do X35H |
+| RAM | 964 MB | igual ao X35H |
+| `libSDL2` | 2.8.5 | funciona, `opengles2` acelerado |
+| `libSDL2_ttf` + freetype + harfbuzz | **tem** | texto desenha (326–328 cores no frame) |
+| fonte TTF | tem | — |
+| **`libasound`** | **falta** | o volume mostra `—`; o binário roda igual (`dlopen`) |
+| `/dev/snd` | tem | ter o dispositivo não é ter a biblioteca |
+| códigos de tecla | **19**, sem `KEY_POWER` (116) | o "toque curto dorme" não tem como acontecer |
+| `::respawn:/usr/bin/giochi-init` | **tem** | o launcher sobe no boot |
+| relógio | **2017**, sem RTC e sem rádio | licença com validade nunca venceria |
+
+O que **não** precisa ser pedido para ele: texto e respawn já estão lá. O que
+falta é `libasound` (para o volume) e um `KEY_POWER` (que é device tree, não
+biblioteca — ver [controles.md](controles.md)).
+
+### O `ps` desta imagem mente
+
+```text
+$ ps
+PID TTY          TIME CMD
+  169 ttyS2    00:00:00 sh
+  184 ttyS2    00:00:00 ps
+$ ls -d /proc/[0-9]* | wc -l
+94
+```
+
+94 processos em `/proc`, dois no `ps` — e entre os invisíveis estavam o `init`,
+o `sshd`, o `giochi-init` e o launcher. É por isso que as ferramentas leem
+`/proc/*/cmdline` em vez de `ps` ou `pidof` (o `pidof` também não acha script
+`sh`, e o `giochi-init` é um). **"Não aparece no ps" não é "não existe"** — é a
+mesma família de erro que "não declarou, não entrega".
+
 ## O que NÃO precisa ser pedido
 
 - **`libSDL2` com backend KMSDRM**: já está lá e funciona.
@@ -269,20 +308,63 @@ prova de que o `SDL2_ttf` usa harfbuzz.
 - **`libSDL2_image`, `libSDL2_mixer`, `libSDL2_gfx`**: o launcher desenha com
   primitivas e ícones vetoriais. `image` não é usada; `mixer` e `gfx` idem.
 
-## Enquanto isso: o launcher funciona sem texto
+## Enquanto isso: texto é feature, som não precisa ser
 
-A feature `texto` do crate `ui-sdl` é opcional de propósito:
+Duas coisas foram tratadas de forma diferente, e a diferença é o tipo de
+dependência:
+
+| | `libSDL2_ttf` | `libasound` |
+| --- | --- | --- |
+| como entra | **link** (`sdl2/ttf`) | `dlopen` em tempo de execução |
+| se faltar | o binário não linka | o mixer é `Ausente`, e o app roda |
+| escolha | feature `texto`, no build | nenhuma: acontece sozinho |
 
 ```bash
-cargo build -p giochi-launcher --no-default-features   # sem SDL2_ttf
-cargo build -p giochi-launcher                          # com SDL2_ttf
+cargo build -p giochi-launcher --no-default-features   # sem glifos
+cargo build -p giochi-launcher                          # padrão (com texto)
 ```
 
-O build sem texto desenha tudo (cartões, gradientes, ícones, barras, foco) e
-omite os glifos. É o que está instalado no aparelho agora. `text_size` devolve
-altura aproximada para o layout não colapsar.
+**Biblioteca ausente é falha de carga, não degradação.** Faltando `libSDL2_ttf`,
+o binário não abre "sem texto": ele não abre. Por isso `texto` continua sendo
+feature, decidida pelo `scripts/compilar-launcher-arm64.sh`, que **pergunta ao
+aparelho** — não confie no nome do aparelho, porque a mesma placa já apareceu com
+duas imagens diferentes.
 
-**Isso é paliativo, não solução.** Um launcher sem rótulo não é usável.
+### O caso do `libasound`: uma feature que virou `dlopen`
+
+Em 06/11/2026 o launcher cross-compilado para o R35S **não abriu**:
+
+```text
+libasound.so.2: cannot open shared object file: No such file or directory
+```
+
+O aparelho tem `/dev/snd` e drivers de áudio, mas não tem a biblioteca. A
+conclusão errada anterior era "tem ALSA, então o volume funciona" — ter o
+dispositivo não é ter a biblioteca, e daí em diante o binário nem carrega.
+
+A primeira correção foi uma feature `som`, compilada por aparelho. Ela resolvia
+o R35S e **quebrava o X55**, onde a biblioteca existe e o binário sem a feature
+perdia o mixer. Um binário que só serve em um aparelho de cada vez anula a
+premissa do projeto — então `volume.rs` passou a resolver os símbolos com
+`dlopen("libasound.so.2")` e, se não achar, devolver `Ausente`.
+
+Medido no R35S, com o binário único:
+
+```text
+$ giochi-launcher --mostrar-volume
+sem mixer com volume de reprodução
+```
+
+O mesmo arquivo, no X55, mostra e aplica o volume. Não há feature, não há
+compilação separada, e o `NEEDED` do binário não lista `libasound`.
+
+### As duas combinações de `texto` compilam — e agora o CI cobra isso
+
+`--no-default-features` **não compilava**: faltava `design` no inicializador do
+`Painter` na ramificação sem `texto`, esquecido quando o layout adaptativo
+entrou. Ninguém viu porque só o build padrão rodava. Um `cfg` que nunca é
+compilado é código que não existe — por isso o job `launcher-build` passou a
+construir as duas combinações.
 
 ## Alternativa se a dependência não puder entrar na imagem
 

@@ -125,15 +125,57 @@ bash scripts/aparelho.sh verificar
 4. desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`;
 5. des-rotaciona a captura conforme `/sys/class/graphics/fbcon/rotate` e compara
    pixel a pixel com a referência;
-6. sobe o launcher de novo, se ele estava rodando antes.
+6. sobe o launcher de novo, se ele estava rodando antes — mas **quem o sobe é o
+   `giochi-init`**, quando ele existe (ver abaixo).
 
-No X55 o resultado é **98,9 %** de acerto (99,9 % no X35H); o que difere é o
-relógio da barra superior, que muda entre as duas capturas. Rodar com a rotação
-oposta cai para **10,9 %** — é essa diferença que separa "desenhou certo" de
-"desenhou de ponta a cabeça", e foi o que resolveu o bug de orientação.
+No X55 o resultado é **98,9 %** de acerto (99,9 % no X35H e **99,2 % no R35S**);
+o que difere é o relógio da barra superior, que muda entre as duas capturas.
+Rodar com a rotação oposta cai para **10,9 %** — é essa diferença que separa
+"desenhou certo" de "desenhou de ponta a cabeça", e foi o que resolveu o bug de
+orientação.
 
 Os quadros ficam em `dist/testes/<data>/frame.png` (ignorado pelo git), para
 inspeção visual depois.
+
+### Quem manda no launcher é o `giochi-init`
+
+`subir`, `parar` e o passo 6 do `verificar` **perguntam antes** se o
+`giochi-init` está rodando, e mudam de comportamento por causa disso:
+
+| Sem `giochi-init` | Com `giochi-init` |
+| --- | --- |
+| o script sobe com `setsid nohup` | espera ele subir, e não inicia concorrente |
+| `parar` para o app de verdade | avisa que o supervisor o reinicia |
+| falha se o binário não abrir | se não vier em 30 s, reinicia o supervisor e espera mais 60 s |
+
+**A segunda linha da última coluna não é zelo: é o `RESTART_MAX`.** O
+`giochi-init` desiste depois de 5 quedas dentro da janela, e cada `verificar`
+derruba o launcher uma vez. Seis rodadas seguidas deixam o aparelho **sem
+interface**, com o supervisor vivo e dormindo. O script detecta e reinicia o
+supervisor pelo `::respawn:` do inittab, que zera a cota.
+
+A razão é medida: em 06/11/2026, no R35S, o `verificar` parava o launcher,
+capturava o quadro e tentava retomar com `nohup`. O `giochi-init` reiniciava o
+dele mais rápido, o nosso perdia a corrida por causa do DRM exclusivo e
+imprimia
+
+```text
+Error: "kmsdrm not available"
+```
+
+— que parece falha do retomar, quando o retomar **tinha** acontecido, só que por
+outra mão. A prova de quem é o pai:
+
+```text
+pid=438 ppid=159 drm=3        # 159 = /bin/sh /usr/bin/giochi-init
+```
+
+Depois da correção, o mesmo passo imprime `pid=957 ppid=159 drm=3` e o número
+muda a cada rodada — que é exatamente o respawn funcionando.
+
+O `drm=` no final não é enfeite: **processo vivo não é hardware aberto**. Se o
+launcher sobe mas não consegue o DRM, ele existe e não desenha — e é isso que o
+`drm=0` denuncia.
 
 ## `verificar-frame.mjs`
 

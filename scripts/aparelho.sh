@@ -334,9 +334,101 @@ resolucao_do_aparelho() {
   esac
 }
 
+# PID do `giochi-init` neste aparelho, ou vazio se ele não está rodando.
+#
+# Lido de `/proc/[0-9]*/cmdline`, e não de `pidof` nem de `ps`:
+#   - `pidof` não acha script `sh`, e o `giochi-init` é um;
+#   - o `ps` desta imagem lista **só a própria TTY**. Medido no R35S em
+#     06/11/2026: 94 diretórios em `/proc` e 2 linhas no `ps`, com o `init`, o
+#     `sshd` e o launcher invisíveis. "Não aparece no ps" não é "não existe".
+pid_do_giochi_init() {
+  # Comparação **exata** do cmdline inteiro, e não `*" /usr/bin/giochi-init"*`:
+  # o `sh -c` que executa este próprio comando carrega a string no argv e casava
+  # consigo mesmo. Medido: o pid devolvido era o do `ssh`, não o do supervisor —
+  # e a ferramenta então "esperava" o processo errado e concluía que o launcher
+  # não voltou.
+  no_aparelho 'for p in /proc/[0-9]*; do c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in "/bin/sh /usr/bin/giochi-init "|"/bin/sh /usr/bin/giochi-init"|"sh /usr/bin/giochi-init "|"sh /usr/bin/giochi-init") echo ${p#/proc/}; break;; esac; done' | tr -d '\r'
+}
+
 # Sobe o launcher e imprime pid + log. Separado de `cmd_subir` porque `verificar`
 # precisa retomar o app depois de capturar o frame.
+#
+# ## Por que este script não sobe o launcher quando há `giochi-init`
+#
+# Porque os dois disputariam o **mesmo** DRM, que é exclusivo. Medido no R35S em
+# 06/11/2026: `verificar` parava o launcher, capturava o frame e tentava retomar
+# com `setsid nohup`; o `giochi-init` reiniciava o dele mais rápido, o nosso
+# perdia a corrida e imprimia `Error: "kmsdrm not available"` — que parece falha
+# do retomar, quando o retomar tinha acontecido, só que por outra mão (o
+# sobrevivente tinha ppid 159 = `giochi-init`, não 1).
+#
+# Quando há supervisor, esperar é a única atitude honesta. Quando não há (imagens
+# antigas, ou init parado), o `nohup` continua sendo o único caminho.
+# Espera o launcher supervisionado aparecer e devolve `pid=… ppid=… drm=…`,
+# ou `MORREU` se ele não vier.
+esperar_launcher_supervisionado() {
+  local tentativas="${1:-60}"
+  no_aparelho "
+    i=0
+    while [ \$i -lt $tentativas ]; do
+      pid=\$(pidof giochi-launcher 2>/dev/null)
+      [ -n \"\$pid\" ] && break
+      i=\$((i+1)); sleep 0.5
+    done
+    if [ -z \"\$pid\" ]; then
+      echo MORREU
+      exit 0
+    fi
+    # 'processo vivo' não é 'abriu o hardware' — o descritor de DRM é a prova.
+    d=0; i=0
+    while [ \$i -lt 20 ]; do
+      d=\$(ls -l /proc/\$pid/fd 2>/dev/null | grep -c 'card0\|renderD')
+      [ \"\$d\" -gt 0 ] && break
+      i=\$((i+1)); sleep 0.5
+    done
+    echo \"pid=\$pid ppid=\$(cut -d' ' -f4 /proc/\$pid/stat 2>/dev/null) drm=\$d\"
+    [ \"\$d\" -eq 0 ] && echo 'aviso: vivo, mas sem descritor de DRM aberto'
+    exit 0
+  "
+}
+
 iniciar_launcher() {
+  local init_pid saida
+  init_pid=$(pid_do_giochi_init)
+  if [ -n "$init_pid" ]; then
+    saida=$(esperar_launcher_supervisionado 60)
+    if [ "$saida" = "MORREU" ]; then
+      # ## Por que o launcher às vezes não volta
+      #
+      # O `giochi-init` desiste: `RESTART_MAX=5` quedas dentro de
+      # `RESTART_WINDOW` e ele para de reiniciar — fica vivo dormindo, para o
+      # kernel não ficar sem init. Cada `verificar` derruba o launcher uma vez,
+      # então **seis `verificar` seguidos deixam o aparelho sem interface** até
+      # alguém reiniciar o supervisor ou o aparelho.
+      #
+      # Matar o `giochi-init` devolve a cota: o `::respawn:` do inittab o
+      # reinicia com `restarts=0`. É por isso que essa segunda chance existe em
+      # vez de uma mensagem de erro.
+      aviso "o giochi-init (pid $init_pid) parou de reiniciar — provável RESTART_MAX"
+      printf '  reiniciando o supervisor (o inittab o respawna com a cota zerada)\n'
+      no_aparelho "kill $init_pid 2>/dev/null; sleep 2; true"
+      init_pid=$(pid_do_giochi_init)
+      if [ -z "$init_pid" ]; then
+        echo MORREU
+        echo 'o giochi-init não voltou depois de reiniciado'
+        return 0
+      fi
+      saida=$(esperar_launcher_supervisionado 120)
+      [ "$saida" = "MORREU" ] && { echo MORREU; echo "nem com o giochi-init novo (pid $init_pid) o launcher subiu em 60s"; return 0; }
+      printf '%s\n' "$saida"
+      printf 'supervisor: giochi-init (pid %s) — reiniciado por este script\n' "$init_pid"
+      return 0
+    fi
+    printf '%s\n' "$saida"
+    printf 'supervisor: giochi-init (pid %s) — não iniciado por este script\n' "$init_pid"
+    return 0
+  fi
+
   no_aparelho "
     rm -f $LOG
     setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
@@ -486,7 +578,15 @@ cmd_subir() {
   # `pidof` em vez de `pkill -f`: `pkill -f giochi-launcher` casa com o próprio
   # shell que executa o comando (a linha de comando contém o nome) e mata a
   # sessão SSH antes de fazer o resto. Já aconteceu.
-  no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null; sleep 1; true'
+  #
+  # Com `giochi-init` rodando, matar o launcher é só pedir um reinício a ele —
+  # e é o `giochi-init` quem traz o novo, não este script. Sem supervisor, o
+  # kill limpa uma instância manual anterior.
+  local init_pid
+  init_pid=$(pid_do_giochi_init)
+  if [ -z "$init_pid" ]; then
+    no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null; sleep 1; true'
+  fi
 
   # `[ -x ]` não imprime nada nem quando dá certo, então é preciso um eco
   # explícito: sem ele `... | grep -q .` falha sempre e a mensagem diz que o
@@ -507,13 +607,26 @@ cmd_subir() {
 
 cmd_parar() {
   exigir_aparelho
-  local saida
-  saida=$(no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); if [ -z "$p" ]; then echo NADA; else kill $p 2>/dev/null; sleep 1; echo "PARADO $p"; fi')
+  local saida init_pid
+  init_pid=$(pid_do_giochi_init)
+  saida=$(no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); if [ -z "$p" ]; then echo NADA; else kill $p 2>/dev/null; sleep 2; echo "PARADO $p"; fi')
   case "$saida" in
     NADA)    aviso "já não estava rodando" ;;
     PARADO*) ok "parado (${saida#PARADO })" ;;
     *)       falha "$saida" ;;
   esac
+
+  # Com `giochi-init` rodando, "parado" é uma meia-verdade: ele reinicia o
+  # launcher sozinho. Dizer isso é o que evita a próxima sessão caçar um
+  # processo zumbi que na verdade é um respawn funcionando.
+  if [ -n "$init_pid" ]; then
+    local agora
+    agora=$(no_aparelho 'pidof giochi-launcher 2>/dev/null' | tr -d '\r')
+    if [ -n "$agora" ]; then
+      aviso "o launcher voltou como $agora — giochi-init (pid $init_pid) o reinicia"
+      printf '  para parar de verdade: mate o giochi-init, ou desligue o aparelho\n'
+    fi
+  fi
 }
 
 cmd_log() {
