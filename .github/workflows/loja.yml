@@ -199,9 +199,27 @@ jobs:
           # Verificar `"seleção: 2"` funciona no Linux e falha no Windows, onde o
           # PowerShell lê a saída de processo nativo com a code page OEM e o
           # acento vira lixo. Já custou uma rodada nos apps de Python.
-          ./target/release/giochi-loja --teclas down,down --json --dump-frame /tmp/baixo.bmp > /tmp/saida.json
-          cat /tmp/saida.json
-          grep -q '"selecao":2' /tmp/saida.json
+          #
+          # A asserção é o **invariante**, não um número: em grade, `→` anda um
+          # item e `↓` anda uma **linha inteira**. Fixar `selecao: 2` foi o que
+          # quebrou esta perna quando a lista virou grade — o valor mudou de 2
+          # para 3 e o código estava certo.
+          set -e
+          export SDL_VIDEODRIVER=dummy
+
+          ./target/release/giochi-loja --teclas right --json --dump-frame /tmp/dir.bmp > /tmp/dir.json
+          cat /tmp/dir.json
+          grep -q '"selecao":1' /tmp/dir.json || { echo "direita nao andou um item"; exit 1; }
+
+          ./target/release/giochi-loja --teclas down --json --dump-frame /tmp/baixo.bmp > /tmp/baixo.json
+          cat /tmp/baixo.json
+          COLS=$(sed -n 's/.*"colunas":\([0-9]*\).*/\1/p' /tmp/baixo.json)
+          SEL=$(sed -n 's/.*"selecao":\([0-9]*\).*/\1/p' /tmp/baixo.json)
+          echo "colunas=$COLS selecao=$SEL"
+          [ -n "$COLS" ] && [ "$SEL" = "$COLS" ] || {
+            echo "baixo deveria ir para a linha de baixo (selecao == colunas)"
+            exit 1
+          }
           # E o quadro tem de ser diferente do primeiro: seleção diferente é
           # pixel diferente. `cmp -s` devolve 1 quando difere.
           if cmp -s /tmp/quadro.bmp /tmp/baixo.bmp; then
@@ -220,10 +238,19 @@ jobs:
           # code page OEM. E `-notmatch` num array de linhas *filtra* em vez de
           # testar, então a condição ficava sempre verdadeira — os dois motivos
           # juntos fizeram esta perna falhar duas vezes.
-          $saida = .\target\release\giochi-loja.exe --teclas down,down --json --dump-frame $env:TEMP\baixo.bmp
-          $saida | Out-Host
-          if ($saida -notmatch '"selecao":2') {
-            Write-Host "a selecao nao foi para 2"
+          # O invariante, não um número: `→` anda um item, `↓` anda uma linha
+          # inteira (selecao == colunas). Fixar `2` quebrou esta perna quando a
+          # lista virou grade, e o código estava certo.
+          $dir = .\target\release\giochi-loja.exe --teclas right --json --dump-frame $env:TEMP\dir.bmp
+          $dir | Out-Host
+          $j = $dir | ConvertFrom-Json
+          if ($j.selecao -ne 1) { Write-Host "direita nao andou um item"; exit 1 }
+
+          $baixo = .\target\release\giochi-loja.exe --teclas down --json --dump-frame $env:TEMP\baixo.bmp
+          $baixo | Out-Host
+          $k = $baixo | ConvertFrom-Json
+          if ($k.selecao -ne $k.colunas) {
+            Write-Host "baixo deveria ir para a linha de baixo (selecao=$($k.selecao), colunas=$($k.colunas))"
             exit 1
           }
           $a = Get-FileHash $env:TEMP\quadro.bmp

@@ -298,6 +298,12 @@ fn main() -> Result<(), String> {
                     .and_then(|c| c.itens.get(estado.selecao))
                     .map(|i| i.preco.centavos),
                 "mensagem": estado.mensagem,
+                // A grade vai no JSON para a verificação poder afirmar o
+                // invariante ("↓ anda exatamente uma linha") em vez de fixar um
+                // número que muda com o layout — foi o que quebrou o CI quando
+                // a lista virou grade.
+                "colunas": estado.grade.colunas,
+                "por_pagina": estado.grade.por_pagina,
             })
         );
     } else {
