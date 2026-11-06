@@ -240,7 +240,102 @@ perpétua (`expira_em: None`) não depende do relógio — robustez de graça.
 
 ---
 
-## 4.2 O pagamento: a loja não vê cartão
+## 4.2 O pagamento: **o provedor faz o checkout e conta as instalações**
+
+A pergunta do dono do projeto foi: *"não tem como o provedor do jogo dar ao
+backend o meio de pagamento? Ex.: logado no itch.io e o site dá o meio de
+pagamento."*
+
+Tem — de **duas** formas, e a diferença entre elas decide se o jogo é vendável.
+
+### As duas formas
+
+| | **A. Provedor é a loja** (itch.io) | **B. Provedor é o caixa** (Lemon Squeezy, Paddle, Gumroad) |
+| --- | --- | --- |
+| quem faz o checkout | o itch.io | o provedor |
+| quem cuida de imposto e nota | o itch.io | o provedor (é *merchant of record*) |
+| como se sabe que comprou | `GET api.itch.io/games/{id}/ownership` | chave de licença |
+| credencial | a **API key do usuário** | a chave de licença |
+| **vínculo com o aparelho** | **nenhum** | **sim**, `activation_limit` por instância |
+| preço e catálogo | do itch.io | **nossos** |
+| backend nosso | não precisa | **não precisa** |
+
+### Por que (A) não resolve, mesmo funcionando
+
+O itch.io tem a API e ela funciona: `game:view:ownership` responde "esta conta
+possui este jogo". Mas a credencial é **a conta do usuário**. Quem compartilhar a
+API key compartilha a biblioteca inteira, em qualquer aparelho — e não há o que
+verificar contra isso, porque o itch.io responde "o usuário possui", nunca "o
+aparelho possui".
+
+É um **verificador de posse**, não um vínculo. Para um portátil de mão, é a
+diferença entre vender e não vender.
+
+Está implementado assim mesmo (`provedor::ItchIo`), porque serve para jogo grátis
+e para conteúdo de terceiro — e porque dizer "não dá" sobre algo que dá seria
+mentira. O que não se pode é chamar isso de proteção.
+
+### Por que (B) resolve, e sem backend
+
+A API de licença do Lemon Squeezy tem `activation_limit` e `activation_usage` **no
+servidor deles**, e cada ativação cria uma *instância* com nome. Nós passamos a
+chave pública do aparelho como nome da instância. Esgotado o limite, a resposta é:
+
+```json
+{ "activated": false, "error": "This license key has reached the activation limit." }
+```
+
+Isso é **contagem de instalações aplicada por terceiro** — exatamente o que um
+backend nosso faria, sem um backend nosso. É o modelo escolhido.
+
+```text
+1. usuário compra no checkout do provedor (cartão, PIX do provedor, boleto)
+2. o provedor emite uma chave de licença com limite N
+3. na loja, o usuário digita a chave
+4. a loja chama /v1/licenses/activate com instance_name = "giochi-<8 chars da chave do aparelho>"
+5. o provedor conta a instalação; recusa se passar do limite
+6. a ativação fica gravada em disco, com prazo de revalidação
+```
+
+O passo 5 é a resposta à pergunta "e se copiarem para o vizinho?". A resposta não
+está no nosso código: está no servidor de quem vendeu.
+
+### O que continua na loja, e não no provedor
+
+| Item | Onde |
+| --- | --- |
+| preço, catálogo, descrição, ano | **nosso** catálogo assinado |
+| assinatura do `.giochi` (é da Giochi?) | nossa chave de catálogo |
+| de onde baixar | nosso CDN |
+| **"este aparelho pagou?"** | **o provedor**, via limite de instâncias |
+| imposto, nota, reembolso | o provedor |
+
+### Cinco estados, de novo
+
+`Situacao` tem `Ativa`, `NaoAtivada`, `Invalida`, e `NaoSei`. O último é para
+falta de rede, e **não** invalida: punir quem está sem sinal com "sua licença é
+falsa" é o erro oposto ao de aceitar tudo.
+
+`Ativacao::revalidar_em` existe porque a licença pode ser desativada no painel do
+provedor (reembolso, fraude). Lemon Squeezy: 30 dias. itch.io: 7 — lá não há
+limite de instâncias, então revalidar é a única chance de perceber.
+
+### O que ainda falta para cobrar
+
+| Item | Estado |
+| --- | --- |
+| cliente da License API | **escrito e testado** (HTTP real contra socket local) |
+| conta no provedor, produto cadastrado | **não existe** — é do dono do projeto |
+| tela para digitar a chave | **não** — hoje é `--ativar <chave>` na linha de comando |
+| revalidação periódica automática | **não** — o campo de prazo existe, o agendador não |
+
+E a limitação honesta de sempre: quem tem root no aparelho edita o arquivo de
+ativação. A proteção real é o limite no servidor do provedor, não um cadeado no
+cliente.
+
+---
+
+## 4.2.1 O pagamento: a loja não vê cartão
 
 **PIX é o caminho principal.** O pagamento é um *pedido* — uma string que a loja
 mostra sem manipular credencial nenhuma.
@@ -435,8 +530,10 @@ baixada, e esta função passa a ser o *fallback* de item sem arte.
 
 | Peça | Estado |
 | --- | --- |
-| Núcleo (catálogo, chave, licença, pedido, pacote, baixador, grade) | **77 testes**, sem SDL |
+| Núcleo (catálogo, chave, licença, pedido, pacote, baixador, grade, http, provedor) | **97 testes**, sem SDL |
 | Interface (SDL2, quatro telas, capa procedural) | **16 testes** + prova de quadro |
+| Cliente da License API | **escrito**: HTTP real contra socket local, com os JSON da documentação |
+| `--ativar` | **executado**: chave válida → exit 0; inválida → exit 3; curta → exit 3 |
 | Gerador de catálogo assinado | **9 testes** JS, e o Rust **verifica** o que ele produz |
 | Layout em grade | **medido**: `down` de 0 vai a 3 (uma linha), não a 1 |
 | `--dump-frame` / `--teclas` | **executado**: quadro de 3.587.254 bytes, navegação muda o quadro |
@@ -445,7 +542,8 @@ baixada, e esta função passa a ser o *fallback* de item sem arte.
 | Desenho nos três | **provado**: quadro de tamanho exato em cada runner |
 | Emissão de licença (ferramenta de teste) | **executado**: emite e **confere** o que emitiu |
 | Gerador de catálogo | **existe**: `scripts/gerar-catalogo-loja.mjs` |
-| Backend de pagamento | **não existe** |
+| Conta no provedor (Lemon Squeezy / Paddle) | **não existe** — do dono do projeto |
+| Tela para digitar a chave | **não** — hoje `--ativar <chave>` |
 | Licença validada no aparelho | **não** — só no PC |
 
 ## 6. O que este documento não promete

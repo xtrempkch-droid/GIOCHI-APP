@@ -31,6 +31,8 @@ pub mod baixador;
 pub mod catalogo;
 pub mod chave;
 pub mod grade;
+pub mod http;
+pub mod provedor;
 pub mod licenca;
 pub mod pacote;
 pub mod pagamento;

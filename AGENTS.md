@@ -2863,3 +2863,88 @@ achando que é bug.
 187 testes JS totais                        12 apps válidos
 catalogo.json assinado pelo JS → verificado pelo Rust: ok
 ```
+
+## 21. O provedor faz o checkout e conta as instalações (06/11/2026)
+
+Pergunta do dono: *"não tem como o provedor do jogo dar ao backend o meio de
+pagamento? Ex.: logado no itch.io e o site dá o meio de pagamento."*
+
+Tem, de duas formas, e a diferença entre elas decide se o jogo é vendável. Fui
+ler a documentação dos dois antes de responder.
+
+### As duas formas
+
+| | **A. Provedor é a loja** (itch.io) | **B. Provedor é o caixa** (Lemon Squeezy, Paddle) |
+| --- | --- | --- |
+| checkout | o itch.io | o provedor |
+| imposto/nota | o itch.io | o provedor (*merchant of record*) |
+| como se sabe que comprou | `GET api.itch.io/games/{id}/ownership` | chave de licença |
+| credencial | a **API key do usuário** | a chave de licença |
+| **vínculo com o aparelho** | **nenhum** | **sim**: `activation_limit` |
+| preço/catálogo | do itch.io | **nossos** |
+| backend nosso | não precisa | **não precisa** |
+
+### (A) funciona e não resolve
+
+O itch.io **tem** a API (`game:view:ownership`, bearer, escopos `game:view:ownership`
+e `profile:owned`). Mas a credencial é a **conta do usuário**: quem compartilha a
+API key compartilha a biblioteca inteira, em qualquer aparelho. O itch.io responde
+"o usuário possui", nunca "o aparelho possui".
+
+É **verificador de posse**, não vínculo. Para portátil de mão, é a diferença entre
+vender e não vender.
+
+Implementado mesmo assim (`provedor::ItchIo`), porque serve para jogo grátis e
+conteúdo de terceiro — e dizer "não dá" sobre algo que dá seria mentira.
+
+### (B) resolve sem backend nosso
+
+`activation_limit` e `activation_usage` ficam **no servidor do provedor**. Nós
+mandamos a chave pública do aparelho como `instance_name`; esgotado o limite:
+
+```json
+{ "activated": false, "error": "This license key has reached the activation limit." }
+```
+
+Isso é contagem de instalações aplicada por terceiro — o que o nosso backend faria,
+sem o nosso backend. É o escolhido.
+
+### O que foi escrito e provado
+
+| Peça | Estado |
+| --- | --- |
+| `http.rs` | curl mínimo; o que erra é a montagem da requisição, e ela é comparada em teste |
+| `provedor.rs` | trait `Provedor`; `LemonSqueezy`, `ItchIo`, `Simulado` |
+| parse da resposta | **com os JSON copiados da documentação**, não inventados |
+| HTTP de verdade | **testado contra socket local**: método, form-encoded e parse |
+| `--ativar <chave>` | chave válida → exit 0; inválida → exit 3; curta → exit 3 |
+| CI | os três sistemas exercitam os três caminhos |
+
+### Três bugs que os testes pegaram
+
+1. **`--data` antes de `--data-raw`.** Sobrou um `push` e o curl lia o **literal**
+   `"--data-raw"` como corpo da requisição — o servidor recebia a string em vez dos
+   campos. Só apareceu porque o teste lê o que chega no socket.
+2. **Um `read` só no servidor de teste** devolvia apenas os cabeçalhos. Era defeito
+   do teste, não do código, e o sintoma era o mesmo (falha) — vale a distinção.
+3. **`Simulado` clonava a si mesmo** para "contar" instalações, e o limite nunca era
+   atingido. O teste do limite reprovou, que é o que ele existe para fazer. Agora é
+   `RefCell`, acumula de verdade.
+
+E um quarto, de desenho: `Simulado::com_chave(chave_do_input)` aceitava **qualquer**
+chave, porque era construído com a chave digitada. O teste de "chave errada" passava
+sem provar nada. Chave de teste agora é fixa (`CHAVE-DE-TESTE-1`).
+
+### `ChavePublica::de_semente`
+
+Faltava no núcleo, e apareceu como erro: usar `[7u8; 32]` como "aparelho de teste"
+dava `NaoEd25519`, porque a semente **não é** uma chave pública — 32 bytes
+quaisquer não são um ponto válido da curva. Agora `de_semente` deriva, que é o que
+o aparelho faz no primeiro boot: gera 32 bytes e guarda só a pública.
+
+### Números
+
+```text
+97 testes do núcleo (eram 77)    113 Rust no total
+CI: 16 passos por runner        `--ativar` exercitado em linux, macos e windows
+```

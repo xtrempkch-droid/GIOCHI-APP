@@ -282,6 +282,48 @@ jobs:
           cp app/loja/README.md dist/loja/ 2>/dev/null || true
           ls -la dist/loja/
 
+      # O provedor de licença é o que substitui o nosso backend, então o
+      # caminho de erro dele precisa de prova: limite de instâncias atingido é
+      # exatamente o que impede a mesma chave rodar em dez aparelhos.
+      - name: Ativação de licença (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd app/loja
+          if [ "$RUNNER_OS" = "macOS" ]; then export DYLD_LIBRARY_PATH="$(brew --prefix)/lib"; fi
+          set -e
+          export SDL_VIDEODRIVER=dummy
+
+          # 1. chave válida → ativa
+          ./target/release/giochi-loja --ativar CHAVE-DE-TESTE-1 > /tmp/at.json
+          cat /tmp/at.json
+          grep -q '"ativado":true' /tmp/at.json
+          # A instância é a chave do aparelho: é o que amarra a compra a ele.
+          grep -q '"instancia":' /tmp/at.json
+
+          # 2. chave inválida → recusa com código 3, não 0
+          if ./target/release/giochi-loja --ativar CHAVE-QUE-NAO-EXISTE > /tmp/er.json; then
+            echo "aceitou uma chave inválida"; exit 1
+          else
+            test $? -eq 3 || { echo "código de saída errado"; exit 1; }
+          fi
+          cat /tmp/er.json
+          grep -q '"ativado":false' /tmp/er.json
+
+      - name: Ativação de licença (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd app/loja
+          $env:SDL_VIDEODRIVER = "dummy"
+          $ok = .\target\release\giochi-loja.exe --ativar CHAVE-DE-TESTE-1 | ConvertFrom-Json
+          $ok | ConvertTo-Json -Compress | Write-Host
+          if (-not $ok.ativado) { Write-Host "chave valida foi recusada"; exit 1 }
+          if (-not $ok.instancia) { Write-Host "sem instancia"; exit 1 }
+          # Chave inválida: tem de sair com 3, e não com 0.
+          .\target\release\giochi-loja.exe --ativar CHAVE-QUE-NAO-EXISTE > $env:TEMP\er.json
+          if ($LASTEXITCODE -ne 3) { Write-Host "codigo de saida errado: $LASTEXITCODE"; exit 1 }
+
       - name: Anexar binários
         uses: actions/upload-artifact@v4
         with:

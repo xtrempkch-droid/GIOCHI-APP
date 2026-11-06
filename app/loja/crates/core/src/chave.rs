@@ -149,6 +149,27 @@ impl ChavePublica {
         Self::de_texto(texto)
     }
 
+    /// A pública correspondente a uma semente de 32 bytes.
+    ///
+    /// É a operação que o **aparelho** faz no primeiro boot: gera 32 bytes
+    /// aleatórios (a privada, que nunca sai) e guarda só o resultado aqui.
+    ///
+    /// ## Por que não é `de_bytes(semente)`
+    ///
+    /// Porque a semente **não é** uma chave pública. Um Ed25519 exige um ponto
+    /// válido da curva, e 32 bytes quaisquer não são: passar `[7u8; 32]`
+    /// devolve `NaoEd25519`. Descobri isso ao tentar usar bytes fixos como
+    /// "aparelho de teste" — o erro estava certo e a expectativa errada.
+    pub fn de_semente(semente: &[u8; 32]) -> Self {
+        let chave = ed25519_dalek::SigningKey::from_bytes(semente);
+        // `verifying_key().to_bytes()` é sempre um ponto válido: a derivação
+        // garante isso, então não há `Result` aqui.
+        let a = chave.verifying_key().to_bytes();
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&a);
+        Self(VerifyingKey::from_bytes(&arr).expect("chave derivada é sempre válida"))
+    }
+
     /// Os 32 bytes, para mandar ao servidor.
     pub fn bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
@@ -286,6 +307,27 @@ mod testes {
         let b = p.base64();
         let com_espacos = format!("{} \n {}", &b[..10], &b[10..]);
         assert_eq!(ChavePublica::de_base64(&com_espacos).unwrap(), p);
+    }
+
+    #[test]
+    fn semente_deriva_uma_chave_valida_e_estavel() {
+        // O caso que motivou: usar `[7u8; 32]` como "aparelho de teste" dava
+        // `NaoEd25519`, porque a semente não é uma chave pública. Derivar é o
+        // que o aparelho faz no primeiro boot.
+        let a = ChavePublica::de_semente(&[7u8; 32]);
+        let b = ChavePublica::de_semente(&[7u8; 32]);
+        assert_eq!(a, b, "a mesma semente tem de dar a mesma chave");
+        assert_ne!(a, ChavePublica::de_semente(&[8u8; 32]));
+        // E a derivada tem de sobreviver à ida e volta pelo base64, que é como
+        // ela viaja até o servidor.
+        assert_eq!(ChavePublica::de_base64(&a.base64()).unwrap(), a);
+    }
+
+    #[test]
+    fn bytes_quaisquer_nao_sao_chave_publica() {
+        // A distinção que importa: 32 bytes de tamanho certo não são uma chave.
+        assert_eq!(ChavePublica::de_bytes(&[7u8; 32]), Err(ErroDeChave::NaoEd25519));
+        assert!(ChavePublica::de_semente(&[7u8; 32]).base64().len() == 44);
     }
 
     #[test]

@@ -26,6 +26,9 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use ui::{Estado, Tecla};
 
+/// Chave que o provedor "simulado" aceita. Ver `--ativar` no `--ajuda`.
+const CHAVE_DE_TESTE: &str = "CHAVE-DE-TESTE-1";
+
 const LARGURA: u32 = 1180;
 const ALTURA: u32 = 760;
 
@@ -40,6 +43,13 @@ fn ajuda() {
   --json                 imprime o estado em JSON, sem texto acentuado
   --fonte <ttf>          fonte alternativa
   --chave-catalogo <arg> chave pública do catálogo: arquivo .pem ou o valor
+  --ativar <chave>       ativa uma chave de licença e imprime JSON (sai com 3 se falhar)
+  --provedor <nome>      simulado (padrão) ou lemonsqueezy
+                         simulado aceita só a chave "CHAVE-DE-TESTE-1", com
+                         limite de 1 instância: exercita sucesso, chave inválida
+                         e limite atingido
+  --aparelho <arg>       chave pública do aparelho: base64 ou arquivo
+  --mensagem-catalogo    imprime os bytes que o binário assina/verifica
   --ajuda                esta mensagem
 
 Variáveis:
@@ -135,6 +145,9 @@ fn main() -> Result<(), String> {
     let mut chave_catalogo: Option<String> = None;
     let mut json = false;
     let mut mostrar_mensagem = false;
+    let mut ativar: Option<String> = None;
+    let mut provedor_nome: String = "simulado".into();
+    let mut aparelho_b64: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -173,6 +186,20 @@ fn main() -> Result<(), String> {
             // com o gerador em JS, e voltará a ser útil na próxima mudança de
             // formato.
             "--mensagem-catalogo" => mostrar_mensagem = true,
+            // Ativação sem tela: é o caminho que o CI e o suporte usam, e o
+            // mesmo código que a tela chama.
+            "--ativar" => {
+                i += 1;
+                ativar = args.get(i).cloned();
+            }
+            "--provedor" => {
+                i += 1;
+                provedor_nome = args.get(i).cloned().unwrap_or(provedor_nome);
+            }
+            "--aparelho" => {
+                i += 1;
+                aparelho_b64 = args.get(i).cloned();
+            }
             outro => return Err(format!("argumento desconhecido: {outro} (use --ajuda)")),
         }
         i += 1;
@@ -217,6 +244,61 @@ fn main() -> Result<(), String> {
         eprintln!("nenhum --catalogo: usando o catálogo de demonstração (não assinado)");
         catalogo_de_demonstracao()
     };
+
+    // A chave pública do aparelho: em produção vem do arquivo que o aparelho
+    // gerou; aqui pode vir por flag, para exercitar o fluxo no PC.
+    let aparelho = match &aparelho_b64 {
+        Some(v) if std::path::Path::new(v).is_file() => {
+            giochi_loja_core::ChavePublica::de_arquivo(v).map_err(|e| e.to_string())?
+        }
+        Some(v) => giochi_loja_core::ChavePublica::de_texto(v).map_err(|e| e.to_string())?,
+        // Sem --aparelho, uma chave de demonstração **derivada**: 32 bytes
+        // quaisquer não formam um ponto Ed25519 válido, e usar `de_bytes` aqui
+        // dava "a chave não é Ed25519".
+        None => giochi_loja_core::ChavePublica::de_semente(&[7u8; 32]),
+    };
+
+    if let Some(chave) = &ativar {
+        use giochi_loja_core::provedor::{LemonSqueezy, Provedor, Simulado};
+        // O provedor é escolhido por nome, e "simulado" existe para o CI: sem
+        // rede e sem credencial não há como exercitar o caminho de erro do
+        // limite de instâncias, que é o que substitui o nosso backend.
+        let provedor: Box<dyn Provedor> = match provedor_nome.as_str() {
+            "lemonsqueezy" => Box::new(LemonSqueezy::default()),
+            // A chave de teste é **fixa**. Construir o simulado com a chave
+            // digitada fazia ele aceitar qualquer coisa — e o teste de chave
+            // errada passava sem provar nada. Chave fixa + limite 1 exercita os
+            // três caminhos: sucesso, chave inválida e limite atingido.
+            "simulado" => Box::new(Simulado::com_chave(CHAVE_DE_TESTE, 1)),
+            outro => return Err(format!("provedor desconhecido: {outro}")),
+        };
+        // O app vem do catálogo já carregado. Sem `--catalogo`, o de
+        // demonstração serve: a ativação não depende de o app existir.
+        let app_do_pedido = catalogo
+            .itens
+            .first()
+            .map(|i| i.slug.clone())
+            .unwrap_or_else(|| "desconhecido".into());
+        match provedor.ativar(chave, &aparelho, &app_do_pedido) {
+            Ok(a) => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ativado": true,
+                        "provedor": a.provedor,
+                        "app": a.app,
+                        "instancia": a.instancia,
+                        "revalidar_em": a.revalidar_em,
+                    })
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                println!("{}", serde_json::json!({ "ativado": false, "erro": e.to_string() }));
+                std::process::exit(3);
+            }
+        }
+    }
 
     if mostrar_mensagem {
         // A mensagem canônica do catálogo **como carregado**, antes de qualquer

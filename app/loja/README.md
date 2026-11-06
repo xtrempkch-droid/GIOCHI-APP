@@ -29,6 +29,35 @@ mundo.
 No código isso são **tipos diferentes**: `PacoteVerificado` prova origem e nada
 mais; `LicencaAssinada` prova compra e carrega a chave do aparelho.
 
+## De onde vem o "este aparelho pagou"
+
+Não do nosso backend — **do provedor**. Duas formas, e a diferença decide se o
+jogo é vendável:
+
+| | **itch.io** | **Lemon Squeezy / Paddle / Gumroad** |
+| --- | --- | --- |
+| como se sabe que comprou | `game:view:ownership` | chave de licença |
+| credencial | a **conta do usuário** | a chave |
+| vínculo com o aparelho | **nenhum** | **sim**: `activation_limit` por instância |
+| preço e catálogo | do itch.io | nossos |
+
+O limite de instâncias do provedor é o que substitui o backend: a chave pública do
+aparelho vira o `instance_name`, e o servidor *deles* conta quantas instalações
+existem. Esgotado, a resposta é
+`{"activated": false, "error": "This license key has reached the activation limit."}`.
+
+```bash
+app/loja/bin/giochi-loja --ativar CHAVE-DE-TESTE-1        # provedor simulado
+app/loja/bin/giochi-loja --ativar <chave> --provedor lemonsqueezy
+```
+
+Saída em JSON; código 3 quando recusa. `--aparelho <b64|arquivo>` define a chave
+do aparelho (sem ele, uma chave de demonstração derivada de semente).
+
+**O itch.io está implementado mesmo sem vincular ao aparelho**, porque serve para
+jogo grátis e conteúdo de terceiro — e porque dizer "não dá" sobre algo que dá
+seria mentira.
+
 ## O que a loja não faz, de propósito
 
 - **Não vê número de cartão.** Cartão é pago em checkout hospedado, no
@@ -78,10 +107,12 @@ crates/core/     # sem SDL, sem rede: catálogo, chave, licença, pedido, pacote
   pacote.rs      # confere hash + assinatura + ordem dos membros do tar
   baixador.rs    # trait + curl (com retomada) + simulado para teste
   grade.rs       # geometria da grade: desenho e navegação usam a MESMA
+  http.rs        # curl mínimo; o que erra é a montagem, e ela tem teste
+  provedor.rs    # LICENSE API: ativar/validar, o limite de instâncias do provedor
 crates/ui-sdl/   # janela, desenho, 4 telas, navegação por teclado
 ```
 
-`cargo test` roda 93 testes. Os 77 do núcleo **não precisam de tela** — é a mesma
+`cargo test` roda 113 testes. Os 97 do núcleo **não precisam de tela** — é a mesma
 separação do launcher, pelo mesmo motivo: teste que precisa de GPU falha no lugar
 errado.
 
