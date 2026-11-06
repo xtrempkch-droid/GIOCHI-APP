@@ -183,6 +183,16 @@ pode comprar.
 - **Não guarda chave.** Recebe o caminho de uma chave existente e repassa ao
   `sign_package`. A privada continua sendo um arquivo do usuário.
 
+### O label do runner também envelhece
+
+`macos-14` foi **aposentado em 02/11/2026**. Com o label morto o job não recebe
+runner e é **cancelado em 1 segundo, sem nenhum passo** — o log fica vazio e a
+leitura natural é "a matriz foi cancelada", não "não existe máquina". Agora é
+`macos-15` (arm64, o Mac que o usuário tem hoje).
+
+Vale como regra: um `cancelled` sem passos é **infraestrutura**, não código.
+Antes de procurar defeito no app, verifique se o label ainda existe.
+
 ### O filtro de `paths` faz parte do teste
 
 O workflow só roda quando um caminho listado muda. `app/painel/**` ficou de fora

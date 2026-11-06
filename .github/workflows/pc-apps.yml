@@ -136,7 +136,12 @@ jobs:
           - so: windows-2022
             rotulo: windows
             versao: "3.12"
-          - so: macos-14 # arm64: é o Mac que o usuário tem hoje
+          # `macos-14` foi **aposentado em 02/11/2026** (actions/runner-images
+          # #15226). Com o label morto o job não recebe runner e é cancelado em
+          # 1 s, sem passo nenhum — o que parece "matriz cancelada" e não falta
+          # de runner. `macos-15` é arm64, que é o Mac que o usuário tem hoje;
+          # `macos-latest` já aponta para macOS 26 arm64.
+          - so: macos-15
             rotulo: macos
             versao: "3.12"
     runs-on: ${{ matrix.so }}
