@@ -395,7 +395,7 @@ Profundidade máxima: 2 (`app/grupo/app`). Mais que isso não é organização.
 | Valor | Onde roda | Efeito no licenciamento |
 | --- | --- | --- |
 | `image` | dentro da imagem assinada do aparelho | exige licença permissiva |
-| `store` | instalado em `/user`, enviado pela loja | aceita GPL |
+| `store` | instalado em `/user/apps`, enviado pela loja | aceita GPL |
 | `host` | no **computador do usuário** (loja, forge) | não vai para o aparelho |
 
 **A loja roda no PC do usuário**, não no aparelho: ela baixa/paga o pacote e envia
@@ -922,7 +922,7 @@ Cada regra existe por um motivo que já apareceu, não por simetria:
 | --- | --- |
 | `status: scaffold` fica fora | tem `bin/` vazio; cartão que não abre é pior que cartão ausente |
 | `distribution: host` fica fora | `forge` e `store` rodam no PC |
-| `distribution: store` fica fora | é instalado em `/user` pela loja, não faz parte da imagem |
+| `distribution: store` fica fora | é instalado em `/user/apps` pela loja, não faz parte da imagem |
 | `role: shell` fica fora | senão o launcher **lista a si mesmo** |
 | `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
 
@@ -1104,6 +1104,26 @@ A primeira versão montava o comando com aspas dentro de aspas dentro de `ssh` e
 produziu `sh: "bin/giochi-pacman": unknown operand`. Aninhar três níveis de aspas
 para falar com outra máquina não é difícil de escrever — é difícil de **ler
 quando falha**. Hoje é `scripts/lib/extrair-pacote.sh`, copiado e executado.
+
+#### App da loja vai para `/user/apps`, não para `/opt`
+
+Correção feita depois de o dono confirmar o desenho: o `instalar-pacote` estava
+gravando em `/opt/giochi/apps`, que é o mesmo lugar dos apps **da imagem**.
+
+Funcionava, e destruía o argumento que justifica a loja existir: `distribution:
+store` significa "não faz parte da imagem assinada", e é isso que permite vender
+app GPL — o comprador substitui o pacote em `/user` e a GPL-3.0 §6 se resolve sem
+entregar chave.
+
+Medido depois da correção: `957 ppid=949 /user/apps/pacman/bin/giochi-pacman` —
+o launcher inicia de `/user/apps` normalmente. A colheita do catálogo passou a
+varrer **as duas** raízes (`/opt/giochi/apps` e `/user/apps`), senão o app da
+loja ficaria fora do índice.
+
+**Ressalva honesta:** nesta imagem `/user` é um **diretório comum no rootfs**, não
+uma partição separada (`mount` mostra só `/dev/root` em `/`). Ou seja, a
+propriedade "substituível pelo comprador" ainda **não é real** — o caminho está
+certo, a partição de dados é que falta. Já está no canal, do lado do System.
 
 #### O que NÃO existe: a loja
 

@@ -10,6 +10,31 @@ pronto o que não foi executado.
 
 ---
 
+## 0. O desenho, em uma frase
+
+**A loja roda no computador do usuário.** O cliente compra o jogo lá; a loja baixa,
+prepara o `.giochi` e entrega o pacote pronto para o aparelho com o Giochi
+instalado (X55 e outros) apenas **executar**. Todo o trabalho pesado — download,
+análise de dependências, empacotamento — acontece no PC. O console é reprodutor
+de pacotes.
+
+```text
+[PC]                                    [aparelho]
+loja ──▶ baixa ──▶ prepara ──▶ .giochi ──▶ /user/apps/<slug> ──▶ executa
+                                       (+ assinatura Ed25519)
+```
+
+| Peça | Onde roda | Estado |
+| --- | --- | --- |
+| `app/store/` — a loja | **PC** (`distribution: host`) | **não escrita** |
+| `app/forge/` — empacotador | **PC** (`distribution: host`) | a lógica existe em `scripts/lib/publicar.mjs`; o app não |
+| pacote `.giochi` assinado | PC → aparelho | **funciona** (`empacotar.mjs`) |
+| instalação no aparelho | PC → aparelho | **funciona** (`aparelho.sh instalar-pacote`) |
+| execução | aparelho | **funciona** (launcher + catálogo) |
+
+O aparelho **não baixa nada** e **não compila nada**: ele extrai e executa. É o
+que mantém o rootfs pequeno e o sistema substituível.
+
 ## 1. O que funciona hoje
 
 ```text

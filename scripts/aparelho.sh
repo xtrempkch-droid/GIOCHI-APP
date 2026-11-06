@@ -706,7 +706,18 @@ cmd_instalar_pacote() {
       console.log(base.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'')
         .replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'app');
     })")
-  destino="/opt/giochi/apps/$slug"
+  # App da loja vai para `/user`, **não** para `/opt`.
+  #
+  # O contrato em `app/apps.json`/`AGENTS.md` diz: `distribution: store` é
+  # instalado em `/user` pela loja e **não faz parte da imagem assinada**. Isso
+  # não é organização de pastas — é o que permite vender app GPL: o pacote
+  # baixado fica fora da imagem, o comprador pode substituí-lo, e a GPL-3.0 §6
+  # se resolve sem entregar chave nenhuma.
+  #
+  # A primeira versão instalava em `/opt/giochi/apps`, que é o mesmo lugar dos
+  # apps da imagem. Funcionava, e destruía exatamente o argumento que justifica
+  # a loja existir neste desenho.
+  destino="/user/apps/$slug"
 
   titulo "instalando em $destino"
   local temp
@@ -767,7 +778,10 @@ cmd_instalar_pacote() {
 colher_instalados() {
   local destino="$1"
   no_aparelho '
-    for d in /opt/giochi/apps/*/; do
+    # Duas raízes, de propósito: apps da imagem moram em `/opt/giochi/apps`,
+    # apps da loja em `/user/apps`. A colheita tem de ver as duas — um app da
+    # loja que ficasse fora do catálogo seria invisível sem erro.
+    for d in /opt/giochi/apps/*/ /user/apps/*/; do
       m="$d/metadata.json"
       [ -f "$m" ] || continue
       id=$(basename "$d")
