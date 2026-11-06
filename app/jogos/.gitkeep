@@ -1,0 +1,6 @@
+# Grupo de jogos.
+#
+# Vazio de propósito desde 06/11/2026: os sete jogos que existiam foram
+# removidos para recomeçar do zero. Uma pasta aqui vira app quando ganha
+# `metadata.json` — este arquivo só mantém o grupo no Git, que não versiona
+# diretório vazio.

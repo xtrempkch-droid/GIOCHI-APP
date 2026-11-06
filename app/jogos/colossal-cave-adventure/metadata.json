@@ -1,9 +1,0 @@
-{
-    "title":  "Colossal Cave Adventure",
-    "developer":  "Giochi",
-    "version":  "1.0.0",
-    "arch":  "aarch64",
-    "runtime":  "godot",
-    "entrypoint":  "bin/colossal-cave-adventure",
-    "license":  "Proprietary"
-}

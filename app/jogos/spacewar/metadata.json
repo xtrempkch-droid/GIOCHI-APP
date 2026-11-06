@@ -1,9 +1,0 @@
-{
-    "title":  "Spacewar",
-    "developer":  "Giochi",
-    "version":  "1.0.0",
-    "arch":  "aarch64",
-    "runtime":  "godot",
-    "entrypoint":  "bin/spacewar",
-    "license":  "Proprietary"
-}

@@ -1,0 +1,10 @@
+{
+  "title": "Projeto Godot de Teste",
+  "developer": "Giochi",
+  "version": "1.0.0",
+  "arch": "aarch64",
+  "runtime": "godot",
+  "entrypoint": "bin/projeto-godot",
+  "slug": "projeto-godot",
+  "license": "Proprietary"
+}

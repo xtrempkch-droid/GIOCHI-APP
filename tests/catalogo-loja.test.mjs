@@ -27,6 +27,15 @@ const RAIZ = path.resolve(import.meta.dirname, "..");
 const GERADOR = path.join(RAIZ, "scripts", "gerar-catalogo-loja.mjs");
 const EMPACOTADOR = path.join(RAIZ, "scripts", "empacotar.mjs");
 
+// App de mentira, comitado em `tests/fixtures/app-teste/`.
+//
+// Antes estes testes empacotavam `app/jogos/pacman` de verdade. Isso fazia o
+// teste do gerador depender do catálogo de jogos: apagar ou renomear um jogo
+// reprovava testes que não têm nada a ver com jogos. A fixture é um app
+// completo (metadata + capa 320×320 + binário), então o empacotador real roda
+// igual — só a origem do conteúdo deixou de ser acidental.
+const APP_FIXTURE = path.join(RAIZ, "tests", "fixtures", "app-teste");
+
 function catalogoDeTeste() {
   return {
     versao: VERSAO,
@@ -159,7 +168,7 @@ test("catálogo gerado tem os campos que o Rust lê", () => {
   comPacotes(({ dir, pacotes }) => {
     // Pacote de verdade, assinado pelo empacotador de verdade.
     execFileSync(process.execPath, [
-      EMPACOTADOR, "app/jogos/pacman", "--saida", pacotes,
+      EMPACOTADOR, APP_FIXTURE, "--saida", pacotes,
       "--chave", path.join(dir, "pacote.pem"),
     ], { cwd: RAIZ, stdio: "pipe" });
 
@@ -167,7 +176,7 @@ test("catálogo gerado tem os campos que o Rust lê", () => {
       "--pacotes", pacotes, "--saida", dir,
       "--chave", path.join(dir, "cat.pem"), "--criar-chave",
       "--url-base", "https://cdn.giochi.example",
-      "--preco", "pacman=1990", "--ano", "pacman=1980",
+      "--preco", "app-teste=1990", "--ano", "app-teste=1980",
     ]);
     assert.equal(r.codigo, 0, r.saida);
 
@@ -177,7 +186,7 @@ test("catálogo gerado tem os campos que o Rust lê", () => {
     assert.equal(json.catalogo.versao, VERSAO);
 
     const item = json.catalogo.itens[0];
-    assert.equal(item.slug, "pacman");
+    assert.equal(item.slug, "app-teste");
     assert.equal(item.preco.centavos, 1990);
     assert.equal(item.ano, 1980);
     assert.match(item.url, /^https:\/\//);
@@ -187,7 +196,7 @@ test("catálogo gerado tem os campos que o Rust lê", () => {
 
     // O sha256 anunciado tem de ser o do arquivo, senão o comprador recebe
     // "download corrompido" e o defeito está aqui.
-    const bytes = readFileSync(path.join(pacotes, "pacman.giochi"));
+    const bytes = readFileSync(path.join(pacotes, "app-teste.giochi"));
     assert.equal(item.sha256, sha256Hex(bytes));
     assert.equal(item.tamanho_bytes, bytes.length);
   });
@@ -198,7 +207,7 @@ test("URL sem https não é gerada, e o aviso aparece", () => {
   // própria não abre.
   comPacotes(({ dir, pacotes }) => {
     execFileSync(process.execPath, [
-      EMPACOTADOR, "app/jogos/pacman", "--saida", pacotes, "--chave", path.join(dir, "p.pem"),
+      EMPACOTADOR, APP_FIXTURE, "--saida", pacotes, "--chave", path.join(dir, "p.pem"),
     ], { cwd: RAIZ, stdio: "pipe" });
     const r = gerar(["--pacotes", pacotes, "--saida", dir, "--chave", path.join(dir, "c.pem"), "--criar-chave"]);
     assert.match(r.saida, /sem --url-base/);

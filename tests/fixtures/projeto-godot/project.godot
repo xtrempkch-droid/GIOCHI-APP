@@ -1,0 +1,13 @@
+; Projeto Godot de teste — existe só para exercitar a classificação.
+; Não é um jogo: é a forma mínima que o classificador do forge reconhece.
+
+config_version=5
+
+[application]
+
+config/name="Projeto Godot de Teste"
+config/features=PackedStringArray("4.3", "GLES3")
+
+[rendering]
+
+renderer/rendering_method="mobile"

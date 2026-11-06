@@ -16,8 +16,16 @@ from giochi_forge.package import generate_keypair
 from giochi_painel import acoes
 
 RAIZ = Path(__file__).resolve().parents[2]
-VOLLEY = RAIZ / "app" / "jogos" / "arcade-volleyball"
-SPACEWAR = RAIZ / "app" / "jogos" / "spacewar"
+
+# Fixtures, não jogos reais.
+#
+# Estes testes usavam `app/jogos/arcade-volleyball` e `app/jogos/spacewar`.
+# Isso acoplava o teste do painel ao catálogo de jogos: apagar um jogo jogava
+# 12 testes para o vermelho sem nenhum defeito no painel. A fixture nativa
+# (`forge.json` + metadata + capa + binário) e a fixture Godot (`project.godot`)
+# exercitam os mesmos caminhos de código sem depender do que está publicado.
+NATIVO = RAIZ / "tests" / "fixtures" / "app-nativo"
+GODOT = RAIZ / "tests" / "fixtures" / "projeto-godot"
 
 
 class TestAparelhos(unittest.TestCase):
@@ -46,7 +54,7 @@ class TestAparelhos(unittest.TestCase):
 
 class TestClassificar(unittest.TestCase):
     def test_volley_e_compativel_com_o_x55(self):
-        r = acoes.classificar(str(VOLLEY), "x55")
+        r = acoes.classificar(str(NATIVO), "x55")
         self.assertTrue(r["permitido"], r["problemas"])
         self.assertEqual(r["aparelho"], "x55")
         self.assertEqual(r["origem"], "forge.json")
@@ -54,13 +62,13 @@ class TestClassificar(unittest.TestCase):
     def test_spacewar_e_recusado_onde_nao_ha_runtime_godot(self):
         # O jogo é Godot e o X55 não tem Godot: dizer "compatível" seria a
         # mentira mais cara do projeto, porque o usuário descobriria no aparelho.
-        r = acoes.classificar(str(SPACEWAR), "x55")
+        r = acoes.classificar(str(GODOT), "x55")
         self.assertFalse(r["permitido"])
         self.assertTrue(r["problemas"])
 
     def test_aparelho_desconhecido_e_erro_de_entrada(self):
         with self.assertRaises(acoes.ErroDeAcao):
-            acoes.classificar(str(VOLLEY), "nao-existe")
+            acoes.classificar(str(NATIVO), "nao-existe")
 
     def test_pasta_sem_metadata_nao_e_app(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,7 +97,7 @@ class TestClassificar(unittest.TestCase):
 class TestEmpacotar(unittest.TestCase):
     def test_empacota_sem_chave(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = acoes.empacotar(str(VOLLEY), tmp)
+            r = acoes.empacotar(str(NATIVO), tmp)
             self.assertTrue(Path(r["arquivo"]).is_file())
             self.assertEqual(r["bytes"], Path(r["arquivo"]).stat().st_size)
             self.assertFalse(r["assinado"])
@@ -98,7 +106,7 @@ class TestEmpacotar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             saida = Path(tmp) / "out"
             priv, _ = generate_keypair(Path(tmp) / "chaves")
-            r = acoes.empacotar(str(VOLLEY), str(saida), str(priv))
+            r = acoes.empacotar(str(NATIVO), str(saida), str(priv))
             self.assertTrue(r["assinado"])
             pacote = Path(r["arquivo"])
             self.assertTrue(Path(r["arquivo"] + ".sig").is_file())
@@ -113,12 +121,12 @@ class TestEmpacotar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             saida = Path(tmp) / "out"
             priv, _ = generate_keypair(Path(tmp) / "chaves")
-            r = acoes.empacotar(str(VOLLEY), str(saida), str(priv))
+            r = acoes.empacotar(str(NATIVO), str(saida), str(priv))
             manifesto = json.loads(
                 Path(r["arquivo"] + ".manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(manifesto["version"], "1.0.0")
-            self.assertEqual(manifesto["signature"], "arcade-volleyball.giochi.sig")
+            self.assertEqual(manifesto["signature"], "app-nativo.giochi.sig")
             self.assertEqual(manifesto["sha256"], r["sha256"])
 
     def test_a_assinatura_tem_64_bytes_crus(self):
@@ -132,33 +140,33 @@ class TestEmpacotar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             saida = Path(tmp) / "out"
             priv, _ = generate_keypair(Path(tmp) / "chaves")
-            r = acoes.empacotar(str(VOLLEY), str(saida), str(priv))
+            r = acoes.empacotar(str(NATIVO), str(saida), str(priv))
             sig = Path(r["arquivo"] + ".sig").read_bytes()
             self.assertEqual(len(sig), 64, "base64 em texto daria 89 bytes")
 
     def test_chave_inexistente_e_erro_de_entrada_nao_de_servidor(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(acoes.ErroDeAcao) as ctx:
-                acoes.empacotar(str(VOLLEY), tmp, "/nao/existe.pem")
+                acoes.empacotar(str(NATIVO), tmp, "/nao/existe.pem")
             self.assertIn("chave", str(ctx.exception).lower())
 
     def test_pacote_e_reproduzivel(self):
         # Mesmo conteúdo, mesmo sha256 — é o que permite a assinatura
         # identificar o conteúdo em vez de identificar o momento do build.
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
-            r1 = acoes.empacotar(str(VOLLEY), a)
-            r2 = acoes.empacotar(str(VOLLEY), b)
+            r1 = acoes.empacotar(str(NATIVO), a)
+            r2 = acoes.empacotar(str(NATIVO), b)
             self.assertEqual(r1["sha256"], r2["sha256"])
 
 
 class TestPacotes(unittest.TestCase):
     def test_lista_o_que_esta_na_pasta(self):
         with tempfile.TemporaryDirectory() as tmp:
-            acoes.empacotar(str(VOLLEY), tmp)
+            acoes.empacotar(str(NATIVO), tmp)
             r = acoes.pacotes(tmp)
             self.assertEqual(len(r["pacotes"]), 1)
             item = r["pacotes"][0]
-            self.assertEqual(item["id"], "arcade-volleyball")
+            self.assertEqual(item["id"], "app-nativo")
             self.assertEqual(item["versao"], "1.0.0")
 
     def test_pasta_inexistente_e_erro_de_entrada(self):
@@ -169,7 +177,7 @@ class TestPacotes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             priv, _ = generate_keypair(Path(tmp) / "chaves")
             saida = Path(tmp) / "out"
-            acoes.empacotar(str(VOLLEY), str(saida), str(priv))
+            acoes.empacotar(str(NATIVO), str(saida), str(priv))
             r = acoes.pacotes(str(saida))
             self.assertTrue(r["pacotes"][0]["ok"], r["pacotes"][0]["motivo"])
 

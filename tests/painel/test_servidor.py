@@ -21,8 +21,8 @@ from giochi_painel import servidor
 # o cwd do teste é `app/painel/src`. Usar relativo aqui testaria a localização
 # do arquivo de teste, não o classificador.
 RAIZ = Path(__file__).resolve().parents[2]
-VOLLEY = str(RAIZ / "app" / "jogos" / "arcade-volleyball")
-SPACEWAR = str(RAIZ / "app" / "jogos" / "spacewar")
+NATIVO = str(RAIZ / "tests" / "fixtures" / "app-nativo")
+GODOT = str(RAIZ / "tests" / "fixtures" / "projeto-godot")
 
 
 class ServidorDeTeste(unittest.TestCase):
@@ -110,7 +110,7 @@ class TestApi(ServidorDeTeste):
     def test_classificar_compativel(self):
         with self.post(
             "/api/classificar",
-            {"projeto": VOLLEY, "aparelho": "x55"},
+            {"projeto": NATIVO, "aparelho": "x55"},
         ) as r:
             dados = json.load(r)
         self.assertTrue(dados["permitido"], dados.get("problemas"))
@@ -119,7 +119,7 @@ class TestApi(ServidorDeTeste):
         # "Incompatível" é resposta, não falha: 200 com o veredito. Reservar
         # erro HTTP para isso faria a UI tratar veredito como pane.
         with self.post(
-            "/api/classificar", {"projeto": SPACEWAR, "aparelho": "x55"}
+            "/api/classificar", {"projeto": GODOT, "aparelho": "x55"}
         ) as r:
             self.assertEqual(r.status, 200)
             dados = json.load(r)
@@ -133,7 +133,7 @@ class TestApi(ServidorDeTeste):
 
     def test_campo_faltando_devolve_400(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.post("/api/classificar", {"projeto": VOLLEY})
+            self.post("/api/classificar", {"projeto": NATIVO})
         self.assertEqual(ctx.exception.code, 400)
         ctx.exception.close()
 

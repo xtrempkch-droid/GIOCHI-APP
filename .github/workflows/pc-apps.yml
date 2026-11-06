@@ -29,6 +29,7 @@ on:
       - "tests/empacotar-pc.test.mjs"
       - "tests/consistencia-runtimes.test.mjs"
       - "tests/painel/**"
+      - "tests/fixtures/**"
       - ".github/workflows/pc-apps.yml"
   push:
     branches: [main]
@@ -40,6 +41,7 @@ on:
       - "scripts/lib/zip.mjs"
       - "scripts/testar-apps-pc.sh"
       - "tests/painel/**"
+      - "tests/fixtures/**"
       - ".github/workflows/pc-apps.yml"
   workflow_dispatch:
   release:
@@ -219,13 +221,19 @@ jobs:
 
       # Exercita o que escreve em disco: `Path.mkdir`, `os.replace` e leitura de
       # arquivo. É aqui que Windows e macOS diferem de Linux de verdade.
-      - name: Forge empacota um jogo de verdade
+      #
+      # Usa `tests/fixtures/app-nativo`, não um jogo do catálogo: o CI de apps de
+      # PC estava empacotando `app/jogos/arcade-volleyball`, e apagar o jogo
+      # derrubou quatro jobs que não têm nada a ver com jogos. A fixture é um
+      # app completo (metadata + capa 320×320 + binário), então o caminho
+      # exercitado é idêntico.
+      - name: Forge empacota um app de verdade
         shell: bash
         run: |
           mkdir -p saida
           python dist/pc/giochi-forge.pyz build \
-            --project app/jogos/arcade-volleyball --out saida/av.giochi
-          test -s saida/av.giochi
+            --project tests/fixtures/app-nativo --out saida/app-nativo.giochi
+          test -s saida/app-nativo.giochi
 
       - name: Store lê o pacote que o forge fez
         # Um app consome o outro: se as duas listas de `runtime` divergirem, esta
@@ -233,14 +241,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p catalogo
-          cp saida/av.giochi catalogo/
+          cp saida/app-nativo.giochi catalogo/
           python dist/pc/giochi-store.pyz listar --src catalogo
-          python dist/pc/giochi-store.pyz listar --src catalogo | grep -q "Arcade Volleyball"
+          python dist/pc/giochi-store.pyz listar --src catalogo | grep -q "App Nativo de Teste"
 
-      # Os perfis reais dos aparelhos, exercitados nos três sistemas. O
-      # arcade-volleyball é `native` e tem de ser compatível no X55; o mesmo
-      # projeto declarado como Godot tem de ser recusado, porque a imagem não
-      # traz o runtime (medido — docs/godot.md).
+      # Os perfis reais dos aparelhos, exercitados nos três sistemas. A fixture
+      # nativa é `native` e tem de ser compatível no X55; a fixture Godot tem de
+      # ser recusada, porque a imagem não traz o runtime (medido — docs/godot.md).
       - name: Classifica contra o X55
         shell: bash
         # Pelo **código de saída**, não pelo texto. `check` já devolve
@@ -250,10 +257,10 @@ jobs:
         # (corrigido na origem, mas o teste não deve depender disso).
         run: |
           python dist/pc/giochi-forge.pyz check --device x55 \
-            --project app/jogos/arcade-volleyball
+            --project tests/fixtures/app-nativo
           echo "código de saída 0 = compatível"
 
-      - name: E o jogo Godot tem de ser REPROVADO
+      - name: E o projeto Godot tem de ser REPROVADO
         shell: bash
         # O outro lado da classificação. `check` devolve 2 para incompatível;
         # o `|| true` mantém o passo verde para que a asserção seja explícita —
@@ -261,11 +268,11 @@ jobs:
         run: |
           set +e
           python dist/pc/giochi-forge.pyz check --device x55 \
-            --project app/jogos/spacewar > /tmp/godot.txt 2>&1
+            --project tests/fixtures/projeto-godot > /tmp/godot.txt 2>&1
           codigo=$?
           cat /tmp/godot.txt
           if [ "$codigo" -eq 0 ]; then
-            echo "spacewar tem de ser incompatível no X55 (não há runtime Godot na imagem)"
+            echo "um projeto Godot tem de ser incompatível no X55 (não há runtime Godot na imagem)"
             exit 1
           fi
           echo "reprovado com código $codigo, como esperado"

@@ -1,0 +1,7 @@
+{
+  "arch": "aarch64",
+  "runtime": "godot",
+  "graphics_api_min": "gles3",
+  "godot_version": "4.3",
+  "ram_min_mb": 512
+}
