@@ -2275,5 +2275,33 @@ Incompatível
     (nenhum build oficial tem KMSDRM); ver docs/godot.md — o caminho e port nativo
 ```
 
-**54 testes** (38 do antecessor + 16 nossos). Reverter cada correção faz o teste
-correspondente falhar: painel cru → 1 falha; sem `godot_runtime` → 4 falhas.
+### E a lacuna que o README do antecessor anotava
+
+*"Precisa de uma forma de declarar 'não exige gráficos'"* — nunca resolvida. O
+classificador assumia `gles3` quando a chave faltava, e com isso a **própria
+forge** (uma CLI headless) era reprovada num RK3326:
+
+```text
+antes    check --device rk3326-1gb --project app/forge  → Incompatível
+depois   check --device rk3326-1gb --project app/forge  → Compatível
+```
+
+O enum ganhou `graphics_api_min: "none"`. O **default continua `gles3`**: omitir
+num app gráfico tem de ser conservador — `none` é declaração, não esquecimento.
+
+### Um teste meu que passava dos dois lados
+
+O primeiro teste de `none` afirmava "é compatível" e ficava **verde mesmo sem o
+ramo `none`**, porque a cadeia de `elif` da checagem gráfica não tinha `else`: um
+valor que não casasse com nenhum ramo passava em silêncio. Descobri ao conferir
+quantos testes falhavam com a correção revertida — eu tinha escrito **3** no
+commit e o real era **1**.
+
+A cadeia foi fechada com um `else` que reprova valor desconhecido (`gles4`, erro
+de digitação), e agora o teste discrimina: sem o ramo `none`, falham **2**.
+
+### Medido
+
+**58 testes** (38 do antecessor + 20 nossos). Reverter cada correção faz o teste
+correspondente falhar: painel cru → 1 falha; sem `godot_runtime` → 4; sem o ramo
+`none` → 2.
