@@ -2535,3 +2535,65 @@ testar-apps-pc.sh        58 forge + 32 painel = 90 Python
 openssl pkeyutl -verify  aceita o .sig do Python e o do JS
 GitHub Actions           7/7 jobs verdes: linux, linux-3.9, windows, macos
 ```
+
+## 18. Verificação no aparelho: o que dá para provar hoje (06/11/2026)
+
+Com jogos em **cartão SD**, o pacote chega ao aparelho sem passar pelo PC — a
+premissa "quem envia, controla" deixa de valer. Fui medir o que a imagem tem,
+lendo os `rootfs.ext4` de `GIOCHI-SYSTEM/out/` com `debugfs`, sem root e sem
+aparelho:
+
+```text
+/usr/bin/sha256sum → ../../bin/busybox     presente
+/usr/bin/awk       → busybox               presente (o instalador usa)
+openssl (CLI)      /usr/bin e /bin         AUSENTE
+python3                                    AUSENTE
+/usr/lib/libcrypto.so.3                    presente
+```
+
+As duas imagens (X55 e X35H) dão o mesmo resultado.
+
+| Pergunta | Resposta medida |
+| --- | --- |
+| dá para conferir **integridade** no aparelho? | **sim** — `sha256sum` do busybox |
+| dá para conferir **assinatura** no aparelho? | **não** — `libcrypto` é biblioteca, não programa |
+| o caminho do cartão verifica? | **sim** — `instalar-do-cartao.sh` recusa hash que não confere |
+| o caminho do SSH verifica no aparelho? | não, e não precisa: o PC roda `verificar-pacote.mjs` antes de enviar |
+
+**Integridade não é autenticidade.** Quem escreve no cartão reescreve o `.giochi`
+**e** o manifesto, e o SHA-256 confere. O que a verificação pega é cópia
+incompleta — o erro real de quem copia pelo leitor.
+
+Falta um verificador nativo aarch64 ligado a `libcrypto`
+(`EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, ...)` + `EVP_DigestVerify`); os
+64 bytes crus do `.sig` já são o formato que essa API consome. **Não foi escrito
+porque não há aparelho para executar** — compilar sem rodar é o erro do `poweroff`
+que este arquivo já documenta.
+
+### O script do aparelho passou a ser testável no PC
+
+`instalar-do-cartao.sh` rodava só no aparelho, e a verificação de SHA-256 dele
+**nunca tinha sido executada** desde que foi escrita. Os caminhos ganharam
+override por ambiente — `GIOCHI_APPS_BASE`, `GIOCHI_DESTINO_BASE`,
+`GIOCHI_LAUNCHER` — e agora `tests/instalar-do-cartao.test.mjs` roda o script
+aqui, com pacotes reais montados por `escreverTar` e um launcher de mentira.
+
+8 testes. O que eles provam, e o que não:
+
+| Cobre | Não cobre |
+| --- | --- |
+| recusa de hash que não confere | o `tar` real do busybox no aarch64 |
+| aviso quando falta manifesto ou `sha256` | o bit de execução no fs do cartão |
+| slug vindo do metadata, não do nome do arquivo | o launcher de verdade (`--catalogo-adicionar`) |
+| laço continuando depois de um pacote recusado | montagem do cartão |
+
+Desligar a comparação de hash reprova 2 dos 8; é assim que se sabe que os testes
+mordem.
+
+### `run-all.mjs` descobria por lista escrita à mão
+
+Era uma lista de `import` fixa. O arquivo novo desta sessão **não rodou**, e
+`node tests/run-all.mjs` continuou dizendo 164/164 — verde com menos cobertura.
+Agora a lista vem de `readdirSync`, e um arquivo `.test.mjs` novo entra sozinho:
+172 testes. Um teste que existe e não roda é pior que teste nenhum, porque
+parece cobertura.

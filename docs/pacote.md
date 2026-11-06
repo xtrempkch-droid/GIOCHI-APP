@@ -212,7 +212,8 @@ depende do Giochi System.
 
 | Item | Estado |
 | --- | --- |
-| verificação de assinatura **no aparelho** | **não** — o PC verifica antes de enviar; o aparelho confia no cabo |
+| verificação de **assinatura** no aparelho | **não** — medido: sem `openssl` na imagem. O PC verifica antes de enviar |
+| verificação de **SHA-256** no aparelho | **sim, pelo cartão** — `instalar-do-cartao.sh` recusa hash que não confere |
 | `.giochi` lido de pendrive/SD pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
 | loja (download, OAuth, butlerd) | **não** — ver [`loja.md`](loja.md) |
 | app Godot empacotado | **não** — falta export ARM64 |
@@ -224,17 +225,53 @@ depende do Giochi System.
 (que é o plano para dois slots + eMMC) o arquivo chega ao aparelho **sem passar
 pelo PC**, e aí confiar sem verificar deixa de ser conveniência e vira risco.
 
-O que falta, e por que ainda não está feito:
+**O caminho do cartão já verifica integridade.** `scripts/lib/instalar-do-cartao.sh`
+compara o SHA-256 do pacote com o do manifesto ao lado (`sha256sum`, que vem do
+busybox) e **recusa** o arquivo quando não confere. Sem manifesto ao lado, ele
+avisa e segue — o `.giochi` sozinho é o formato documentado.
 
-- `scripts/lib/extrair-pacote.sh` hoje **não verifica nada**: nem o SHA-256 do
-  manifesto, nem a assinatura. Ele extrai, confere que o `entrypoint` existe e
-  que ficou executável. Corrupção por cópia parcial passa.
-- Verificar no aparelho exige `openssl` (ou uma implementação de Ed25519) e
-  `sha256sum` no rootfs. **Não medi se existem** — o X55 está offline, e
-  escrever verificação sem executá-la seria exatamente o que este repositório
-  evita declarar.
-- O caminho barato, quando houver aparelho: conferir o SHA-256 do manifesto com
-  `sha256sum`, e a assinatura com `openssl pkeyutl -verify -rawin -sigfile`
-  contra `/etc/giochi/loja-publica.pem` — as duas ferramentas que o formato do
-  `.sig` (64 bytes crus) já atende de propósito. Se faltar `openssl`, o
-  verificador tem de **dizer que não verificou**, não passar em silêncio.
+**O caminho do SSH não verifica no aparelho**, e não precisa: o PC roda
+`verificar-pacote.mjs` (estrutura + SHA-256 + Ed25519) **antes** de enviar, e
+aborta se o pacote for recusado. Quem envia é quem verifica.
+
+O que nenhum dos dois faz é **autenticidade**: a assinatura Ed25519 não é
+conferida no aparelho. E isso é uma limitação medida, não uma suposição.
+
+#### O que existe na imagem (medido com `debugfs`, 06/11/2026)
+
+```text
+busybox sha256sum   /usr/bin/sha256sum → ../../bin/busybox   presente
+busybox awk         necessário pelo instalar-do-cartao         presente
+openssl (CLI)       /usr/bin/openssl, /bin/openssl             AUSENTE
+python3                                                        AUSENTE
+libcrypto           /usr/lib/libcrypto.so.3                    presente
+```
+
+As duas imagens (`powkiddy-x55`, `powkiddy-x35h`, 04/11 20:32 e 18:14) dão o
+mesmo resultado. Ou seja: **o hash dá para conferir hoje**; a **assinatura não**,
+porque verificar Ed25519 sem `openssl` exige um binário — `libcrypto` está lá,
+mas é biblioteca, não programa.
+
+#### Integridade não é autenticidade
+
+Quem tem acesso de escrita ao cartão reescreve o `.giochi` **e** o manifesto, e o
+SHA-256 confere. O que a verificação pega é **cópia incompleta ou corrompida**,
+que é o erro real de quem copia pelo leitor. Isso está dito no cabeçalho do
+`instalar-do-cartao.sh` desde que ele foi escrito, e continua valendo.
+
+#### O que falta, com o caminho técnico definido
+
+Um verificador nativo em aarch64, pequeno, ligado a `libcrypto`:
+
+```text
+EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, ...)
+EVP_DigestVerifyInit / EVP_DigestVerify
+```
+
+O formato já ajuda: o `.sig` tem **64 bytes crus**, exatamente o que
+`EVP_DigestVerify` consome. E o cross-compile já existe neste repositório
+(`scripts/compilar-launcher-arm64.sh` monta sysroot e libs do aparelho).
+
+**Não implementado porque não há aparelho para executar.** Compilar sem rodar
+seria repetir o erro que este repositório documenta — o `poweroff` que eu
+declarei sem testar.

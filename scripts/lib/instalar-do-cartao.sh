@@ -33,14 +33,21 @@
 set -u
 
 PASTA="${1:-/mnt/cartao}"
-INDICE="/opt/giochi/apps/index.json"
-LAUNCHER="/opt/giochi/apps/launcher/bin/giochi-launcher"
-DESTINO_BASE="/user/apps"
+
+# Os caminhos são configuráveis por ambiente **para poderem ser testados no PC**.
+# No aparelho nada é definido e os padrões valem. Sem isto, a única forma de
+# exercitar a verificação de SHA-256 seria com o aparelho na mão — e ela nunca
+# tinha sido exercitada desde que foi escrita. É a mesma razão do
+# `GIOCHI_CATALOGO` do launcher.
+APPS_BASE="${GIOCHI_APPS_BASE:-/opt/giochi/apps}"
+INDICE="$APPS_BASE/index.json"
+LAUNCHER="${GIOCHI_LAUNCHER:-$APPS_BASE/launcher/bin/giochi-launcher}"
+DESTINO_BASE="${GIOCHI_DESTINO_BASE:-/user/apps}"
 
 [ -d "$PASTA" ] || { echo "ERRO pasta não existe: $PASTA"; exit 1; }
 [ -x "$LAUNCHER" ] || { echo "ERRO launcher não está em $LAUNCHER"; exit 1; }
 
-mkdir -p "$DESTINO_BASE" /opt/giochi/apps || { echo "ERRO não consegui criar destino"; exit 1; }
+mkdir -p "$DESTINO_BASE" "$APPS_BASE" || { echo "ERRO não consegui criar destino"; exit 1; }
 
 TOTAL=0
 OK=0

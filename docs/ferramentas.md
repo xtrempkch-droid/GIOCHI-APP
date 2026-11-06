@@ -671,3 +671,29 @@ mecânica de GPL declarada em `distribution: "image"`. Ver
   aparelho estava em uso pela equipe do System durante esta rodada — então o
   caminho "arquivo presente" nunca rodou. O caminho "arquivo ausente" é o
   esperado hoje e está implementado com mensagem própria.
+
+## Verificar o que a imagem tem, sem o aparelho
+
+O `rootfs.ext4` de `GIOCHI-SYSTEM/out/<aparelho>/` responde "esta ferramenta
+existe na imagem?" sem root, sem montar e sem aparelho ligado:
+
+```bash
+IMG=../GIOCHI-SYSTEM/out/powkiddy-x55/rootfs.ext4
+debugfs -R "ls -l /usr/bin" "$IMG" | grep -iE "sha|ssl"
+debugfs -R "stat /usr/bin/sha256sum" "$IMG" | tail -1   # Fast link dest
+debugfs -R "stat /usr/bin/openssl" "$IMG"               # File not found
+```
+
+Três armadilhas, todas encontradas na prática:
+
+1. **`cat` num symlink não mostra o alvo** — o `debugfs` devolve
+   `File not found by ext2_lookup`, que parece "não existe" e é o contrário. O
+   alvo está na última linha do `stat`, em `Fast link dest`.
+2. **`stat` de caminho inexistente imprime o inode da consulta anterior** se o
+   stderr estiver suprimido: dois arquivos parecem o mesmo. Não suprima o
+   stderr, ou confira o `not found`.
+3. **A mesma ferramenta pode estar em `/bin` e não em `/usr/bin`** (busybox
+   mora em `/bin`). Procure nos dois antes de concluir que falta.
+
+Medido assim: `sha256sum`, `awk`, `sed`, `tar`, `head`, `cmp` e `od` existem
+(todos busybox); `openssl` e `python3` **não**.
