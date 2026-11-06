@@ -28,7 +28,16 @@ export const ARCH_DO_PC = ["x86_64", "arm64", "any"];
 // (LOJA.md §6): com só godot/retroarch/proton, app nativo — como o forge e a
 // store, escritos em Python — não tinha como se declarar.
 export const RUNTIME_VALUES = ["godot", "retroarch", "proton", "native"];
-export const GRAPHICS_MIN_VALUES = ["gles2", "gles3", "vulkan"];
+/**
+ * `none` existe porque uma ferramenta headless não desenha nada, e o
+ * classificador assumia `gles3` quando a chave faltava — o que reprovava a
+ * própria `forge` num RK3326 (que não tem GLES3). Era uma pendência anotada no
+ * `app/forge/README.md` do antecessor e nunca resolvida.
+ *
+ * O default continua `gles3` de propósito: omitir a chave num app gráfico tem
+ * de ser conservador. Quem não desenha declara `none`.
+ */
+export const GRAPHICS_MIN_VALUES = ["none", "gles2", "gles3", "vulkan"];
 export const GRAPHICS_FALLBACK_VALUES = ["gles2", "gles3"];
 
 export const REQUIRED_METADATA = [

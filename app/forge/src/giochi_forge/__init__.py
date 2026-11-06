@@ -8,4 +8,4 @@ O subcomando `store` fecha o ciclo da Loja: le uma pasta de projetos baixados
 Roda no PC -- o rootfs do console nao tem toolchain (ver docs/LOJA.md).
 """
 
-__version__ = "1.2"
+__version__ = "1.2.0"

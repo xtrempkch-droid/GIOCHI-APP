@@ -165,27 +165,69 @@ def classify(req: GameRequirements, profile: DeviceProfile) -> Classification:
             Verdict.INCOMPATIBLE,
         ))
 
+    # O runtime do Godot **nao esta na imagem** dos aparelhos medidos.
+    #
+    # Isto e ortogonal a `godot_min`/`godot_max`: aqueles dizem o que o hardware
+    # suporta, este diz o que a imagem tem. Confundir os dois fazia o
+    # classificador chamar de compativel um jogo que nao abre — nenhum build
+    # oficial do Godot tem driver KMSDRM, e o rootfs nao tem X11 nem Wayland
+    # (medido em 06/11/2026, ver docs/godot.md).
+    #
+    # `None` nao e "nao tem": e "nao medido", e nao gera nem problema nem
+    # aviso. Perfil generico nao deve reprovar o que ninguem testou.
+    if req.runtime == "godot" and profile.godot_runtime is False:
+        issues.append(Issue(
+            "runtime",
+            "a imagem deste aparelho nao traz o runtime do Godot "
+            "(nenhum build oficial tem KMSDRM); ver docs/godot.md — "
+            "o caminho e port nativo (runtime \"native\")",
+            Verdict.INCOMPATIBLE,
+        ))
+
     api = req.graphics_api_min.lower()
-    if api == "vulkan":
+    # A cadeia abaixo tem de ser **fechada**. Antes ela era uma sequencia de
+    # `elif api == ... and not profile...`, e um valor que nao casasse com
+    # nenhum ramo — `"none"`, `"gles4"`, um erro de digitacao — passava sem
+    # problema nenhum, em silencio.
+    #
+    # Foi assim que um teste meu passou dos dois lados: ele afirmava que `none`
+    # e compativel, e continuava verde mesmo sem o ramo `none`, porque a
+    # classificacao caia no vazio. Teste que passa com e sem a correcao nao
+    # prova nada; o ramo `else` e o que faz o teste discriminar.
+    if api == "none":
+        # O app nao desenha nada (ferramenta headless). Sem esta saida, o
+        # default `gles3` reprovava a propria `forge` num RK3326, que nao tem
+        # GLES3 — medido.
+        pass
+    elif api == "vulkan":
         issues.append(Issue(
             "graphics_api",
             "exige Vulkan; dispositivo oferece OpenGL ES 3.0/2.0 (ADR-06)",
             Verdict.INCOMPATIBLE,
         ))
-    elif api == "gles3" and not profile.gles3:
+    elif api == "gles3":
+        if not profile.gles3:
+            issues.append(Issue(
+                "graphics_api",
+                "exige GLES3; dispositivo nao declara gles3",
+                Verdict.INCOMPATIBLE,
+            ))
+        elif req.graphics_api_fallback == "gles2":
+            warnings.append("GLES3 com fallback GLES2: qualidade reduzida possivel")
+    elif api == "gles2":
+        if not profile.gles2:
+            issues.append(Issue(
+                "graphics_api",
+                "exige GLES2; dispositivo nao declara gles2",
+                Verdict.INCOMPATIBLE,
+            ))
+    else:
         issues.append(Issue(
             "graphics_api",
-            "exige GLES3; dispositivo nao declara gles3",
+            f"valor desconhecido: {req.graphics_api_min!r} "
+            "(aceitos: none, gles2, gles3, vulkan)",
             Verdict.INCOMPATIBLE,
         ))
-    elif api == "gles2" and not profile.gles2:
-        issues.append(Issue(
-            "graphics_api",
-            "exige GLES2; dispositivo nao declara gles2",
-            Verdict.INCOMPATIBLE,
-        ))
-    elif api == "gles3" and req.graphics_api_fallback == "gles2":
-        warnings.append("GLES3 com fallback GLES2: qualidade reduzida possivel")
 
     if req.godot_version:
         if req.runtime == "godot" and not version_in_range(
@@ -229,13 +271,19 @@ def classify(req: GameRequirements, profile: DeviceProfile) -> Classification:
                 Verdict.PARTIAL,
             ))
 
-    if req.display_min_width > profile.display_width or (
-        req.display_min_height > profile.display_height
-    ):
+    # Comparacao com a area **utilizavel**, nao com o painel cru.
+    #
+    # O painel do X55 e 720x1280 (retrato) e o jogo desenha 1280x720 girando.
+    # Comparar com o painel cru reprovava o caso mais comum: um jogo 1280x720
+    # "nao caber" num aparelho de 720x1280 onde ele roda — foi o que o
+    # arcade-volleyball fez, medido.
+    util_largura, util_altura = profile.usable_display()
+    if req.display_min_width > util_largura or req.display_min_height > util_altura:
         issues.append(Issue(
             "display",
             f"requer {req.display_min_width}x{req.display_min_height}; "
-            f"dispositivo {profile.display_width}x{profile.display_height}",
+            f"dispositivo {profile.display_width}x{profile.display_height}"
+            f" (utilizavel {util_largura}x{util_altura})",
             Verdict.INCOMPATIBLE,
         ))
 

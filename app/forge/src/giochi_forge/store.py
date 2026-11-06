@@ -118,12 +118,25 @@ def _describe_gap(path: Path, kind: Kind) -> str:
         faltando = [n for n in PACKAGE_MARKERS if not (path / n).exists()]
         return "falta " + ", ".join(faltando)
     if kind is Kind.GODOT:
-        # O bloqueio e de plataforma, nao do projeto: o template oficial de
-        # exportacao aarch64 e glibc (GLIBC_2.17+) e o rootfs e musl (ADR-03).
-        return ("precisa export aarch64; o template oficial e glibc e o rootfs "
-                "e musl (ADR-03) -- recompilar o template contra musl")
+        # O bloqueio NAO e de exportacao, e sim de plataforma — e a versao
+        # anterior desta mensagem estava errada em dois pontos, medida contra o
+        # aparelho em 06/11/2026:
+        #
+        # 1. o rootfs NAO e musl: e glibc 2.38. O binario do arcade-volleyball,
+        #    compilado aqui contra o glibc do aparelho, exige GLIBC_2.38 e roda.
+        # 2. nao adianta "recompilar o template contra musl": nenhum build
+        #    oficial do Godot tem driver KMSDRM, e o rootfs nao tem X11 nem
+        #    Wayland. Exportar produz um binario que cai em Headless e nao
+        #    desenha nada. Ver docs/godot.md.
+        return ("projeto Godot nao roda neste aparelho: nenhum build oficial do "
+                "Godot tem KMSDRM e o rootfs nao tem X11/Wayland (docs/godot.md) "
+                "-- o caminho e port nativo (runtime \"native\")")
     if kind is Kind.SOURCE:
-        return "precisa cross-compile para aarch64/musl; sem receita no repo"
+        # Idem: era "aarch64/musl". O alvo e aarch64/glibc 2.38, e o
+        # cross-compile existe (scripts/compilar-jogo-*-arm64.sh).
+        return ("precisa cross-compile para aarch64/glibc 2.38; ver "
+                "scripts/compilar-jogo-arm64.sh (Rust) e "
+                "scripts/compilar-jogo-cpp-arm64.sh (C++)")
     if kind is Kind.UNKNOWN:
         return "sem metadata.json, project.godot nem build system reconhecido"
     return ""
@@ -148,7 +161,15 @@ def _inspect_package(path: Path, profile) -> str:
         req = GameRequirements.from_forge_json(path / "forge.json")
         result = classify(req, profile)
         if not result.allowed:
-            raise PackageError(f"{result.verdict.label_pt}: {result.summary()}")
+            # A mensagem sai dos **dados**, não do texto já formatado.
+            # Prefixar `label_pt` a `summary()` produzia "Incompatível:
+            # Incompatível", e a tentativa de limpar com `strip(" -[]")`
+            # arrancava o `[` de um lado e deixava o `]` do outro. O veredito
+            # já está no começo; o que interessa é o motivo.
+            motivos = "; ".join(
+                f"{i.requirement}: {i.detail}" for i in result.issues
+            )
+            raise PackageError(f"{result.verdict.label_pt}: {motivos}")
     return str(metadata.get("title", path.name))
 
 

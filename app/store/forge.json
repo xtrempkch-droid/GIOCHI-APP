@@ -1,4 +1,5 @@
 {
   "runtime": "native",
-  "ram_min_mb": 64
+  "ram_min_mb": 64,
+  "graphics_api_min": "none"
 }

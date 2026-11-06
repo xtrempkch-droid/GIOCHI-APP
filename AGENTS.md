@@ -2180,3 +2180,100 @@ dos jobs `launcher-core`/`launcher-build`, que também nunca rodaram no GitHub.
 [`docs/diario/2026-11-06.md`](docs/diario/2026-11-06.md) fecha as quatro frentes
 do dia (jogo, dependências, navegação, apps de PC) com os números medidos e o que
 ficou aberto.
+
+## 16. Forge atualizado: perfis reais e duas classificações erradas (06/11/2026)
+
+Pedido: **"atualize o forge, os dados estão no repo anterior."** O *código* já
+estava migrado (6 arquivos, idênticos exceto pelo `native`). O que faltava era o
+que o código **acredita** — e três crenças estavam erradas.
+
+### O que veio do antecessor agora
+
+- **412 linhas de teste** (`tests/forge/`: `test_package.py`, `test_classify.py`,
+  `test_store.py`) que nunca tinham sido migradas. Passaram de primeira, o que
+  confirma que o código migrado estava fiel.
+- **Os `device.conf` dos aparelhos** (`x55`, `x35h`, `x35s`, `rk3326-generic`,
+  `rk3566-generic`) — SoC, GPU, painel, rotação, rádio, joystick.
+- A ferramenta se identifica como **1.2** desde o antecessor, mas o
+  `metadata.json` dizia `1.0.0`: `giochi-forge --version` e a loja discordavam.
+  Agora os dois são `1.2.0`.
+
+### Três crenças que a medição derrubou
+
+**(1) O painel é do aparelho, não do SoC.** Havia **um** perfil para o RK3566,
+com painel 640×480. Só que o painel não vem do chip: o **X55 é 720×1280** e o
+**X35H é 640×480**, os dois com RK3566. Classificar os dois como o mesmo aparelho
+reprovava no X55 um jogo que roda lá.
+
+Agora existem `x55`, `x35h` e `x35s` com o painel medido, e os três genéricos
+continuam como piso de cada chip (`rk3566-2gb` é o do `rk3566-generic`, com
+640×480).
+
+**(2) A tela era comparada com o painel cru.** O X55 é retrato, mas nenhum app
+deste projeto desenha em retrato: o espaço de projeto é **1280×720** e o sistema
+gira o desenho. Então um jogo 1280×720 era **Incompatível** num aparelho de
+720×1280 onde ele desenha — medido, é o que o arcade-volleyball faz. Agora a
+comparação usa `usable_display()` = maior lado × menor lado, que não precisa
+saber a rotação:
+
+| Painel | Utilizável | Jogo 1280×720 |
+| --- | --- | --- |
+| 720×1280 (X55) | 1280×720 | **cabe** |
+| 640×480 (X35H) | 640×480 | não cabe |
+
+**(3) O `runtime: godot` era classificado como compatível.** Nenhum build
+oficial do Godot tem KMSDRM e o rootfs não tem X11 nem Wayland (§13). O
+classificador dizia "Compatível" e o jogo não abria — o falso verde que este
+repositório combate.
+
+O perfil ganhou `godot_runtime`, **três estados** como `SemFio::tem_wifi` no
+launcher: `False` = medido que não tem (X55, X35H, X35S), `True` = medido que
+tem, `None` = não medido (perfis genéricos). Só `False` reprova — **não medir não
+é reprovar**.
+
+### E uma crença antiga sobre libc
+
+`store.py` dizia *"o rootfs é musl (ADR-03) -- recompilar o template contra
+musl"*. Medido: o rootfs é **glibc 2.38** (o binário do arcade-volleyball exige
+`GLIBC_2.38` e roda). E "recompilar o template contra musl" não resolveria nada:
+o bloqueio é KMSDRM, não a libc. A mensagem agora diz isso e aponta o caminho
+(`runtime: "native"`, com os scripts de cross-compile).
+
+O `test_store.py` do antecessor afirmava `assertIn("musl", ...)`. Foi reescrito —
+e o comentário no teste diz por quê: o que ele garante continua valendo *(o
+projeto Godot é pulado com motivo escrito)*; o motivo é que mudou.
+
+### A RAM passou a ser a medida
+
+`1968 MB` no X55 e `964 MB` no X35H, do `/proc/meminfo`. Os perfis diziam
+2048/1024 — o valor nominal do SoC. O firmware reserva memória para a GPU, então
+um jogo que declara "preciso de 2000 MB" passaria no número redondo e morreria no
+real.
+
+### Ferramenta: `scripts/testar-apps-pc.sh`
+
+Os testes Python não entram no `tests/run-all.mjs` (que é JS). O script roda os
+dois conjuntos e **confere a contagem**: `Ran N tests` com `N > 0`. Sem isso,
+descobrir zero arquivos daria "verde" — o falso positivo que o script existe para
+evitar. Verificado: sem `tests/forge/`, sai com 1.
+
+Agora `pc-apps.yml` tem um job `testes` (Python 3.9 e 3.12) que vem **antes** de
+empacotar: um `.pyz` que abre e classifica errado é pior que um que não abre — o
+que não abre aparece na hora, o veredito errado aparece como jogo comprado que
+não roda.
+
+### Medido
+
+```text
+$ giochi-forge check --device x55 --project app/jogos/arcade-volleyball
+dispositivo: powkiddy-x55 (rk3566, 1968 MB, Mali-G52)
+Compatível
+
+$ giochi-forge check --device x55 --project <projeto godot 4.3>
+Incompatível
+  - [Incompatível] runtime: a imagem deste aparelho nao traz o runtime do Godot
+    (nenhum build oficial tem KMSDRM); ver docs/godot.md — o caminho e port nativo
+```
+
+**54 testes** (38 do antecessor + 16 nossos). Reverter cada correção faz o teste
+correspondente falhar: painel cru → 1 falha; sem `godot_runtime` → 4 falhas.

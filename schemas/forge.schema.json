@@ -7,19 +7,34 @@
   "additionalProperties": false,
   "properties": {
     "arch": {
-      "enum": ["aarch64"],
+      "enum": [
+        "aarch64"
+      ],
       "description": "Default aplicado pelo classificador: aarch64."
     },
     "runtime": {
-      "enum": ["godot", "retroarch", "proton", "native"],
+      "enum": [
+        "godot",
+        "retroarch",
+        "proton",
+        "native"
+      ],
       "description": "Default: godot."
     },
     "graphics_api_min": {
-      "enum": ["gles2", "gles3", "vulkan"],
-      "description": "Default: gles3. 'vulkan' é sempre incompatível: o aparelho tem GLES 3.x (3.1 esperado no panfrost), não Vulkan."
+      "enum": [
+        "none",
+        "gles2",
+        "gles3",
+        "vulkan"
+      ],
+      "description": "\"none\" = o app nao desenha nada (ferramenta headless). Default: gles3. \"vulkan\" e sempre incompativel: o aparelho tem GLES 3.x, nao Vulkan."
     },
     "graphics_api_fallback": {
-      "enum": ["gles2", "gles3"],
+      "enum": [
+        "gles2",
+        "gles3"
+      ],
       "description": "Default: gles2."
     },
     "godot_version": {

@@ -39,12 +39,40 @@ permissions:
   contents: write # só o job de publicação anexa artefatos à release
 
 jobs:
+  # ── 0. os testes do próprio forge ──────────────────────────
+  #
+  # Vem antes de empacotar de propósito: um `.pyz` que abre e classifica errado
+  # é pior que um pacote que não abre — o pacote quebrado aparece na hora, o
+  # veredito errado aparece como jogo comprado que não roda.
+  #
+  # Os testes são os do antecessor `GIOCHI-KONSOL-OS` (`tests/forge/`) mais os
+  # nossos, de 06/11/2026. Rodar em 3.9 também, porque o piso declarado é 3.9.
+  testes:
+    name: testes do forge (Python ${{ matrix.versao }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        versao: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.versao }}
+
+      # Sem dependência de terceiro: é uma decisão do projeto, e aqui ela é
+      # verificada — se um dia alguém adicionar um import externo, este passo
+      # não instala nada e os testes falham no import.
+      - name: Rodar os testes
+        run: bash scripts/testar-apps-pc.sh
+
   # ── 1. o pacote ────────────────────────────────────────────
   # Um job só, de propósito: se cada sistema empacotasse, sairiam três
   # artefatos com hashes diferentes para o mesmo código, e o SHA-256 deixaria
   # de identificar o conteúdo.
   empacotar:
     name: empacotar .pyz
+    needs: testes
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -155,6 +183,31 @@ jobs:
           cp saida/av.giochi catalogo/
           python dist/pc/giochi-store.pyz listar --src catalogo
           python dist/pc/giochi-store.pyz listar --src catalogo | grep -q "Arcade Volleyball"
+
+      # Os perfis reais dos aparelhos, exercitados nos três sistemas. O
+      # arcade-volleyball é `native` e tem de ser compatível no X55; o mesmo
+      # projeto declarado como Godot tem de ser recusado, porque a imagem não
+      # traz o runtime (medido — docs/godot.md).
+      - name: Classifica contra o X55
+        shell: bash
+        run: |
+          python dist/pc/giochi-forge.pyz check --device x55 \
+            --project app/jogos/arcade-volleyball | tee /tmp/check.txt
+          grep -q "Compatível" /tmp/check.txt
+
+      # O JSON do perfil, produzido pelo `.pyz` empacotado — não pela árvore de
+      # origem. É o arquivo que o usuário recebe. A conferência é por `grep`
+      # simples de propósito: um heredoc de Python dentro do YAML depende de
+      # indentação e falha de um jeito difícil de ler.
+      - name: Perfil do X55 tem o painel real, não o do SoC
+        shell: bash
+        run: |
+          python dist/pc/giochi-forge.pyz profile --device x55 > /tmp/x55.json
+          grep -A2 '"display"' /tmp/x55.json
+          grep -q '"width": 720' /tmp/x55.json
+          grep -q '"height": 1280' /tmp/x55.json
+          grep -q '"ram_mb": 1968' /tmp/x55.json
+          grep -q '"godot_runtime": false' /tmp/x55.json
 
       - name: Store gera o catálogo
         shell: bash
