@@ -2464,7 +2464,20 @@ Signature Verified Successfully     ← tanto o .sig do Python quanto o do JS
 Dentro de um `.pyz` não existe diretório ao lado do módulo: `__file__` aponta
 para dentro do zip e `Path.exists()` devolve `False`. Com `Path`, o painel
 **empacotado** serve 404 na própria página, e o defeito só apareceria com o
-usuário na frente. `servidor.py` usa `resources.files(__package__).
+usuário na frente. `servidor.py` usa `resources.files("giochi_painel")` — nome
+**literal**, e não `__package__`.
+
+**`__package__` é `None` no 3.9 dentro de um zip.** Em 3.9 o `zipimport` carrega
+por `load_module()` legado e não preenche `__package__`; `files(None)` estoura
+com `AttributeError: 'NoneType' object has no attribute 'startswith'`. Só no
+`.pyz`, só no piso — no 3.12 é preenchido e o erro não existe. A importação
+normal, que é o que os testes de unidade usam, também não reproduz: por isso a
+guarda tem de **executar o zip**, e ela roda sob `python3.9` quando ele existe.
+
+```
+Python 3.9.25:  python3.9 giochi-painel.pyz --versao   → AttributeError (antes)
+Python 3.9.25:  python3.9 giochi-painel.pyz --versao   → giochi-painel 0.1.0 (agora)
+```
 
 ### O `.pyz` do painel leva três pacotes
 

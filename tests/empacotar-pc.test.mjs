@@ -77,17 +77,40 @@ test("o .pyz do painel leva os estáticos e os três pacotes", () => {
   });
 });
 
-test("o .pyz do painel roda de fato", () => {
+/** Interpretadores a exercitar: sempre o atual e, se existir, o piso 3.9. */
+function interpretadores() {
+  const lista = ["python3"];
+  for (const candidato of ["python3.9"]) {
+    try {
+      execFileSync(candidato, ["--version"], { stdio: "pipe" });
+      lista.push(candidato);
+    } catch {
+      /* não instalado: o CI tem a perna dele */
+    }
+  }
+  return lista;
+}
+
+test("o .pyz do painel roda de fato, inclusive no piso 3.9", () => {
   // "Está no zip" e "executa" são afirmações diferentes. Um `import` que só
   // resolve no diretório do código passa no teste acima e falha aqui.
+  //
+  // O 3.9 é testado **de propósito**: em 3.9 o `zipimport` carrega por
+  // `load_module()` legado e não preenche `__package__`. Com
+  // `resources.files(__package__)` o painel empacotado morria com
+  // `AttributeError: 'NoneType' object has no attribute 'startswith'` — só no
+  // `.pyz`, só no 3.9. A importação normal (que os testes de unidade usam) não
+  // reproduz, então a guarda tem de executar o zip.
   comSaida((dir) => {
     empacotar(dir);
-    const saida = execFileSync(
-      "python3",
-      [path.join(dir, "giochi-painel.pyz"), "--versao"],
-      { encoding: "utf8", stdio: "pipe" },
-    );
-    assert.match(saida, /giochi-painel \d+\.\d+\.\d+/);
+    for (const py of interpretadores()) {
+      const saida = execFileSync(
+        py,
+        [path.join(dir, "giochi-painel.pyz"), "--versao"],
+        { encoding: "utf8", stdio: "pipe" },
+      );
+      assert.match(saida, /giochi-painel \d+\.\d+\.\d+/, `${py}: saída inesperada`);
+    }
   });
 });
 

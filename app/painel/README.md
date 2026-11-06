@@ -55,6 +55,11 @@ diretório ao lado do módulo: `__file__` aponta para dentro do zip e
 `Path.exists()` devolve `False`. Com `Path`, o painel empacotado serviria **404
 na própria página** — e só depois de distribuído alguém descobriria.
 
+E o nome do pacote é **literal** (`resources.files("giochi_painel")`), não
+`__package__`: em Python 3.9 o `zipimport` carrega por `load_module()` legado e
+deixa `__package__` como `None`, então `files(None)` estoura. Só no `.pyz`, só
+no piso — o 3.12 preenche a variável e esconde o problema.
+
 ## Empacotamento
 
 ```bash

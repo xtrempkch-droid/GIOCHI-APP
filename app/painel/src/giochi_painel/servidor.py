@@ -40,7 +40,13 @@ from . import acoes
 # `__file__` aponta para dentro do zip e `Path.exists()` devolve False. O
 # `resources` lê dos dois lugares, e sem isso o painel empacotado serviria 404
 # na própria página — erro que só apareceria depois de distribuir.
-ESTATICOS = resources.files(__package__).joinpath("estatico")
+#
+# O nome é **literal**, e não `__package__`. Em Python 3.9 o `zipimport` ainda
+# carrega por `load_module()` legado, que não preenche `__package__`; ele fica
+# `None` e `files(None)` estoura com `AttributeError: 'NoneType' object has no
+# attribute 'startswith'` — só no `.pyz`, só no 3.9. Aconteceu no CI, na perna
+# do piso: no 3.12 `__package__` é preenchido e o erro não existe.
+ESTATICOS = resources.files("giochi_painel").joinpath("estatico")
 
 HOSTS_ACEITOS = ("127.0.0.1", "localhost", "[::1]")
 
