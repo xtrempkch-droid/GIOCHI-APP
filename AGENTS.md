@@ -1264,6 +1264,12 @@ inerte — sem essa guarda, apertar A ligaria "procurando…" para sempre.
 Ver [`docs/r35s.md`](docs/r35s.md), incluindo §5 (por que a imagem não existe) e
 §6 (a ordem do que falta).
 
+**Pedido escrito no canal** (06/11 04:50, fora da janela → próximo dia útil): os
+três itens do System e uma pergunta que muda o custo de testar — o
+`usb-role-switch` existe no DTB do R35S; se der para forçar o papel de
+dispositivo, ele deixa de depender de TTL e passa a aceitar SSH por USB como o
+X35H.
+
 #### O que ainda não foi provado
 
 | Alegação | Estado |
