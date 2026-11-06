@@ -167,6 +167,103 @@ impl Catalogo {
     }
 }
 
+/// Acrescenta ou substitui um app no catálogo publicado.
+///
+/// ## Por que isto existe
+///
+/// O catálogo (`/opt/giochi/apps/index.json`) era escrito só do PC. Isso amarra
+/// a instalação de um jogo ao SSH e a um computador com Node — e o caminho
+/// natural num portátil é outro: copiar o `.giochi` para o cartão e instalar no
+/// aparelho.
+///
+/// Com esta função, o próprio aparelho atualiza o índice **sem Node**: o
+/// launcher já tem `serde_json`.
+///
+/// ## O que ela garante
+///
+/// - `id` é a chave: se existe, é substituído (reinstalar não duplica);
+/// - a ordem por título é restaurada, senão a Home mudaria de conteúdo conforme
+///   a ordem de instalação;
+/// - `license` do índice anterior é herdada quando o `metadata.json` do pacote
+///   não a traz — foi a perda que apareceu na primeira instalação;
+/// - nada de `unsafe` ou escrita parcial: quem chama grava em arquivo temporário
+///   e move, para um corte de energia não deixar JSON truncado.
+pub fn adicionar_ao_indice(texto: &str, dir: &str, metadata: &serde_json::Value) -> Result<String, String> {
+    let mut raiz: serde_json::Value = serde_json::from_str(texto)
+        .map_err(|e| format!("catálogo atual ilegível: {e}"))?;
+
+    let id = metadata
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Sem `slug`, o nome da pasta é a identidade — é o que o
+            // `aparelho.sh` usa para instalar, então é a mesma chave.
+            std::path::Path::new(dir)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .ok_or("não consegui determinar o id do app")?;
+
+    let entrypoint = metadata
+        .get("entrypoint")
+        .and_then(|v| v.as_str())
+        .ok_or("metadata.json sem entrypoint")?;
+
+    if !entrypoint.starts_with("bin/") || entrypoint.contains("..") {
+        return Err(format!("entrypoint inválido: {entrypoint}"));
+    }
+
+    let lista = raiz
+        .get_mut("apps")
+        .and_then(|v| v.as_array_mut())
+        .ok_or("catálogo sem a lista \"apps\"")?;
+
+    let anterior = lista
+        .iter()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        .cloned();
+
+    let mut novo = serde_json::json!({
+        "id": id,
+        "version": metadata.get("version").cloned().unwrap_or(serde_json::json!("0.0.0")),
+        "entrypoint": entrypoint,
+        "dir": dir,
+        "title": metadata.get("title").cloned().unwrap_or(serde_json::json!(id)),
+        "developer": metadata.get("developer").cloned().unwrap_or(serde_json::json!("desconhecido")),
+    });
+
+    // Campos opcionais que o catálogo repassa à UI.
+    for (campo, destino) in [("releaseYear", "year"), ("category", "category")] {
+        if let Some(v) = metadata.get(campo) {
+            if !v.is_null() {
+                novo[destino] = v.clone();
+            }
+        }
+    }
+
+    // `license` só existe no índice (vem do `apps.json`), nunca no pacote.
+    // Trocar a entrada inteira a apagava: o pacman apareceu sem licença.
+    if let Some(lic) = anterior.as_ref().and_then(|a| a.get("license")) {
+        novo["license"] = lic.clone();
+    }
+
+    lista.retain(|a| a.get("id").and_then(|v| v.as_str()) != Some(id.as_str()));
+    lista.push(novo);
+
+    // Ordem por título, com `sort_by` estável: duas execuções dão o mesmo
+    // arquivo, então o catálogo não muda sozinho entre boots.
+    lista.sort_by(|a, b| {
+        let ta = a.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let tb = b.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        ta.cmp(tb)
+    });
+
+    serde_json::to_string_pretty(&raiz)
+        .map(|s| s + "\n")
+        .map_err(|e| format!("não consegui serializar: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +276,82 @@ mod tests {
               "developer": "Giochi", "year": 2026, "category": "Esporte" }
         ]
     }"#;
+
+    fn meta(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "slug": id, "title": "Jogo", "developer": "Giochi", "version": "1.0.0",
+            "arch": "aarch64", "runtime": "native", "entrypoint": "bin/app"
+        })
+    }
+
+    #[test]
+    fn adiciona_app_novo_ao_indice() {
+        let novo = adicionar_ao_indice(EXEMPLO, "/user/apps/pacman", &meta("pacman")).unwrap();
+        let c = Catalogo::do_texto(&novo).unwrap();
+        assert_eq!(c.games.len(), 2, "o volley continua lá");
+        assert!(c.games.iter().any(|g| g.title == "Jogo"));
+    }
+
+    /// Reinstalar não pode duplicar o cartão.
+    #[test]
+    fn substitui_em_vez_de_duplicar() {
+        let meta1 = serde_json::json!({
+            "slug": "volley", "title": "Volley", "developer": "Giochi", "version": "9.9.9",
+            "arch": "aarch64", "runtime": "native", "entrypoint": "bin/giochi-volley"
+        });
+        let texto = adicionar_ao_indice(EXEMPLO, "/user/apps/volley", &meta1).unwrap();
+        let c = Catalogo::do_texto(&texto).unwrap();
+        assert_eq!(c.games.len(), 1, "mesmo id não duplica");
+        assert_eq!(c.games[0].title, "Volley");
+    }
+
+    /// A licença vive só no índice; trocar a entrada a apagava.
+    #[test]
+    fn preserva_licenca_do_indice() {
+        let comLicenca = EXEMPLO.replace(r#""developer": "Giochi","#, r#""developer": "Giochi", "license": "Proprietary","#);
+        let meta1 = serde_json::json!({
+            "slug": "volley", "title": "Volley", "developer": "Giochi", "version": "0.2.0",
+            "arch": "aarch64", "runtime": "native", "entrypoint": "bin/giochi-volley"
+        });
+        let texto = adicionar_ao_indice(&comLicenca, "/user/apps/volley", &meta1).unwrap();
+        assert!(texto.contains("Proprietary"), "licença desapareceu: {texto}");
+    }
+
+    #[test]
+    fn ordem_por_titulo_nao_depende_da_instalacao() {
+        let a = adicionar_ao_indice(EXEMPLO, "/user/apps/aaa", &{
+            let mut m = meta("aaa");
+            m["title"] = serde_json::json!("AAA");
+            m
+        })
+        .unwrap();
+        let b = adicionar_ao_indice(EXEMPLO, "/user/apps/zzz", &{
+            let mut m = meta("zzz");
+            m["title"] = serde_json::json!("ZZZ");
+            m
+        })
+        .unwrap();
+
+        let titulos = |t: &str| -> Vec<String> {
+            Catalogo::do_texto(t).unwrap().games.iter().map(|g| g.title.clone()).collect()
+        };
+        assert_eq!(titulos(&a), vec!["AAA", "Volley"]);
+        assert_eq!(titulos(&b), vec!["Volley", "ZZZ"]);
+    }
+
+    #[test]
+    fn recusa_entrypoint_que_sai_do_pacote() {
+        let mut m = meta("mal");
+        m["entrypoint"] = serde_json::json!("bin/../../etc/passwd");
+        assert!(adicionar_ao_indice(EXEMPLO, "/user/apps/mal", &m).is_err());
+    }
+
+    #[test]
+    fn indice_corrompido_da_erro_em_vez_de_zerar() {
+        // Sobrescrever um catálogo ilegível com uma lista de um item faria o
+        // usuário perder os outros apps — e sem aviso.
+        assert!(adicionar_ao_indice("{lixo", "/user/apps/x", &meta("x")).is_err());
+    }
 
     #[test]
     fn le_um_app_completo() {

@@ -27,6 +27,8 @@
 #   bash scripts/aparelho.sh catalogo   (gera e envia o índice de apps)
 #   bash scripts/aparelho.sh instalar-pacote app.giochi
 #                                       (verifica, extrai e republica o índice)
+#   bash scripts/aparelho.sh instalar-do-cartao
+#                                       (instala os .giochi da partição do cartão)
 #
 # Variáveis:
 #   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
@@ -769,6 +771,105 @@ cmd_instalar_pacote() {
 }
 
 #
+# Instala os `.giochi` que estiverem na partição do cartão.
+#
+# ## O que descobriu-se medindo o X55 (06/11/2026)
+#
+# O aparelho **não tem eMMC**: o sistema roda do próprio cartão SD
+# (`mmcblk1`, "SD128", 128 GB). A tabela de partições usa ~1,9 GiB:
+#
+#     mmcblk1p1  256 MiB  FAT32  GIOCHI_BOOT
+#     mmcblk1p2  1,7 GiB  ext4   rootfs   ← o sistema em execução
+#     (resto)   116,5 GiB NÃO ALOCADO
+#
+# E a `GIOCHI_BOOT` **não é montada** em lugar nenhum (nem no `fstab`). Como ela
+# é FAT32, qualquer PC a lê — é o caminho natural para levar um jogo sem SSH.
+# Montar aqui é medida de app porque o sistema não a monta: mesmo motivo do
+# `ip link set up` no Wi-Fi, que o `S40wifi` também não faz.
+#
+# Montagem **somente leitura**: o app não tem o que escrever no cartão, e um
+# `rw` num FAT32 com o sistema rodando do mesmo cartão é risco sem retorno.
+cmd_instalar_do_cartao() {
+  exigir_aparelho
+  titulo "instalando do cartão"
+
+  local part="/dev/mmcblk1p1"
+  local ponto="/mnt/cartao"
+
+  local estado
+  estado=$(no_aparelho "
+    if [ ! -b $part ]; then echo SEM_PARTICAO; exit 0; fi
+    mkdir -p $ponto 2>/dev/null
+    if mountpoint -q $ponto 2>/dev/null || grep -q ' $ponto ' /proc/mounts; then
+      echo JA_MONTADO
+    elif mount -o ro $part $ponto 2>/dev/null; then
+      echo MONTEI
+    else
+      echo FALHOU_MOUNT
+    fi
+  " 2>&1 | tr -d '\r')
+
+  case "$estado" in
+    SEM_PARTICAO)
+      falha "$part não existe neste aparelho"
+      printf '  este console pode não ter partição de boot separada\n'
+      return 1 ;;
+    FALHOU_MOUNT)
+      falha "não consegui montar $part em $ponto"
+      return 1 ;;
+    MONTEI)     ok "$part montado em $ponto (somente leitura)" ;;
+    JA_MONTADO) ok "$ponto já estava montado" ;;
+    *)          falha "estado inesperado ao montar: $estado"; return 1 ;;
+  esac
+
+  # Envia o instalador: roda no aparelho, sem Node e sem PC no meio.
+  if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q \
+       "$RAIZ/scripts/lib/instalar-do-cartao.sh" "root@$HOST:/tmp/instalar-do-cartao.sh" 2>/dev/null; then
+    falha "não consegui enviar o instalador"
+    return 1
+  fi
+
+  local conteudo
+  conteudo=$(no_aparelho "ls -1 $ponto/*.giochi 2>/dev/null | wc -l" 2>/dev/null | tr -d ' \r')
+  if [ "${conteudo:-0}" = "0" ]; then
+    aviso "nenhum .giochi em $ponto"
+    printf '  copie os pacotes para a partição GIOCHI_BOOT pelo leitor de cartão,\n'
+    printf '  devolva o cartão e rode de novo.\n'
+    return 1
+  fi
+  ok "$conteudo pacote(s) para instalar"
+
+  # O código de saída vem **dentro** da saída, não de `$?`.
+  #
+  # A primeira versão terminava o comando remoto com `; rm -f ...`, e o `rm`
+  # (que sempre dá 0) engolia o status do instalador: uma execução com pacote
+  # recusado reportava "ok pronto". O texto dizia "1 recusado" e o resultado
+  # dizia sucesso — a contradição que faz o usuário confiar no lugar errado.
+  local saida
+  saida=$(no_aparelho "sh /tmp/instalar-do-cartao.sh $ponto; echo \"STATUS=\$?\"; rm -f /tmp/instalar-do-cartao.sh" 2>&1)
+
+  local codigo
+  codigo=$(printf '%s\n' "$saida" | sed -n 's/^STATUS=//p' | tail -1)
+  : "${codigo:=1}"
+  printf '%s\n' "$saida" | grep -v '^STATUS=' | sed 's/^/  /'
+
+  no_aparelho "umount $ponto 2>/dev/null; rmdir $ponto 2>/dev/null" >/dev/null 2>&1
+
+  if printf '%s\n' "$saida" | grep -q "RESUMO 0 instalado"; then
+    falha "nada foi instalado"
+    return 1
+  fi
+  if [ "$codigo" != "0" ]; then
+    aviso "instalação terminou com pacote(s) recusado(s)"
+    return 1
+  fi
+
+  ok "tudo instalado"
+  printf '\n  o launcher lê o catálogo na abertura:\n'
+  printf '  bash scripts/aparelho.sh parar && bash scripts/aparelho.sh subir\n'
+}
+
+#
 # Colhe do aparelho o que está instalado, para o gerador juntar ao catálogo.
 #
 # A varredura é no **aparelho** e não no repositório porque um pacote da loja não
@@ -980,6 +1081,7 @@ case "${1:-ajuda}" in
   instalar-pacote|pacote)
     shift
     cmd_instalar_pacote "${1:-}" ;;
+  instalar-do-cartao|cartao) cmd_instalar_do_cartao ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.

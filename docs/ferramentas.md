@@ -286,6 +286,24 @@ versão fazia isso e o shell comeu o `$(...)`, produzindo
 falar com outra máquina não é difícil de escrever — é difícil de **ler quando
 falha**.
 
+### Cartão de boot: `instalar-do-cartao`
+
+O X55 **não tem eMMC**: o sistema roda do próprio cartão SD. A partição
+`GIOCHI_BOOT` (256 MiB, FAT32) é a única que um PC lê, então é por ela que se
+levam jogos sem SSH.
+
+```bash
+bash scripts/aparelho.sh instalar-do-cartao
+```
+
+O app monta `mmcblk1p1` **read-only** porque nada mais monta; confere o SHA-256 de
+cada pacote contra o manifesto, extrai em `/user/apps/<slug>` e põe no catálogo
+pelo próprio launcher (`--catalogo-adicionar`) — sem Node e sem PC no meio.
+
+Um pacote corrompido é **recusado** e o comando sai com 1. Ver
+[`cartao-sd.md`](cartao-sd.md) para o que a verificação cobre (integridade) e o
+que não cobre (assinatura — falta crate de Ed25519 offline).
+
 ### Antes do hardware: `verificar-mapa.mjs`
 
 Um símbolo que o launcher não conhece no `buttons.map` vira **botão morto em

@@ -451,7 +451,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 194 testes do launcher
+cd app/launcher && cargo test --workspace  # 200 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -690,7 +690,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Item | Estado |
 | --- | --- |
 | `crates/core` — 7 módulos, 87 testes | **compila, testa e passa** |
-| `crates/ui-sdl` — 14 módulos, 107 testes | **compila, linka e roda** |
+| `crates/ui-sdl` — 14 módulos, 113 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
@@ -723,6 +723,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | R35S: mapa de botões | **verificado sem aparelho** — 19/19 símbolos reconhecidos |
 | R35S: tela sem rádio | **preparada e fotografada** com `--sem-radio` |
 | R35S: imagem / boot / botões | **não existe** — bloqueado no Giochi System (sem defconfig, sem driver) |
+| Instalar `.giochi` do cartão SD | **no X55** — corrompido recusado, bom instalado e aberto |
+| Partição de dados (116 GB) | **não existe** — decisão do System, levada ao canal |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
 | Aba de configurações | **navegável** — `Zone::SettingsContent` existe; anel de foco medido no X55 (x 446..1107) |
@@ -1044,6 +1046,62 @@ A primeira versão logava só quando a **bateria** mudava. Uma leitura de
 temperatura que falhasse (sensor ausente, caminho diferente) ficava invisível: a
 HUD mostrava `—` e nada dizia se era ausência real ou bug. Agora os dois valores
 saem juntos quando qualquer um muda.
+
+### Cartão SD: 116 GB parados, e o caminho por cartão funciona
+
+Pergunta do dono: *"se eu usar um sdcard para por jogos no momento atual tem
+suporte?"* Medido no X55, e a resposta tem duas metades.
+
+#### O X55 não tem eMMC — o sistema roda do próprio cartão
+
+```text
+mmc1:59b4  type=SD  name=SD128   (128 GB)     mmc3 = SDIO (rádio Wi-Fi)
+
+mmcblk1p1  131072-655359    256 MiB  FAT32  GIOCHI_BOOT
+mmcblk1p2  655360-4194303   1,7 GiB  ext4   rootfs (rodando)
+--------------------------------------------
+último setor usado 4.194.303 = 2 GiB  →  116,5 GiB NÃO ALOCADOS
+```
+
+`/dev/mmcblk1p1` **não era montada** e não está no `fstab`. `/user` é diretório
+**dentro do rootfs**, não partição.
+
+#### Resolvido do nosso lado
+
+```bash
+bash scripts/aparelho.sh instalar-do-cartao
+  /dev/mmcblk1p1 montado em /mnt/cartao (somente leitura)
+    corrompido.giochi: RECUSADO — sha256 não confere
+    pacman.giochi: instalado em /user/apps/pacman
+  RESUMO 1 instalado(s), 1 recusado(s)
+```
+
+E abre: `1305 ppid=1297 /user/apps/pacman/bin/giochi-pacman`.
+
+O app **monta** a partição read-only porque ninguém monta — mesmo motivo do
+`ip link set up` no Wi-Fi, que o `S40wifi` também não faz. E o catálogo é
+atualizado **pelo launcher** (`--catalogo-adicionar`), não por `sed`: ele já tem
+`serde_json`, e um `sed` no `index.json` produziria JSON inválido no primeiro
+campo com vírgula.
+
+#### A verificação cobre integridade, NÃO autenticidade
+
+SHA-256 sim; **Ed25519 não** — não há crate disponível offline. Isso é limitação
+declarada: a assinatura importa para pacote vindo da rede (loja); aqui o arquivo
+vem de um cartão que o dono pôs na mão. O que o hash resolve é corrupção
+silenciosa na cópia, que é o erro real do leitor de cartão.
+
+#### Levado ao System com número
+
+Canal, 05:55: **partição de dados nos 116,5 GB** (hoje `/user` está no rootfs, e
+regravar a imagem apaga jogo comprado — o que anula o argumento de
+`distribution: store` para vender GPL), **montar `GIOCHI_BOOT`** num caminho fixo,
+e **automount** (não há `mdev.conf` nem udev).
+
+Limite hoje: `GIOCHI_BOOT` tem **210 MB livres** — dois ou três jogos pequenos,
+não uma biblioteca. E é a única partição que um PC lê.
+
+Ver [`docs/cartao-sd.md`](docs/cartao-sd.md).
 
 ### O pacote `.giochi` existe — e o download da loja não
 

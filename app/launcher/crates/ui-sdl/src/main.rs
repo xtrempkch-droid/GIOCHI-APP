@@ -68,6 +68,48 @@ fn main() -> Result<(), String> {
         .cloned()
         .unwrap_or_else(default_font);
 
+    // `--catalogo-adicionar <dir>`: põe um app instalado no índice do aparelho.
+    //
+    // Existe para o aparelho se catalogar **sozinho**, sem Node e sem PC. O
+    // caminho natural num portátil é copiar o `.giochi` para o cartão e instalar
+    // ali; exigir SSH + Node para o cartão aparecer na tela tornaria o cartão
+    // inútil.
+    //
+    // Grava em arquivo temporário e move: um corte de energia no meio da escrita
+    // deixaria JSON truncado no lugar do catálogo, e o launcher leria lixo.
+    if let Some(i) = args.iter().position(|a| a == "--catalogo-adicionar") {
+        let dir = args
+            .get(i + 1)
+            .ok_or("--catalogo-adicionar precisa da pasta do app")?;
+        let caminho_meta = std::path::Path::new(dir).join("metadata.json");
+        let texto_meta = std::fs::read_to_string(&caminho_meta)
+            .map_err(|e| format!("{}: {e}", caminho_meta.display()))?;
+        let meta: serde_json::Value =
+            serde_json::from_str(&texto_meta).map_err(|e| format!("metadata inválido: {e}"))?;
+
+        let caminho_indice = catalogo::caminho();
+        let atual = std::fs::read_to_string(&caminho_indice).unwrap_or_else(|_| {
+            // Catálogo ausente não é erro: é o primeiro app do aparelho.
+            r#"{"schemaVersion":1,"apps":[]}"#.to_string()
+        });
+
+        let novo = catalogo::adicionar_ao_indice(&atual, dir, &meta)?;
+        let temporario = caminho_indice.with_extension("json.novo");
+        std::fs::write(&temporario, novo)
+            .map_err(|e| format!("{}: {e}", temporario.display()))?;
+        std::fs::rename(&temporario, &caminho_indice)
+            .map_err(|e| format!("não consegui mover para {}: {e}", caminho_indice.display()))?;
+
+        let quantos = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&caminho_indice).unwrap_or_default(),
+        )
+        .ok()
+        .and_then(|v| v.get("apps").and_then(|a| a.as_array()).map(|a| a.len()))
+        .unwrap_or(0);
+        eprintln!("catálogo: {caminho_indice:?} agora com {quantos} app(s)");
+        return Ok(());
+    }
+
     // `--simbolos`: imprime o que o tradutor de `buttons.map` entende e sai.
     //
     // Serve para verificar o mapa de um aparelho **sem o aparelho**: se o mapa
