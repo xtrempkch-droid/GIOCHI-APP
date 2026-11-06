@@ -1422,16 +1422,28 @@ mod tests {
                 s.tab = Tab::Settings;
                 s.settings_category = cat;
                 s.focus = Focus::at(Zone::SettingsContent, linha);
+                let antes = s.clone();
 
                 s = reduce(s, Cmd::Nav(Dir::Left));
 
-                // Linha ajustável: ← ajusta, então o foco **fica**. É o único
-                // caso legítimo de não voltar, e tem saída pelo `B`.
+                // Linha ajustável: ← ajusta, então o foco **fica**. Mas tem de
+                // ajustar **de verdade** — senão a tela promete um ajuste que
+                // não existe, que foi metade da queixa ("aperto seta para
+                // trocar o tema e não faz nada").
+                //
+                // A primeira versão deste teste só verificava que o foco ficava.
+                // Com `settings_ajustavel` devolvendo `true` para tudo, ela
+                // continuava passando: um teste que se desculpa não testa nada.
                 if crate::state::settings_ajustavel(cat, linha) {
                     assert_eq!(
                         s.focus.zone,
                         Zone::SettingsContent,
                         "categoria {cat} linha {linha}: ajustável, ← deve ajustar"
+                    );
+                    assert_ne!(
+                        s.settings, antes.settings,
+                        "categoria {cat} linha {linha}: declarada ajustável, mas ← \
+                         não mudou nada — é o 'aperto e não faz nada' de novo"
                     );
                     continue;
                 }
@@ -1453,6 +1465,95 @@ mod tests {
     ///
     /// Precisa existir porque nas linhas ajustáveis `←` não volta — e ter só
     /// uma rota de saída foi o que transformou um bug pequeno em tela sem saída.
+    /// Nenhuma zona pode capturar uma seta e não ter saída.
+    ///
+    /// É a generalização do bug da seta esquerda: um `if` que trata as setas
+    /// como ajuste e termina em `return state` cria uma zona da qual não se
+    /// sai. Aqui, para cada zona, ou existe uma direção que leva a outra zona,
+    /// ou existe uma tecla que sai (`B`). Zona que falhe nas duas é armadilha.
+    #[test]
+    fn nenhuma_zona_captura_as_setas_sem_ter_saida() {
+        use crate::state::Overlay;
+
+        // Zonas-raiz: são o nível mais alto da aba, não há para onde "voltar".
+        const RAIZES: [Zone; 4] = [
+            Zone::HomeCarousel,
+            Zone::LibraryGrid,
+            Zone::AppsGrid,
+            Zone::SettingsSidebar,
+        ];
+
+        let zonas_com_overlay = [
+            (Overlay::WifiList, Zone::WifiNetworks),
+            (Overlay::WifiPassword, Zone::PasswordKeys),
+            (Overlay::BtList, Zone::BtDevices),
+        ];
+
+        let mut checadas = 0usize;
+        for zona in [
+            Zone::LibraryFilters,
+            Zone::SettingsContent,
+            Zone::SearchKeyboard,
+            Zone::SearchResults,
+            Zone::QuickSettings,
+            Zone::GameDetailActions,
+            Zone::PowerActions,
+            Zone::WifiNetworks,
+            Zone::PasswordKeys,
+            Zone::BtDevices,
+        ] {
+            if RAIZES.contains(&zona) {
+                continue;
+            }
+            checadas += 1;
+
+            // Uma base plausível para cada zona: precisa de linhas para ter foco.
+            let mut base = demo();
+            base.tab = Tab::Settings;
+            base.settings_category = 2;
+            base.overlays = match zona {
+                Zone::WifiNetworks => vec![Overlay::WifiList],
+                Zone::PasswordKeys => vec![Overlay::WifiPassword],
+                Zone::BtDevices => vec![Overlay::BtList],
+                Zone::QuickSettings => vec![Overlay::QuickSettings],
+                Zone::GameDetailActions => {
+                    base.selected_game = Some(0);
+                    vec![Overlay::GameDetail]
+                }
+                Zone::PowerActions => vec![Overlay::PowerPopup],
+                Zone::SearchKeyboard | Zone::SearchResults => vec![Overlay::Search],
+                _ => Vec::new(),
+            };
+            if zona == Zone::LibraryFilters {
+                base.tab = Tab::Library;
+            }
+            if zona == Zone::SearchResults || zona == Zone::SearchKeyboard {
+                base.search_query = "jogo".into();
+            }
+            let linhas = base.zone_len(zona);
+            base.focus = Focus::at(zona, 0);
+
+            for linha in 0..linhas.max(1) {
+                let mut s = base.clone();
+                s.focus = Focus::at(zona, linha.min(linhas.max(1) - 1));
+
+                let foge_por_seta = [Dir::Up, Dir::Down, Dir::Left, Dir::Right]
+                    .iter()
+                    .any(|d| reduce(s.clone(), Cmd::Nav(*d)).focus.zone != zona);
+
+                let foge_por_b = reduce(s.clone(), Cmd::Back).focus.zone != zona
+                    || reduce(s.clone(), Cmd::Back).overlays.len() < s.overlays.len();
+
+                assert!(
+                    foge_por_seta || foge_por_b,
+                    "{zona:?} linha {linha}: nenhuma seta sai e B não sai — armadilha"
+                );
+            }
+        }
+        assert_eq!(checadas, 10, "a lista de zonas a checar mudou; revise este teste");
+        let _ = zonas_com_overlay;
+    }
+
     #[test]
     fn b_volta_do_painel_para_a_coluna() {
         let mut s = demo();

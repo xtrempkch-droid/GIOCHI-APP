@@ -291,6 +291,18 @@ Agora há `sair_do_painel_com_esquerda_funciona_em_toda_linha`, que percorre as
 seis categorias × todas as linhas e reprova qualquer combinação que não devolva o
 foco à coluna — inclusive categorias que ainda não existem, quando existirem.
 
+**A primeira versão desse teste se desculpava.** Em linha "ajustável" ela só
+verificava que o foco ficava; com `settings_ajustavel` devolvendo `true` para
+tudo, continuava verde. Um teste que se desculpa não testa nada — e foi assim
+que o bug passou. Agora ela também exige que o valor **mude**:
+
+```text
+categoria 0 linha 0: declarada ajustável, mas ← não mudou nada
+                     — é o 'aperto e não faz nada' de novo
+```
+
+Esse texto foi verificado reintroduzindo o bug de propósito: o teste reprova.
+
 E, no aparelho, `--teclas` prova o caminho de verdade: com `--foco conteudo:0` o
 anel está em x 446..1107; depois de `--teclas right,left` ele está em x 172..419.
 

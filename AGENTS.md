@@ -445,7 +445,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 173 testes do launcher
+cd app/launcher && cargo test --workspace  # 174 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -682,7 +682,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 7 módulos, 68 testes | **compila, testa e passa** |
+| `crates/core` — 7 módulos, 69 testes | **compila, testa e passa** |
 | `crates/ui-sdl` — 13 módulos, 105 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
@@ -1118,6 +1118,13 @@ rodapé prometia `← Categorias` numa linha onde `←` ajustava.
 o **reducer** deixava a seta chegar lá. Agora
 `sair_do_painel_com_esquerda_funciona_em_toda_linha` percorre as seis categorias ×
 todas as linhas.
+
+**E a primeira versão do teste novo também se desculpava:** em linha "ajustável"
+ela só verificava que o foco ficava, então `settings_ajustavel` devolvendo `true`
+para tudo continuava verde. Corrigido para exigir que o valor **mude**. Verificação
+de que o teste vale: o bug foi reintroduzido de propósito e o teste reprovou com
+`"declarada ajustável, mas ← não mudou nada — é o 'aperto e não faz nada' de novo"`.
+**Um teste que nunca falhou não provou nada.**
 
 **Medido no X55**, anel em espaço de projeto: `--foco conteudo:0` → x 446..1107
 (linha "Tema", preso); `--teclas right,left` → x 172..419 (coluna esquerda);
