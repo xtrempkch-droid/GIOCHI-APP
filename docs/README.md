@@ -2,6 +2,7 @@
 
 Índice da documentação deste repositório.
 
+- [Salva-vidas: quando o shell morre](salva-vidas.md) — **leia primeiro se a máquina estiver sem terminal**: o que conferir sem `git`, o que `Exec format error` significa e como trabalhar só com a API do GitHub.
 - [Adicionar um app](adicionar-app.md) — passo a passo a partir do `_template`.
 - [Migração do antecessor](migracao.md) — o que vem do `GIOCHI-KONSOL-OS`, o que não vem e por quê.
 - [Contrato de metadata](metadata.md) — os campos do `metadata.json` e por que são fechados.
