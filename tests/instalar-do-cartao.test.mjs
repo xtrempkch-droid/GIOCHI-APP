@@ -88,7 +88,7 @@ function aparelhoFalso(cb) {
 }
 
 /** Roda o instalador como o aparelho rodaria: `sh script <pasta>`. */
-function instalar({ cartao, apps, destino, launcher }) {
+function instalar({ cartao, apps, destino, launcher, verificador, chave }) {
   try {
     const saida = execFileSync("sh", [SCRIPT, cartao], {
       encoding: "utf8",
@@ -98,6 +98,8 @@ function instalar({ cartao, apps, destino, launcher }) {
         GIOCHI_APPS_BASE: apps,
         GIOCHI_DESTINO_BASE: destino,
         GIOCHI_LAUNCHER: launcher,
+        ...(verificador ? { GIOCHI_VERIFICADOR: verificador } : {}),
+        ...(chave ? { GIOCHI_CHAVE_PUBLICA: chave } : {}),
       },
     });
     return { codigo: 0, saida };
@@ -106,7 +108,7 @@ function instalar({ cartao, apps, destino, launcher }) {
   }
 }
 
-function copiarPacote(cartao, nome, pacote, { manifesto = true } = {}) {
+function copiarPacote(cartao, nome, pacote, { manifesto = true, assinatura = null } = {}) {
   const arquivo = path.join(cartao, nome);
   writeFileSync(arquivo, pacote);
   if (manifesto) {
@@ -119,6 +121,7 @@ function copiarPacote(cartao, nome, pacote, { manifesto = true } = {}) {
       ),
     );
   }
+  if (assinatura) writeFileSync(`${arquivo}.sig`, assinatura);
   return arquivo;
 }
 
@@ -235,5 +238,104 @@ test("dois pacotes: um bom e um corrompido, cada um com o seu veredito", () => {
     assert.ok(existsSync(path.join(destino, "a")));
     assert.ok(!existsSync(path.join(destino, "b")));
     assert.ok(existsSync(path.join(destino, "c")), "o laço parou no pacote recusado");
+  });
+});
+
+// ── Assinatura ─────────────────────────────────────────────
+//
+// O verificador de verdade é um binário aarch64 ligado à `libcrypto` do
+// aparelho (ver `scripts/lib/verificador-ed25519.c`). Ele foi exercitado no X55
+// com seis casos. Aqui o que se testa é a **decisão do instalador** — recusar,
+// aceitar, ou avisar que não verificou — usando um verificador de mentira que
+// devolve o código escolhido. Assim este teste roda em qualquer PC, sem o
+// binário cruzado, e continua provando o que importa.
+
+/** Um verificador falso que devolve sempre o mesmo código. */
+function verificadorFalso(dir, codigo) {
+  const caminho = path.join(dir, `verificador-${codigo}`);
+  writeFileSync(caminho, `#!/bin/sh\nexit ${codigo}\n`);
+  chmodSync(caminho, 0o755);
+  return caminho;
+}
+
+test("assinatura que confere: instala", () => {
+  aparelhoFalso(({ dir, cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo(), { assinatura: Buffer.alloc(64, 7) });
+    const verificador = verificadorFalso(dir, 0);
+    const chave = path.join(dir, "chave.pem");
+    writeFileSync(chave, "-----BEGIN PUBLIC KEY-----\n");
+
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher, verificador, chave });
+    assert.equal(codigo, 0, saida);
+    // E DIZ que conferiu: silêncio no sucesso tornaria "verificou" e "não
+    // verificou" indistinguíveis na saída.
+    assert.match(saida, /assinatura confere/);
+    assert.match(saida, /RESUMO 1 instalado\(s\), 0 recusado\(s\)/);
+  });
+});
+
+test("assinatura que NÃO confere: recusa e não extrai", () => {
+  // O caso que justifica tudo isto: pacote com hash certo e assinatura errada.
+  // Sem esta recusa, um cartão com o app trocado passaria — o SHA-256 do
+  // manifesto pode ser reescrito por quem escreve no cartão.
+  aparelhoFalso(({ dir, cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo(), { assinatura: Buffer.alloc(64, 7) });
+    const verificador = verificadorFalso(dir, 1);
+    const chave = path.join(dir, "chave.pem");
+    writeFileSync(chave, "x");
+
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher, verificador, chave });
+    assert.equal(codigo, 1, saida);
+    assert.match(saida, /RECUSADO — assinatura não confere/);
+    assert.ok(!existsSync(path.join(destino, "teste")), "pacote com assinatura inválida foi extraído");
+  });
+});
+
+test("sem assinatura ao lado, mas com chave: recusa", () => {
+  // Havendo chave, a ausência da assinatura é omissão, não "formato simples".
+  aparelhoFalso(({ dir, cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo());
+    const verificador = verificadorFalso(dir, 0);
+    const chave = path.join(dir, "chave.pem");
+    writeFileSync(chave, "x");
+
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher, verificador, chave });
+    assert.equal(codigo, 1, saida);
+    assert.match(saida, /RECUSADO — sem assinatura ao lado/);
+  });
+});
+
+test("erro do verificador (chave errada) AVISA e instala, não recusa", () => {
+  // Código 2/3 é problema de configuração da imagem, não veredito sobre o jogo.
+  // Recusar aqui pararia a instalação inteira por um motivo que não é do pacote.
+  aparelhoFalso(({ dir, cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo(), { assinatura: Buffer.alloc(64, 7) });
+    const verificador = verificadorFalso(dir, 3);
+    const chave = path.join(dir, "chave.pem");
+    writeFileSync(chave, "x");
+
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher, verificador, chave });
+    assert.equal(codigo, 0, saida);
+    assert.match(saida, /aviso — assinatura não verificada/);
+  });
+});
+
+test("sem verificador, o script DIZ que não verificou", () => {
+  // Silêncio aqui seria a mentira fácil: o usuário acharia que foi conferido.
+  aparelhoFalso(({ cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo());
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher });
+    assert.equal(codigo, 0, saida);
+    assert.match(saida, /aviso — sem verificador, assinatura não verificada/);
+  });
+});
+
+test("com verificador e sem chave, avisa que faltou a chave", () => {
+  aparelhoFalso(({ dir, cartao, apps, destino, launcher }) => {
+    copiarPacote(cartao, "teste.giochi", pacoteDeExemplo());
+    const verificador = verificadorFalso(dir, 0);
+    const { codigo, saida } = instalar({ cartao, apps, destino, launcher, verificador });
+    assert.equal(codigo, 0, saida);
+    assert.match(saida, /aviso — sem chave em .*, assinatura não verificada/);
   });
 });

@@ -212,7 +212,8 @@ depende do Giochi System.
 
 | Item | Estado |
 | --- | --- |
-| verificação de **assinatura** no aparelho | **não** — medido: sem `openssl` na imagem. O PC verifica antes de enviar |
+| verificação de **assinatura** no aparelho | **sim**, pelo cartão — binário aarch64 ligado a `libcrypto`, exercitado no X55 |
+| chave pública em `/etc/giochi/` | **não** — falta na imagem; sem ela o instalador avisa que não verificou |
 | verificação de **SHA-256** no aparelho | **sim, pelo cartão** — `instalar-do-cartao.sh` recusa hash que não confere |
 | `.giochi` lido de pendrive/SD pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
 | loja (download, OAuth, butlerd) | **não** — ver [`loja.md`](loja.md) |
@@ -259,19 +260,71 @@ SHA-256 confere. O que a verificação pega é **cópia incompleta ou corrompida
 que é o erro real de quem copia pelo leitor. Isso está dito no cabeçalho do
 `instalar-do-cartao.sh` desde que ele foi escrito, e continua valendo.
 
-#### O que falta, com o caminho técnico definido
+#### O verificador existe e foi exercitado no X55
 
-Um verificador nativo em aarch64, pequeno, ligado a `libcrypto`:
+`scripts/lib/verificador-ed25519.c` + `scripts/compilar-verificador-arm64.sh`.
 
-```text
-EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, ...)
-EVP_DigestVerifyInit / EVP_DigestVerify
+```bash
+bash scripts/compilar-verificador-arm64.sh              # gera dist/arm64/verificador-ed25519
+bash scripts/compilar-verificador-arm64.sh --instalar   # compila e instala no aparelho
 ```
 
-O formato já ajuda: o `.sig` tem **64 bytes crus**, exatamente o que
-`EVP_DigestVerify` consome. E o cross-compile já existe neste repositório
-(`scripts/compilar-launcher-arm64.sh` monta sysroot e libs do aparelho).
+É um binário de **8.912 bytes** ligado a `libcrypto` e `libc.so.6` — as duas que
+o aparelho tem. Usa `EVP_DigestVerify` de uma vez, que é o que Ed25519 pede
+(assina a mensagem, não um hash dela), e consome os 64 bytes crus do `.sig` sem
+conversão nenhuma.
 
-**Não implementado porque não há aparelho para executar.** Compilar sem rodar
-seria repetir o erro que este repositório documenta — o `poweroff` que eu
-declarei sem testar.
+**Medido no X55, não deduzido:**
+
+| Caso | Saída | Código |
+| --- | --- | --- |
+| pacote bom, chave certa | `OK assinatura confere (81408 bytes)` | 0 |
+| um byte a mais no pacote | `RECUSADO assinatura não confere` | 1 |
+| chave de outra pessoa | `RECUSADO assinatura não confere` | 1 |
+| chave RSA no lugar de Ed25519 | `ERRO chave não é Ed25519 (tipo 6)` | 3 |
+| `.sig` em base64 (89 bytes) | `ERRO assinatura com 89 bytes; Ed25519 tem 64` | 1 |
+| arquivo inexistente | `ERRO pacote: não consegui abrir` | 2 |
+
+Custo no aparelho: **20 MB de RSS, 0,01 s**. Quase tudo é o `libcrypto`, que fica
+na página e é liberado no fim.
+
+O código 3 existe porque uma chave RSA falharia na verificação e o veredito
+sairia "assinatura não confere" — culpando o pacote por um erro de configuração.
+O usuário trocaria o jogo em vez da chave.
+
+#### O instalador do cartão usa, e diz quando não pode
+
+Com verificador **e** chave em `/etc/giochi/loja-publica.pem`, o
+`instalar-do-cartao.sh` recusa antes de extrair:
+
+```text
+arcade-volleyball.giochi: assinatura confere
+arcade-volleyball.giochi: instalado em /user/apps/arcade-volleyball
+RESUMO 1 instalado(s), 0 recusado(s), 1 encontrado(s)
+```
+
+Pacote adulterado, no aparelho:
+
+```text
+arcade-volleyball.giochi: RECUSADO — assinatura não confere
+RESUMO 0 instalado(s), 1 recusado(s), 1 encontrado(s)
+```
+
+Sem verificador ou sem chave, ele **avisa** — não passa calado:
+
+```text
+teste.giochi: aviso — sem verificador, assinatura não verificada
+teste.giochi: aviso — sem chave em /etc/giochi/loja-publica.pem, assinatura não verificada
+```
+
+**Silêncio no sucesso era um defeito.** A primeira versão verificava e não dizia
+nada, o que torna "verificou e passou" indistinguível de "não verificou". Agora
+imprime `assinatura confere`.
+
+#### O que continua faltando
+
+**A chave pública não está na imagem.** Medido com `debugfs`: `/etc/giochi` tem
+só `buttons.map`. Sem `loja-publica.pem` na imagem, o instalador avisa e segue
+sem verificar — que é o comportamento correto, mas não é segurança. Colocar a
+chave lá é decisão do **Giochi System**, e é o que transforma o verificador em
+garantia em vez de ferramenta.

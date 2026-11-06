@@ -2564,11 +2564,59 @@ As duas imagens (X55 e X35H) dão o mesmo resultado.
 **e** o manifesto, e o SHA-256 confere. O que a verificação pega é cópia
 incompleta — o erro real de quem copia pelo leitor.
 
-Falta um verificador nativo aarch64 ligado a `libcrypto`
-(`EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, ...)` + `EVP_DigestVerify`); os
-64 bytes crus do `.sig` já são o formato que essa API consome. **Não foi escrito
-porque não há aparelho para executar** — compilar sem rodar é o erro do `poweroff`
-que este arquivo já documenta.
+**O verificador existe e foi exercitado no X55** (06/11/2026, aparelho ligado):
+
+```bash
+bash scripts/compilar-verificador-arm64.sh              # dist/arm64/verificador-ed25519
+bash scripts/compilar-verificador-arm64.sh --instalar   # compila e instala
+```
+
+8.912 bytes, `EVP_DigestVerify` de uma vez, ligado a `libcrypto.so.3` e
+`libc.so.6`. Custo medido no aparelho: **20 MB de RSS, 0,01 s**.
+
+| Caso | Saída no X55 | Código |
+| --- | --- | --- |
+| pacote bom | `OK assinatura confere (81408 bytes)` | 0 |
+| um byte a mais | `RECUSADO assinatura não confere` | 1 |
+| chave de outra pessoa | `RECUSADO assinatura não confere` | 1 |
+| chave RSA | `ERRO chave não é Ed25519 (tipo 6)` | 3 |
+| `.sig` base64 (89 bytes) | `ERRO assinatura com 89 bytes; Ed25519 tem 64` | 1 |
+| arquivo ausente | `ERRO pacote: não consegui abrir` | 2 |
+
+Duas lições das escolhas:
+
+- **O tamanho é conferido antes de verificar.** Um `.sig` de 89 bytes é base64
+  gravado como texto, e o `EVP_DigestVerify` recusaria com uma mensagem que não
+  aponta a causa. O erro já aconteceu neste projeto.
+- **Tipo de chave é conferido.** Uma chave RSA falharia na verificação e o
+  veredito sairia "assinatura não confere" — culpando o pacote por erro de
+  configuração. O usuário trocaria o jogo em vez da chave.
+
+`instalar-do-cartao.sh` integra: recusa antes de extrair, e **avisa** quando não
+tem verificador ou chave. A primeira versão verificava em silêncio — o que torna
+"verificou e passou" indistinguível de "não verificou". Silêncio no sucesso é o
+defeito espelhado do silêncio no fracasso.
+
+**O que falta é da imagem, não do app:** `/etc/giochi/` tem só `buttons.map`, sem
+`loja-publica.pem`. Sem chave, o instalador avisa e segue. Colocar a chave lá é
+do **Giochi System**, e é o que transforma o verificador em garantia.
+
+### Compilar C para o aparelho: três armadilhas medidas
+
+1. **`gcc --target=` não existe** no gcc do host. Precisa de um compilador
+   cruzado; o script usa `aarch64-linux-musl-gcc` (baixado de musl.cc) **só com
+   `-c`**, porque objeto ELF aarch64 é o mesmo nos dois mundos — quem escolhe a
+   libc é o link, feito pelo `rust-lld` contra o sysroot glibc.
+2. **Os headers do OpenSSL do host são x86-64 e API 3.5.5**; o aparelho é
+   aarch64 e 3.2.1. Sem trocar `configuration.h`, o erro é
+   `unknown type name 'BN_ULONG'` — que não sugere "alvo errado". O script
+   gera um `configuration.h` com `SIXTY_FOUR_BIT_LONG` e API 30200.
+3. **`-lc` falha**: o `libc.so` do sysroot é linker script com caminho absoluto
+   (`/usr/aarch64-linux-gnu/lib/libc.so.6`), inexistente no host. Passar os
+   `.so` direto resolve.
+
+E `rust-lld` não está no `PATH`; ele mora em
+`~/.rustup/toolchains/*/lib/rustlib/x86_64-unknown-linux-gnu/bin/`.
 
 ### O script do aparelho passou a ser testável no PC
 

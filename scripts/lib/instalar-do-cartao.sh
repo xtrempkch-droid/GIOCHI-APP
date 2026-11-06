@@ -17,18 +17,23 @@
 # | Verificação | Aqui | Por quê |
 # | --- | --- | --- |
 # | SHA-256 contra o manifesto | **sim** | pega cópia corrompida, que é o erro real de quem copia pelo leitor |
-# | assinatura Ed25519 | **NÃO** | não há crate de Ed25519 na imagem; ver abaixo |
+# | assinatura Ed25519 | **se houver verificador e chave** | ver abaixo |
 # | entrypoint existe e é executável | **sim** | o erro aparece como "não abre" e não aponta a causa |
 #
-# **Ausência de verificação de assinatura é limitação declarada, não recurso.**
-# Ela importa quando o pacote vem de um canal em que se confia pouco — a loja
-# pela rede. Aqui o pacote vem de um cartão que o dono pôs na mão dele: quem
-# consegue escrever no cartão também consegue copiar um binário para
-# `/user/apps` sem passar por aqui. O que a verificação **não** cobre é uma
-# corrupção silenciosa na cópia — e é isso que o SHA-256 resolve.
+# ## Integridade não é autenticidade
 #
-# Enquanto a assinatura não é verificada no aparelho, o PC continua verificando
-# antes de enviar (`verificar-pacote.mjs`).
+# O SHA-256 sozinho não prova origem: quem escreve no cartão reescreve o `.giochi`
+# **e** o manifesto, e os dois concordam. Ele pega corrupção na cópia, que é o
+# erro comum.
+#
+# A assinatura fecha essa lacuna, e é verificada por um binário nativo
+# (`verificador-ed25519`, ligado à `libcrypto` do aparelho — medido: 20 MB de RSS,
+# 0,01 s). Sem `openssl` na imagem, foi a forma de fazer isso sem instalar 4 MB de
+# CLI.
+#
+# **Quando não dá para verificar, este script DIZ.** Faltando o binário ou a
+# chave, ele avisa em vez de deixar o pacote passar como se tivesse sido
+# conferido — silêncio aqui seria a mentira fácil.
 
 set -u
 
@@ -43,6 +48,10 @@ APPS_BASE="${GIOCHI_APPS_BASE:-/opt/giochi/apps}"
 INDICE="$APPS_BASE/index.json"
 LAUNCHER="${GIOCHI_LAUNCHER:-$APPS_BASE/launcher/bin/giochi-launcher}"
 DESTINO_BASE="${GIOCHI_DESTINO_BASE:-/user/apps}"
+
+# O verificador e a chave pública. Ausentes = aviso explícito, não passe livre.
+VERIFICADOR="${GIOCHI_VERIFICADOR:-$APPS_BASE/bin/verificador-ed25519}"
+CHAVE_PUBLICA="${GIOCHI_CHAVE_PUBLICA:-/etc/giochi/loja-publica.pem}"
 
 [ -d "$PASTA" ] || { echo "ERRO pasta não existe: $PASTA"; exit 1; }
 [ -x "$LAUNCHER" ] || { echo "ERRO launcher não está em $LAUNCHER"; exit 1; }
@@ -77,6 +86,41 @@ for PACOTE in "$PASTA"/*.giochi; do
     # Sem manifesto não há como detectar corrupção. Recusar seria mais seguro,
     # mas o `.giochi` sozinho é o formato documentado — então avisa e segue.
     echo "  $NOME: aviso — sem manifest.json ao lado, integridade não verificada"
+  fi
+
+  # ── autenticidade ──────────────────────────────────────
+  #
+  # Depois do hash e antes de extrair: um pacote com assinatura inválida não
+  # deve sequer tocar o disco.
+  ASSINATURA="$PACOTE.sig"
+  if [ -x "$VERIFICADOR" ] && [ -f "$CHAVE_PUBLICA" ]; then
+    if [ ! -f "$ASSINATURA" ]; then
+      echo "  $NOME: RECUSADO — sem assinatura ao lado, e há chave para conferir"
+      FALHOU=$((FALHOU + 1))
+      continue
+    fi
+    SAIDA_ASSIN=$("$VERIFICADOR" "$PACOTE" "$ASSINATURA" "$CHAVE_PUBLICA" 2>&1)
+    CODIGO_ASSIN=$?
+    case "$CODIGO_ASSIN" in
+      0) # Confere, e **diz** que conferiu.
+         #
+         # Silêncio no sucesso é o defeito espelhado do silêncio no fracasso:
+         # sem esta linha, "verificou e passou" e "não verificou" produzem a
+         # mesma saída, e o usuário não tem como saber em qual está.
+         echo "  $NOME: assinatura confere" ;;
+      1) echo "  $NOME: RECUSADO — assinatura não confere"
+         FALHOU=$((FALHOU + 1))
+         continue ;;
+      *) # 2 = não consegui verificar, 3 = chave não é Ed25519.
+         # Não é veredito sobre o pacote: avisa e segue, porque recusar por
+         # defeito de configuração da imagem pararia a instalação inteira por um
+         # motivo que não é do jogo.
+         echo "  $NOME: aviso — assinatura não verificada: $SAIDA_ASSIN" ;;
+    esac
+  elif [ -x "$VERIFICADOR" ]; then
+    echo "  $NOME: aviso — sem chave em $CHAVE_PUBLICA, assinatura não verificada"
+  else
+    echo "  $NOME: aviso — sem verificador, assinatura não verificada"
   fi
 
   # ── extração ───────────────────────────────────────────
