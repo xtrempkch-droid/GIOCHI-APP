@@ -298,7 +298,10 @@ o mesmo BMP. Zonas: `home`, `filtros`, `biblioteca`, `apps`, `categorias`,
 `detalhe`, `energia`.
 
 `--teclas` existe porque `--foco` posiciona o destaque mas **não mostra o
-resultado de andar**. Uma seta que não voltava passou por 169 testes verdes: o
+resultado de andar** — e, como a tecla é despachada de verdade pelo reducer,
+também exercita os efeitos: `--teclas a` na Home **inicia o jogo**, o mesmo
+caminho que o botão. Foi assim que se provou no aparelho que o cartão da Home
+passou a abrir o jogo (o filho aparece com `ppid` do launcher). Uma seta que não voltava passou por 169 testes verdes: o
 teste olhava o estado, não o caminho. O log diz onde o foco parou, e o quadro
 mostra o anel no lugar certo:
 

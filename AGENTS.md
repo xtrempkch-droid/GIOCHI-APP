@@ -445,7 +445,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 174 testes do launcher
+cd app/launcher && cargo test --workspace  # 177 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -682,7 +682,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 7 módulos, 69 testes | **compila, testa e passa** |
+| `crates/core` — 7 módulos, 72 testes | **compila, testa e passa** |
 | `crates/ui-sdl` — 13 módulos, 105 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
@@ -710,6 +710,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Catálogo com 3 itens | **medido no X55** — `catálogo: 3 app(s)`, os 3 abrem por `--lancar` |
 | Jogo em painel retrato (X55) | **gira** — `projeto 1280x720 (Ccw90)`, preenche o painel |
 | Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
+| `A` no cartão da Home lança | **no X55** — `giochi-cobrinha` com ppid do launcher |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
 | Aba de configurações | **navegável** — `Zone::SettingsContent` existe; anel de foco medido no X55 (x 446..1107) |
@@ -1141,6 +1142,36 @@ Agora dizem `"Tema — Giochi Dark (único)"` e `"Escala — acompanha o painel"
 **Trocar de tema de verdade exige paleta em tempo de execução** e não foi feito:
 `theme::ACCENT` é `const` em centenas de lugares, e mexer nisso arrisca o layout
 que acabou de ser medido. Declarado, não fingido.
+
+#### A na Home não abria o jogo — o mesmo aviso vazio, uma camada acima
+
+Relatado em 06/11/2026, depois do fix da seta:
+
+> "aba home cards não estão abrindo o jogo quando se escolhe o botão jogar"
+
+`Zone::HomeCarousel` + `A` caía num ramo que **só** trocava o aviso para
+`Iniciando X...` e voltava. Nada era iniciado, e nem a ficha abria. É o mesmo
+defeito que o botão "Jogar" da ficha tinha: a correção foi feita em
+`GameDetailActions` e **este ramo ficou para trás**, com o comentário irmão
+apontando o problema no lugar errado.
+
+Pior: o rodapé da Home anuncia literalmente `A — Jogar`. A promessa estava
+escrita na tela, então o usuário não tinha como desconfiar.
+
+Agora `A` na Home preenche `state.lancar` — mesmo caminho do `--lancar`, sem
+cópia. `X` continua abrindo a ficha (`open_detail`), que é o que o rodapé diz na
+tecla ao lado.
+
+**Medido no X55**: `--teclas a` na Home e `giochi-cobrinha` subiu com **ppid do
+launcher** (2440 ← 2430). Ciclo completo: iniciou, e o launcher voltou.
+
+O rodapé também ficou honesto por aba: dizia "Jogar" em três abas que fazem
+coisas diferentes com o `A` (Home abre o jogo, Biblioteca abre a ficha, Apps não
+abre nada porque são de demonstração e não estão no catálogo).
+
+Teste que vale: `todo_caminho_de_iniciar_jogo_pede_lancamento` percorre os três
+caminhos, e `a_na_home_pede_o_lancamento_do_jogo_em_foco` é o caso relatado.
+Ambos verificados contra o bug reintroduzido — reprovam.
 
 #### O que ainda não foi provado
 

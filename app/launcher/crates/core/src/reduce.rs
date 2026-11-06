@@ -459,13 +459,29 @@ fn confirm(state: State) -> State {
 
     match zone {
         Zone::HomeCarousel => {
-            // Clona o título antes de mover o estado: evita manter empréstimo
-            // de `state` enquanto `state` é consumido.
-            let title = state
-                .focused_game()
-                .map(|game| game.title.clone());
-            match title {
-                Some(title) => toast(state, &format!("Iniciando {title}...")),
+            // **A aqui abre o jogo.** Antes só aparecia o aviso "Iniciando X..."
+            // e nada acontecia: era um substituto de ação, não a ação.
+            //
+            // É o mesmo defeito que o botão "Jogar" da ficha tinha, uma camada
+            // acima — a correção foi feita em `GameDetailActions` e este ramo
+            // ficou para trás. E o rodapé da Home anuncia literalmente
+            // `A — Jogar`, então a promessa estava na tela.
+            //
+            // O detalhe continua no X (`Cmd::Options` → `open_detail`), que é o
+            // que o rodapé diz na tecla ao lado. Dois rótulos diferentes, dois
+            // efeitos diferentes.
+            //
+            // Clona id e título antes de mover o estado: `toast` consome `state`
+            // e o empréstimo de `focused_game` não pode sobreviver a isso.
+            let alvo = state.focused_game().map(|game| (game.id, game.title.clone()));
+            match alvo {
+                Some((id, title)) => {
+                    let s = toast(state, &format!("Iniciando {title}..."));
+                    State {
+                        lancar: Some(id),
+                        ..s
+                    }
+                }
                 None => state,
             }
         }
@@ -1332,6 +1348,87 @@ mod tests {
         // E volta para a Home: ao retornar do jogo o usuário cai na interface,
         // não numa ficha de jogo que ele já iniciou.
         assert!(s.overlays.is_empty());
+    }
+
+    /// O bug relatado: "aba home cards não estão abrindo o jogo quando se
+    /// escolhe o botão jogar".
+    ///
+    /// `A` na Home caía num ramo que só trocava o aviso para `Iniciando X...`
+    /// — o mesmo substituto de ação que já tinha sido corrigido na ficha, uma
+    /// camada acima. E o rodapé da Home anuncia `A — Jogar`, então a promessa
+    /// estava escrita na tela.
+    #[test]
+    fn a_na_home_pede_o_lancamento_do_jogo_em_foco() {
+        let mut s = demo();
+        s.tab = Tab::Home;
+        s.focus = Focus::at(Zone::HomeCarousel, 3);
+        s.carousel = 3;
+        let esperado = s.games[3].id;
+
+        s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(
+            s.lancar,
+            Some(esperado),
+            "A na Home tem de pedir o lançamento, não só avisar"
+        );
+    }
+
+    /// Todo caminho que **promete** iniciar um jogo tem de pedir o lançamento.
+    ///
+    /// A correção anterior foi feita só na ficha e a Home ficou para trás. Este
+    /// teste percorre os três caminhos de uma vez: qualquer ramo novo que
+    /// mostre "Iniciando…" sem preencher `lancar` reprova aqui.
+    #[test]
+    fn todo_caminho_de_iniciar_jogo_pede_lancamento() {
+        // 1. Home: A no cartão.
+        let mut home = demo();
+        home.tab = Tab::Home;
+        home.focus = Focus::at(Zone::HomeCarousel, 1);
+        home.carousel = 1;
+        let id_home = home.games[1].id;
+        let home = reduce(home, Cmd::Confirm);
+
+        // 2. Home: X abre a ficha, depois A em "Jogar".
+        let mut via_ficha_home = demo();
+        via_ficha_home.tab = Tab::Home;
+        via_ficha_home.focus = Focus::at(Zone::HomeCarousel, 2);
+        via_ficha_home.carousel = 2;
+        let id_ficha = via_ficha_home.games[2].id;
+        let mut via_ficha_home = reduce(via_ficha_home, Cmd::Options);
+        via_ficha_home.focus = Focus::at(Zone::GameDetailActions, 0);
+        let via_ficha_home = reduce(via_ficha_home, Cmd::Confirm);
+
+        // 3. Biblioteca: A no cartão abre a ficha, A em "Jogar".
+        let mut via_biblioteca = demo();
+        via_biblioteca.tab = Tab::Library;
+        via_biblioteca.focus = Focus::at(Zone::LibraryGrid, 0);
+        let id_bib = via_biblioteca.filtered_games()[0];
+        let id_bib = via_biblioteca.games[id_bib].id;
+        let mut via_biblioteca = reduce(via_biblioteca, Cmd::Confirm);
+        via_biblioteca.focus = Focus::at(Zone::GameDetailActions, 0);
+        let via_biblioteca = reduce(via_biblioteca, Cmd::Confirm);
+
+        assert_eq!(home.lancar, Some(id_home), "Home: A no cartão");
+        assert_eq!(
+            via_ficha_home.lancar,
+            Some(id_ficha),
+            "Home: X na ficha, A em Jogar"
+        );
+        assert_eq!(
+            via_biblioteca.lancar,
+            Some(id_bib),
+            "Biblioteca: ficha, A em Jogar"
+        );
+    }
+
+    #[test]
+    fn a_na_home_sem_jogos_nao_estoura() {
+        let mut s = State::new(Vec::new(), Vec::new());
+        s.screen = Screen::Running;
+        s.focus = Focus::at(Zone::HomeCarousel, 0);
+        let s = reduce(s, Cmd::Confirm);
+        assert_eq!(s.lancar, None);
     }
 
     /// Voltar e favoritar **não** pedem lançamento.

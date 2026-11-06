@@ -383,13 +383,29 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
             ("↑↓", "Linha"),
             ("B", "Voltar"),
         ],
-        None => &[
+        // O rodapé era um só para Home, Biblioteca e Apps — e as três fazem
+        // coisas diferentes com o `A`: na Home ele abre o jogo, na Biblioteca
+        // abre a ficha, nos Apps não abre nada. Dizer "Jogar" na Biblioteca era
+        // a mesma mentira que o aviso "Iniciando..." sem iniciar: a tela
+        // promete um efeito que a tecla não tem.
+        None if state.tab == Tab::Home => &[
             ("A", "Jogar"),
             ("X", "Detalhes"),
             ("Y", "Buscar"),
             ("LB/RB", "Aba"),
             ("Select", "Ajustes"),
         ],
+        None if state.tab == Tab::Library => &[
+            ("A", "Abrir"),
+            ("X", "Detalhes"),
+            ("Y", "Buscar"),
+            ("LB/RB", "Aba"),
+        ],
+        // A grade de apps é de demonstração: os apps não estão no catálogo do
+        // sistema, então não há entrypoint para executar. O rodapé diz o que a
+        // tecla faz hoje, não o que faria com uma loja instalada.
+        None if state.tab == Tab::Apps => &[("X", "Detalhes"), ("LB/RB", "Aba")],
+        None => &[("LB/RB", "Aba")],
     };
 
     // Centralizado na faixa do rodapé. Antes era `foot_y + 18` fixo: num painel
