@@ -244,7 +244,7 @@ fn pressionado(map: &ButtonsMap, estado: &HashMap<u16, bool>, nome: &str) -> boo
 }
 
 /// Nome de símbolo do kernel → código. Só o que o mapa usa.
-fn code_for(symbol: &str) -> Option<u16> {
+pub fn code_for(symbol: &str) -> Option<u16> {
     Some(match symbol {
         "BTN_SOUTH" | "BTN_A" | "BTN_GAMEPAD" => 0x130,
         "BTN_EAST" | "BTN_B" => 0x131,
@@ -469,6 +469,26 @@ fn spawn_reader(path: PathBuf, tx: Sender<Ev>) -> Option<JoinHandle<()>> {
 
     Some(handle)
 }
+
+/// Todos os símbolos que o tradutor entende.
+///
+/// Esta lista existe para ser **consultada de fora** (`--simbolos`), não para
+/// ser mantida à mão: o teste `lista_de_simbolos_bate_com_o_tradutor` percorre
+/// cada entrada e confirma que `code_for` a aceita. Assim a lista não pode
+/// envelhecer separada do tradutor — que é como o `releaseYear` precisou entrar
+/// em três lugares e o carrossel ficou dessincronizado.
+pub const SIMBOLOS_CONHECIDOS: &[&str] = &[
+    "BTN_SOUTH", "BTN_A", "BTN_GAMEPAD",
+    "BTN_EAST", "BTN_B",
+    "BTN_NORTH", "BTN_X",
+    "BTN_WEST", "BTN_Y",
+    "BTN_TL", "BTN_TR", "BTN_TL2", "BTN_TR2",
+    "BTN_SELECT", "BTN_START", "BTN_MODE",
+    "BTN_THUMBL", "BTN_THUMBR",
+    "BTN_DPAD_UP", "BTN_DPAD_DOWN", "BTN_DPAD_LEFT", "BTN_DPAD_RIGHT",
+    "KEY_VOLUMEDOWN", "KEY_VOLUMEUP", "KEY_POWER",
+    "KEY_HOME", "KEY_MENU", "KEY_BACK",
+];
 
 #[cfg(test)]
 mod tests {

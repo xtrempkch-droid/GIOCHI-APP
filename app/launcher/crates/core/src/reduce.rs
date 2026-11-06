@@ -197,28 +197,46 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         // campo passar de falso para verdadeiro. Se a marcação ficasse na UI,
         // haveria duas rotas para o mesmo efeito — e a tela abriria vazia por um
         // instante parecendo "nenhuma rede".
-        Cmd::AbrirWifi => push(
-            State {
-                sem_fio: crate::state::SemFio {
-                    escaneando: true,
-                    erro: None,
-                    ..state.sem_fio
-                },
-                ..state
+        // Capacidade de rádio do aparelho. Guardada como fato, não como erro:
+        // a tela precisa dizer "não tem" antes de o usuário tentar.
+        Cmd::CapacidadesSemFio { wifi, bluetooth } => State {
+            sem_fio: crate::state::SemFio {
+                tem_wifi: Some(wifi),
+                tem_bt: Some(bluetooth),
+                ..state.sem_fio
             },
-            Overlay::WifiList,
-        ),
-        Cmd::AbrirBluetooth => push(
-            State {
-                sem_fio: crate::state::SemFio {
-                    bt_escaneando: true,
-                    erro: None,
-                    ..state.sem_fio
+            ..state
+        },
+        // Sem rádio, não marca "procurando": seria a tela prometer uma varredura
+        // que nunca vai acontecer. O overlay mostra o motivo.
+        Cmd::AbrirWifi => {
+            let tem = state.sem_fio.tem_wifi.unwrap_or(true);
+            push(
+                State {
+                    sem_fio: crate::state::SemFio {
+                        escaneando: tem,
+                        erro: None,
+                        ..state.sem_fio
+                    },
+                    ..state
                 },
-                ..state
-            },
-            Overlay::BtList,
-        ),
+                Overlay::WifiList,
+            )
+        }
+        Cmd::AbrirBluetooth => {
+            let tem = state.sem_fio.tem_bt.unwrap_or(true);
+            push(
+                State {
+                    sem_fio: crate::state::SemFio {
+                        bt_escaneando: tem,
+                        erro: None,
+                        ..state.sem_fio
+                    },
+                    ..state
+                },
+                Overlay::BtList,
+            )
+        }
         Cmd::SetBattery(level) => State {
             battery: level,
             ..state
@@ -631,6 +649,13 @@ fn confirm(state: State) -> State {
             let total = state.sem_fio.redes.len();
             if index >= total {
                 // Varredura: a UI precisa saber para chamar o `wpa_cli`.
+                //
+                // Num aparelho **sem rádio** (R35S) esta linha fica inerte: sem
+                // a guarda, apertar A nela ligaria "procurando…" para sempre —
+                // uma promessa que o hardware nunca vai cumprir.
+                if state.sem_fio.tem_wifi == Some(false) {
+                    return state;
+                }
                 State {
                     sem_fio: crate::state::SemFio {
                         escaneando: true,
@@ -702,6 +727,10 @@ fn confirm(state: State) -> State {
         Zone::BtDevices => {
             let total = state.sem_fio.dispositivos.len();
             if index >= total {
+                // Mesma guarda do Wi-Fi: sem rádio, "procurar" não faz nada.
+                if state.sem_fio.tem_bt == Some(false) {
+                    return state;
+                }
                 State {
                     sem_fio: crate::state::SemFio {
                         bt_escaneando: true,
@@ -1560,6 +1589,89 @@ mod tests {
     }
 
     /// Com overlay aberto o gatilho não troca nada por baixo.
+    /// R35S: **não tem rádio**. A tela não pode dizer "não conectado".
+    ///
+    /// "Não conectado" sugere que dá para conectar. Num aparelho sem Wi-Fi nem
+    /// Bluetooth — os DTBs do r33s/r35s/r36s não têm nó de rádio — isso é
+    /// promessa de capacidade inexistente, a mesma classe do "Tema Giochi Dark".
+    #[test]
+    fn aparelho_sem_radio_nao_promete_conexao() {
+        let mut s = demo();
+        s = reduce(s, Cmd::CapacidadesSemFio { wifi: false, bluetooth: false });
+
+        assert_eq!(s.sem_fio.tem_wifi, Some(false));
+        assert_eq!(s.sem_fio.tem_bt, Some(false));
+        assert!(s.sem_fio.sem_radio());
+        // E não pode estar "procurando" o que não existe.
+        assert!(!s.sem_fio.escaneando);
+        assert!(!s.sem_fio.bt_escaneando);
+    }
+
+    /// Abrir Wi-Fi/BT sem rádio não liga a animação de varredura.
+    ///
+    /// Se ligasse, a tela pulsaria "procurando…" para sempre — pior que dizer
+    /// "não tem", porque parece que está tentando.
+    #[test]
+    fn abrir_lista_sem_radio_nao_marca_procurando() {
+        for (cmd, campo, overlay) in [
+            (Cmd::AbrirWifi, 0usize, Overlay::WifiList),
+            (Cmd::AbrirBluetooth, 1, Overlay::BtList),
+        ] {
+            let mut s = demo();
+            s = reduce(s, Cmd::CapacidadesSemFio { wifi: false, bluetooth: false });
+            s = reduce(s, cmd);
+            assert_eq!(s.top_overlay(), Some(overlay));
+            let procurando = if campo == 0 {
+                s.sem_fio.escaneando
+            } else {
+                s.sem_fio.bt_escaneando
+            };
+            assert!(!procurando, "{overlay:?}: não pode procurar sem rádio");
+        }
+    }
+
+    /// Com rádio, tudo continua como antes — a correção não pode quebrar o X55.
+    /// Apertar "procurar de novo" num aparelho sem rádio não pode iniciar nada.
+    ///
+    /// A linha final da lista existe sempre; sem guarda ela ligaria
+    /// "procurando…" indefinidamente — o usuário veria um spinner eterno em vez
+    /// do motivo.
+    #[test]
+    fn procurar_de_novo_e_inerte_sem_radio() {
+        let mut s = demo();
+        s = reduce(s, Cmd::CapacidadesSemFio { wifi: false, bluetooth: false });
+        s = reduce(s, Cmd::AbrirWifi);
+        // nenhuma rede, então a única linha é a de procurar
+        s.focus = Focus::at(Zone::WifiNetworks, 0);
+        let s = reduce(s, Cmd::Confirm);
+        assert!(!s.sem_fio.escaneando, "não pode procurar sem rádio");
+
+        let mut b = demo();
+        b = reduce(b, Cmd::CapacidadesSemFio { wifi: false, bluetooth: false });
+        b = reduce(b, Cmd::AbrirBluetooth);
+        b.focus = Focus::at(Zone::BtDevices, 0);
+        let b = reduce(b, Cmd::Confirm);
+        assert!(!b.sem_fio.bt_escaneando, "não pode procurar sem rádio");
+    }
+
+    #[test]
+    fn aparelho_com_radio_continua_procurando() {
+        let mut s = demo();
+        s = reduce(s, Cmd::CapacidadesSemFio { wifi: true, bluetooth: true });
+        assert!(!s.sem_fio.sem_radio());
+
+        s = reduce(s, Cmd::AbrirWifi);
+        assert!(s.sem_fio.escaneando, "com rádio tem de procurar");
+    }
+
+    /// Antes da sondagem não se sabe de nada — e desconhecido não é ausência.
+    #[test]
+    fn capacidade_desconhecida_nao_e_tratada_como_ausente() {
+        let s = demo();
+        assert_eq!(s.sem_fio.tem_wifi, None);
+        assert!(!s.sem_fio.sem_radio(), "None não pode virar 'sem rádio'");
+    }
+
     #[test]
     fn gatilho_nao_age_com_overlay_aberto() {
         let mut s = demo();

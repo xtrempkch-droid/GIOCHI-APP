@@ -125,12 +125,19 @@ impl App {
         // transições, então o pedido inicial sai aqui — sem isto a tela de
         // Wi-Fi fica "procurando…" para sempre e nenhum `wpa_cli` roda.
         let sem_fio = crate::semfio::SemFio::novo();
+        // Capacidade vai para o estado **antes** de qualquer tela abrir: um
+        // aparelho sem rádio (R35S) precisa que a linha diga "sem rádio" na
+        // primeira vez que o usuário olhar, não depois de tentar.
+        let capacidades = sem_fio.capacidades();
         if state.sem_fio.escaneando {
             sem_fio.pedir(crate::semfio::Pedido::EscanearWifi);
         }
         if state.sem_fio.bt_escaneando {
             sem_fio.pedir(crate::semfio::Pedido::EscanearBt);
         }
+
+        let mut state = state;
+        state = giochi_launcher_core::update(state, capacidades);
 
         Self {
             state,

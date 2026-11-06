@@ -255,9 +255,26 @@ pub struct SemFio {
     pub bt_alvo: Option<String>,
     pub conectado: Option<String>,
     pub bt_conectado: Option<String>,
+    /// O aparelho **tem** rádio Wi-Fi.
+    ///
+    /// `None` = ainda não se sabe (antes da primeira sondagem). Existe porque
+    /// "não conectado" e "não tem rádio" são fatos diferentes, e a tela dizia o
+    /// primeiro nos dois casos. O R35S **não tem rádio nenhum** (medido no DTB:
+    /// não existe nó de Wi-Fi nos DTBs do R33S/R35S/R36S), então lá a linha
+    /// "Wi-Fi — não conectado" prometia uma capacidade inexistente — a mesma
+    /// classe do "Tema Giochi Dark" que sugeria uma lista de temas.
+    pub tem_wifi: Option<bool>,
+    /// Idem para Bluetooth.
+    pub tem_bt: Option<bool>,
 }
 
 impl SemFio {
+    /// Sem rádio de fábrica? Só responde `true` com certeza — `None` não é
+    /// ausência.
+    pub fn sem_radio(&self) -> bool {
+        self.tem_wifi == Some(false) && self.tem_bt == Some(false)
+    }
+
     pub fn limpar_senha(&mut self) {
         self.senha.clear();
         self.senha_visivel = false;

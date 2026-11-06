@@ -141,6 +141,12 @@ pub enum Cmd {
     MostrarSenha,
     /// Resultado de uma tentativa de conexão. `None` = deu certo.
     ResultadoWifi(Option<String>),
+    /// O que este aparelho tem de rádio. Enviado uma vez, na abertura.
+    ///
+    /// Não é resultado de varredura: é **capacidade**. Um aparelho sem rádio
+    /// (R35S) nunca vai ter rede, e a tela precisa dizer isso em vez de
+    /// "procurando…" para sempre ou "não conectado", que sugere que dá.
+    CapacidadesSemFio { wifi: bool, bluetooth: bool },
     AbrirBluetooth,
     DispositivosBt(Vec<crate::state::DispositivoBt>, Option<String>),
     EscaneandoBt(bool),
@@ -196,6 +202,7 @@ impl Cmd {
             // Relógio do HUD, bateria, temperatura, presença de controle, boot
             // e o próprio despertar não vêm de um dedo ou de um botão.
             Cmd::TickHud
+            | Cmd::CapacidadesSemFio { .. }
             | Cmd::RedesWifi(_, _)
             | Cmd::EscaneandoWifi(_)
             | Cmd::ResultadoWifi(_)

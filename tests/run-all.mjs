@@ -7,3 +7,4 @@ import "./validate-app.test.mjs";
 import "./verificar-frame.test.mjs";
 import "./capacidades-input.test.mjs";
 import "./catalogo.test.mjs";
+import "./verificar-mapa.test.mjs";

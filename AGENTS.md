@@ -298,6 +298,7 @@ Giochi app/
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   ├── verificar-telas.mjs    # as 12 telas em 3 tamanhos: cabe? ocupa quanto?
+│   ├── verificar-mapa.mjs     # buttons.map contra os símbolos do launcher
 │   ├── verificar-jogos.mjs    # geometria dos jogos: a célula é legível?
 │   ├── gerar-catalogo.mjs     # projeta o índice do aparelho
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
@@ -440,12 +441,12 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 86 testes JS
+node tests/run-all.mjs                    # 97 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 189 testes do launcher
+cd app/launcher && cargo test --workspace  # 194 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -472,6 +473,7 @@ node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao
 node scripts/verificar-telas.mjs         # as 12 telas em 640x480, 800x600, 1280x720
 node scripts/verificar-jogos.mjs         # a geometria dos jogos nos mesmos 3 tamanhos
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
+node scripts/verificar-mapa.mjs --mapa <buttons.map>   # símbolos que o app entende
 bash scripts/canal.sh                    # janela de contato com o Giochi System
 ```
 
@@ -682,7 +684,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 7 módulos, 82 testes | **compila, testa e passa** |
+| `crates/core` — 7 módulos, 87 testes | **compila, testa e passa** |
 | `crates/ui-sdl` — 14 módulos, 107 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
@@ -713,6 +715,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | `A` no cartão da Home lança | **no X55** — `giochi-cobrinha` com ppid do launcher |
 | L2/R2 trocam sub-aba | **no X55** — `r2,r2,r2` dá a volta nos filtros; `r2` cicla categoria |
 | L2/R2 físicos emitem evento | **não testado** — o kernel declara 312/313 e o app os lê, mas ninguém apertou os gatilhos |
+| R35S: mapa de botões | **verificado sem aparelho** — 19/19 símbolos reconhecidos |
+| R35S: tela sem rádio | **preparada e fotografada** com `--sem-radio` |
+| R35S: imagem / boot / botões | **não existe** — bloqueado no Giochi System (sem defconfig, sem driver) |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
 | Aba de configurações | **navegável** — `Zone::SettingsContent` existe; anel de foco medido no X55 (x 446..1107) |
@@ -1222,6 +1227,42 @@ tela. Agora é `views::dicas(state)` e há dois testes:
 `rodape_so_anuncia_gatilho_onde_ele_age` e
 `rodape_nao_promete_jogar_onde_a_apenas_abre`. Ambos verificados contra a versão
 mentirosa.
+
+#### R35S: preparado no que é do app, bloqueado no que não é
+
+Pedido do usuário: *"crie uma imagem para o r35s e teste tudo para que esse já
+fique liberado para uso"*. **A imagem não pode ser construída** — e isso é do
+`GIOCHI-SYSTEM`, não deste repositório. O `device/r35s/device.json` de lá tem
+`buildrootDefconfig: ""` (vazio), `status: draft`, e o README diz *"Build nunca
+executado"*. Falta o loader do fabricante (`px30_bl31`, DDR `px30_ddr_333MHz`,
+U-Boot `odroid-go2`) — *"nada disso foi reproduzido por nós"* —, o driver de
+botões compilado e o `genimage`. É **outro SoC** (RK3326), então é um segundo
+alvo de build. E não há R35S na bancada: só o X55.
+
+O que **é** deste repositório e foi feito, com evidência:
+
+| Item | Estado |
+| --- | --- |
+| layout 640×480 | **coberto** — mesmo painel do X35H, 12 telas cabem, escala 1,0 |
+| 19 símbolos do `buttons.map` do R35S | **todos reconhecidos** (`verificar-mapa.mjs`) |
+| sem rádio (não tem Wi-Fi nem BT) | **tela honesta** — "sem rádio neste aparelho", sem spinner |
+| memória | **25 MB** medidos (VmRSS) num aparelho de 1 GB = 2,5 % |
+
+**A ferramenta que faltava:** `scripts/verificar-mapa.mjs`. Um símbolo
+desconhecido vira botão morto em silêncio (duas ocorrências). A lista de símbolos
+vem do **binário** (`--simbolos`), não de uma cópia — mesma razão do catálogo ser
+projeção. Teste Rust `lista_de_simbolos_bate_com_o_tradutor` impede a lista de
+divergir do `code_for`. É o que permite verificar um aparelho **que não está na
+mão**.
+
+**Rádio ausente é capacidade, não erro.** `SemFio::tem_wifi`/`tem_bt` são
+`Option<bool>`: `None` = não sondado, e `None` **não** é ausência. Com
+`Some(false)` a linha diz "sem rádio neste aparelho" e o "procurar de novo" fica
+inerte — sem essa guarda, apertar A ligaria "procurando…" para sempre.
+`--sem-radio` simula o perfil para fotografar a tela.
+
+Ver [`docs/r35s.md`](docs/r35s.md), incluindo §5 (por que a imagem não existe) e
+§6 (a ordem do que falta).
 
 #### O que ainda não foi provado
 

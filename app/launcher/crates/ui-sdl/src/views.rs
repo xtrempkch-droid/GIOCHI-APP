@@ -1008,25 +1008,38 @@ fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
         // Antes as duas linhas mostravam "Ligado/Desligado" de um campo que
         // ninguém alternava: a informação era sempre a mesma e não dizia se
         // havia conexão. Agora mostra o SSID conectado ou "não conectado".
+        // Três estados, não dois: **não tem rádio** é diferente de **não
+        // conectado**. O R35S não tem Wi-Fi nem Bluetooth (não existe nó de
+        // rádio nos DTBs do r33s/r35s/r36s); ali "não conectado" sugeriria que
+        // dá para conectar. Mesma regra do "Tema Giochi Dark": capacidade
+        // ausente tem de ser declarada ausente.
         "network" => vec![
             (
                 "Wi-Fi".into(),
-                match &state.sem_fio.conectado {
-                    Some(ssid) => ssid.clone(),
-                    None => "não conectado".into(),
+                if state.sem_fio.tem_wifi == Some(false) {
+                    "sem rádio neste aparelho".into()
+                } else {
+                    match &state.sem_fio.conectado {
+                        Some(ssid) => ssid.clone(),
+                        None => "não conectado".into(),
+                    }
                 },
             ),
             (
                 "Bluetooth".into(),
-                match &state.sem_fio.bt_conectado {
-                    Some(mac) => state
-                        .sem_fio
-                        .dispositivos
-                        .iter()
-                        .find(|d| &d.mac == mac)
-                        .map(|d| d.nome.clone())
-                        .unwrap_or_else(|| mac.clone()),
-                    None => "não conectado".into(),
+                if state.sem_fio.tem_bt == Some(false) {
+                    "sem rádio neste aparelho".into()
+                } else {
+                    match &state.sem_fio.bt_conectado {
+                        Some(mac) => state
+                            .sem_fio
+                            .dispositivos
+                            .iter()
+                            .find(|d| &d.mac == mac)
+                            .map(|d| d.nome.clone())
+                            .unwrap_or_else(|| mac.clone()),
+                        None => "não conectado".into(),
+                    }
                 },
             ),
         ],
@@ -1865,7 +1878,12 @@ fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         })
         .collect();
 
-    let (rodape, vazio) = if let Some(erro) = &sf.erro {
+    let (rodape, vazio) = if sf.tem_wifi == Some(false) {
+        (
+            "este aparelho não tem Wi-Fi".to_string(),
+            "Sem rádio Wi-Fi neste aparelho".to_string(),
+        )
+    } else if let Some(erro) = &sf.erro {
         (format!("erro: {erro}"), String::new())
     } else if sf.escaneando {
         ("procurando redes…".to_string(), "Procurando…".to_string())
@@ -1910,7 +1928,12 @@ fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         })
         .collect();
 
-    let (rodape, vazio) = if let Some(erro) = &sf.erro {
+    let (rodape, vazio) = if sf.tem_bt == Some(false) {
+        (
+            "este aparelho não tem Bluetooth".to_string(),
+            "Sem rádio Bluetooth neste aparelho".to_string(),
+        )
+    } else if let Some(erro) = &sf.erro {
         (format!("erro: {erro}"), String::new())
     } else if sf.bt_escaneando {
         ("procurando aparelhos…".to_string(), "Procurando…".to_string())

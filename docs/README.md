@@ -17,6 +17,7 @@
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.
+- [R35S](r35s.md) — o que o app já garante nesse aparelho, o que falta do sistema e por que a imagem ainda não existe.
 - [Rede: Wi-Fi e Bluetooth](rede.md) — a aba de configurações navegável, a lista de redes, o teclado de senha e o que foi medido no aparelho.
 
 ## Princípio

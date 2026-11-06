@@ -68,6 +68,19 @@ fn main() -> Result<(), String> {
         .cloned()
         .unwrap_or_else(default_font);
 
+    // `--simbolos`: imprime o que o tradutor de `buttons.map` entende e sai.
+    //
+    // Serve para verificar o mapa de um aparelho **sem o aparelho**: se o mapa
+    // declara um símbolo que não está nesta lista, o botão é descartado em
+    // silêncio (aconteceu duas vezes, ver AGENTS.md). A lista é a do próprio
+    // tradutor, não uma cópia — `scripts/verificar-mapa.mjs` compara com ela.
+    if args.iter().any(|a| a == "--simbolos") {
+        for simbolo in input_evdev::SIMBOLOS_CONHECIDOS {
+            println!("{simbolo}");
+        }
+        return Ok(());
+    }
+
     if std::env::var("GIOCHI_GLES").is_ok() {
         // No aparelho o backend é GLES2; no desktop o padrão do SDL é melhor.
         sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
@@ -233,6 +246,23 @@ fn main() -> Result<(), String> {
     if let Some(tela) = tela_inicial.as_deref() {
         abrir_tela(&mut state, tela)?;
         eprintln!("tela forcada por --tela: {tela}");
+    }
+
+    // `--sem-radio`: finge um aparelho sem Wi-Fi nem Bluetooth.
+    //
+    // Existe porque não há R35S na mão e ele **não tem rádio**: a única forma de
+    // ver a tela que o usuário daquele aparelho vai ver é simular a capacidade
+    // ausente. Sem esta chave, a verificação do R35S no lado do app ficaria
+    // esperando hardware que talvez não venha.
+    if args.iter().any(|a| a == "--sem-radio") {
+        state = giochi_launcher_core::update(
+            state,
+            giochi_launcher_core::Cmd::CapacidadesSemFio {
+                wifi: false,
+                bluetooth: false,
+            },
+        );
+        eprintln!("--sem-radio: aparelho simulado sem rádio (perfil R35S)");
     }
 
     // `--rede-real`: descarta o exemplo e pede uma varredura de verdade.

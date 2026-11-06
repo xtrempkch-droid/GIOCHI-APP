@@ -52,6 +52,8 @@ const JANELA_BT_S: u32 = 8;
 pub struct SemFio {
     pedidos: Sender<Pedido>,
     respostas: Receiver<Cmd>,
+    tem_wifi: bool,
+    tem_bt: bool,
 }
 
 impl SemFio {
@@ -63,20 +65,16 @@ impl SemFio {
         // O nome da interface vai para o log na abertura: se o aparelho não
         // tiver rádio, "nenhuma rede" e "não há interface" têm causas
         // diferentes, e só a linha de log separa as duas.
+        // A frase muda quando **não há** rádio: num aparelho sem nenhum (R35S)
+        // dizer "interface ausente" soa a defeito, e não é — é o hardware.
         eprintln!(
-            "sem fio: interface {}, bluetooth {}",
+            "sem fio: wi-fi {}, bluetooth {}",
             iface.as_deref().unwrap_or("ausente"),
-            if Command::new(programa("bluetoothctl"))
-                .arg("--version")
-                .output()
-                .is_ok()
-            {
-                "disponível"
-            } else {
-                "sem bluetoothctl"
-            }
+            if tem_bluetooth() { "disponível" } else { "não disponível" }
         );
 
+        let tem_wifi = iface.is_some();
+        let tem_bt = tem_bluetooth();
         let iface_thread = iface;
         thread::Builder::new()
             .name("giochi-semfio".into())
@@ -86,6 +84,16 @@ impl SemFio {
         Self {
             pedidos: tx_pedido,
             respostas: rx_cmd,
+            tem_wifi,
+            tem_bt,
+        }
+    }
+
+    /// O que este aparelho tem de rádio, para o núcleo guardar como fato.
+    pub fn capacidades(&self) -> Cmd {
+        Cmd::CapacidadesSemFio {
+            wifi: self.tem_wifi,
+            bluetooth: self.tem_bt,
         }
     }
 
@@ -125,6 +133,19 @@ fn trabalhador(pedidos: Receiver<Pedido>, respostas: Sender<Cmd>, iface: Option<
 }
 
 // ── Wi-Fi ──────────────────────────────────────────────────
+
+/// Existe controlador Bluetooth neste aparelho?
+///
+/// Dois sinais, nesta ordem: adaptador `hci*` em `/sys/class/bluetooth` (prova de
+/// hardware) e o utilitário presente (prova de que dá para operar). Um aparelho
+/// sem adaptador — o R35S — falha no primeiro e a tela diz "não tem rádio" em vez
+/// de "procurando…".
+fn tem_bluetooth() -> bool {
+    let tem_adapter = std::fs::read_dir("/sys/class/bluetooth")
+        .map(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("hci")))
+        .unwrap_or(false);
+    tem_adapter && programa("bluetoothctl").exists()
+}
 
 /// Caminho de um utilitário, com os diretórios padrão como reserva.
 ///

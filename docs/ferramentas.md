@@ -11,6 +11,7 @@ nenhum foi escrito "por completude".
 | `scripts/aparelho.sh` | PC | operação e diagnóstico do aparelho por SSH |
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
 | `scripts/verificar-telas.mjs` | PC | as 12 telas em 3 tamanhos: cabe? ocupa quanto? |
+| `scripts/verificar-mapa.mjs` | PC | um `buttons.map` contra os símbolos que o launcher entende |
 | `scripts/verificar-jogos.mjs` | PC | geometria dos jogos: a célula é legível? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
@@ -259,6 +260,30 @@ renderer: opengles2 (acelerado, vsync; textura máx 8192x8192)  # X35H com GIOCH
 O `textura máx 0x0` no software é do próprio backend e não é erro. A linha vem
 de `canvas.info()`, então responde "qual backend rodou", que é diferente de
 "qual foi pedido" — a mesma distinção entre existir, declarar e ser usado.
+
+### Antes do hardware: `verificar-mapa.mjs`
+
+Um símbolo que o launcher não conhece no `buttons.map` vira **botão morto em
+silêncio**. Já aconteceu duas vezes (comentário no fim da linha; `KEY_VOLUMEUP`
+fora do tradutor), e as duas só apareceram com o aparelho na mão.
+
+```bash
+node scripts/verificar-mapa.mjs --mapa ../GIOCHI-SYSTEM/device/r35s/buttons.map
+```
+
+```text
+  19 botão(ões), 0 entrada(s) de calibragem
+  símbolos conhecidos pelo launcher: 28
+  todos os símbolos são reconhecidos
+```
+
+A lista de símbolos vem do **binário** (`--simbolos`), não de uma cópia no
+script: uma lista paralela envelheceria separada do `code_for`, que é o erro que
+o `releaseYear` já custou. Há um teste Rust (`lista_de_simbolos_bate_com_o_
+tradutor`) que impede a lista publicada de divergir do tradutor.
+
+É o que permite verificar um aparelho **que não está na mão** — foi assim que o
+mapa do R35S foi conferido. Ver [`r35s.md`](r35s.md).
 
 ### Um app por tela: `--tela` + `verificar-telas.mjs`
 
