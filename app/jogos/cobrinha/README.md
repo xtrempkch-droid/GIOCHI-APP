@@ -63,14 +63,18 @@ O que liga os dois é o **alpha**: quanto falta para o próximo passo. A cabeça
 desenhada no meio do caminho entre duas células, então 7 passos/s aparecem lisos
 a 45 quadros/s sem nenhum passo extra de simulação.
 
-Medido no PC, 640×480, renderizador software:
+Medido no **R35S real** (RK3326), 640×480:
 
 ```text
-{"quadros":135,"passos":20,"segundos":2.979,"fps":45.3,"atrasados":0}
+software    {"fps":44.7,"atrasados":0,"celula":22}
+opengles2   {"fps":45.3,"atrasados":0,"celula":22}
 ```
 
-20 passos em 3 s é ~6,7/s — o passo base de 7. O desenho é 45,3. **Os dois
-relógios são independentes de fato, não no papel.**
+300 quadros seguidos: `45 fps`, sem queda. Os dois backends batem a meta —
+o software serve de plano B quando o Mali não abre.
+
+No PC a 640×480 dá `45,3 fps` com `20 passos` em 3 s, que é ~6,7/s: o passo base
+de 7. **Os dois relógios são independentes de fato, não no papel.**
 
 ### 2. Sem upscaling: a célula é o pixel
 
@@ -83,7 +87,7 @@ de dispositivo. Escala é sempre 1,0. Painel maior dá célula maior:
 
 | Painel | célula | campo | escala |
 | --- | --- | --- | --- |
-| 640×480 (R35S/X35H) | **22 px** | 528×396 | 1,00 |
+| 640×480 (R35S/X35H) | **22 px** | 528×396 | 1,00 — **medido no R35S** |
 | 800×600 | **28 px** | 672×504 | 1,00 |
 | 1280×720 (X55 girado) | **34 px** | 816×612 | 1,00 |
 
@@ -106,9 +110,19 @@ libgcc_s.so.1
 libc.so.6
 ```
 
-O R35S **não tem `libasound`** e um binário que a exige não sobe — não é "roda sem
-som", é falha de carga. Jogo que não pede nada à imagem instala em qualquer
-aparelho.
+Um binário que exige biblioteca ausente **não sobe** — não é "roda sem som", é
+falha de carga, e já aconteceu com `libasound` neste aparelho. Jogo que não pede
+nada à imagem instala em qualquer aparelho.
+
+### Memória: 2 MB no PC, 20 MB no aparelho
+
+```text
+PC, software       VmHWM  2,2 MB
+R35S, opengles2    VmHWM 20,1 MB
+```
+
+A diferença **não é o jogo**: é o driver Mali e o Mesa carregados pelo GLES.
+O `forge.json` declara `ram_min_mb: 24`, que é o pior caso medido com folga.
 
 ## Memória fraca do ARM: onde isso morde
 
@@ -135,6 +149,20 @@ Onde NEON pagaria, e por que não existe aqui: **escalonamento de imagem** (não
 porque não há upscaling), **mixagem de áudio** (não há som) e **partículas** (não
 há). Se alguma dessas entrar, o lugar do NEON será a função de escala ou de
 mistura — e será medida antes de escrita.
+
+## O `Aborted` que não era crash
+
+O perfil de release usa `panic = "abort"`. O Rust ignora `SIGPIPE`, então
+escrever num pipe fechado vira `Err` e o `println!` entra em pânico — o processo
+aborta e imprime **`Aborted`**.
+
+Aconteceu de verdade: `giochi-cobrinha --quadro x | head -3` imprimiu `Aborted`,
+e por um momento pareceu que o jogo quebrava no aparelho. Era o `head`. Agora
+`restaurar_sigpipe()` devolve o comportamento Unix padrão: o processo morre em
+silêncio por `SIGPIPE` (código 141), que é o que qualquer programa faz.
+
+Regra que fica: **mensagem de erro que sugere a causa errada custa mais que
+nenhuma mensagem.**
 
 ## Orientação
 
@@ -181,4 +209,37 @@ SDL_RENDER_DRIVER=software giochi-cobrinha     # força backend software
 
 No aparelho, `--quadro` com GLES grava BMP **preto** (o swap esvazia o buffer
 antes da leitura). Para fotografar, force software — é a mesma armadilha do
-launcher, documentada em `docs/ferramentas.md`.
+launcher, documentada em `docs/ferramentas.md`. O app agora **avisa** quando
+detecta o quadro preto, em vez de deixar o diagnóstico para quem olhar o BMP.
+
+## GIOCHI_GLES
+
+Mesma variável e mesmo significado do launcher — se um comando muda o backend de
+um app, tem de mudar o do outro:
+
+| valor | efeito |
+| --- | --- |
+| ausente | deixa o SDL escolher (no R35S: `opengles2`) |
+| `1` / outro | pede `opengles2` |
+| `0` / `false` / `off` | pede `software` |
+
+Medido no R35S: ausente → `opengles2` 45,8 fps; `0` → `software` 44,1 fps.
+
+## Instalado no R35S (06/11/2026)
+
+```text
+/opt/giochi/apps/cobrinha/
+├── bin/giochi-cobrinha   360 KB, sha256 conferido na instalação
+├── metadata.json
+└── capa.png
+```
+
+O launcher do aparelho reporta `catálogo: 2 app(s)` e o ciclo completo funciona:
+
+```text
+3688 <- 3691 : ./bin/giochi-launcher --lancar cobrinha
+3691 <- 3700 : /opt/giochi/apps/cobrinha/bin/giochi-cobrinha
+```
+
+O `ppid` prova: o jogo foi iniciado **pelo launcher** (`fork`+`wait`), não por
+SSH.

@@ -161,6 +161,9 @@ pub struct Tela {
     pub geom: Geometria,
     pub rot: Rotacao,
     pub design: (i32, i32),
+    /// Verdadeiro quando o backend não é `software`. O `--quadro` usa isto para
+    /// avisar que o BMP pode sair preto por causa do swap.
+    pub renderer_acelerado: bool,
 }
 
 impl Tela {
@@ -181,7 +184,12 @@ impl Tela {
             .as_texture(criador)
             .expect("textura do fundo");
         let _ = canvas.set_blend_mode(sdl2::render::BlendMode::None);
-        Tela { canvas, fundo, geom, rot, design }
+        let renderer_acelerado = canvas
+            .info()
+            .name
+            .to_ascii_lowercase()
+            .contains("gles");
+        Tela { canvas, fundo, geom, rot, design, renderer_acelerado }
     }
 
     /// Retângulo de projeto → `Rect` de dispositivo.

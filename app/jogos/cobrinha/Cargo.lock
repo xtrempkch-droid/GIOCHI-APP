@@ -19,6 +19,7 @@ name = "giochi-cobrinha"
 version = "1.0.0"
 dependencies = [
  "giochi-cobrinha-core",
+ "libc",
  "sdl2",
 ]
 

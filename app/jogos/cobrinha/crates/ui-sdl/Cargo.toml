@@ -15,3 +15,6 @@ giochi-cobrinha-core = { path = "../core" }
 # Só SDL2: sem ttf, sem asound, sem image. O R35S não tem libasound e um
 # binário que a exige não sobe — três `NEEDED`, nada mais.
 sdl2 = "0.37"
+# `libc` já vinha transitivamente pelo `sdl2`, então declarar não baixa nada.
+# Serve para uma linha só: restaurar o `SIGPIPE` padrão (ver `main.rs`).
+libc = "0.2"

@@ -39,6 +39,7 @@ use desenho::{Tela, APAGADO, CABECA, COMIDA, CORPO, TEXTO};
 
 const VERSAO: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Debug)]
 struct Opcoes {
     quadro: Option<String>,
     tamanho: Option<(u32, u32)>,
@@ -339,12 +340,78 @@ fn gravar_quadro(tela: &mut Tela, caminho: &str) -> Result<(u32, u32), String> {
     let formato = PixelFormatEnum::ABGR8888;
     let mut pixels = tela.canvas.read_pixels(None, formato)?;
     let pitch = w * formato.byte_size_per_pixel() as u32;
+
+    // Com GLES o `SwapWindow` esvazia o buffer antes da leitura e o BMP sai
+    // **preto**. Isto não é hipótese: foi medido no X35H, no R35S e aqui.
+    // Avisar na hora evita o diagnóstico errado de "o jogo não desenha", que
+    // custou uma sessão inteira quando aconteceu com o `--dump-frame`.
+    let preto = pixels
+        .chunks_exact(4)
+        .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0);
+    if preto && tela.renderer_acelerado {
+        eprintln!(
+            "aviso: o quadro saiu todo preto — com GLES o swap esvazia o buffer \n\
+             antes da leitura. Para capturar, force software:\n\
+             \x20 SDL_RENDER_DRIVER=software (ou GIOCHI_GLES=0)"
+        );
+    }
+
     let superficie = Surface::from_data(&mut pixels, w, h, pitch, formato)?;
     superficie.save_bmp(caminho)?;
     Ok((w, h))
 }
 
+/// Restaura o comportamento padrão do `SIGPIPE`.
+///
+/// O Rust ignora `SIGPIPE` no início do processo, então escrever num pipe
+/// fechado vira `Err` — e `println!` entra em pânico. Com `panic = "abort"`
+/// (o perfil de release deste app), o processo aborta e imprime **`Aborted`**.
+///
+/// Isso já custou um diagnóstico errado: `giochi-cobrinha --quadro x | head -3`
+/// imprimiu `Aborted`, e por um momento pareceu que o jogo quebrava no
+/// aparelho. Era o pipe. Restaurar o padrão faz o processo morrer em silêncio
+/// por `SIGPIPE`, como qualquer programa Unix — e o log para de mentir.
+fn restaurar_sigpipe() {
+    // `SIG_DFL` é o valor 0 em todas as plataformas que este app suporta.
+    unsafe {
+        libc::signal(libc::SIGPIPE, 0);
+    }
+}
+
+/// Traduz `GIOCHI_GLES` no driver a pedir.
+///
+/// Os três estados fazem coisas diferentes, como no launcher — mesma variável,
+/// mesmo significado, senão um comando que muda o backend de um app não muda o
+/// do outro e o teste mente sobre um dos dois:
+///
+/// | valor | efeito |
+/// | --- | --- |
+/// | ausente | deixa o SDL escolher (no aparelho: `opengles2`) |
+/// | `1` / outro | pede `opengles2` |
+/// | `0` / `false` | pede `software` |
+///
+/// A armadilha que já apareceu no launcher: `env::var(..).is_ok()` testa
+/// **presença**, não valor, e assim `GIOCHI_GLES=0` *ligava* o GLES. O oposto
+/// do nome. Por isso a decisão é uma função pura com teste.
+pub fn driver_de_gles(valor: Option<&str>) -> Option<&'static str> {
+    let v = valor?;
+    let v = v.trim().to_ascii_lowercase();
+    Some(match v.as_str() {
+        "0" | "false" | "nao" | "off" => "software",
+        _ => "opengles2",
+    })
+}
+
+fn aplicar_backend() -> Option<&'static str> {
+    let valor = std::env::var("GIOCHI_GLES").ok();
+    let driver = driver_de_gles(valor.as_deref())?;
+    let _ = sdl2::hint::set("SDL_RENDER_DRIVER", driver);
+    Some(driver)
+}
+
 fn principal() -> Result<i32, String> {
+    restaurar_sigpipe();
+    let _backend = aplicar_backend();
     let o = opcoes(std::env::args().skip(1).collect())?;
     if o.ajuda {
         ajuda();
@@ -548,5 +615,65 @@ fn main() {
             eprintln!("erro: {e}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn gles_ausente_deixa_o_sdl_escolher() {
+        assert_eq!(driver_de_gles(None), None);
+    }
+
+    #[test]
+    fn gles_zero_pede_software() {
+        // O bug que já aconteceu no launcher: `is_ok()` testa presença, então
+        // `GIOCHI_GLES=0` ligava o GLES — o oposto do que o nome promete.
+        assert_eq!(driver_de_gles(Some("0")), Some("software"));
+        assert_eq!(driver_de_gles(Some("false")), Some("software"));
+        assert_eq!(driver_de_gles(Some(" off ")), Some("software"));
+    }
+
+    #[test]
+    fn gles_um_pede_acelerado() {
+        assert_eq!(driver_de_gles(Some("1")), Some("opengles2"));
+        assert_eq!(driver_de_gles(Some("qualquer")), Some("opengles2"));
+    }
+
+    #[test]
+    fn teclas_de_cli_mapeiam_para_acoes() {
+        assert_eq!(tecla("up").unwrap(), Acao::Dir(Direcao::Cima));
+        assert_eq!(tecla("a").unwrap(), Acao::Confirmar);
+        assert_eq!(tecla("b").unwrap(), Acao::Sair);
+        assert!(tecla("l2").is_err(), "tecla inexistente tem de ser erro");
+    }
+
+    #[test]
+    fn tamanho_de_painel_invalido_e_erro_com_mensagem() {
+        assert!(opcoes(vec!["--tamanho".into(), "640".into()]).is_err());
+        assert!(opcoes(vec!["--tamanho".into(), "axb".into()]).is_err());
+        let o = opcoes(vec!["--tamanho".into(), "800x600".into()]).unwrap();
+        assert_eq!(o.tamanho, Some((800, 600)));
+    }
+
+    #[test]
+    fn argumento_desconhecido_nao_e_ignorado() {
+        // Ignorar argumento errado faz o usuário achar que a opção funcionou.
+        let r = opcoes(vec!["--nao-existe".into()]);
+        assert!(r.is_err());
+        assert!(r.unwrap_err().contains("--nao-existe"));
+    }
+
+    #[test]
+    fn o_bot_avanca_a_simulacao_sem_morrer() {
+        // `adiantar` é o que produz o quadro de verificação. Se o bot morresse
+        // logo, o quadro mostraria sempre a posição inicial e o teste de
+        // desenho não provaria movimento.
+        let mut j = Jogo::novo(7);
+        adiantar(&mut j, 120);
+        assert!(j.pontos >= 1, "em 120 passos o bot tem de comer algo");
+        assert!(j.tamanho() > 3, "e a cobra tem de ter crescido");
     }
 }
