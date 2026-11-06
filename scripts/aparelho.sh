@@ -1208,8 +1208,20 @@ cmd_verificar_jogo() {
   local jogo="${1:-}" quadros="${2:-240}"
   [ -n "$jogo" ] || morrer "uso: aparelho.sh verificar-jogo <jogo> [quadros]"
 
-  local bin_local="$RAIZ/app/jogos/$jogo/bin/$jogo"
-  [ -f "$bin_local" ] || morrer "sem binário em app/jogos/$jogo/bin/$jogo (rode compilar-jogo-cpp-arm64.sh)"
+  # O binário não se chama igual à pasta em todo jogo: o `cobrinha` instala
+  # `bin/giochi-cobrinha`. Ler `metadata.json` é o que permite esta função
+  # servir a qualquer app instalado, em vez de só à convenção `<pasta>/bin/<pasta>`
+  # que o `volley` e o `arcade-volleyball` usavam.
+  local meta="$RAIZ/app/jogos/$jogo/metadata.json"
+  [ -f "$meta" ] || morrer "app/jogos/$jogo/metadata.json não existe"
+
+  local entry slug
+  entry=$(node -e "process.stdout.write(require('$meta').entrypoint||'')" 2>/dev/null)
+  slug=$(node -e "process.stdout.write(require('$meta').slug||'$jogo')" 2>/dev/null)
+  [ -n "$entry" ] || morrer "metadata.json de $jogo sem entrypoint"
+
+  local bin_local="$RAIZ/app/jogos/$jogo/$entry"
+  [ -f "$bin_local" ] || morrer "sem binário em app/jogos/$jogo/$entry (compile primeiro)"
 
   exigir_aparelho
   titulo "jogo $jogo"
@@ -1220,12 +1232,29 @@ cmd_verificar_jogo() {
   rot=$(rotacao_do_aparelho)
   ok "painel $painel, rotação $rot"
 
-  local remoto="/user/apps/$jogo/bin/$jogo"
+  # Tenta as duas raízes, porque `distribution` decide onde o app mora: `image`
+  # vai para `/opt/giochi/apps` e `store` para `/user/apps`. Fixar uma delas
+  # fazia o app certo parecer ausente.
+  local raiz_app remoto=""
+  for raiz_app in /opt/giochi/apps /user/apps; do
+    if [ "$(no_aparelho "[ -x $raiz_app/$slug/$entry ] && echo SIM || echo NAO")" = "SIM" ]; then
+      remoto="$raiz_app/$slug/$entry"
+      break
+    fi
+  done
   # `test -x` não imprime nada: canalizar para `grep` nunca casaria e o script
   # diria "não existe" com o arquivo lá. A resposta tem de ser explícita.
-  local existe
-  existe=$(no_aparelho "[ -x $remoto ] && echo SIM || echo NAO")
-  [ "${existe:-NAO}" = "SIM" ] || morrer "$remoto não existe no aparelho"
+  [ -n "$remoto" ] || morrer "$slug/$entry não está instalado (nem em /opt/giochi/apps nem em /user/apps)"
+  ok "instalado em $remoto"
+
+  # `--dump-frame` (launcher, volley, arcade-volleyball) e `--quadro`
+  # (cobrinha) fazem a mesma coisa com nomes diferentes. Perguntar ao binário
+  # é melhor que manter uma tabela de qual usa qual.
+  local flag="--dump-frame"
+  if [ "$(no_aparelho "$remoto --ajuda 2>&1 | grep -c -- '--quadro'")" != "0" ]; then
+    flag="--quadro"
+  fi
+  ok "flag de captura: $flag"
 
   titulo "rodando no aparelho"
   # O `inittab` ressuscita o launcher em ~1 s e o KMSDRM é exclusivo: matar uma
@@ -1235,8 +1264,10 @@ cmd_verificar_jogo() {
   saida=$(no_aparelho "
     kill \$(pidof giochi-launcher) 2>/dev/null; sleep 1.5
     kill \$(pidof giochi-launcher) 2>/dev/null; sleep 0.5
-    cd /user/apps/$jogo &&
-    SDL_VIDEODRIVER=kmsdrm ./bin/$jogo --quadros $quadros --dump-frame /tmp/jogo.bmp 2>&1
+    cd \$(dirname $remoto)/.. 2>/dev/null || cd /;
+    # Software porque com GLES o swap esvazia o buffer e o BMP sai preto —
+    # medido. Sem isto a função reprovaria um jogo que desenha.
+    SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software $remoto --quadros $quadros $flag /tmp/jogo.bmp 2>&1
     echo \"STATUS=\$?\"
     ls -l /tmp/jogo.bmp 2>/dev/null | awk '{print \"TAMANHO=\"\$5}'
   ")

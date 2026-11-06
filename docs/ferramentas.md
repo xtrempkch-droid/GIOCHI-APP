@@ -18,7 +18,7 @@ nenhum foi escrito "por completude".
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
-| `scripts/compilar-jogo-arm64.sh` | PC | idem para os jogos em Rust (`volley`, `pacman`, `cobrinha`), reusando o cache |
+| `scripts/compilar-jogo-arm64.sh` | PC | idem para os jogos em Rust (`cobrinha`), reusando o cache |
 | `scripts/compilar-jogo-cpp-arm64.sh` | PC | idem para o jogo em C++ (`arcade-volleyball`), montando o compilador cruzado sem root |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
 | `scripts/migrar-do-antecessor.sh` | PC | traz as fontes do repositório antecessor |
@@ -32,7 +32,7 @@ bash scripts/aparelho.sh instalar        # cross-compila e instala, conferindo s
 bash scripts/aparelho.sh subir           # inicia o launcher e mostra pid + log
 bash scripts/aparelho.sh parar           # encerra pelo pid
 bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comparado
-bash scripts/aparelho.sh verificar-jogo arcade-volleyball   # roda o jogo e analisa o quadro
+bash scripts/aparelho.sh verificar-jogo cobrinha        # roda o jogo e analisa o quadro
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
 bash scripts/aparelho.sh capacidades     # códigos que cada dispositivo declara
@@ -792,3 +792,26 @@ status 0 e com status 1 significam coisas diferentes.
 
 `1500000` — é o que o `device.json` do R35S declara (`console=ttyS2,1500000`) e
 o que o aparelho responde. Outros aparelhos Rockchip usam o mesmo.
+
+## `aparelho.sh verificar-jogo`
+
+```bash
+bash scripts/aparelho.sh verificar-jogo cobrinha        # roda e analisa o quadro
+bash scripts/aparelho.sh verificar-jogo cobrinha 300    # 300 quadros antes de capturar
+```
+
+Prova que o jogo desenha no aparelho **sem ninguém olhar a tela**: roda com
+captura de quadro, traz o BMP e analisa.
+
+Duas coisas que ele passou a descobrir sozinho em 06/11/2026, por ter falhado
+com o `cobrinha`:
+
+- **onde o app está instalado** — `/opt/giochi/apps` (distribution `image`) ou
+  `/user/apps` (distribution `store`). Fixar uma das duas fazia o app certo
+  parecer ausente;
+- **o nome do binário e a flag de captura** — vinham do `metadata.json` e de
+  `--ajuda` do próprio binário, não de uma convenção `<pasta>/bin/<pasta>` nem
+  de uma tabela de qual jogo usa `--quadro` ou `--dump-frame`.
+
+E ele força `SDL_RENDER_DRIVER=software`: com GLES o swap esvazia o buffer e o
+BMP sai preto, o que faria a função reprovar um jogo que desenha.
