@@ -5,6 +5,7 @@
 //!   giochi-loja --demo                   habilita o fluxo de pagamento de teste
 //!   giochi-loja --dump-frame <arq.bmp>   desenha a tela atual num BMP e sai
 //!   giochi-loja --teclas up,down,enter   aplica teclas e imprime a tela resultante
+//!   giochi-loja --teclas down --json     imprime o estado em JSON (ASCII puro)
 //!   giochi-loja --fonte <arquivo.ttf>    fonte alternativa
 //!
 //! `--dump-frame` e `--teclas` existem pelo mesmo motivo que no launcher: uma
@@ -35,6 +36,7 @@ fn ajuda() {
   --demo                 fluxo de pagamento de teste (código PIX não pagável)
   --dump-frame <bmp>     desenha e grava um BMP, sem abrir janela
   --teclas <lista>       teclas separadas por vírgula: up,down,left,right,enter,esc
+  --json                 imprime o estado em JSON, sem texto acentuado
   --fonte <ttf>          fonte alternativa
   --chave-catalogo <b64> chave pública que assina o catálogo (só verifica)
   --ajuda                esta mensagem
@@ -130,6 +132,7 @@ fn main() -> Result<(), String> {
     let mut demo = false;
     let mut fonte = fonte_padrao();
     let mut chave_catalogo: Option<String> = None;
+    let mut json = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -162,6 +165,7 @@ fn main() -> Result<(), String> {
                 chave_catalogo = args.get(i).cloned();
             }
             "--demo" => demo = true,
+            "--json" => json = true,
             outro => return Err(format!("argumento desconhecido: {outro} (use --ajuda)")),
         }
         i += 1;
@@ -183,11 +187,11 @@ fn main() -> Result<(), String> {
                 assinado
                     .verificar(&chave)
                     .map_err(|e| format!("catálogo recusado: {e}"))?;
-                println!("catálogo verificado contra a chave informada");
+                eprintln!("catálogo verificado contra a chave informada");
                 assinado.catalogo
             }
             None => {
-                println!(
+                eprintln!(
                     "AVISO catálogo carregado SEM verificação de assinatura \
                      (passe --chave-catalogo); os itens podem ser de qualquer origem"
                 );
@@ -195,7 +199,7 @@ fn main() -> Result<(), String> {
             }
         }
     } else {
-        println!("nenhum --catalogo: usando o catálogo de demonstração (não assinado)");
+        eprintln!("nenhum --catalogo: usando o catálogo de demonstração (não assinado)");
         catalogo_de_demonstracao()
     };
 
@@ -254,24 +258,46 @@ fn main() -> Result<(), String> {
             None => return Err(format!("tecla desconhecida: {nome}")),
         }
     }
-    println!(
-        "tela: {:?}  seleção: {}  {}{}",
-        estado.tela,
-        estado.selecao,
-        estado
-            .catalogo
-            .as_ref()
-            .and_then(|c| c.itens.get(estado.selecao))
-            .map(|i| format!("item: {} · {}", i.titulo, i.preco))
-            .unwrap_or_else(|| "sem item".into()),
-        if estado.mensagem.is_empty() { String::new() } else { format!("  msg: {}", estado.mensagem) }
-    );
+    // `--json` existe porque **verificação de CI não pode depender de texto
+    // acentuado**. O PowerShell 5.1 lê a saída de um processo nativo com a code
+    // page OEM, e "seleção" chega como "seleÃ§Ã£o" — o mesmo defeito que já
+    // quebrou a perna Windows dos apps de Python. Aqui a saída de máquina é
+    // ASCII puro e o texto bonito fica para o humano.
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "tela": format!("{:?}", estado.tela),
+                "selecao": estado.selecao,
+                "item": estado.catalogo.as_ref()
+                    .and_then(|c| c.itens.get(estado.selecao))
+                    .map(|i| i.slug.clone()),
+                "preco_centavos": estado.catalogo.as_ref()
+                    .and_then(|c| c.itens.get(estado.selecao))
+                    .map(|i| i.preco.centavos),
+                "mensagem": estado.mensagem,
+            })
+        );
+    } else {
+        println!(
+            "tela: {:?}  seleção: {}  {}{}",
+            estado.tela,
+            estado.selecao,
+            estado
+                .catalogo
+                .as_ref()
+                .and_then(|c| c.itens.get(estado.selecao))
+                .map(|i| format!("item: {} · {}", i.titulo, i.preco))
+                .unwrap_or_else(|| "sem item".into()),
+            if estado.mensagem.is_empty() { String::new() } else { format!("  msg: {}", estado.mensagem) }
+        );
+    }
 
     estado.desenhar(&mut pintor);
 
     if let Some(caminho) = &dump {
         pintor.para_bmp(caminho)?;
-        println!("quadro gravado: {caminho}");
+        eprintln!("quadro gravado: {caminho}");
         return Ok(());
     }
     if saiu {

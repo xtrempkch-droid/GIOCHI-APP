@@ -195,12 +195,15 @@ jobs:
           cd app/loja
           if [ "$RUNNER_OS" = "macOS" ]; then export DYLD_LIBRARY_PATH="$(brew --prefix)/lib"; fi
           export SDL_VIDEODRIVER=dummy
-          # Duas teclas para baixo: a seleção tem de ir de 0 para 2. Se o
-          # programa ignorasse a entrada, os dois quadros sairiam idênticos.
-          ./target/release/giochi-loja --teclas down,down --dump-frame /tmp/baixo.bmp | tee /tmp/saida.txt
-          grep -q "seleção: 2" /tmp/saida.txt
+          # `--json`: a saída de máquina é JSON ASCII, sem texto acentuado.
+          # Verificar `"seleção: 2"` funciona no Linux e falha no Windows, onde o
+          # PowerShell lê a saída de processo nativo com a code page OEM e o
+          # acento vira lixo. Já custou uma rodada nos apps de Python.
+          ./target/release/giochi-loja --teclas down,down --json --dump-frame /tmp/baixo.bmp > /tmp/saida.json
+          cat /tmp/saida.json
+          grep -q '"selecao":2' /tmp/saida.json
           # E o quadro tem de ser diferente do primeiro: seleção diferente é
-          # pixel diferente. `cmp` sem argumento devolve 1 quando difere.
+          # pixel diferente. `cmp -s` devolve 1 quando difere.
           if cmp -s /tmp/quadro.bmp /tmp/baixo.bmp; then
             echo "os dois quadros são idênticos — a navegação não desenhou nada"
             exit 1
@@ -212,11 +215,20 @@ jobs:
         run: |
           cd app/loja
           $env:SDL_VIDEODRIVER = "dummy"
-          .\target\release\giochi-loja.exe --teclas down,down --dump-frame $env:TEMP\baixo.bmp | Tee-Object -Variable saida
-          if ($saida -notmatch "seleção: 2") { exit 1 }
+          # `--json` e nada de acento: `-match "seleção: 2"` sobre a saída de um
+          # processo nativo falha aqui, porque o PowerShell 5.1 decodifica com a
+          # code page OEM. E `-notmatch` num array de linhas *filtra* em vez de
+          # testar, então a condição ficava sempre verdadeira — os dois motivos
+          # juntos fizeram esta perna falhar duas vezes.
+          $saida = .\target\release\giochi-loja.exe --teclas down,down --json --dump-frame $env:TEMP\baixo.bmp
+          $saida | Out-Host
+          if ($saida -notmatch '"selecao":2') {
+            Write-Host "a selecao nao foi para 2"
+            exit 1
+          }
           $a = Get-FileHash $env:TEMP\quadro.bmp
           $b = Get-FileHash $env:TEMP\baixo.bmp
-          if ($a.Hash -eq $b.Hash) { Write-Host "quadros idênticos"; exit 1 }
+          if ($a.Hash -eq $b.Hash) { Write-Host "quadros identicos"; exit 1 }
 
       - name: Anexar binários
         uses: actions/upload-artifact@v4
