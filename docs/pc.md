@@ -1,8 +1,8 @@
 # Apps de PC: a loja, o forge e o painel nos três sistemas
 
-> Medido em 06/11/2026. **Linux: executado.** Windows e macOS: o workflow está
-> escrito para executar os dois, mas **ainda não rodou no GitHub** — ver
-> [o que está provado](#o-que-está-provado-e-o-que-não-está).
+> Medido em 06/11/2026. **Os três sistemas: executados no GitHub Actions** —
+> run `42214382640`, commit `f12051e`, sete jobs verdes incluindo macOS e
+> Windows. Ver [o que está provado](#o-que-está-provado-e-o-que-não-está).
 
 Os três apps com `distribution: "host"` são a **loja** (`app/store`), o
 **forge** (`app/forge`) e o **painel** (`app/painel`, interface web local). Eles
@@ -213,12 +213,14 @@ app sem CI, e o sintoma é silêncio, não falha.
 | o `.sh` funciona | **executado** |
 | o empacotamento é reprodutível | **executado**: mesmo SHA-256 em duas rodadas |
 | sintaxe compatível com 3.9 | **verificado**: `ast.parse(feature_version=(3, 9))` nos 12 arquivos |
-| **roda no Windows** | **não verificado** — o workflow executa, mas ainda não rodou no GitHub |
-| **roda no macOS** | **não verificado** — idem |
+| **roda no Windows** | **executado** no CI (`windows-2022`), 15 passos verdes |
+| **roda no macOS** | **executado** no CI (`macos-15`, arm64), 15 passos verdes |
 | **roda em Python 3.9 de verdade** | **executado** em 3.9.25: três `.pyz`, passo HTTP e 32 testes |
 
-As três últimas são a matriz fazendo o seu trabalho na primeira execução. Até
-lá, o honesto é: **Linux está provado, Windows e macOS estão preparados.**
+Isso fechou em 06/11/2026, e as duas correções que faltavam não eram de código
+de aplicação: **saída em UTF-8** (o Windows escrevia `Compat?vel` e a verificação
+por texto acentuado falhava — o `mojibake` era do usuário também, não só do CI) e
+**label de runner aposentado** (`macos-14` saiu do ar em 02/11/2026).
 
 ## Pendente
 

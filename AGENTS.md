@@ -2510,11 +2510,28 @@ Não instala no aparelho (isso é `aparelho.sh instalar-pacote`, por SSH) e não
 guarda chave nenhuma: recebe o caminho de uma chave existente e repassa ao
 `sign_package`.
 
+### O CI provou os três sistemas, e desmentiu duas coisas
+
+Run `42214382640`, commit `f12051e`: **sete jobs verdes**, incluindo
+`executar em windows` e `executar em macos` com o passo do painel servindo HTTP.
+
+| O que parecia | O que era |
+| --- | --- |
+| "o macOS está preparado, mas não rodou" | o job era **cancelado em 1 s sem passo nenhum**: `macos-14` foi aposentado em **02/11/2026** (`actions/runner-images#15226`). Agora `macos-15` (arm64) |
+| "3.9 é só gramática" | `ast.parse(feature_version=(3,9))` prova que o texto é aceito, **não** que a biblioteca se comporta. Em 3.9 o `zipimport` deixa `__package__` como `None` e `resources.files(None)` estoura — só no `.pyz` |
+| "o painel está coberto pelo CI" | `app/painel/**` **não estava** no filtro de `paths`; a correção do 3.9 não acionou o workflow |
+
+Regra nova: **`cancelled` sem passos é infraestrutura, não código.** E filtro de
+`paths` faz parte do teste — app fora do filtro é app sem CI, e o sintoma é
+silêncio.
+
 ### Números de 06/11/2026
 
 ```text
 validate-app.mjs --all   11 apps válidos (3 em scaffold)
-tests/run-all.mjs        162/162 JS
+tests/run-all.mjs        164/164 JS
 testar-apps-pc.sh        58 forge + 32 painel = 90 Python
+3.9.25 (local)           3 .pyz abrem, passo HTTP roda, 32/32 do painel
 openssl pkeyutl -verify  aceita o .sig do Python e o do JS
+GitHub Actions           7/7 jobs verdes: linux, linux-3.9, windows, macos
 ```
