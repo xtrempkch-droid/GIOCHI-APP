@@ -7,13 +7,54 @@ o bilhete para depois do reboot.
 **Depois de ligar, o primeiro comando:**
 
 ```bash
-bash -c 'echo vivo'        # se imprimir "vivo", o reboot resolveu
+cd ~/Giochi/GIOCHI-APP && bash scripts/consertar-shell.sh
 ```
 
-Se imprimir, o problema acabou: `ENOEXEC` em `bash` é arquivo corrompido, e
-corrupção em disco às vezes é só leitura suja em cache. **Teste antes de
-reinstalar nada.** Se não imprimir, siga a seção 3 de
-[docs/salva-vidas.md](docs/salva-vidas.md) → `scripts/consertar-shell.sh`.
+Se esse script não puder rodar (não há shell), siga a seção 3 de
+[docs/salva-vidas.md](docs/salva-vidas.md) — mas o reboot pode ter resolvido:
+`ENOEXEC` em `bash` costuma ser arquivo corrompido, e corrupção em disco às vezes
+é só leitura suja em cache. **Teste antes de reinstalar nada:**
+
+```bash
+bash -c 'echo vivo'        # se imprimir "vivo", acabou o problema
+df -h /                    # se estiver 100%, libere espaço ANTES de tudo
+```
+
+## Passo 0 — a sobra que eu deixei
+
+Tentei rodar `git` por outros caminhos enquanto o shell estava morto, e um
+arquivo de tentativa ficou na raiz: **`salva-vidas.ipynb`**. Ele **não** é código
+deste repositório. Já entrou no `.gitignore` para não atrapalhar um `git add -A`,
+mas o certo é apagar:
+
+```bash
+rm -f salva-vidas.ipynb .vscode/salva-vidas.ipynb
+```
+
+### O que foi tentado, e por que nada funcionou
+
+Registro para não repetir a rodada. **Todos os caminhos de execução estão
+fechados**, e o motivo não é falta de ideia:
+
+| Caminho | Resultado |
+| --- | --- |
+| `bash` (ferramenta padrão) | `Exec format error` |
+| tarefa do VS Code tipo `shell` | `execvp(3) failed` no `/usr/bin/bash` |
+| tarefa do VS Code tipo `process` | o runner insiste em embrulhar em `/usr/bin/bash` |
+| `runTask` com `tasks.json` escrito à mão | `Task not found` |
+| depurador Python (debugpy) | bloqueado: *workspace is not trusted* |
+| kernel Jupyter / notebook | `Notebook file … not found` |
+| `/usr/bin/ripgrep` (busca do editor) | `Exec format error` — o mesmo defeito |
+
+**Descoberta útil:** `/usr/bin/dash` está **intacto** (ELF válido). Só `bash` e
+`ripgrep` corromperam — o que indica dois arquivos atingidos, não o sistema
+inteiro. Deixei um perfil de terminal "dash" **disponível mas não padrão** em
+`~/.config/Code/User/settings.json`: se o `bash` continuar quebrado, escolha esse
+perfil no seletor do terminal e o reparo vira
+
+```bash
+sudo apt-get install --reinstall bash
+```
 
 ---
 
@@ -28,6 +69,7 @@ O dia inteiro está no GitHub. `main` local e `origin/main` estavam em
 | `f842448` | diário de 06/11 |
 | `5508688` | `docs/salva-vidas.md` (salvo pela API, sem git local) |
 | `a9a0c7f` | link dele no índice |
+| `dd3c756` | este arquivo |
 
 ## 2. O que precisa de commit depois do reboot
 
@@ -40,7 +82,7 @@ renderizada e não a estrutura que a monta.
 
 O bug: `hud.temp_c` é `u16`, então não há valor que signifique "sem leitura". Com
 sensor ausente, `None != Some(x)` é sempre verdadeiro e o "só registra quando
-muda" registra sempre. O mesmo vale para `state.battery` quando não há medidor.
+muda" registra sempre.
 
 ```rust
 // antes
