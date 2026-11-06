@@ -397,38 +397,37 @@ fn main() -> Result<(), String> {
     // passou por 169 testes verdes — o teste olhava o estado, não o caminho.
     //
     // Aceita só teclas: é diagnóstico de navegação, não um interpretador.
-    if let Some(i) = args.iter().position(|a| a == "--teclas") {
-        let lista = args.get(i + 1).ok_or("--teclas precisa de uma lista")?;
-        for tecla in lista.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
-            let cmd = match tecla.to_ascii_lowercase().as_str() {
-                "up" | "cima" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Up),
-                "down" | "baixo" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Down),
-                "left" | "esquerda" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Left),
-                "right" | "direita" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Right),
-                "a" | "confirmar" => giochi_launcher_core::Cmd::Confirm,
-                "l2" | "subprev" => giochi_launcher_core::Cmd::SubPrev,
-                "r2" | "subnext" => giochi_launcher_core::Cmd::SubNext,
-                "l" | "tabprev" => giochi_launcher_core::Cmd::TabPrev,
-                "r" | "tabnext" => giochi_launcher_core::Cmd::TabNext,
-                "b" | "voltar" => giochi_launcher_core::Cmd::Back,
-                outra => return Err(format!("--teclas: tecla desconhecida: {outra}")),
-            };
-            state = giochi_launcher_core::update(state, cmd);
-        }
-        // O filtro e a categoria entram no log porque "o gatilho trocou de
-        // sub-aba" é exatamente o que se quer provar — e o foco sozinho não
-        // mostra isso (ele fica na grade de propósito).
-        eprintln!(
-            "--teclas: {lista} -> foco {:?} {} | filtro {} | categoria {}",
-            state.focus.zone,
-            state.focus.index,
-            state.library_filter.label(),
-            giochi_launcher_core::SETTINGS_CATEGORIES
-                .get(state.settings_category)
-                .copied()
-                .unwrap_or("?")
-        );
-    }
+    // As teclas são **traduzidas** aqui e aplicadas depois, com o `App` já
+    // montado e um quadro desenhado.
+    //
+    // A ordem não é detalhe: o arranjo da grade (colunas e itens por página) é
+    // publicado pelo desenho. Aplicando as teclas antes do primeiro quadro, a
+    // navegação usaria o padrão do estado — 4 colunas — que é exatamente o
+    // número errado que causou o bug, e a ferramenta mostraria o comportamento
+    // antigo como se fosse o atual.
+    let sequencia: Option<(String, Vec<giochi_launcher_core::Cmd>)> =
+        if let Some(i) = args.iter().position(|a| a == "--teclas") {
+            let lista = args.get(i + 1).ok_or("--teclas precisa de uma lista")?;
+            let mut cmds = Vec::new();
+            for tecla in lista.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                cmds.push(match tecla.to_ascii_lowercase().as_str() {
+                    "up" | "cima" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Up),
+                    "down" | "baixo" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Down),
+                    "left" | "esquerda" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Left),
+                    "right" | "direita" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Right),
+                    "a" | "confirmar" => giochi_launcher_core::Cmd::Confirm,
+                    "l2" | "subprev" => giochi_launcher_core::Cmd::SubPrev,
+                    "r2" | "subnext" => giochi_launcher_core::Cmd::SubNext,
+                    "l" | "tabprev" => giochi_launcher_core::Cmd::TabPrev,
+                    "r" | "tabnext" => giochi_launcher_core::Cmd::TabNext,
+                    "b" | "voltar" => giochi_launcher_core::Cmd::Back,
+                    outra => return Err(format!("--teclas: tecla desconhecida: {outra}")),
+                });
+            }
+            Some((lista.clone(), cmds))
+        } else {
+            None
+        };
 
     // `--lancar <id|slug>`: pede o lançamento já na abertura.
     //
@@ -475,6 +474,50 @@ fn main() -> Result<(), String> {
     }
 
     let mut app = app::App::new(painter, state, evdev);
+
+    // `--teclas`: um quadro primeiro (para o desenho publicar o arranjo da
+    // grade), depois a sequência pelo mesmo `dispatch` da entrada real.
+    if let Some((lista, cmds)) = sequencia {
+        app.render();
+        for cmd in cmds {
+            app.aplicar(cmd);
+            // Um quadro por comando, como no laço real: é o desenho que publica
+            // o arranjo da grade, e ele muda quando a aba ou o filtro muda.
+            app.render();
+        }
+        // O filtro e a categoria entram no log porque "o gatilho trocou de
+        // sub-aba" é exatamente o que se quer provar — e o foco sozinho não
+        // mostra isso (ele fica na grade de propósito).
+        let estado = app.estado();
+        eprintln!(
+            "--teclas: {} -> foco {:?} {} | filtro {} | categoria {} | grade {}x{}",
+            lista,
+            estado.focus.zone,
+            estado.focus.index,
+            estado.library_filter.label(),
+            giochi_launcher_core::SETTINGS_CATEGORIES
+                .get(estado.settings_category)
+                .copied()
+                .unwrap_or("?"),
+            estado.grade_biblioteca.cols(),
+            estado.grade_biblioteca.por_pagina()
+        );
+
+        // Sai depois de imprimir: `--teclas` é diagnóstico, e ficar no laço
+        // dependia de um `timeout` que o aparelho não tem (`sh: timeout: not
+        // found`) — a ferramenta travava em vez de responder. Com
+        // `--dump-frame` o laço continua, porque a foto é o resultado.
+        // Só sai quando não há outro diagnóstico pendente: `--lancar` e
+        // `--conectar` acontecem **no laço**, e sair aqui os engoliria em
+        // silêncio.
+        let tem_lancamento = app.estado().lancar.is_some();
+        let tem_rede = args
+            .iter()
+            .any(|a| a == "--conectar" || a == "--parear");
+        if dump_frame.is_none() && !tem_lancamento && !tem_rede {
+            return Ok(());
+        }
+    }
 
     // `--conectar ssid[:senha]` e `--parear mac`: exercitam o caminho de rede
     // sem dedo na tela. Imprimem o resultado e saem — são diagnóstico, não uso

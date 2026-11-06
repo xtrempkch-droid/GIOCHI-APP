@@ -784,6 +784,19 @@ impl App {
         }
     }
 
+    /// Aplica um comando como se viesse do controle.
+    ///
+    /// Existe para o `--teclas`: sem ele, a ferramenta de diagnóstico teria de
+    /// reimplementar a navegação (ou mexer no estado por fora), e passaria a
+    /// testar uma cópia em vez do caminho real.
+    pub fn aplicar(&mut self, cmd: Cmd) {
+        self.dispatch(cmd);
+    }
+
+    pub fn estado(&self) -> &State {
+        &self.state
+    }
+
     pub fn render(&mut self) {
         // Nada mudou: não redesenha. Ver `dirty` na struct.
         if !self.dirty {
@@ -832,6 +845,20 @@ impl App {
         views::overlays(&mut self.painter, &self.state, &mut self.layout);
         views::toast(&mut self.painter, &self.state);
         views::hud(&mut self.painter, &self.state);
+
+        // O desenho é quem sabe quantas colunas cabem no painel. Publicar esse
+        // número no estado é o que faz o d-pad seguir a grade que está na tela:
+        // antes a navegação tinha 4 colunas próprias e a view desenhava 2×2 com
+        // 4 jogos, então o destaque pulava em diagonal na aba Jogos.
+        //
+        // Um quadro de atraso é irrelevante: o arranjo só muda se o painel ou a
+        // quantidade de itens mudar, e ambos vêm antes do próximo `handle_event`.
+        if let Some(grade) = self.layout.grade_biblioteca {
+            self.state.grade_biblioteca = grade;
+        }
+        if let Some(grade) = self.layout.grade_apps {
+            self.state.grade_apps = grade;
+        }
 
         if !self.font_warned && self.painter.text_size("x", 12).0 == 0 {
             eprintln!(

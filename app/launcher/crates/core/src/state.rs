@@ -364,6 +364,15 @@ pub struct State {
     /// Quem consome é `App::tomar_pedido_de_lancamento`, com `take()`: o pedido
     /// vale uma vez. Sem isso o launcher tentaria iniciar o jogo em todo quadro.
     pub lancar: Option<u32>,
+    /// Arranjo da grade de jogos, **publicado pelo desenho**.
+    ///
+    /// A view escolhe as colunas por geometria (`grade_para`) e pagina; a
+    /// navegação precisa desse mesmo número para o d-pad seguir a grade que está
+    /// na tela. Antes eram duas verdades — 4 colunas fixas aqui, 2×2 lá — e o
+    /// destaque pulava em diagonal na aba Jogos.
+    pub grade_biblioteca: crate::viewport::Grade,
+    /// Idem para a aba Apps.
+    pub grade_apps: crate::viewport::Grade,
 }
 
 impl State {
@@ -388,6 +397,8 @@ impl State {
             pad_connected: false,
             sem_fio: SemFio::default(),
             lancar: None,
+            grade_biblioteca: crate::viewport::Grade::default(),
+            grade_apps: crate::viewport::Grade::default(),
         }
     }
 

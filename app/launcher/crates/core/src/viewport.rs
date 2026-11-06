@@ -173,3 +173,138 @@ mod tests {
         assert!(vp.scale.is_finite());
     }
 }
+
+/// Arranjo de uma grade de conteúdo: colunas e itens por página.
+///
+/// ## Por que isto mora no núcleo
+///
+/// Porque **duas** partes precisam do mesmo número, e por muito tempo cada uma
+/// teve o seu:
+///
+/// - o desenho (`views::library`) escolhia as colunas por geometria, com
+///   `grade_para`, e paginava de 8 em 8;
+/// - a navegação (`focus::navigate`) assumia **4 colunas fixas** e não conhecia
+///   paginação nenhuma.
+///
+/// Com os 4 jogos do catálogo num painel 1280×720, `grade_para` escolhe **2×2**.
+/// A navegação, achando que havia 4 colunas, fazia `↓` de 0 para 4 (que não
+/// existe, recuando para 3) e `→` de 1 para 2 — ou seja, o destaque pulava em
+/// diagonal. Era a queixa "a navegação da aba Jogos não é livre": o d-pad não
+/// seguia a grade que estava na tela.
+///
+/// A correção não é escolher um número melhor, é **eliminar o segundo número**:
+/// a view calcula o arranjo com `grade_para`, publica aqui e a navegação lê.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Grade {
+    pub cols: usize,
+    /// Itens que cabem numa página. É `cols * rows` do arranjo desenhado.
+    pub por_pagina: usize,
+}
+
+impl Default for Grade {
+    /// Padrão conservador: 4 colunas, duas linhas. Só vale para o **primeiro**
+    /// quadro, antes de a view publicar o arranjo real — e existe porque a
+    /// navegação precisa de *algum* valor antes do primeiro desenho. Não é uma
+    /// segunda verdade: assim que a tela é desenhada, este número é trocado.
+    fn default() -> Self {
+        Self { cols: 4, por_pagina: 8 }
+    }
+}
+
+impl Grade {
+    pub const fn new(cols: usize, por_pagina: usize) -> Self {
+        Self { cols, por_pagina }
+    }
+
+    /// Colunas válidas para uso em `%` e divisão.
+    pub fn cols(&self) -> usize {
+        self.cols.max(1)
+    }
+
+    pub fn por_pagina(&self) -> usize {
+        self.por_pagina.max(1)
+    }
+}
+
+/// Escolhe colunas e linhas para `itens` numa área `w`×`h` com `gap` entre
+/// células, **maximizando a área da célula** sob uma faixa de proporção usável.
+///
+/// # Por que não um 4×2 fixo
+///
+/// A grade era sempre 4 colunas por 2 linhas. Num painel 640×480 isso dá
+/// células de 110×172 — uma tira em pé, onde o título de 13 px não cabe — e,
+/// como o catálogo tem 4 jogos, a segunda linha ficava vazia com metade da tela
+/// sem uso. Numa área 4:3 o melhor arranjo para 4 itens é 2×2.
+///
+/// A faixa de proporção existe porque área igual não significa legibilidade: uma
+/// célula 110×353 tem a mesma área de uma 229×172, e só a segunda comporta um
+/// título de duas palavras.
+///
+/// Vive no núcleo, e não na view, porque a navegação precisa do mesmo arranjo
+/// que o desenho — ver [`Grade`].
+pub fn grade_para(itens: usize, w: i32, h: i32, gap: i32) -> (i32, i32) {
+    let itens = itens.max(1);
+    let (mut melhor_cols, mut melhor_rows) = (1i32, itens as i32);
+    let mut melhor_area = -1i64;
+    let mut melhor_vazios = usize::MAX;
+
+    for cols in 1..=itens {
+        let rows = itens.div_ceil(cols);
+        let cw = (w - gap * (cols as i32 - 1)) / cols as i32;
+        let ch = (h - gap * (rows as i32 - 1)) / rows as i32;
+        if cw <= 0 || ch <= 0 {
+            continue;
+        }
+        let aspecto = cw as f32 / ch as f32;
+        if !(0.62..=2.2).contains(&aspecto) {
+            continue;
+        }
+        let area = cw as i64 * ch as i64;
+        let vazios = cols * rows - itens;
+        if area > melhor_area || (area == melhor_area && vazios < melhor_vazios) {
+            (melhor_cols, melhor_rows) = (cols as i32, rows as i32);
+            melhor_area = area;
+            melhor_vazios = vazios;
+        }
+    }
+    (melhor_cols, melhor_rows)
+}
+
+/// Arranjo de uma grade com `itens` itens na área dada, pronto para o estado.
+pub fn grade_de(itens: usize, w: i32, h: i32, gap: i32) -> Grade {
+    let (cols, rows) = grade_para(itens, w, h, gap);
+    Grade::new(cols.max(1) as usize, (cols * rows).max(1) as usize)
+}
+
+#[cfg(test)]
+mod grade_tests {
+    use super::*;
+
+    #[test]
+    fn quatro_jogos_em_16_9_sao_duas_colunas() {
+        // O caso do aparelho: 4 jogos, área 936×538. Não são 4 colunas.
+        let g = grade_de(4, 936, 538, 9);
+        assert_eq!(g, Grade::new(2, 4), "a grade desenhada é 2×2");
+    }
+
+    #[test]
+    fn oito_jogos_em_16_9_sao_quatro_colunas() {
+        let g = grade_de(8, 936, 538, 9);
+        assert_eq!(g, Grade::new(4, 8));
+    }
+
+    #[test]
+    fn area_estreita_prefere_menos_colunas() {
+        let g = grade_de(4, 468, 377, 5);
+        assert_eq!(g, Grade::new(2, 4));
+    }
+
+    #[test]
+    fn grade_nunca_devolve_zero() {
+        for itens in 0..=12 {
+            let g = grade_de(itens, 100, 100, 5);
+            assert!(g.cols() >= 1);
+            assert!(g.por_pagina() >= 1);
+        }
+    }
+}

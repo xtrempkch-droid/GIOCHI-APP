@@ -398,8 +398,28 @@ teste olhava o estado, não o caminho. O log diz onde o foco parou, e o quadro
 mostra o anel no lugar certo:
 
 ```text
---teclas: right,left -> foco SettingsSidebar 0
+--teclas: right,left -> foco SettingsSidebar 0 | filtro Todos | categoria … | grade 2x4
 ```
+
+**A sequência roda depois de um quadro desenhado, e um quadro por comando.** Não
+é detalhe de implementação: o arranjo da grade (colunas e itens por página) é
+publicado **pelo desenho** e fica no estado. Aplicando as teclas antes do
+primeiro quadro, a navegação usaria o padrão — 4 colunas — que é justamente o
+número errado que causou o bug da aba Jogos, e a ferramenta mostraria o
+comportamento antigo como se fosse o atual. A linha `grade 2x4` no log existe
+para que isso seja visível: se ela mostrar `4x8`, o desenho não rodou.
+
+Duas armadilhas que já custaram tempo:
+
+- **o estado inicial é `Screen::Boot`**, e `TabNext`/`GoTab` são ignorados nele.
+  Sem `--tela home`, `--teclas r` não troca de aba e o log mostra o foco
+  original — parece que a navegação está quebrada quando o problema é o
+  diagnóstico. Use sempre `--tela` junto.
+- **`--teclas` agora sai depois de imprimir.** Antes ficava no laço, o que no
+  aparelho dependia de um `timeout` que **não existe** (`sh: timeout: not
+  found`) — a ferramenta travava em vez de responder. Com `--dump-frame`,
+  `--lancar` ou `--conectar`, o laço continua, porque nesses casos o resultado é
+  o quadro ou o processo.
 
 `--categoria` existe porque `--tela ajustes` só troca a aba e deixa a primeira
 categoria — sem ela não há como fotografar "Som" nem exercitar uma linha

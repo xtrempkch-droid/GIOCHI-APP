@@ -34,7 +34,7 @@ pub use state::{
     settings_ajustavel, settings_rows, App, DispositivoBt, Game, Overlay, Perf, Rede, Screen, SemFio, Settings, State,
     Tab, Toast, HUD, KEYBOARD, KEYBOARD_COLS, SETTINGS_CATEGORIES,
 };
-pub use viewport::Viewport;
+pub use viewport::{grade_de, grade_para, Grade, Viewport};
 
 /// Resolve um comando sobre um estado, devolvendo o novo estado.
 ///

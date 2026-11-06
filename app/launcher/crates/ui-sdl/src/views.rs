@@ -101,46 +101,12 @@ impl Moldura {
 
 pub const LIB_PAGE: usize = 8;
 
-/// Escolhe colunas e linhas para `itens` numa área `w`×`h` com `gap` entre
-/// células, **maximizando a área da célula** sob uma faixa de proporção usável.
+/// Reexportado do núcleo: existe **uma** implementação.
 ///
-/// # Por que não um 4×2 fixo
-///
-/// A grade era sempre 4 colunas por 2 linhas. Num painel 640×480 isso dá
-/// células de 110×172 — uma tira em pé, onde o título de 13 px não cabe — e,
-/// como o catálogo tem 4 jogos, a segunda linha ficava vazia com metade da tela
-/// sem uso. Numa área 4:3 o melhor arranjo para 4 itens é 2×2.
-///
-/// A faixa de proporção existe porque área igual não significa legibilidade: uma
-/// célula 110×353 tem a mesma área de uma 229×172, e só a segunda comporta um
-/// título de duas palavras.
-pub fn grade_para(itens: usize, w: i32, h: i32, gap: i32) -> (i32, i32) {
-    let itens = itens.max(1);
-    let (mut melhor_cols, mut melhor_rows) = (1i32, itens as i32);
-    let mut melhor_area = -1i64;
-    let mut melhor_vazios = usize::MAX;
-
-    for cols in 1..=itens {
-        let rows = itens.div_ceil(cols);
-        let cw = (w - gap * (cols as i32 - 1)) / cols as i32;
-        let ch = (h - gap * (rows as i32 - 1)) / rows as i32;
-        if cw <= 0 || ch <= 0 {
-            continue;
-        }
-        let aspecto = cw as f32 / ch as f32;
-        if !(0.62..=2.2).contains(&aspecto) {
-            continue;
-        }
-        let area = cw as i64 * ch as i64;
-        let vazios = cols * rows - itens;
-        if area > melhor_area || (area == melhor_area && vazios < melhor_vazios) {
-            (melhor_cols, melhor_rows) = (cols as i32, rows as i32);
-            melhor_area = area;
-            melhor_vazios = vazios;
-        }
-    }
-    (melhor_cols, melhor_rows)
-}
+/// Estava aqui, e o núcleo tinha outra ideia do arranjo (4 colunas fixas) — o
+/// desenho escolhia 2×2 e a navegação andava como se fossem 4. Ver
+/// [`giochi_launcher_core::Grade`].
+pub use giochi_launcher_core::grade_para;
 
 /// Ação disparada por um toque.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +138,16 @@ pub enum Hit {
 #[derive(Default)]
 pub struct Layout {
     pub hits: Vec<(Rect, Hit)>,
+    /// Arranjo da grade de jogos deste quadro.
+    ///
+    /// O desenho é quem sabe quantas colunas cabem — depende de geometria e de
+    /// métrica de fonte. A navegação precisa do mesmo número para o d-pad
+    /// seguir a grade que está na tela, então o valor é publicado aqui e o
+    /// `App` o copia para o estado. Sem isso havia duas verdades: 4 colunas na
+    /// navegação e 2×2 no desenho.
+    pub grade_biblioteca: Option<giochi_launcher_core::Grade>,
+    /// Idem para a aba Apps.
+    pub grade_apps: Option<giochi_launcher_core::Grade>,
 }
 
 impl Layout {
@@ -713,8 +689,10 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     // O arranjo sai da capacidade da página, não do número de itens visíveis:
     // a grade não pode mudar de forma quando o usuário vira a página.
     let alvo = games.len().min(LIB_PAGE).max(1);
+    let grade = giochi_launcher_core::grade_de(alvo, m.safe_w - m.pad * 2, grid_h, gap);
+    layout.grade_biblioteca = Some(grade);
     let (cols, rows) = grade_para(alvo, m.safe_w - m.pad * 2, grid_h, gap);
-    let por_pagina = (cols * rows).max(1) as usize;
+    let por_pagina = grade.por_pagina();
     let page = focused_index.map(|i| i / por_pagina).unwrap_or(0);
     let pages = games.len().div_ceil(por_pagina).max(1);
     let cell_w = (m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols;
@@ -806,7 +784,15 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
 pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
     let m = Moldura::de(p);
     let gap = m.e(9).max(4);
-    let (cols, rows) = grade_para(state.apps.len().max(1), m.safe_w - m.pad * 2, m.main_h - m.pad * 2, gap);
+    // Mesma conta do desenho, publicada para a navegação — ver `Layout`.
+    let itens_apps = state.apps.len().max(1);
+    layout.grade_apps = Some(giochi_launcher_core::grade_de(
+        itens_apps,
+        m.safe_w - m.pad * 2,
+        m.main_h - m.pad * 2,
+        gap,
+    ));
+    let (cols, rows) = grade_para(itens_apps, m.safe_w - m.pad * 2, m.main_h - m.pad * 2, gap);
     let cell_w = (m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols;
     let cell_h = (m.main_h - m.pad * 2 - gap * (rows - 1)) / rows;
     let r_tile = m.e(theme::RADIUS_TILE).max(3);

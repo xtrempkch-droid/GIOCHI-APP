@@ -1948,3 +1948,104 @@ reescritos (eles apontam para caminhos de instalação real) e a `libSDL2` vem d
 **aparelho**, não do Ubuntu. O Makefile é a única fonte das bandeiras; o binário
 que ele produz tem o sha256 do que rodou no aparelho
 (`2dc8b70a…`), conferido nas duas pontas.
+
+## 14. Navegação da aba Jogos: duas verdades sobre as colunas (06/11/2026)
+
+Queixa: **"corrija a navegação livre na aba Jogos."** Havia dois defeitos, e o
+segundo era o que doía.
+
+### 1. A grade parava nas bordas
+
+`Zone::wraps()` existia e **nunca era chamado** — a intenção estava no código e
+não chegava ao teclado. `→` ia de 0 a 3 e ali morria; `←` não voltava.
+
+### 2. A navegação não seguia a grade desenhada
+
+O defeito real, e mais grave:
+
+| | colunas | paginação |
+| --- | --- | --- |
+| **desenho** (`views::library`) | escolhidas por geometria (`grade_para`) | 8 por página |
+| **navegação** (`focus::navigate`) | **4 fixas** (`Zone::columns`) | nenhuma |
+
+`grade_para(4, 936, 538, 9)` devolve **2×2** — é o caso do aparelho, com 4 jogos
+num painel 16:9. A navegação, achando que havia 4 colunas e uma linha só, fazia
+`↓` cair no mesmo índice: **`↓` não fazia nada**. E `→` de 1 ia para 2, que
+visualmente é a célula de baixo à esquerda — o destaque pulava em diagonal.
+
+Medido em quadro, com o catálogo de demonstração (4 jogos, painel 1280×720):
+
+```text
+antes   --teclas r,down    diff contra r:  0 px      ← ↓ não movia nada
+depois  --teclas r,down    diff contra r: 2864 px    ← e o x máximo é 635,
+                                                       a coluna da esquerda:
+                                                       desceu, não foi em diagonal
+```
+
+### A correção: um número só, e ele vem do desenho
+
+`grade_para` foi para o **núcleo** (`viewport.rs`), junto com `Grade { cols,
+por_pagina }`. A view chama `grade_de(...)`, publica em `Layout`, e o `App` copia
+para `State::grade_biblioteca` / `grade_apps` **depois de desenhar**. A navegação
+lê esse valor.
+
+Consequência de ordem, que morde: o laço despacha a entrada **antes** de
+desenhar, então a navegação usa o arranjo do quadro anterior — irrelevante na
+prática (o arranjo só muda se o painel ou a contagem de itens mudar). Mas o
+`--teclas` precisou ser movido para **depois** do primeiro `render` e passou a
+desenhar um quadro por comando; antes ele aplicava as teclas sobre o padrão de 4
+colunas e teria mostrado o comportamento antigo como se fosse o novo.
+
+O `↑` para os filtros passou a olhar a linha **dentro da página**
+(`index % por_pagina < cols`), não `index < cols` — a página 2 começa no índice
+`por_pagina`, onde o índice é grande embora a linha seja a primeira.
+
+### Testes que fixavam o bug
+
+Dois testes afirmavam o comportamento travado:
+
+```rust
+assert!(navigate(&s, Dir::Left).is_none(), "coluna 0 não sai para a esquerda");
+assert!(next.is_none(), "à direita do último item não há para onde ir");
+```
+
+Reescritos. Novos: `descer_segue_a_grade_desenhada_e_nao_quatro_colunas`,
+`grade_de_quatro_jogos_percorre_em_laco`,
+`direita_no_fim_da_linha_continua_na_linha_de_baixo`,
+`descer_da_ultima_linha_volta_a_topo`,
+`subir_da_primeira_linha_da_segunda_pagina_vai_aos_filtros`,
+`aba_apps_tambem_percorre_em_laco`, `teclado_da_busca_nao_percorre_em_laco`, e
+quatro de `grade_para` no núcleo. Reintroduzir a navegação com 4 colunas faz
+**6 testes falharem**; reintroduzir `wraps` só no carrossel faz **6**. A lição
+de sempre: teste que passa dos dois lados não prova nada.
+
+O teclado da busca e o da senha **não** entram no laço de propósito: são lidos
+como grade de caracteres, e `→` na última tecla de uma linha pular para a
+primeira da seguinte atrapalha quem digita.
+
+### `--teclas` deixou de travar no aparelho
+
+Ele ficava no laço depois de imprimir, e o aparelho **não tem `timeout`**
+(`sh: timeout: not found`) — a ferramenta pendurava a sessão SSH. Agora sai
+depois de imprimir, exceto quando há `--dump-frame`, `--lancar` ou
+`--conectar`/`--parear`, que acontecem no laço.
+
+E imprime a grade usada:
+
+```text
+--teclas: r,down -> foco LibraryGrid 2 | filtro Todos | categoria appearance | grade 2x4
+```
+
+`grade 4x8` nesse campo significa que o desenho não rodou e o número é o padrão —
+ou seja, que o diagnóstico não está medindo o que promete.
+
+### Pendente
+
+A confirmação no aparelho ficou sem rodada: o X55 saiu da rede no meio do
+trabalho (nem `usb0` em `10.55.0.2`, nem varredura em `192.168.1.0/24`). A
+correção está verificada no PC pelo caminho real (`--teclas` → `dispatch` →
+reducer) e pelo quadro. Ao retomar: `aparelho.sh instalar` e
+
+```bash
+giochi-launcher --tela home --teclas "r,down"
+```
