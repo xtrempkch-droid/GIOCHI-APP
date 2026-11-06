@@ -183,6 +183,13 @@ pode comprar.
 - **Não guarda chave.** Recebe o caminho de uma chave existente e repassa ao
   `sign_package`. A privada continua sendo um arquivo do usuário.
 
+### O filtro de `paths` faz parte do teste
+
+O workflow só roda quando um caminho listado muda. `app/painel/**` ficou de fora
+na primeira versão e a correção do 3.9 **não rodou** — o workflow que existe para
+provar os apps de PC não era acionado por um deles. Um app fora do filtro é um
+app sem CI, e o sintoma é silêncio, não falha.
+
 ## O que está provado, e o que não está
 
 | Afirmação | Como foi verificado |
@@ -198,7 +205,7 @@ pode comprar.
 | sintaxe compatível com 3.9 | **verificado**: `ast.parse(feature_version=(3, 9))` nos 12 arquivos |
 | **roda no Windows** | **não verificado** — o workflow executa, mas ainda não rodou no GitHub |
 | **roda no macOS** | **não verificado** — idem |
-| **roda em Python 3.9 de verdade** | **não verificado** — só a gramática, não a execução |
+| **roda em Python 3.9 de verdade** | **executado** em 3.9.25: três `.pyz`, passo HTTP e 32 testes |
 
 As três últimas são a matriz fazendo o seu trabalho na primeira execução. Até
 lá, o honesto é: **Linux está provado, Windows e macOS estão preparados.**

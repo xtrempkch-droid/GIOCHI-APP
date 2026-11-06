@@ -18,18 +18,28 @@ on:
     paths:
       - "app/store/**"
       - "app/forge/**"
+      # O painel arrasta forge e store para dentro do próprio `.pyz`: mexer
+      # nele pode quebrar o empacotamento dos três. Deixá-lo fora daqui fez a
+      # correção do 3.9 não rodar — o workflow existe justamente para isto.
+      - "app/painel/**"
       - "scripts/empacotar-pc.mjs"
       - "scripts/lib/zip.mjs"
+      - "scripts/testar-apps-pc.sh"
       - "tests/zip-pyz.test.mjs"
+      - "tests/empacotar-pc.test.mjs"
       - "tests/consistencia-runtimes.test.mjs"
+      - "tests/painel/**"
       - ".github/workflows/pc-apps.yml"
   push:
     branches: [main]
     paths:
       - "app/store/**"
       - "app/forge/**"
+      - "app/painel/**"
       - "scripts/empacotar-pc.mjs"
       - "scripts/lib/zip.mjs"
+      - "scripts/testar-apps-pc.sh"
+      - "tests/painel/**"
       - ".github/workflows/pc-apps.yml"
   workflow_dispatch:
   release:
