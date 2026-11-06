@@ -1149,6 +1149,11 @@ e **automount** (não há `mdev.conf` nem udev).
 Limite hoje: `GIOCHI_BOOT` tem **210 MB livres** — dois ou três jogos pequenos,
 não uma biblioteca. E é a única partição que um PC lê.
 
+**Duas mensagens no canal:** 05:55 (partição de dados, montar `GIOCHI_BOOT`,
+automount) e 06:08 (multi-cartão, com três perguntas objetivas — convenção de
+montagem do slot 2, onde ficam os jogos quando houver eMMC, e se "partição de
+dados" e "slot 2" são a mesma coisa).
+
 Ver [`docs/cartao-sd.md`](docs/cartao-sd.md).
 
 ### O pacote `.giochi` existe — e o download da loja não

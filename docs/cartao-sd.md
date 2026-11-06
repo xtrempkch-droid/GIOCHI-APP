@@ -161,12 +161,17 @@ o cartão estará lá no próximo boot. Quem sabe é o aparelho.
 
 ## 4. O que é do Giochi System
 
-Levado ao canal em 06/11/2026 05:55, com os números acima.
+Levado ao canal em 06/11/2026 — 05:55 (partição e montagem) e 06:08 (multi-cartão),
+com os números acima. As três perguntas objetivas ao System estão na segunda
+mensagem: convenção de montagem, onde ficam os jogos com eMMC, e se "partição de
+dados" e "slot 2" são a mesma coisa ou duas.
 
 | # | Item | Por que trava |
 | --- | --- | --- |
 | 1 | **Partição de dados** nos 116,5 GB | hoje `/user` é diretório **dentro do rootfs**. Regravar a imagem apaga os jogos comprados — e `distribution: store` ("fora da imagem assinada") deixa de ser verdade |
 | 1b | **Layout nos aparelhos com 2 slots + eMMC** | o app já descobre qualquer número de cartões, mas *onde* os jogos devem morar (instalar em `/user` ou rodar do cartão) muda com o layout da imagem |
+| 1c | **Convenção de montagem** para o slot 2 | hoje o app monta em `/mnt/cartao<N>` porque ninguém monta; se o sistema fixar um caminho, o app para de montar |
+| 1d | **eMMC: jogos onde?** | eMMC, cartão, ou os dois — muda o `dir` do catálogo, e a loja precisa saber antes de instalar |
 | 2 | **Montar `GIOCHI_BOOT`** no boot | não está no `fstab` nem montada. Se eles montarem num caminho fixo, o app para de montar |
 | 3 | **Automount** de mídia removível | não há `mdev.conf` nem udev ativo. Irrelevante para o cartão de boot; necessário para um segundo slot ou pendrive |
 
