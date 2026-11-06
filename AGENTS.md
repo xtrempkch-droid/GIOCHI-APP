@@ -2935,6 +2935,16 @@ E um quarto, de desenho: `Simulado::com_chave(chave_do_input)` aceitava **qualqu
 chave, porque era construído com a chave digitada. O teste de "chave errada" passava
 sem provar nada. Chave de teste agora é fixa (`CHAVE-DE-TESTE-1`).
 
+### `exit 0` no fim de um passo `pwsh` não é redundância
+
+A perna Windows falhou em "Ativação de licença" com todas as asserções passando. O
+runner do GitHub **anexa `exit $LASTEXITCODE` ao fim de cada passo `pwsh`**, e o
+último comando nativo do passo sai com 3 de propósito (chave inválida). O passo
+termina vermelho por um sucesso que ele mesmo provocou.
+
+Regra: em passo `pwsh` que testa um código de saída diferente de zero, o passo tem
+de terminar com `exit 0` explícito.
+
 ### `ChavePublica::de_semente`
 
 Faltava no núcleo, e apareceu como erro: usar `[7u8; 32]` como "aparelho de teste"

@@ -322,7 +322,16 @@ jobs:
           if (-not $ok.instancia) { Write-Host "sem instancia"; exit 1 }
           # Chave inválida: tem de sair com 3, e não com 0.
           .\target\release\giochi-loja.exe --ativar CHAVE-QUE-NAO-EXISTE > $env:TEMP\er.json
-          if ($LASTEXITCODE -ne 3) { Write-Host "codigo de saida errado: $LASTEXITCODE"; exit 1 }
+          $codigo = $LASTEXITCODE
+          Write-Host "codigo de saida da chave invalida: $codigo"
+          if ($codigo -ne 3) { Write-Host "esperava 3"; exit 1 }
+
+          # `exit 0` explícito **é obrigatório** aqui. O runner do GitHub anexa
+          # `exit $LASTEXITCODE` ao fim de cada passo `pwsh`, e o último comando
+          # nativo deste passo sai com 3 de propósito — o passo terminaria
+          # vermelho mesmo tendo todas as asserções passado. Foi o que aconteceu
+          # na primeira execução desta perna.
+          exit 0
 
       - name: Anexar binários
         uses: actions/upload-artifact@v4
