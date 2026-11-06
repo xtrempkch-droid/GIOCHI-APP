@@ -2048,16 +2048,32 @@ E imprime a grade usada:
 `grade 4x8` nesse campo significa que o desenho não rodou e o número é o padrão —
 ou seja, que o diagnóstico não está medindo o que promete.
 
-### Pendente
+### Confirmado no aparelho (06/11/2026, 08:1x)
 
-A confirmação no aparelho ficou sem rodada: o X55 saiu da rede no meio do
-trabalho (nem `usb0` em `10.55.0.2`, nem varredura em `192.168.1.0/24`). A
-correção está verificada no PC pelo caminho real (`--teclas` → `dispatch` →
-reducer) e pelo quadro. Ao retomar: `aparelho.sh instalar` e
+A primeira tentativa ficou sem rodada — o X55 saiu da rede no meio do trabalho.
+Com ele de volta, o binário novo foi instalado (sha256 conferido) e cada caso
+medido no X55, que tem **4 apps** no catálogo. A grade real é **2×4** (2 colunas,
+4 por página):
 
-```bash
-giochi-launcher --tela home --teclas "r,down"
+```text
+r                            → LibraryGrid 0   grade 2x4
+r,right                      → LibraryGrid 1
+r,right,right                → LibraryGrid 2
+r,right,right,right          → LibraryGrid 3   (último cartão)
+r,right,right,right,right    → LibraryGrid 0   ← dá a volta
+r,left                       → LibraryGrid 3   ← volta para trás
+r,down                       → LibraryGrid 2   ← a célula DE BAIXO, não em diagonal
+r,up                         → LibraryFilters 0
 ```
+
+`↓` ir de 0 para **2** é a prova: numa grade de 2 colunas, a célula de baixo do
+cartão 0 é a 2. Antes ia para 3, em diagonal — ou para lugar nenhum.
+
+Detalhe operacional que custou duas rodadas: **o `inittab` ressuscita o launcher
+em ~1 s** e ele toma o DRM. Para rodar `--teclas` em sequência é preciso matar
+antes de **cada** execução, e o `--teclas` só começou a sair sozinho nesta sessão
+(antes ficava no laço). Com espera de 2,5 s + 1,5 s entre as mortes, todos os
+oito casos rodaram.
 
 ## 15. Apps de PC: um `.pyz`, quatro execuções (06/11/2026)
 
@@ -2305,3 +2321,78 @@ de digitação), e agora o teste discrimina: sem o ramo `none`, falham **2**.
 **58 testes** (38 do antecessor + 20 nossos). Reverter cada correção faz o teste
 correspondente falhar: painel cru → 1 falha; sem `godot_runtime` → 4; sem o ramo
 `none` → 2.
+
+### Os dados dos perfis, reconferidos no aparelho
+
+Com o X55 de volta à rede, cada número que os perfis declaram foi medido de novo:
+
+| Campo do perfil | Declarado | Medido no X55 |
+| --- | --- | --- |
+| `ram_mb` | 1968 | `MemTotal: 2015020 kB` = **1968 MB** |
+| `display` | 720×1280 | `/sys/class/drm/card0-DSI-1/modes` = `720x1280` |
+| rotação | (implícita) | `fbcon/rotate` = `3` |
+| libc | glibc 2.38 | `GNU C Library ... version 2.38` |
+| `vulkan` | `false` | `libvulkan.so*` **ausente** |
+| `godot_runtime` | `false` | `command -v godot` → não existe |
+| GPU | Mali-G52 / panfrost | DT: `arm,mali-bifrost` (Bifrost = G5x) |
+
+Um erro de medição minha, corrigido no caminho: eu tinha escrito antes que o
+`MemTotal` do X55 era 1968 MB e o do X35H 964 MB, e os testes do forge fixam
+esses números. O do X55 confere exatamente (2015020 kB / 1024 = 1968).
+
+### `GIOCHI_GLES` mentia, e foi corrigido no aparelho
+
+Descoberto ao reconferir os dados: a documentação dizia *"no aparelho defina
+`GIOCHI_GLES=1`; no PC deixe vazio"*. Medido no X55 em 06/11/2026:
+
+```text
+ausente                        renderer: opengles2 (acelerado, textura 8192x8192)
+GIOCHI_GLES=1                  renderer: opengles2 (idêntico)
+GIOCHI_GLES=0                  renderer: opengles2   ← o oposto do nome
+SDL_RENDER_DRIVER=software     renderer: software
+```
+
+Dois defeitos de uma vez:
+
+1. **`GIOCHI_GLES=0` ligava o GLES.** O código usava
+   `if std::env::var("GIOCHI_GLES").is_ok()`, que testa **presença**, não valor.
+2. **A variável era inútil na direção documentada.** Sem ela o SDL já escolhe
+   `opengles2` no KMSDRM — é o único driver acelerado disponível. "Forçar GLES"
+   não mudava nada.
+
+O que a variável consegue de fato é o **contrário**: pedir `software` num
+aparelho onde o acelerado funciona, que é o que permite comparar os dois
+backends. Agora os três estados fazem coisas diferentes:
+
+| valor | efeito |
+| --- | --- |
+| ausente | deixa o SDL escolher (no X55: `opengles2`) |
+| `1` / outro | pede `opengles2` |
+| `0` / `false` | pede `software` |
+
+Verificado no aparelho depois da correção: `0` dá `software`, ausente e `1` dão
+`opengles2`.
+
+Lição que vale além deste caso: **`is_ok()` é "a variável existe", não "está
+ligada"**. Uma variável de ambiente que só é testada por presença não tem como
+ser desligada, e o nome promete o que ela não faz.
+
+### O "bluetooth não disponível" no X55 é fato, não bug do app
+
+Registrado para não virar suspeita recorrente. Medido em 06/11/2026:
+
+```text
+$ ls /sys/class/bluetooth/     → vazio (nenhum adaptador hci)
+$ rfkill list                  → só "0: phy0: Wireless LAN"
+$ command -v bluetoothctl      → existe
+```
+
+O `device.conf` do antecessor declara `GIOCHI_BT="integrated rtl8821cs
+(UART/H5)"`, então o rádio **existe no hardware** e não registrou. Causa provável:
+firmware ausente ou driver UART não carregado — **imagem**, ou seja, Giochi
+System.
+
+O launcher está certo: `tem_bt` é `Option<bool>` e este caso é `Some(false)`.
+Se algum dia aparecer `Some(true)` com adaptador em `/sys/class/bluetooth/`,
+então é bug do app. A distinção entre "não tem rádio" (R35S), "tem e não
+registrou" (este caso) e "não medido" é o que evita os três diagnósticos errados.

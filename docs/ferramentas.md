@@ -275,13 +275,30 @@ leitura também vem preta: o buffer fica na GPU.
 Por isso o launcher imprime o que o SDL abriu de fato:
 
 ```text
-renderer: software (software, vsync; textura máx 0x0)          # X35H sem GIOCHI_GLES
-renderer: opengles2 (acelerado, vsync; textura máx 8192x8192)  # X35H com GIOCHI_GLES=1
+renderer: software (software, vsync; textura máx 0x0)          # GIOCHI_GLES=0
+renderer: opengles2 (acelerado, vsync; textura máx 8192x8192)  # ausente, ou =1
 ```
 
 O `textura máx 0x0` no software é do próprio backend e não é erro. A linha vem
 de `canvas.info()`, então responde "qual backend rodou", que é diferente de
 "qual foi pedido" — a mesma distinção entre existir, declarar e ser usado.
+
+**Esta tabela já esteve errada, e por dois motivos.** Medido no X55 em
+06/11/2026: `GIOCHI_GLES=0` *ligava* o GLES (o código testava
+`env::var(..).is_ok()`, que é presença e não valor), e sem a variável o SDL já
+abria `opengles2` — então "defina `GIOCHI_GLES=1` no aparelho" não mudava nada.
+
+Hoje:
+
+| valor | efeito |
+| --- | --- |
+| ausente | deixa o SDL escolher (no X55: `opengles2`) |
+| `1` / qualquer outro | pede `opengles2` |
+| `0` / `false` | pede `software` |
+
+O caso útil é o `0`: forçar software num aparelho onde o acelerado funciona, para
+comparar os dois backends — que é o que `SDL_RENDER_DRIVER=software` já fazia e a
+variável não.
 
 ### Pacote: `empacotar.mjs` → `instalar-pacote`
 

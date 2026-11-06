@@ -17,8 +17,18 @@
 //!   giochi-launcher --checar-energia
 //!                                   mostra o que o device tree declara sobre energia
 //!
-//! Para o aparelho (GLES2 sobre KMSDRM), defina `GIOCHI_GLES=1`. No PC deixe
-//! vazio: forçar `opengles2` no desktop costuma falhar.
+//! `GIOCHI_GLES` escolhe o backend, e cada valor faz uma coisa:
+//!
+//! | valor | efeito |
+//! | --- | --- |
+//! | ausente | deixa o SDL escolher — no X55 isso já é `opengles2` (medido) |
+//! | `1` / qualquer outro | pede `opengles2` |
+//! | `0` / `false` | pede `software` |
+//!
+//! A tabela existe porque a documentação dizia "defina `GIOCHI_GLES=1` no
+//! aparelho, deixe vazio no PC" — e no X55 as duas coisas davam o mesmo
+//! resultado. O que a variável consegue de fato é o oposto: **forçar software**
+//! num aparelho onde o acelerado funciona, que é o que permite comparar os dois.
 
 mod app;
 mod backlight;
@@ -123,9 +133,24 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
 
-    if std::env::var("GIOCHI_GLES").is_ok() {
-        // No aparelho o backend é GLES2; no desktop o padrão do SDL é melhor.
-        sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
+    // `GIOCHI_GLES`: escolhe o backend de desenho. Três estados, porque antes
+    // ela testava só a **presença** da variável (`is_ok()`) e então
+    // `GIOCHI_GLES=0` ligava o GLES — o oposto do que o nome promete.
+    //
+    // Medido no X55 em 06/11/2026: sem a variável o SDL já abre `opengles2`
+    // (acelerado, textura 8192x8192), então "forçar GLES" não muda nada. O que
+    // só a variável consegue é o contrário — pedir `software` num aparelho onde
+    // o acelerado funciona, que é o que se quer para comparar os dois backends.
+    match std::env::var("GIOCHI_GLES").as_deref() {
+        Ok("0") | Ok("false") | Ok("nao") | Ok("não") => {
+            sdl2::hint::set("SDL_RENDER_DRIVER", "software");
+            eprintln!("GIOCHI_GLES=0: pedindo o backend por software");
+        }
+        Ok(_) => {
+            sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
+            eprintln!("GIOCHI_GLES: pedindo opengles2");
+        }
+        Err(_) => {} // ausente: deixa o SDL escolher
     }
 
     // Diagnóstico de campo: prova que o caminho do backlight funciona neste
