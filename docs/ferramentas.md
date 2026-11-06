@@ -12,6 +12,8 @@ nenhum foi escrito "por completude".
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
 | `scripts/verificar-telas.mjs` | PC | as 12 telas em 3 tamanhos: cabe? ocupa quanto? |
 | `scripts/verificar-mapa.mjs` | PC | um `buttons.map` contra os símbolos que o launcher entende |
+| `scripts/empacotar.mjs` | PC | pasta de app → `.giochi` assinado |
+| `scripts/verificar-pacote.mjs` | PC | estrutura + SHA-256 + Ed25519 de um pacote |
 | `scripts/verificar-jogos.mjs` | PC | geometria dos jogos: a célula é legível? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
@@ -260,6 +262,29 @@ renderer: opengles2 (acelerado, vsync; textura máx 8192x8192)  # X35H com GIOCH
 O `textura máx 0x0` no software é do próprio backend e não é erro. A linha vem
 de `canvas.info()`, então responde "qual backend rodou", que é diferente de
 "qual foi pedido" — a mesma distinção entre existir, declarar e ser usado.
+
+### Pacote: `empacotar.mjs` → `instalar-pacote`
+
+```bash
+node scripts/empacotar.mjs app/jogos/pacman            # → dist/pacotes/pacman.giochi
+node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/pacman.giochi
+```
+
+O pacote é **reprodutível**: dois empacotamentos do mesmo conteúdo dão o mesmo
+SHA-256, porque `mtime`, `uid` e `gid` são fixos no cabeçalho ustar. Sem isso a
+assinatura deixaria de identificar o conteúdo.
+
+`instalar-pacote` verifica no PC (estrutura, hash, assinatura), envia, extrai com
+`scripts/lib/extrair-pacote.sh` **no aparelho** e republica o catálogo — que é
+gerado incluindo o que está instalado em `/opt/giochi/apps/`, não só o
+`apps.json`. Sem essa colheita, um app vindo da loja ficaria invisível sem erro.
+
+O extrator é um script copiado, não um `sh -c` com aspas aninhadas: a primeira
+versão fazia isso e o shell comeu o `$(...)`, produzindo
+`sh: "bin/giochi-pacman": unknown operand`. Aninhar três níveis de aspas para
+falar com outra máquina não é difícil de escrever — é difícil de **ler quando
+falha**.
 
 ### Antes do hardware: `verificar-mapa.mjs`
 

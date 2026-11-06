@@ -90,12 +90,34 @@ function validateMetadata(metadata, appDir, errors) {
         // Mesmo motivo: o gênero aparece no cartão, e sem campo próprio o
         // gerador de catálogo não teria de onde tirá-lo.
         "category",
+        // Identidade estável do pacote. Sem ele, a loja derivaria o diretório de
+        // instalação do **título** — e renomear o título moveria o app de lugar,
+        // quebrando o catálogo e o favorito do usuário. O `id` do `apps.json`
+        // precisa ser igual quando os dois existem.
+        "slug",
       ].includes(key)
     ) {
       errors.push({
         code: "campo_desconhecido",
         path: `metadata.json:${key}`,
         message: `campo não previsto no schema: ${key}`,
+      });
+    }
+  }
+
+  if (metadata.slug !== undefined) {
+    const slug = metadata.slug;
+    if (typeof slug !== "string" || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
+      errors.push({
+        code: "slug_invalido",
+        path: "metadata.json:slug",
+        message: "slug precisa ser kebab-case (a-z, 0-9, hífen; sem hífen nas pontas)",
+      });
+    } else if (slug.length > 40) {
+      errors.push({
+        code: "slug_invalido",
+        path: "metadata.json:slug",
+        message: "slug tem no máximo 40 caracteres",
       });
     }
   }

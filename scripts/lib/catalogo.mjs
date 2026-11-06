@@ -34,6 +34,8 @@ export const DIR_BASE_PADRAO = "/opt/giochi/apps";
 
 // O que entra no catálogo, e o que fica de fora (com motivo).
 export const MOTIVOS = {
+  /** Um pacote da loja está instalado e substitui a entrada do `apps.json`. */
+  INSTALADO_SUBSTITUI: "instalado no aparelho; a entrada do apps.json foi substituída",
   SCAFFOLD: "status scaffold: a fonte não foi migrada ou o binário não foi exportado",
   HOST: "distribution host: roda no PC, não vai para o aparelho",
   SHELL: "role shell: é a própria interface, não algo para iniciar de dentro dela",
@@ -165,6 +167,68 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
   apps.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
 
   return { catalogo: { schemaVersion: 1, apps }, avisos };
+}
+
+/**
+ * Junta apps **instalados no aparelho** ao catálogo gerado do repositório.
+ *
+ * ## Por que esta função existe
+ *
+ * `gerarCatalogo` deriva de `app/apps.json`. Um pacote `.giochi` vindo da loja
+ * **não está lá**: ele chega no aparelho e é extraído em
+ * `/opt/giochi/apps/<slug>/`. Sem esta junção, instalar um jogo pela loja o
+ * deixaria invisível — e invisível sem erro nenhum, que é o pior modo de falha
+ * já registrado neste projeto (o catálogo escrito à mão mostrava 1 jogo com 3
+ * instalados).
+ *
+ * ## A regra de precedência
+ *
+ * Quem manda é o **disco**, não o `apps.json`. Se um id aparece nos dois, a
+ * entrada instalada vence: ela é o que existe de fato no aparelho. O
+ * `apps.json` descreve o que a imagem *deveria* ter; o diretório descreve o que
+ * ela *tem*. Divergir é informação, não erro — vai para `avisos`.
+ *
+ * `instalados` vem da varredura do aparelho: `[{ id, metadata, dir }]`.
+ */
+export function mesclarInstalados(catalogo, instalados, { dirBase = DIR_BASE_PADRAO } = {}) {
+  const avisos = [];
+  const porId = new Map(catalogo.apps.map((a) => [a.id, a]));
+
+  for (const inst of instalados) {
+    const { id, metadata } = inst;
+    if (!id || !metadata) continue;
+
+    const entrypoint = metadata.entrypoint;
+    if (typeof entrypoint !== "string" || !entrypoint.startsWith("bin/")) {
+      avisos.push({ id, motivo: `entrypoint inválido no metadata.json: ${entrypoint}` });
+      continue;
+    }
+
+    const anterior = porId.get(id);
+    const entrada = {
+      id,
+      version: metadata.version,
+      entrypoint,
+      dir: inst.dir || `${dirBase}/${id}`,
+      title: metadata.title,
+      developer: metadata.developer,
+      ...(metadata.releaseYear !== undefined ? { year: metadata.releaseYear } : {}),
+      ...(metadata.category ? { category: metadata.category } : {}),
+      // Campos que **não** existem no `metadata.json` do pacote e só o
+      // `apps.json` tem (`license`). Substituir a entrada inteira os apagava:
+      // o pacman apareceu no catálogo sem licença depois de instalado pelo
+      // pacote. Herdar do anterior preserva a informação em vez de perdê-la.
+      ...(anterior?.license ? { license: anterior.license } : {}),
+    };
+
+    if (anterior) {
+      avisos.push({ id, motivo: MOTIVOS.INSTALADO_SUBSTITUI });
+    }
+    porId.set(id, entrada);
+  }
+
+  const apps = [...porId.values()].sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
+  return { catalogo: { schemaVersion: catalogo.schemaVersion ?? 1, apps }, avisos };
 }
 
 /** Serializa com a mesma indentação que o resto do repositório usa. */

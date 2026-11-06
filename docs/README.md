@@ -6,7 +6,8 @@
 - [Migração do antecessor](migracao.md) — o que vem do `GIOCHI-KONSOL-OS`, o que não vem e por quê.
 - [Contrato de metadata](metadata.md) — os campos do `metadata.json` e por que são fechados.
 - [Requisitos do app](forge.md) — o `forge.json` e como a compatibilidade é calculada.
-- [Formato do pacote](pacote.md) — o arquivo `.giochi` que vai para a loja.
+- [Formato do pacote](pacote.md) — o `.giochi`: ordem, assinatura Ed25519 e o empacotador que existe.
+- [Loja e multi-lojas](loja.md) — o que funciona, o que não existe e as decisões que faltam antes de escrever a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
 - [Dependências que faltam no aparelho](dependencias-aparelho.md) — o que pedir ao Giochi System: SDL2_ttf, freetype e uma fonte.

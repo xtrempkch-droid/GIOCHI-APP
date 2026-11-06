@@ -105,8 +105,95 @@ decidir se `graphics_api` entra no metadata ou se fica só no `forge.json`.
 
 ## O que falta para o pacote existir
 
-1. **Export ARM64** dos projetos Godot (`src/` → `bin/`).
-2. **Migrar** empacotador e assinador do antecessor (não escrever do zero).
-3. **Portar o teste de ida e volta**, incluindo a checagem de adulteração.
+1. **Export ARM64** dos projetos Godot (`src/` → `bin/`). Continua pendente: os
+   jogos Godot seguem sem `bin/`.
+2. ~~Migrar empacotador e assinador~~ — **feito em 06/11/2026**, em Node, sem
+   dependência externa. Ver abaixo.
+3. ~~Portar o teste de ida e volta~~ — **feito**: `tests/pacote.test.mjs`,
+   incluindo a adulteração.
 
-Nenhum dos três foi feito aqui ainda.
+---
+
+## Implementado em 06/11/2026
+
+```bash
+node scripts/empacotar.mjs app/jogos/pacman          # gera + assina
+node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/pacman.giochi
+```
+
+| Arquivo | Papel |
+| --- | --- |
+| `scripts/lib/tar.mjs` | escreve e lê o ustar à mão |
+| `scripts/lib/publicar.mjs` | valida, ordena, assina, verifica, confere estrutura |
+| `scripts/empacotar.mjs` | CLI: pasta do app → `.giochi` + `.sig` + `.manifest.json` |
+| `scripts/verificar-pacote.mjs` | CLI: estrutura + SHA-256 + Ed25519 |
+| `scripts/lib/extrair-pacote.sh` | extrator que roda **no aparelho** |
+| `scripts/aparelho.sh instalar-pacote` | verifica, envia, extrai, republica o catálogo |
+
+### Por que o `tar` é escrito à mão
+
+Três razões, todas de comportamento observável:
+
+1. **Ordem.** O `tar` do sistema escreve na ordem do `readdir`. A ordem aqui é
+   contrato, e a montagem é uma função só (`ordenarMembros`), testável.
+2. **Reprodutibilidade.** `mtime`, `uid` e `gid` fixos. Dois empacotamentos do
+   mesmo conteúdo dão o **mesmo SHA-256** — conferido: `0dddbe2b…` duas vezes.
+   Se o hash mudasse, a assinatura deixaria de identificar o conteúdo.
+3. **Bit de execução.** `tar --mode` mascara permissão; o extrator precisa de
+   `bin/app` executável, e o erro só aparece no aparelho como "entrypoint não
+   existe".
+
+O formato foi verificado contra o `tar` do sistema: GNU tar lê o ustar escrito à
+mão, extrai com as permissões certas e `test -x` passa.
+
+### `slug`: a identidade não vem do título
+
+`metadata.json` ganhou `slug` (opcional, kebab-case). Sem ele a loja derivaria o
+diretório de instalação do **título** — e renomear "Pac-Man" para "Pac-Man DX"
+moveria o app de lugar, quebrando o catálogo e o favorito do usuário.
+
+Ordem: `metadata.slug` → `id` do `apps.json` → derivação do título (último
+recurso, e o pacote **diz** que usou).
+
+### O catálogo passou a incluir o que veio da loja
+
+Um pacote `.giochi` não está no `apps.json`: ele chega pelo cartão e é extraído
+em `/opt/giochi/apps/<slug>/`. `aparelho.sh catalogo` agora **pergunta ao
+aparelho** o que está instalado (`colher_instalados`) e o gerador junta isso ao
+catálogo do repositório, com o disco vencendo.
+
+Sem essa junção, instalar pela loja deixaria o jogo **invisível sem erro** — o
+mesmo modo de falha do `index.json` escrito à mão, que mostrava 1 jogo com 3
+instalados.
+
+Achado durante a implementação: substituir a entrada inteira apagava a
+`license`, que só existe no `apps.json`. O pacman apareceu no catálogo do
+aparelho sem licença. Agora a entrada do repositório é herdada nos campos que o
+pacote não traz.
+
+### O que foi medido no X55
+
+```text
+instalar-pacote dist/pacotes/pacman.giochi
+  verificado: sha256 c52a181b…, assinatura ok
+  extraído: bin/giochi-pacman
+  catálogo republicado: 3 app(s)
+
+--lancar pacman
+  287  giochi-launcher --lancar pacman      ← pai
+  300  giochi-pacman                        ← filho, iniciado pelo launcher
+  quadro depois da volta: 346 cores, 0,00% de preto
+```
+
+Ciclo completo: **empacotar → assinar → verificar → enviar → extrair → catalogar
+→ lançar → voltar**.
+
+### Ainda não feito
+
+| Item | Estado |
+| --- | --- |
+| verificação de assinatura **no aparelho** | **não** — o PC verifica antes de enviar; o aparelho confia no cabo |
+| `.giochi` lido de pendrive pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
+| loja (download, OAuth, butlerd) | **não** — ver [`loja.md`](loja.md) |
+| app Godot empacotado | **não** — falta export ARM64 |

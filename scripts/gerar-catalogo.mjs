@@ -6,6 +6,7 @@
 //   node scripts/gerar-catalogo.mjs --saida index.json # grava
 //   node scripts/gerar-catalogo.mjs --lista            # só o que entra e o que não
 //   node scripts/gerar-catalogo.mjs --tudo             # ignora a checagem de binário
+//   node scripts/gerar-catalogo.mjs --instalados f.json  # junta pacotes da loja
 //
 // Normalmente não se chama isto à mão: `bash scripts/aparelho.sh catalogo` gera
 // e envia para o aparelho num passo.
@@ -19,23 +20,30 @@
 // `--tudo` desliga a checagem, e serve para inspecionar o que *seria* publicado
 // sem instalar nada.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { gerarCatalogo, serializar, DIR_BASE_PADRAO } from "./lib/catalogo.mjs";
+import { gerarCatalogo, mesclarInstalados, serializar, DIR_BASE_PADRAO } from "./lib/catalogo.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP_ROOT = path.join(RAIZ, "app");
 
 function analisarArgs(argv) {
-  const opcoes = { saida: null, lista: false, apenasInstalados: true, dirBase: DIR_BASE_PADRAO };
+  const opcoes = {
+    saida: null,
+    lista: false,
+    apenasInstalados: true,
+    dirBase: DIR_BASE_PADRAO,
+    instalados: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--saida") opcoes.saida = argv[++i];
     else if (a === "--lista") opcoes.lista = true;
     else if (a === "--tudo") opcoes.apenasInstalados = false;
     else if (a === "--dir-base") opcoes.dirBase = argv[++i];
+    else if (a === "--instalados") opcoes.instalados = argv[++i];
     else if (a === "-h" || a === "--ajuda") opcoes.ajuda = true;
     else if (a.startsWith("--")) throw new Error(`opção desconhecida: ${a}`);
   }
@@ -45,14 +53,41 @@ function analisarArgs(argv) {
 function main() {
   const opcoes = analisarArgs(process.argv.slice(2));
   if (opcoes.ajuda) {
-    console.log("uso: node scripts/gerar-catalogo.mjs [--saida ARQ] [--lista] [--tudo] [--dir-base DIR]");
+    console.log(
+      "uso: node scripts/gerar-catalogo.mjs [--saida ARQ] [--lista] [--tudo] [--dir-base DIR] " +
+        "[--instalados f.json]",
+    );
     return 0;
   }
 
-  const { catalogo, avisos } = gerarCatalogo(APP_ROOT, {
+  const doRepo = gerarCatalogo(APP_ROOT, {
     dirBase: opcoes.dirBase,
     apenasInstalados: opcoes.apenasInstalados,
   });
+
+  // Pacotes da loja não estão no `apps.json`: chegam no aparelho e são
+  // extraídos em `/opt/giochi/apps/<slug>/`. Quem sabe quais existem é o
+  // aparelho, então a varredura vem de lá (`aparelho.sh catalogo` colhe).
+  //
+  // Sem isto, instalar um jogo pela loja o deixaria **invisível, sem erro** —
+  // o mesmo defeito do catálogo escrito à mão.
+  let { catalogo, avisos } = doRepo;
+  if (opcoes.instalados) {
+    if (!existsSync(opcoes.instalados)) {
+      throw new Error(`--instalados: arquivo não existe: ${opcoes.instalados}`);
+    }
+    let lista;
+    try {
+      lista = JSON.parse(readFileSync(opcoes.instalados, "utf8"));
+    } catch (e) {
+      throw new Error(`--instalados: JSON inválido: ${e.message}`);
+    }
+    if (!Array.isArray(lista)) throw new Error("--instalados: esperava uma lista");
+
+    const juntos = mesclarInstalados(catalogo, lista, { dirBase: opcoes.dirBase });
+    catalogo = juntos.catalogo;
+    avisos = [...avisos, ...juntos.avisos];
+  }
 
   if (opcoes.lista) {
     console.log(`entram no catálogo (${catalogo.apps.length}):`);

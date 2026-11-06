@@ -25,6 +25,8 @@
 #   bash scripts/aparelho.sh opcoes
 #   bash scripts/aparelho.sh boot-log   (salva ANTES de regravar o cartão)
 #   bash scripts/aparelho.sh catalogo   (gera e envia o índice de apps)
+#   bash scripts/aparelho.sh instalar-pacote app.giochi
+#                                       (verifica, extrai e republica o índice)
 #
 # Variáveis:
 #   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
@@ -539,12 +541,23 @@ cmd_catalogo() {
 
   local temp
   temp=$(mktemp "${TMPDIR:-/tmp}/giochi-catalogo.XXXXXX.json")
+  local instalados="$temp.instalados.json"
+
+  # O aparelho é a única fonte que não pode mentir sobre o que está instalado:
+  # um pacote da loja não existe no repositório. Sem esta colheita, instalar um
+  # jogo pela loja o deixaria fora do catálogo e invisível **sem erro**.
+  if colher_instalados "$instalados" 2>&1 | sed 's/^/  /'; then
+    :
+  else
+    aviso "não consegui ler os apps instalados; o catálogo terá só os do repositório"
+    printf '[]\n' > "$instalados"
+  fi
 
   # `--lista` vai para stderr do gerador; aqui interessa o que ele decide.
-  if ! node "$RAIZ/scripts/gerar-catalogo.mjs" --saida "$temp" 2>"$temp.avisos"; then
+  if ! node "$RAIZ/scripts/gerar-catalogo.mjs" --saida "$temp" --instalados "$instalados" 2>"$temp.avisos"; then
     falha "não consegui gerar o catálogo"
     sed 's/^/  /' "$temp.avisos" >&2 2>/dev/null
-    rm -f "$temp" "$temp.avisos"
+    rm -f "$temp" "$temp.avisos" "$instalados"
     return 1
   fi
 
@@ -553,7 +566,7 @@ cmd_catalogo() {
   ok "gerado: $quantos app(s)"
   # Os avisos são o que responde "por que meu app não aparece".
   sed 's/^/  /' "$temp.avisos" 2>/dev/null
-  rm -f "$temp.avisos"
+  rm -f "$temp.avisos" "$instalados"
 
   # ── conferência NO APARELHO ────────────────────────────────────────────
   #
@@ -630,6 +643,150 @@ cmd_catalogo() {
 #
 # Guarda em `dist/`, que é ignorado pelo git, com a data no nome para que dois
 # boots ruins não se sobrescrevam.
+# ── pacotes da loja ────────────────────────────────────────────────────
+
+#
+# Instala um `.giochi` no aparelho.
+#
+# ## O que é verificado, e onde
+#
+# No **PC**, antes de enviar: estrutura (ordem dos membros, entrypoint
+# executável), SHA-256 e assinatura Ed25519. O PC é a máquina de quem publica, e
+# um pacote corrompido não deve nem atravessar o cabo.
+#
+# No **aparelho**, depois de extrair: o `entrypoint` existe e é executável. É a
+# mesma checagem que `catalogo` faz, e é a que pega o erro que só aparece lá —
+# permissão perdida na cópia, arquitetura errada, dependência ausente.
+#
+# ## Por que o catálogo é republicado no fim
+#
+# Um pacote instalado e não catalogado é **invisível sem erro**: o arquivo está
+# no disco, o usuário não vê o cartão. Foi exatamente o que aconteceu quando o
+# `index.json` era escrito à mão (1 jogo na tela, 3 no disco).
+cmd_instalar_pacote() {
+  exigir_aparelho
+  local arquivo="$1"
+  if [ -z "$arquivo" ]; then
+    falha "informe o pacote: aparelho.sh instalar-pacote <arquivo.giochi>"
+    return 1
+  fi
+  if [ ! -f "$arquivo" ]; then
+    falha "pacote não existe: $arquivo"
+    return 1
+  fi
+
+  titulo "verificando $(basename "$arquivo")"
+  if ! node "$RAIZ/scripts/verificar-pacote.mjs" "$arquivo" | sed 's/^/  /'; then
+    falha "pacote recusado — não foi enviado"
+    return 1
+  fi
+
+  # O slug vem do próprio pacote, não do nome do arquivo: renomear o arquivo não
+  # pode mudar onde ele é instalado.
+  local meta
+  meta=$(node -e "
+    const { readFileSync } = require('fs');
+    const m = require('$RAIZ/scripts/lib/publicar.mjs');
+    const p = readFileSync('$arquivo');
+    const meta = [...m.lerTar(p)].find((x) => x.caminho === 'metadata.json');
+    const j = JSON.parse(meta.conteudo.toString('utf8'));
+    console.log(JSON.stringify(j));
+  " 2>/dev/null)
+  if [ -z "$meta" ]; then
+    falha "não consegui ler o metadata.json do pacote"
+    return 1
+  fi
+
+  local slug destino
+  slug=$(printf '%s' "$meta" | node -e "
+    let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{
+      const j = JSON.parse(s);
+      // Sem slug no metadata, o título vira slug: é o que o usuário veria.
+      const base = (j.slug || j.title || '').toString();
+      console.log(base.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'')
+        .replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'app');
+    })")
+  destino="/opt/giochi/apps/$slug"
+
+  titulo "instalando em $destino"
+  local temp
+  temp=$(mktemp "${TMPDIR:-/tmp}/giochi-pkg.XXXXXX.giochi")
+  cp "$arquivo" "$temp"
+
+  if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "$temp" "root@$HOST:/tmp/pacote.giochi" 2>/dev/null; then
+    falha "não consegui enviar o pacote"
+    rm -f "$temp"
+    return 1
+  fi
+  rm -f "$temp"
+
+  # O extrator é um script **do aparelho**, copiado junto com o pacote.
+  #
+  # A primeira versão montava um `sh -c` com aspas dentro de aspas dentro de
+  # `ssh`, e o shell comeu o `$(...)`: `sh: "bin/giochi-pacman": unknown
+  # operand`. Copiar um arquivo custa um `scp` e elimina a classe.
+  if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "$RAIZ/scripts/lib/extrair-pacote.sh" \
+       "root@$HOST:/tmp/extrair-pacote.sh" 2>/dev/null; then
+    falha "não consegui enviar o extrator"
+    return 1
+  fi
+
+  local saida
+  saida=$(no_aparelho "sh /tmp/extrair-pacote.sh /tmp/pacote.giochi '$destino'; rm -f /tmp/extrair-pacote.sh" 2>&1)
+
+  case "$saida" in
+    OK*)
+      ok "extraído: ${saida#OK }"
+      ;;
+    ERRO*)
+      falha "${saida#ERRO }"
+      no_aparelho "rm -f /tmp/pacote.giochi" >/dev/null 2>&1
+      return 1
+      ;;
+    *)
+      falha "instalação falhou: $saida"
+      return 1
+      ;;
+  esac
+
+  # Republica o catálogo incluindo o que está instalado no aparelho.
+  cmd_catalogo >/dev/null 2>&1 || { aviso "instalado, mas o catálogo não foi republicado"; return 1; }
+  ok "catálogo republicado"
+
+  printf '\n  o launcher lê o catálogo na abertura:\n'
+  printf '  bash scripts/aparelho.sh parar && bash scripts/aparelho.sh subir\n'
+}
+
+#
+# Colhe do aparelho o que está instalado, para o gerador juntar ao catálogo.
+#
+# A varredura é no **aparelho** e não no repositório porque um pacote da loja não
+# existe no repositório: ele chega pelo cartão e é extraído em
+# `/opt/giochi/apps/<slug>/`. Perguntar ao disco do aparelho é a única resposta
+# que não pode mentir.
+colher_instalados() {
+  local destino="$1"
+  no_aparelho '
+    for d in /opt/giochi/apps/*/; do
+      m="$d/metadata.json"
+      [ -f "$m" ] || continue
+      id=$(basename "$d")
+      # `tr -d` de quebra de linha: metadata.json é JSON válido com quebras.
+      meta=$(cat "$m" | tr -d "\n\r")
+      printf "{\"id\":\"%s\",\"dir\":\"%s\",\"metadata\":%s}\n" "$id" "${d%/}" "$meta"
+    done
+  ' 2>/dev/null | node -e "
+    let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{
+      const lista=[];
+      for (const linha of s.split('\n')) {
+        if (!linha.trim()) continue;
+        try { lista.push(JSON.parse(linha)); } catch { /* metadata inválido: ignora */ }
+      }
+      require('fs').writeFileSync('$destino', JSON.stringify(lista, null, 2) + '\n');
+      console.error('  aparelho informa ' + lista.length + ' app(s) instalado(s)');
+    })"
+}
+
 cmd_boot_log() {
   exigir_aparelho
   local origem="/root/giochi-boot.log"
@@ -806,6 +963,9 @@ case "${1:-ajuda}" in
   opcoes)      cmd_opcoes ;;
   boot-log)    cmd_boot_log ;;
   catalogo)    cmd_catalogo ;;
+  instalar-pacote|pacote)
+    shift
+    cmd_instalar_pacote "${1:-}" ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.
@@ -813,7 +973,7 @@ case "${1:-ajuda}" in
     ;;
   *)
     falha "subcomando desconhecido: $1"
-    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log | catalogo\n'
+    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log | catalogo | instalar-pacote\n'
     exit 1
     ;;
 esac

@@ -5,13 +5,27 @@
   "description": "Identidade de um app publicado. Formato herdado do antecessor GIOCHI-KONSOL-OS; additionalProperties:false e intencional.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "developer", "version", "arch", "runtime", "entrypoint"],
+  "required": [
+    "title",
+    "developer",
+    "version",
+    "arch",
+    "runtime",
+    "entrypoint"
+  ],
   "properties": {
     "title": {
       "type": "string",
       "minLength": 1,
       "maxLength": 120,
       "description": "Nome exibido na loja."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "minLength": 1,
+      "maxLength": 40,
+      "description": "Opcional. Identidade estável do pacote (kebab-case). Vai para /opt/giochi/apps/<slug> e é a chave do catálogo. Sem ele, a loja deriva do título — e renomear o título moveria o app de lugar."
     },
     "developer": {
       "type": "string",
@@ -37,11 +51,18 @@
       "description": "Semver obrigatório: 1.0.0, nunca 1.0."
     },
     "arch": {
-      "enum": ["aarch64"],
+      "enum": [
+        "aarch64"
+      ],
       "description": "Arquitetura única do console."
     },
     "runtime": {
-      "enum": ["godot", "retroarch", "proton", "native"],
+      "enum": [
+        "godot",
+        "retroarch",
+        "proton",
+        "native"
+      ],
       "description": "Único vocabulário fechado compartilhado entre app e sistema. 'native' cobre binário próprio (Python, C++, C)."
     },
     "entrypoint": {
@@ -50,7 +71,10 @@
       "description": "Caminho relativo dentro de bin/. Não pode ser absoluto nem conter '..'."
     },
     "graphics_api": {
-      "enum": ["gles2", "gles3"],
+      "enum": [
+        "gles2",
+        "gles3"
+      ],
       "description": "Opcional. API gráfica usada em tempo de execução."
     },
     "license": {

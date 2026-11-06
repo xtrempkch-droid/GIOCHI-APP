@@ -10,7 +10,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { DIR_BASE_PADRAO, gerarCatalogo, lerMetadata, serializar } from "../scripts/lib/catalogo.mjs";
+import {
+  DIR_BASE_PADRAO,
+  gerarCatalogo,
+  lerMetadata,
+  mesclarInstalados,
+  MOTIVOS,
+  serializar,
+} from "../scripts/lib/catalogo.mjs";
 
 function withTempDir(run) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "giochi-cat-"));
@@ -229,4 +236,116 @@ test("na árvore real: três jogos, sem o launcher", () => {
     assert.ok(app.dir.startsWith(DIR_BASE_PADRAO), `${app.id}: dir fora da base`);
     assert.ok(app.title, `${app.id}: sem título`);
   }
+});
+
+// ── Pacotes da loja instalados no aparelho ─────────────────
+//
+// Estes testes cobrem o buraco que existia: um `.giochi` vem da loja, é extraído
+// em `/opt/giochi/apps/<slug>/` e **não está** no `apps.json`. Sem a junção ele
+// ficaria fora do catálogo — invisível, e sem nenhum erro.
+
+const META_INSTALADO = {
+  slug: "pacman",
+  title: "Pac-Man",
+  developer: "Giochi",
+  version: "0.1.0",
+  arch: "aarch64",
+  runtime: "native",
+  entrypoint: "bin/giochi-pacman",
+  category: "Arcade",
+  releaseYear: 1980,
+};
+
+test("app instalado que não está no apps.json entra no catálogo", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { catalogo } = mesclarInstalados(base, [
+    { id: "pacman", dir: "/opt/giochi/apps/pacman", metadata: META_INSTALADO },
+  ]);
+
+  assert.equal(catalogo.apps.length, 1);
+  const app = catalogo.apps[0];
+  assert.equal(app.id, "pacman");
+  assert.equal(app.dir, "/opt/giochi/apps/pacman");
+  assert.equal(app.entrypoint, "bin/giochi-pacman");
+  assert.equal(app.year, 1980);
+  assert.equal(app.category, "Arcade");
+});
+
+test("instalado substitui a entrada do repositório e o aviso diz isso", () => {
+  const base = {
+    schemaVersion: 1,
+    apps: [
+      {
+        id: "pacman",
+        version: "0.0.1",
+        entrypoint: "bin/giochi-pacman",
+        dir: "/opt/giochi/apps/pacman",
+        title: "Pacman",
+        developer: "Giochi",
+      },
+    ],
+  };
+  const { catalogo, avisos } = mesclarInstalados(base, [
+    {
+      id: "pacman",
+      metadata: { ...META_INSTALADO, version: "0.2.0", title: "Pac-Man" },
+    },
+  ]);
+
+  assert.equal(catalogo.apps.length, 1, "não pode duplicar");
+  assert.equal(catalogo.apps[0].version, "0.2.0", "o disco vence");
+  assert.ok(avisos.some((a) => a.motivo === MOTIVOS.INSTALADO_SUBSTITUI));
+});
+
+test("substituir preserva a licença, que só existe no apps.json", () => {
+  // Regressão real: depois de instalar o pacote, o pacman apareceu no catálogo
+  // do aparelho **sem `license`**, porque a entrada inteira era trocada.
+  const base = {
+    schemaVersion: 1,
+    apps: [
+      {
+        id: "pacman",
+        version: "0.1.0",
+        entrypoint: "bin/giochi-pacman",
+        dir: "/opt/giochi/apps/pacman",
+        title: "Pac-Man",
+        developer: "Giochi",
+        license: "Proprietary",
+      },
+    ],
+  };
+  const { catalogo } = mesclarInstalados(base, [
+    { id: "pacman", dir: "/opt/giochi/apps/pacman", metadata: META_INSTALADO },
+  ]);
+  assert.equal(catalogo.apps[0].license, "Proprietary", "a licença não pode sumir");
+});
+
+test("pacote com entrypoint inválido não entra no catálogo", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { catalogo, avisos } = mesclarInstalados(base, [
+    { id: "ruim", metadata: { ...META_INSTALADO, entrypoint: "/etc/passwd" } },
+  ]);
+  assert.equal(catalogo.apps.length, 0);
+  assert.ok(avisos.some((a) => a.motivo.includes("entrypoint inválido")));
+});
+
+test("id ausente ou metadata ausente são ignorados sem quebrar", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { catalogo } = mesclarInstalados(base, [
+    { id: "", metadata: META_INSTALADO },
+    { id: "x", metadata: null },
+  ]);
+  assert.equal(catalogo.apps.length, 0);
+});
+
+test("a ordem por título é preservada depois da junção", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { catalogo } = mesclarInstalados(base, [
+    { id: "zzz", metadata: { ...META_INSTALADO, slug: "zzz", title: "Zzz" } },
+    { id: "aaa", metadata: { ...META_INSTALADO, slug: "aaa", title: "Aaa" } },
+  ]);
+  assert.deepEqual(
+    catalogo.apps.map((a) => a.title),
+    ["Aaa", "Zzz"],
+  );
 });

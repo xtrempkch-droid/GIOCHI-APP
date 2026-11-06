@@ -299,10 +299,15 @@ Giochi app/
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   ├── verificar-telas.mjs    # as 12 telas em 3 tamanhos: cabe? ocupa quanto?
 │   ├── verificar-mapa.mjs     # buttons.map contra os símbolos do launcher
+│   ├── empacotar.mjs          # app → .giochi assinado (Ed25519)
+│   ├── verificar-pacote.mjs   # estrutura + sha256 + assinatura
 │   ├── verificar-jogos.mjs    # geometria dos jogos: a célula é legível?
 │   ├── gerar-catalogo.mjs     # projeta o índice do aparelho
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
 │   └── lib/
+│       ├── tar.mjs            # ustar à mão: ordem, reprodutibilidade, exec bit
+│       ├── publicar.mjs       # valida, ordena, assina, verifica o pacote
+│       ├── extrair-pacote.sh  # extrator que roda NO aparelho
 │       ├── apps.mjs
 │       ├── png.mjs
 │       └── capacidades.mjs    # bitmask B: KEY= de /proc/bus/input/devices
@@ -441,7 +446,7 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 97 testes JS
+node tests/run-all.mjs                    # 133 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
@@ -1039,6 +1044,78 @@ A primeira versão logava só quando a **bateria** mudava. Uma leitura de
 temperatura que falhasse (sensor ausente, caminho diferente) ficava invisível: a
 HUD mostrava `—` e nada dizia se era ausência real ou bug. Agora os dois valores
 saem juntos quando qualquer um muda.
+
+### O pacote `.giochi` existe — e o download da loja não
+
+**Feito em 06/11/2026**, substituindo a afirmação "nada disso está implementado"
+que o `docs/pacote.md` carregava.
+
+```text
+app/jogos/pacman ──empacotar──▶ pacman.giochi (+.sig +.manifest.json)
+                              ──instalar-pacote──▶ /opt/giochi/apps/pacman
+                              ──catálogo──▶ cartão na tela ──▶ jogo
+```
+
+**Medido no X55** — o ciclo inteiro:
+
+```text
+287  giochi-launcher --lancar pacman     ← pai
+300  giochi-pacman                       ← filho, iniciado pelo launcher
+quadro depois da volta: 346 cores, 0,00% de preto
+```
+
+#### Por que o `tar` é escrito à mão (`scripts/lib/tar.mjs`)
+
+1. **Ordem** — o `tar` do sistema usa a ordem do `readdir`; aqui a ordem é
+   contrato e a montagem é uma função só, testável.
+2. **Reprodutibilidade** — `mtime`/`uid`/`gid` fixos. Dois empacotamentos do
+   mesmo conteúdo dão **o mesmo SHA-256** (conferido). Se mudasse, a assinatura
+   deixaria de identificar o conteúdo.
+3. **Bit de execução** — `tar --mode` mascara permissão, e o erro só apareceria
+   no aparelho como "entrypoint não existe".
+
+Verificado contra o `tar` do sistema: GNU tar lê o ustar escrito à mão, extrai
+com as permissões certas e `test -x` passa. Sem essa conferência seria o meu
+parser concordando com o meu escritor.
+
+#### `slug`: a identidade não pode vir do título
+
+`metadata.json` ganhou `slug` opcional. Derivar o diretório do **título** faria
+"Pac-Man" → "Pac-Man DX" mover o app de lugar, quebrando catálogo e favorito.
+Ordem: `metadata.slug` → `id` do `apps.json` → título (último recurso, e o
+pacote diz que usou).
+
+Achado real: a primeira instalação foi para `/opt/giochi/apps/pac-man` (do
+título) enquanto o catálogo apontava para `pacman`.
+
+#### O catálogo passou a incluir o que veio da loja
+
+Um `.giochi` **não está** no `apps.json`. `aparelho.sh catalogo` agora colhe do
+aparelho o que está em `/opt/giochi/apps/*/metadata.json` e o gerador junta,
+com o disco vencendo. Sem isso, instalar pela loja deixaria o jogo **invisível
+sem erro**.
+
+Segundo achado: substituir a entrada inteira apagava `license` (que só existe no
+`apps.json`) — o pacman apareceu no catálogo sem licença. Agora herda.
+
+#### O extrator é script copiado, não `sh -c` aninhado
+
+A primeira versão montava o comando com aspas dentro de aspas dentro de `ssh` e
+produziu `sh: "bin/giochi-pacman": unknown operand`. Aninhar três níveis de aspas
+para falar com outra máquina não é difícil de escrever — é difícil de **ler
+quando falha**. Hoje é `scripts/lib/extrair-pacote.sh`, copiado e executado.
+
+#### O que NÃO existe: a loja
+
+Nenhuma linha de OAuth, butler/butlerd ou UI de loja foi escrita. Falta
+`client_id` registrado no itch.io e rede para testar. Está em
+[`docs/loja.md`](docs/loja.md) §2, com as decisões que precisam vir antes (§4) —
+inclusive que a chave do formato hoje é única, e multi-assinatura é mudança de
+formato.
+
+E a limitação mais dura, que não é de código: **catálogo de jogos de PC não é
+catálogo de jogos ARM64**. Hoje existem três jogos escritos aqui e quatro
+projetos Godot sem export.
 
 ### A aba de configurações não era navegável — e Wi-Fi/BT não existiam
 

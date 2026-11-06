@@ -1,5 +1,6 @@
 {
   "title": "Pac-Man",
+  "slug": "pacman",
   "developer": "Giochi",
   "version": "0.1.0",
   "arch": "aarch64",
