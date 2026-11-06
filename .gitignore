@@ -38,5 +38,11 @@ app/jogos/*/src/nativo/*-host
 
 # NÃO ignore bin/: é exatamente o que vai para o aparelho.
 
+# Sobra de tentativa durante a quebra do shell (06/11/2026): o `bash` morreu com
+# `Exec format error` e eu tentei rodar `git` por um kernel de notebook. Não
+# funcionou, e o arquivo ficou. Não é código deste repositório — apagar é o certo,
+# mas enquanto não há shell ele não pode entrar num `git add -A`.
+salva-vidas.ipynb
+
 # Rust — saída de build
 target/
