@@ -2747,6 +2747,30 @@ foi um bug: a navegação usava o valor padrão de grade em vez do real.
 4. **`sd2::ttf::init()` não pode ser chamado duas vezes** — mesmo problema do
    launcher; o contexto é vazado com `Box::leak`.
 
+### Os três sistemas: provados no CI
+
+Run `42222562164`, commit `9873580` — quatro jobs verdes (núcleo, linux, macos,
+windows). Cada runner **executou** o binário com `SDL_VIDEODRIVER=dummy`, exigiu
+quadro do tamanho exato e exigiu que `--teclas down,down` mudasse a seleção para 2
+**e** produzisse BMP diferente do primeiro.
+
+```text
+loja-linux      280.621 bytes
+loja-macos      241.678 bytes   (assinado ad-hoc no CI: sem isso o Gatekeeper mata)
+loja-windows    202.296 bytes   + SDL2.dll e SDL2_ttf.dll ao lado
+```
+
+Duas rodadas falharam antes de chegar aqui, e as duas valem como regra:
+
+1. **vcpkg nunca era consultado.** `sdl2` 0.37 tem `default = []`, sem
+   `use-vcpkg`; o `sdl2-sys` emite só `-l SDL2` e deixa o linker procurar.
+   Exportar `SDL2_DIR` não faz nada. O que funciona no MSVC é `LIB`, e os zips
+   oficiais "VC" trazem `include/` + `lib/x64/` prontos.
+2. **Verificação de CI não lê texto acentuado.** `-match "seleção: 2"` falha no
+   PowerShell 5.1 (code page OEM), e `$array -notmatch "x"` **filtra** em vez de
+   testar, então a condição ficava sempre verdadeira. Daí `--json` com saída
+   ASCII pura, e diagnóstico no stderr para o stdout ser só dado.
+
 ### Onde a chave pública mora: ainda em aberto
 
 O verificador de pacote já roda no aparelho (`verificador-ed25519`), mas `/etc/giochi/`

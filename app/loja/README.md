@@ -73,4 +73,5 @@ ela era sobre imitar um console. Uma loja precisa de lista, texto e botão.
 | navega | `--teclas down,down` → seleção 2, e o BMP **difere** do primeiro |
 | build Linux | 525.456 bytes em release |
 | emite e confere licença | `cargo run --example emitir_licenca` |
-| Windows e macOS | CI escrito; **não executado ainda** |
+| Windows e macOS | **executado no CI** (run `42222562164`): os três desenharam quadro e navegaram |
+| tamanho dos binários | linux 280.621 · macos 241.678 · windows 202.296 bytes |

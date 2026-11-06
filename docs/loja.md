@@ -307,8 +307,9 @@ pergunta já enviada ao Giochi System sobre `loja-publica.pem`.
 | Núcleo (catálogo, chave, licença, pedido, pacote, baixador) | **65 testes**, sem SDL |
 | Interface (SDL2, quatro telas) | **9 testes** + prova de quadro |
 | `--dump-frame` / `--teclas` | **executado**: quadro de 3.587.254 bytes, navegação muda o quadro |
-| Build Linux | **executado**: 525.456 bytes em release |
-| Build Windows e macOS | **CI escrito, não executado** |
+| Build Linux, Windows e macOS | **executado no CI**, run `42222562164`: quatro jobs verdes |
+| Tamanho por sistema | linux 280.621 · macos 241.678 · windows 202.296 bytes |
+| Desenho nos três | **provado**: quadro de tamanho exato em cada runner |
 | Emissão de licença (ferramenta de teste) | **executado**: emite e **confere** o que emitiu |
 | Backend de pagamento | **não existe** |
 | Licença validada no aparelho | **não** — só no PC |

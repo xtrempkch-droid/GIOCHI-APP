@@ -230,12 +230,35 @@ jobs:
           $b = Get-FileHash $env:TEMP\baixo.bmp
           if ($a.Hash -eq $b.Hash) { Write-Host "quadros identicos"; exit 1 }
 
+      # O artefato precisa ser **executável por quem baixa**, não só "o binário".
+      #
+      # No Windows isso significa as DLLs do SDL2 ao lado do `.exe`: sem elas o
+      # processo morre com `0xc0000135` e nenhuma mensagem. No macOS, o Gatekeeper
+      # recusa binário não assinado — assinatura ad-hoc não é notarização, mas é o
+      # que faz o arquivo abrir em vez de ser bloqueado.
+      - name: Assinatura ad-hoc (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --sign - app/loja/target/release/giochi-loja
+          codesign --verify --verbose app/loja/target/release/giochi-loja
+
+      - name: Empacotar o artefato
+        shell: bash
+        run: |
+          mkdir -p dist/loja
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp app/loja/target/release/giochi-loja.exe dist/loja/
+            cp app/loja/target/release/*.dll dist/loja/ 2>/dev/null || true
+          else
+            cp app/loja/target/release/giochi-loja dist/loja/
+          fi
+          cp app/loja/README.md dist/loja/ 2>/dev/null || true
+          ls -la dist/loja/
+
       - name: Anexar binários
         uses: actions/upload-artifact@v4
         with:
           name: loja-${{ matrix.rotulo }}
-          path: |
-            app/loja/target/release/giochi-loja
-            app/loja/target/release/giochi-loja.exe
-          if-no-files-found: warn
+          path: dist/loja/**
+          if-no-files-found: error
           retention-days: 14
