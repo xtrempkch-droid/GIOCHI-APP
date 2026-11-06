@@ -38,6 +38,12 @@ const TELAS = [
   "detalhe",
   "energia",
   "sono",
+  // Telas de rede: existem desde 06/11/2026 e ficaram de fora desta lista na
+  // primeira versão — sonhar com uma tela nova sem acrescentá-la aqui deixa o
+  // teste cego justamente para ela.
+  "wifi",
+  "senha",
+  "bluetooth",
 ];
 
 function argumentos(argv) {

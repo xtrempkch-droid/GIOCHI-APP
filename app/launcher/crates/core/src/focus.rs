@@ -5,7 +5,7 @@
 //! navegação em silêncio.
 
 use crate::cmd::Dir;
-use crate::state::State;
+use crate::state::{State, KEYBOARD_COLS};
 
 /// Regiões navegáveis da interface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,6 +15,18 @@ pub enum Zone {
     LibraryGrid,
     AppsGrid,
     SettingsSidebar,
+    /// Linhas do painel de conteúdo das configurações.
+    ///
+    /// Existia `SettingsSidebar` e **não** existia esta. O painel da direita era
+    /// desenhado como texto e nenhuma linha recebia foco — a aba de ajustes era
+    /// navegável só na coluna da esquerda, e as opções de dentro não abriam.
+    SettingsContent,
+    /// Lista de redes Wi-Fi.
+    WifiNetworks,
+    /// Teclado da senha. Usa o mesmo `KEYBOARD` da busca, com outro destino.
+    PasswordKeys,
+    /// Lista de dispositivos Bluetooth.
+    BtDevices,
     SearchKeyboard,
     SearchResults,
     QuickSettings,
@@ -31,6 +43,10 @@ impl Zone {
             Zone::LibraryGrid => 4,
             Zone::AppsGrid => 4,
             Zone::SettingsSidebar => 1,
+            Zone::SettingsContent => 1,
+            Zone::WifiNetworks => 1,
+            Zone::PasswordKeys => KEYBOARD_COLS,
+            Zone::BtDevices => 1,
             Zone::SearchKeyboard => 7,
             Zone::SearchResults => 1,
             Zone::QuickSettings => 1,
@@ -106,6 +122,24 @@ pub fn navigate(state: &State, dir: Dir) -> Option<Focus> {
             Dir::Down => Some(Focus::at(Zone::LibraryGrid, 0)),
             _ => None,
         };
+    }
+
+    // Configurações: a coluna lateral é a esquerda do painel de conteúdo.
+    //
+    // Sem esta ligação o painel da direita nunca recebia foco: dava para
+    // destacar a categoria, mas não para entrar nas opções de dentro. Era a
+    // queixa literal — "a aba de configuração não é navegável".
+    if zone == Zone::SettingsSidebar && dir == Dir::Right {
+        return if state.zone_len(Zone::SettingsContent) == 0 {
+            None
+        } else {
+            Some(Focus::at(Zone::SettingsContent, 0))
+        };
+    }
+
+    // E a volta: ← do painel devolve para a coluna, na categoria atual.
+    if zone == Zone::SettingsContent && dir == Dir::Left {
+        return Some(Focus::at(Zone::SettingsSidebar, state.settings_category));
     }
 
     // Busca: sair da grade de resultados volta para o teclado.
@@ -231,6 +265,59 @@ mod tests {
         let next = navigate(&s, Dir::Up).unwrap();
         assert_eq!(next.zone, Zone::LibraryFilters);
         assert_eq!(next.index, 0);
+    }
+
+    /// A queixa do usuário, em teste: "a aba de configuração não é navegável".
+    ///
+    /// Antes, a coluna da esquerda recebia foco e o painel da direita não — só
+    /// existia `Zone::SettingsSidebar`. Dava para destacar "Rede e BT" e não
+    /// dava para entrar em Wi-Fi. Nenhum teste olhava para isso.
+    #[test]
+    fn direita_entra_no_painel_de_configuracoes() {
+        let mut s = state_with(1, 1);
+        s.tab = crate::state::Tab::Settings;
+        s.settings_category = 2; // rede
+        s.focus = Focus::at(Zone::SettingsSidebar, 2);
+
+        let next = navigate(&s, Dir::Right).expect("tem de entrar no painel");
+        assert_eq!(next.zone, Zone::SettingsContent);
+        assert_eq!(next.index, 0, "entra pela primeira linha");
+    }
+
+    #[test]
+    fn esquerda_do_painel_volta_para_a_coluna() {
+        let mut s = state_with(1, 1);
+        s.tab = crate::state::Tab::Settings;
+        s.settings_category = 2;
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+
+        let next = navigate(&s, Dir::Left).unwrap();
+        assert_eq!(next.zone, Zone::SettingsSidebar);
+        assert_eq!(next.index, 2, "volta na categoria em que estava");
+    }
+
+    #[test]
+    fn painel_de_configuracoes_nao_sai_pelas_bordas() {
+        let mut s = state_with(1, 1);
+        s.tab = crate::state::Tab::Settings;
+        s.settings_category = 2; // duas linhas
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+        assert!(navigate(&s, Dir::Up).is_none(), "não passa do topo");
+
+        s.focus = Focus::at(Zone::SettingsContent, 1);
+        assert!(navigate(&s, Dir::Down).is_none(), "não passa do fim");
+    }
+
+    #[test]
+    fn categoria_sem_linhas_nao_recebe_foco() {
+        let mut s = state_with(1, 1);
+        s.tab = crate::state::Tab::Settings;
+        s.settings_category = 5; // "sobre": só texto
+        s.focus = Focus::at(Zone::SettingsSidebar, 5);
+        assert!(
+            navigate(&s, Dir::Right).is_none(),
+            "entrar num painel vazio prenderia o foco sem nada para onde ir"
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ mod energia;
 mod icons;
 mod input_evdev;
 mod power;
+mod semfio;
 mod system;
 mod theme;
 mod views;
@@ -48,6 +49,18 @@ fn main() -> Result<(), String> {
         .position(|a| a == "--dump-frame")
         .and_then(|i| args.get(i + 1))
         .cloned();
+    // Espera antes de gravar o quadro, em milissegundos.
+    //
+    // Existe porque algumas telas só ficam prontas depois de trabalho
+    // assíncrono: a lista de redes chega do `wpa_cli` uns 5 s depois de abrir.
+    // Sem esta espera o BMP sai em "Procurando…" e a foto não prova nada sobre
+    // a lista.
+    let espera_ms: u64 = args
+        .iter()
+        .position(|a| a == "--esperar-ms")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let font_path = args
         .iter()
         .position(|a| a == "--font")
@@ -222,6 +235,41 @@ fn main() -> Result<(), String> {
         eprintln!("tela forcada por --tela: {tela}");
     }
 
+    // `--rede-real`: descarta o exemplo e pede uma varredura de verdade.
+    //
+    // As telas de rede abrem com dados de exemplo para fotografar o layout sem
+    // hardware. Isso é bom para olhar o desenho e péssimo para provar que o
+    // `wpa_cli` funciona: a foto mostraria números inventados e chamaria de
+    // sucesso. Este sinal limpa o exemplo e liga a varredura real.
+    if args.iter().any(|a| a == "--rede-real") {
+        state.sem_fio.redes.clear();
+        state.sem_fio.dispositivos.clear();
+        state.sem_fio.conectado = None;
+        state.sem_fio.erro = None;
+        state.sem_fio.escaneando = true;
+        state.sem_fio.bt_escaneando = true;
+        eprintln!("--rede-real: varredura de verdade pedida");
+    }
+
+    // `--foco zona:indice`: coloca o destaque onde o teste precisa vê-lo.
+    //
+    // Existe porque um quadro parado no estado inicial nunca mostra o anel de
+    // foco da tela fotografada — e foi justamente a falta de foco no painel de
+    // configurações a queixa do usuário. Sem isto, "tem anel" e "não tem anel"
+    // produzem o mesmo BMP.
+    if let Some(i) = args.iter().position(|a| a == "--foco") {
+        let pedido = args.get(i + 1).ok_or("--foco precisa de zona:indice")?;
+        let (zona, indice) = pedido
+            .split_once(':')
+            .ok_or_else(|| format!("--foco espera zona:indice, veio {pedido}"))?;
+        let zona = zona_com_nome(zona).ok_or_else(|| format!("--foco: zona desconhecida: {zona}"))?;
+        let indice: usize = indice
+            .parse()
+            .map_err(|_| format!("--foco: índice inválido: {indice}"))?;
+        state.focus = giochi_launcher_core::Focus::at(zona, indice);
+        eprintln!("foco forcado por --foco: {zona:?} {indice}");
+    }
+
     // `--lancar <id|slug>`: pede o lançamento já na abertura.
     //
     // Existe porque o caminho "abrir display → rodar app → reabrir" não tem
@@ -268,8 +316,30 @@ fn main() -> Result<(), String> {
 
     let mut app = app::App::new(painter, state, evdev);
 
+    // `--conectar ssid[:senha]` e `--parear mac`: exercitam o caminho de rede
+    // sem dedo na tela. Imprimem o resultado e saem — são diagnóstico, não uso
+    // normal, e por isso não esperam o laço de entrada.
+    if let Some(i) = args.iter().position(|a| a == "--conectar") {
+        let pedido = args.get(i + 1).ok_or("--conectar precisa de ssid[:senha]")?;
+        let (ssid, senha) = pedido.split_once(':').unwrap_or((pedido, ""));
+        eprintln!("--conectar: {ssid} (senha de {} caractere(s))", senha.chars().count());
+        app.pedir_sem_fio(semfio::Pedido::Conectar {
+            ssid: ssid.to_string(),
+            senha: senha.to_string(),
+        });
+    }
+    if let Some(i) = args.iter().position(|a| a == "--parear") {
+        let mac = args.get(i + 1).ok_or("--parear precisa de um MAC")?;
+        eprintln!("--parear: {mac}");
+        app.pedir_sem_fio(semfio::Pedido::Parear {
+            mac: mac.to_string(),
+        });
+    }
+    let diagnosticando = args.iter().any(|a| a == "--conectar") || args.iter().any(|a| a == "--parear");
+
     let mut events = sdl.event_pump()?;
     let mut last = Instant::now();
+    let inicio = Instant::now();
 
     'outer: loop {
         for event in events.poll_iter() {
@@ -328,7 +398,22 @@ fn main() -> Result<(), String> {
         app.tick(delta.min(0.1));
         app.render();
 
-        if let Some(path) = dump_frame.as_deref() {
+        // Diagnóstico de rede: o veredito é o aviso na tela, então espera ele
+        // aparecer (ou desiste) e encerra com o texto no stderr.
+        if diagnosticando {
+            if let Some(msg) = app.ultimo_aviso() {
+                eprintln!("rede: {msg}");
+                return Ok(());
+            }
+            if inicio.elapsed().as_secs() > 40 {
+                eprintln!("rede: sem resposta em 40 s");
+                return Ok(());
+            }
+        }
+
+        if let Some(path) = dump_frame.as_deref()
+            .filter(|_| inicio.elapsed().as_millis() as u64 >= espera_ms)
+        {
             // Com `--tela` a tela pedida pode não ser `Running` (sono, desligar).
             // Nesse caso grava no primeiro quadro, senão o laço nunca termina.
             let alvo = app.state.screen == giochi_launcher_core::Screen::Running
@@ -560,15 +645,113 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
             state.overlays.push(Overlay::PowerPopup);
         }
         "sono" | "sleeping" => state.screen = Screen::Sleeping,
+        // Telas de rede. Vêm com dados de exemplo porque a lista vazia esconde
+        // justamente o que interessa conferir: truncamento de SSID longo,
+        // muitas redes empilhadas, senha comprida demais para o campo.
+        "wifi" => {
+            state.tab = Tab::Settings;
+            state.settings_category = 2;
+            state.sem_fio = exemplo_redes();
+            state.overlays.push(Overlay::WifiList);
+        }
+        "senha" | "wifisenha" => {
+            state.tab = Tab::Settings;
+            state.settings_category = 2;
+            state.sem_fio = exemplo_redes();
+            state.sem_fio.alvo = Some("Kill.exe".into());
+            state.sem_fio.senha = "senha-de-exemplo".into();
+            state.overlays.push(Overlay::WifiPassword);
+        }
+        "bluetooth" | "bt" => {
+            state.tab = Tab::Settings;
+            state.settings_category = 2;
+            state.sem_fio = exemplo_redes();
+            state.overlays.push(Overlay::BtList);
+        }
         outro => {
             return Err(format!(
                 "tela desconhecida: {outro}\n\
                  use: home, biblioteca, apps, ajustes, busca, rapido, detalhe, \
-                 energia, sono"
+                 energia, sono, wifi, senha, bluetooth"
             ))
         }
     }
     Ok(())
+}
+
+/// Nome de zona aceito em `--foco`.
+///
+/// A lista é explícita, não um `Debug` parseado: renomear uma variante não deve
+/// mudar em silêncio o que os scripts de verificação pedem.
+fn zona_com_nome(nome: &str) -> Option<giochi_launcher_core::Zone> {
+    use giochi_launcher_core::Zone;
+    Some(match nome.to_ascii_lowercase().as_str() {
+        "home" | "carrossel" => Zone::HomeCarousel,
+        "filtros" => Zone::LibraryFilters,
+        "biblioteca" | "grade" => Zone::LibraryGrid,
+        "apps" => Zone::AppsGrid,
+        "categorias" => Zone::SettingsSidebar,
+        "ajustes" | "conteudo" => Zone::SettingsContent,
+        "wifi" => Zone::WifiNetworks,
+        "senha" => Zone::PasswordKeys,
+        "bluetooth" | "bt" => Zone::BtDevices,
+        "teclado" => Zone::SearchKeyboard,
+        "resultados" => Zone::SearchResults,
+        "rapido" => Zone::QuickSettings,
+        "detalhe" => Zone::GameDetailActions,
+        "energia" => Zone::PowerActions,
+        _ => return None,
+    })
+}
+
+/// Redes e aparelhos de exemplo para fotografar as telas sem hardware.
+///
+/// Os nomes vêm de uma varredura real do X55 (06/11/2026) — inclusive um SSID
+/// longo, que é o que testa o truncamento, e uma rede sem nome.
+fn exemplo_redes() -> giochi_launcher_core::SemFio {
+    use giochi_launcher_core::{DispositivoBt, Rede, SemFio};
+    SemFio {
+        redes: vec![
+            Rede {
+                ssid: "Kill.exe".into(),
+                sinal: 100,
+                protegida: true,
+                salva: true,
+            },
+            Rede {
+                ssid: "ISABELA_2.4GHz".into(),
+                sinal: 74,
+                protegida: true,
+                salva: false,
+            },
+            Rede {
+                ssid: "ORLEANS".into(),
+                sinal: 60,
+                protegida: true,
+                salva: false,
+            },
+            Rede {
+                ssid: "Cafe Aberto Sem Senha".into(),
+                sinal: 48,
+                protegida: false,
+                salva: false,
+            },
+        ],
+        conectado: Some("Kill.exe".into()),
+        dispositivos: vec![
+            DispositivoBt {
+                mac: "AC:12:2F:34:56:78".into(),
+                nome: "Controle Sem Fio".into(),
+                pareado: true,
+            },
+            DispositivoBt {
+                mac: "52:79:B8:05:84:F2".into(),
+                nome: "aparelho sem nome".into(),
+                pareado: false,
+            },
+        ],
+        ..SemFio::default()
+    }
 }
 
 /// Catálogo de demonstração.

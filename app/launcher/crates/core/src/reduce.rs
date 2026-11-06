@@ -102,6 +102,119 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         Cmd::SearchBackspace => pop_char(state),
         // As leituras reais vêm do sistema; ver `TickHud` em `docs/arquitetura.md`.
         Cmd::TickHud => state,
+        // ── Wi-Fi / Bluetooth ────────────────────────────────
+        Cmd::RedesWifi(redes, erro) => State {
+            sem_fio: crate::state::SemFio {
+                redes,
+                escaneando: false,
+                erro,
+                ..state.sem_fio
+            },
+            ..state
+        },
+        Cmd::EscaneandoWifi(ligado) => State {
+            sem_fio: crate::state::SemFio {
+                escaneando: ligado,
+                ..state.sem_fio
+            },
+            ..state
+        },
+        Cmd::ResultadoWifi(erro) => {
+            let s = State {
+                sem_fio: crate::state::SemFio {
+                    erro: erro.clone(),
+                    ..state.sem_fio
+                },
+                ..state
+            };
+            match erro {
+                // Deu certo: sai da senha e volta para a lista.
+                None => {
+                    let s = State {
+                        sem_fio: crate::state::SemFio {
+                            conectado: s.sem_fio.alvo.clone(),
+                            ..s.sem_fio.clone()
+                        },
+                        ..s
+                    };
+                    let mut s = go_back(s);
+                    s.sem_fio.limpar_senha();
+                    toast(s, "Conectado")
+                }
+                Some(motivo) => toast(s, &motivo),
+            }
+        }
+        Cmd::CancelarSenha => {
+            let mut s = go_back(state);
+            s.sem_fio.limpar_senha();
+            s
+        }
+        Cmd::MostrarSenha => State {
+            sem_fio: crate::state::SemFio {
+                senha_visivel: !state.sem_fio.senha_visivel,
+                ..state.sem_fio
+            },
+            ..state
+        },
+        Cmd::DispositivosBt(lista, erro) => State {
+            sem_fio: crate::state::SemFio {
+                dispositivos: lista,
+                bt_escaneando: false,
+                erro,
+                ..state.sem_fio
+            },
+            ..state
+        },
+        Cmd::EscaneandoBt(ligado) => State {
+            sem_fio: crate::state::SemFio {
+                bt_escaneando: ligado,
+                ..state.sem_fio
+            },
+            ..state
+        },
+        Cmd::ResultadoBt(erro) => match erro {
+            None => {
+                let alvo = state.sem_fio.bt_alvo.clone();
+                let s = State {
+                    sem_fio: crate::state::SemFio {
+                        bt_conectado: alvo,
+                        ..state.sem_fio
+                    },
+                    ..state
+                };
+                toast(s, "Pareado")
+            }
+            Some(motivo) => toast(state, &motivo),
+        },
+        // Estes três não mudam estado por si: a UI lê o campo e executa.
+        // Mantidos no `match` para o compilador exigir que alguém pense neles.
+        Cmd::EscolherRede(_) | Cmd::ConectarSenha | Cmd::ParearBt(_) => state,
+        // Abrir já marca "procurando": a UI executa a varredura quando vê este
+        // campo passar de falso para verdadeiro. Se a marcação ficasse na UI,
+        // haveria duas rotas para o mesmo efeito — e a tela abriria vazia por um
+        // instante parecendo "nenhuma rede".
+        Cmd::AbrirWifi => push(
+            State {
+                sem_fio: crate::state::SemFio {
+                    escaneando: true,
+                    erro: None,
+                    ..state.sem_fio
+                },
+                ..state
+            },
+            Overlay::WifiList,
+        ),
+        Cmd::AbrirBluetooth => push(
+            State {
+                sem_fio: crate::state::SemFio {
+                    bt_escaneando: true,
+                    erro: None,
+                    ..state.sem_fio
+                },
+                ..state
+            },
+            Overlay::BtList,
+        ),
         Cmd::SetBattery(level) => State {
             battery: level,
             ..state
@@ -154,10 +267,16 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         }
         Cmd::GoSettingsCat(index) => {
             if index < crate::state::SETTINGS_CATEGORIES.len() {
-                State {
-                    settings_category: index,
-                    ..state
-                }
+                // O toque move o foco junto: antes só `settings_category`
+                // mudava e o destaque continuava na categoria anterior.
+                focus_on(
+                    State {
+                        settings_category: index,
+                        ..state
+                    },
+                    Zone::SettingsSidebar,
+                    index,
+                )
             } else {
                 state
             }
@@ -242,6 +361,20 @@ fn nav(state: State, dir: Dir) -> State {
         };
     }
 
+    // Configurações: ← → numa linha do painel ajustam o valor, não navegam.
+    if state.focus.zone == Zone::SettingsContent && matches!(dir, Dir::Left | Dir::Right) {
+        let categoria = crate::state::SETTINGS_CATEGORIES
+            .get(state.settings_category)
+            .copied()
+            .unwrap_or("about");
+        if categoria == "sound" && state.focus.index == 0 {
+            let delta: i16 = if dir == Dir::Right { 5 } else { -5 };
+            let alvo = state.settings.volume as i16 + delta;
+            return set_volume(state, alvo);
+        }
+        return state;
+    }
+
     // Filtros: horizontal troca o filtro ativo.
     if state.focus.zone == Zone::LibraryFilters && matches!(dir, Dir::Left | Dir::Right) {
         let step: isize = if dir == Dir::Right { 1 } else { -1 };
@@ -260,9 +393,21 @@ fn nav(state: State, dir: Dir) -> State {
             } else {
                 state.carousel
             };
+            // Andar pela coluna lateral muda a categoria na hora, como as abas
+            // do topo. Exigir Confirm em cada item fazia o painel da direita
+            // mostrar o conteúdo da categoria anterior enquanto o destaque
+            // estava em outra.
+            let settings_category = if focus.zone == Zone::SettingsSidebar
+                && focus.index < crate::state::SETTINGS_CATEGORIES.len()
+            {
+                focus.index
+            } else {
+                state.settings_category
+            };
             State {
                 focus,
                 carousel,
+                settings_category,
                 ..state
             }
         }
@@ -327,6 +472,128 @@ fn confirm(state: State) -> State {
             settings_category: index,
             ..state
         },
+
+        // Cada linha do painel de configurações agora **faz alguma coisa**.
+        //
+        // Antes o painel da direita era só texto: `Zone::SettingsContent` não
+        // existia, então nenhuma linha recebia foco e nada abria. Era a queixa
+        // literal — "a aba de configuração não é navegável".
+        Zone::SettingsContent => {
+            let categoria = crate::state::SETTINGS_CATEGORIES
+                .get(state.settings_category)
+                .copied()
+                .unwrap_or("about");
+            match (categoria, index) {
+                // Rede: a linha 0 abre Wi-Fi, a 1 abre Bluetooth.
+                ("network", 0) => push(state, Overlay::WifiList),
+                ("network", 1) => push(state, Overlay::BtList),
+                ("sound", 0) => {
+                    // Volume não abre tela: o ajuste é aqui mesmo, com ← →.
+                    // Um overlay para um número seria mais passos, não menos.
+                    let atual = state.settings.volume;
+                    toast(state, &format!("Volume: {atual}% — use ← →"))
+                }
+                ("appearance", 0) => toast(state, "Tema único por enquanto"),
+                ("appearance", 1) => toast(state, "A escala acompanha o painel"),
+                ("system", 0) => toast(state, "launcher 0.1.0"),
+                _ => toast(state, "Use ← → para ajustar"),
+            }
+        }
+
+        // Lista de redes: a última linha é "procurar de novo".
+        Zone::WifiNetworks => {
+            let total = state.sem_fio.redes.len();
+            if index >= total {
+                // Varredura: a UI precisa saber para chamar o `wpa_cli`.
+                State {
+                    sem_fio: crate::state::SemFio {
+                        escaneando: true,
+                        erro: None,
+                        ..state.sem_fio
+                    },
+                    ..state
+                }
+            } else {
+                let rede = state.sem_fio.redes[index].clone();
+                if rede.protegida && !rede.salva {
+                    // Pede a senha: guarda o alvo e limpa o campo.
+                    let s = State {
+                        sem_fio: crate::state::SemFio {
+                            alvo: Some(rede.ssid),
+                            senha: String::new(),
+                            senha_visivel: false,
+                            erro: None,
+                            ..state.sem_fio
+                        },
+                        ..state
+                    };
+                    push(s, Overlay::WifiPassword)
+                } else {
+                    // Rede aberta ou já salva: conecta direto.
+                    State {
+                        sem_fio: crate::state::SemFio {
+                            alvo: Some(rede.ssid),
+                            ..state.sem_fio
+                        },
+                        ..state
+                    }
+                }
+            }
+        }
+
+        // Teclado da senha: mesma grade da busca, destino diferente.
+        Zone::PasswordKeys => {
+            let row = index / crate::state::KEYBOARD_COLS;
+            let col = index % crate::state::KEYBOARD_COLS;
+            match crate::state::KEYBOARD
+                .get(row)
+                .and_then(|r| r.get(col))
+                .copied()
+            {
+                Some(BACKSPACE) => State {
+                    sem_fio: crate::state::SemFio {
+                        senha: {
+                            let mut s = state.sem_fio.senha.clone();
+                            s.pop();
+                            s
+                        },
+                        ..state.sem_fio
+                    },
+                    ..state
+                },
+                Some(c) => State {
+                    sem_fio: crate::state::SemFio {
+                        senha: format!("{}{c}", state.sem_fio.senha),
+                        ..state.sem_fio
+                    },
+                    ..state
+                },
+                None => state,
+            }
+        }
+
+        // Bluetooth: última linha é "procurar de novo".
+        Zone::BtDevices => {
+            let total = state.sem_fio.dispositivos.len();
+            if index >= total {
+                State {
+                    sem_fio: crate::state::SemFio {
+                        bt_escaneando: true,
+                        ..state.sem_fio
+                    },
+                    ..state
+                }
+            } else {
+                let mac = state.sem_fio.dispositivos[index].mac.clone();
+                State {
+                    sem_fio: crate::state::SemFio {
+                        bt_alvo: Some(mac),
+                        ..state.sem_fio
+                    },
+                    ..state
+                }
+            }
+        }
 
         Zone::LibraryFilters => state,
 
@@ -457,7 +724,18 @@ fn go_back(state: State) -> State {
     };
     let index = state.saved_focus.get(&zone).copied().unwrap_or(0);
 
-    focus_on(State { overlays, ..state }, zone, index)
+    // Sair do teclado de senha apaga o que foi digitado.
+    //
+    // Sem isto a senha continua na memória depois de `B`: o usuário desiste,
+    // volta à lista e ela segue guardada. `CancelarSenha` já fazia isso; `B`
+    // não fazia, e o `B` é justamente o que o rodapé anuncia.
+    let saindo_do_teclado = state.top_overlay() == Some(Overlay::WifiPassword);
+    let mut s = State { overlays, ..state };
+    if saindo_do_teclado {
+        s.sem_fio.limpar_senha();
+    }
+
+    focus_on(s, zone, index)
 }
 
 fn open_detail(state: State) -> State {
@@ -809,8 +1087,9 @@ mod tests {
         ] {
             let mut s = demo();
             s.screen = Screen::Sleeping;
+            let nome = format!("{cmd:?}");
             s = reduce(s, cmd);
-            assert_eq!(s.screen, Screen::Running, "{cmd:?} não acordou a tela");
+            assert_eq!(s.screen, Screen::Running, "{nome} não acordou a tela");
         }
     }
 
@@ -851,11 +1130,12 @@ mod tests {
         ] {
             let mut s = demo();
             s.screen = Screen::Sleeping;
+            let nome = format!("{cmd:?}");
             let s = reduce(s, cmd);
             assert_eq!(
                 s.screen,
                 Screen::Sleeping,
-                "{cmd:?} não é entrada de usuário e não pode acordar"
+                "{nome} não é entrada de usuário e não pode acordar"
             );
         }
     }
@@ -1080,6 +1360,33 @@ mod tests {
         let s = demo();
         let after = reduce(s.clone(), Cmd::TickHud);
         assert_eq!(s, after, "TickHud é no-op até haver leitura real");
+    }
+
+    #[test]
+    fn voltar_do_teclado_de_senha_apaga_o_que_foi_digitado() {
+        use crate::state::{Rede, SemFio};
+
+        let mut s = demo();
+        s.sem_fio = SemFio {
+            redes: vec![Rede {
+                ssid: "Kill.exe".into(),
+                sinal: 80,
+                protegida: true,
+                salva: false,
+            }],
+            ..SemFio::default()
+        };
+        s = reduce(s, Cmd::AbrirWifi);
+        s = reduce(s, Cmd::Confirm); // escolhe a única rede: abre o teclado
+        assert_eq!(s.top_overlay(), Some(Overlay::WifiPassword));
+        assert_eq!(s.sem_fio.alvo.as_deref(), Some("Kill.exe"));
+
+        s.sem_fio.senha = "segredo-digitado".into();
+        s = reduce(s, Cmd::Back);
+
+        assert_eq!(s.top_overlay(), Some(Overlay::WifiList), "volta para a lista");
+        assert!(s.sem_fio.senha.is_empty(), "a senha não pode sobreviver ao B");
+        assert!(s.sem_fio.alvo.is_none(), "nem o alvo");
     }
 
     #[test]

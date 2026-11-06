@@ -31,7 +31,8 @@ pub use cmd::{Cmd, Dir};
 pub use focus::{Focus, Zone};
 pub use gamepad::{GamepadFrame, Mapper};
 pub use state::{
-    App, Game, Overlay, Perf, Screen, Settings, State, Tab, Toast, HUD,
+    settings_rows, App, DispositivoBt, Game, Overlay, Perf, Rede, Screen, SemFio, Settings, State,
+    Tab, Toast, HUD, KEYBOARD, KEYBOARD_COLS, SETTINGS_CATEGORIES,
 };
 pub use viewport::Viewport;
 

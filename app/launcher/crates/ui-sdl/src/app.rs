@@ -74,6 +74,8 @@ pub struct App {
     aviso_sistema: Option<String>,
     /// Evita reexecutar `poweroff`/`reboot` a cada quadro quando falham.
     tentativa_desligar: TentativaUnica,
+    /// Varredura e conexão de Wi-Fi/Bluetooth. Ver `crate::semfio`.
+    sem_fio: crate::semfio::SemFio,
 }
 
 /// Duração do aviso, igual ao protótipo.
@@ -117,6 +119,19 @@ impl App {
             }
         );
 
+        // O estado pode **já** vir pedindo varredura: `--rede-real` marca
+        // `escaneando` antes da janela abrir, e o retorno de um jogo reabre o
+        // `App` com o estado que estava na tela. `sync_sem_fio` só enxerga
+        // transições, então o pedido inicial sai aqui — sem isto a tela de
+        // Wi-Fi fica "procurando…" para sempre e nenhum `wpa_cli` roda.
+        let sem_fio = crate::semfio::SemFio::novo();
+        if state.sem_fio.escaneando {
+            sem_fio.pedir(crate::semfio::Pedido::EscanearWifi);
+        }
+        if state.sem_fio.bt_escaneando {
+            sem_fio.pedir(crate::semfio::Pedido::EscanearBt);
+        }
+
         Self {
             state,
             mapper: Mapper::new(),
@@ -144,6 +159,7 @@ impl App {
             rep_baixo: Repeticao::novo(),
             aviso_sistema: None,
             tentativa_desligar: TentativaUnica::nova(),
+            sem_fio,
         }
     }
 
@@ -181,6 +197,23 @@ impl App {
     ///
     /// `take()` e não `clone()`: o pedido vale uma vez. Sem isso o launcher
     /// tentaria iniciar o jogo em todo quadro e nunca mais desenharia nada.
+    /// Pede uma ação de rede de fora do laço de entrada.
+    ///
+    /// Existe pelo mesmo motivo de `--lancar`: sem isto, provar que conectar e
+    /// parear funcionam exigiria um dedo na tela — e verificação que depende de
+    /// dedo não entra em rodada automatizada.
+    pub fn pedir_sem_fio(&mut self, pedido: crate::semfio::Pedido) {
+        self.sem_fio.pedir(pedido);
+    }
+
+    /// Texto do último aviso, para a linha de comando reportar o resultado.
+    pub fn ultimo_aviso(&self) -> Option<&str> {
+        self.state
+            .toast
+            .visible
+            .then_some(self.state.toast.message.as_str())
+    }
+
     pub fn tomar_pedido_de_lancamento(&mut self) -> Option<u32> {
         self.state.lancar.take()
     }
@@ -205,14 +238,77 @@ impl App {
         let brilho_antes = self.state.settings.brightness;
         let volume_antes = self.state.settings.volume;
         let before = self.state.clone();
+
+        // O pedido que só a UI sabe executar é lido **antes** do reducer: são
+        // comandos pass-through (o núcleo só declara que alguém precisa agir).
+        self.executar_pedido(&cmd);
+
         self.state = giochi_launcher_core::update(self.state.clone(), cmd);
         if self.state != before {
             self.dirty = true;
         }
+        self.sync_sem_fio(&before);
         self.sync_backlight(tela_antes, self.state.screen);
         self.sync_brilho(brilho_antes, self.state.settings.brightness);
         self.sync_volume(volume_antes, self.state.settings.volume);
         self.sync_sistema(tela_antes, self.state.screen);
+    }
+
+    /// Comandos que a UI traduz em ação de sistema.
+    ///
+    /// Só `ConectarSenha` precisa passar por aqui: os outros três efeitos
+    /// (varrer, conectar direto, parear) são visíveis no estado, e
+    /// `sync_sem_fio` os detecta por diferença. Um comando com efeito só no
+    /// estado seria uma segunda rota para o mesmo fato.
+    fn executar_pedido(&mut self, cmd: &Cmd) {
+        if let Cmd::ConectarSenha = cmd {
+            if let Some(ssid) = self.state.sem_fio.alvo.clone() {
+                let senha = self.state.sem_fio.senha.clone();
+                if senha.is_empty() {
+                    // Senha em branco numa rede protegida só produziria um
+                    // `FAIL` do supplicant. Dizer o que falta é mais útil.
+                    self.avisar("digite a senha (X mostra o que foi digitado)");
+                    return;
+                }
+                self.sem_fio.pedir(crate::semfio::Pedido::Conectar { ssid, senha });
+            }
+        }
+    }
+
+    /// Traduz mudanças de estado em trabalho de sistema.
+    ///
+    /// O reducer marca **o que** o usuário quer; aqui se descobre **quando**
+    /// executar. Comparar antes/depois evita repetir a varredura a cada quadro
+    /// — o campo `escaneando` fica verdadeiro por vários segundos.
+    fn sync_sem_fio(&mut self, antes: &State) {
+        use crate::semfio::Pedido;
+
+        if self.state.sem_fio.escaneando && !antes.sem_fio.escaneando {
+            self.sem_fio.pedir(Pedido::EscanearWifi);
+        }
+        if self.state.sem_fio.bt_escaneando && !antes.sem_fio.bt_escaneando {
+            self.sem_fio.pedir(Pedido::EscanearBt);
+        }
+
+        // Rede escolhida. Sem o overlay de senha na frente, é conexão direta —
+        // rede aberta ou já salva. Com o overlay, o usuário ainda vai digitar.
+        if self.state.sem_fio.alvo.is_some()
+            && self.state.sem_fio.alvo != antes.sem_fio.alvo
+            && self.state.top_overlay() != Some(giochi_launcher_core::Overlay::WifiPassword)
+        {
+            if let Some(ssid) = self.state.sem_fio.alvo.clone() {
+                self.sem_fio.pedir(Pedido::Conectar {
+                    ssid,
+                    senha: String::new(),
+                });
+            }
+        }
+
+        if let Some(mac) = self.state.sem_fio.bt_alvo.clone() {
+            if antes.sem_fio.bt_alvo.as_deref() != Some(mac.as_str()) {
+                self.sem_fio.pedir(Pedido::Parear { mac });
+            }
+        }
     }
 
     /// Desenha uma vez antes de executar o comando do sistema.
@@ -401,6 +497,22 @@ impl App {
             }
             Hit::App(index) => self.dispatch(Cmd::OpenApp(index)),
             Hit::SettingsCat(index) => self.dispatch(Cmd::GoSettingsCat(index)),
+            Hit::SettingsRow(index) => {
+                self.dispatch(Cmd::FocusAt(Zone::SettingsContent, index));
+                self.dispatch(Cmd::Confirm);
+            }
+            Hit::WifiNet(index) => {
+                self.dispatch(Cmd::FocusAt(Zone::WifiNetworks, index));
+                self.dispatch(Cmd::Confirm);
+            }
+            Hit::PasswordKey(index) => {
+                self.dispatch(Cmd::FocusAt(Zone::PasswordKeys, index));
+                self.dispatch(Cmd::Confirm);
+            }
+            Hit::BtDevice(index) => {
+                self.dispatch(Cmd::FocusAt(Zone::BtDevices, index));
+                self.dispatch(Cmd::Confirm);
+            }
             Hit::QsRow(index) => {
                 self.dispatch(Cmd::FocusAt(Zone::QuickSettings, index));
                 self.dispatch(Cmd::Confirm);
@@ -439,6 +551,7 @@ impl App {
         }
 
         self.poll_gamepad(delta_seconds);
+        self.tick_sem_fio();
         self.tick_toast(delta_seconds);
         self.tick_rotation(delta_seconds);
         self.tick_energia(delta_seconds);
@@ -465,6 +578,17 @@ impl App {
         if minute != self.last_minute {
             self.last_minute = minute;
             self.dirty = true;
+        }
+    }
+
+    /// Aplica o que a thread de Wi-Fi/Bluetooth devolveu.
+    ///
+    /// Sem drenar o canal a lista nunca sai de "procurando…": o resultado existe
+    /// e ninguém o lê. É o mesmo cuidado do `evdev`, que precisa de `poll()` a
+    /// cada quadro para não acumular evento.
+    fn tick_sem_fio(&mut self) {
+        for cmd in self.sem_fio.colher() {
+            self.dispatch(cmd);
         }
     }
 

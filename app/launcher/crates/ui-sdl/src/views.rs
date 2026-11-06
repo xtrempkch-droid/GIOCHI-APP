@@ -150,6 +150,14 @@ pub enum Hit {
     Game(usize),
     App(usize),
     SettingsCat(usize),
+    /// Linha do painel de configurações.
+    SettingsRow(usize),
+    /// Rede Wi-Fi na lista (o último índice é "procurar").
+    WifiNet(usize),
+    /// Tecla do teclado de senha.
+    PasswordKey(usize),
+    /// Dispositivo Bluetooth na lista.
+    BtDevice(usize),
     QsRow(usize),
     QsButton(u8),
     DetailButton(usize),
@@ -346,6 +354,26 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
         Some(Overlay::QuickSettings) => &[("↑↓", "Navegar"), ("←→", "Ajustar"), ("B", "Fechar")],
         Some(Overlay::GameDetail) => &[("←→", "Ação"), ("A", "Confirmar"), ("B", "Voltar")],
         Some(Overlay::PowerPopup) => &[("↑↓", "Navegar"), ("A", "Confirmar"), ("B", "Cancelar")],
+        Some(Overlay::WifiList) => &[("A", "Conectar"), ("B", "Voltar"), ("↑↓", "Rede")],
+        Some(Overlay::WifiPassword) => &[("A", "Digitar"), ("X", "Mostrar"), ("B", "Cancelar")],
+        Some(Overlay::BtList) => &[("A", "Parear"), ("B", "Voltar"), ("↑↓", "Aparelho")],
+        // Configurações: as dicas mudam com a coluna em foco.
+        //
+        // Antes havia uma dica só para a aba inteira, e ela não dizia que ← →
+        // atravessa para o painel da direita nem que A abre Wi-Fi. O usuário
+        // concluiu — com razão — que a aba não era navegável.
+        None if state.tab == Tab::Settings && state.focus.zone == Zone::SettingsSidebar => &[
+            ("→", "Entrar"),
+            ("↑↓", "Categoria"),
+            ("LB/RB", "Aba"),
+            ("Select", "Ajustes"),
+        ],
+        None if state.tab == Tab::Settings => &[
+            ("A", "Abrir"),
+            ("←→", "Ajustar"),
+            ("←", "Categorias"),
+            ("B", "Voltar"),
+        ],
         None => &[
             ("A", "Jogar"),
             ("X", "Detalhes"),
@@ -846,34 +874,7 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     let heading = label_for_category(category);
     p.text_left(content_x, m.top + 12, &heading, theme::F_BODY, theme::TEXT);
 
-    let rows: Vec<(String, String)> = match category {
-        "appearance" => vec![
-            ("Tema Giochi Dark".into(), "Otimizado para OLED".into()),
-            ("Escala da interface".into(), "Letterbox centrado, sem corte".into()),
-        ],
-        "sound" => vec![
-            ("Volume geral".into(), format!("{}%", state.settings.volume)),
-            ("Saída padrão".into(), "Alto-falante estéreo".into()),
-        ],
-        "network" => vec![
-            ("Wi-Fi".into(), if state.settings.wifi { "Ligado".into() } else { "Desligado".into() }),
-            ("Bluetooth".into(), if state.settings.bluetooth { "Ativo".into() } else { "Desligado".into() }),
-        ],
-        "controller" => vec![
-            ("A / Cross".into(), "Confirmar".into()),
-            ("B / Circle".into(), "Voltar".into()),
-            ("X / Square".into(), "Detalhes".into()),
-            ("Y / Triangle".into(), "Buscar".into()),
-            ("LB / RB".into(), "Trocar aba".into()),
-            ("Select".into(), "Ajustes rápidos".into()),
-            ("Start".into(), "Menu de energia".into()),
-        ],
-        "system" => vec![
-            ("Versão".into(), "launcher 0.1.0".into()),
-            ("Desempenho".into(), state.settings.perf.label().into()),
-        ],
-        _ => Vec::new(),
-    };
+    let rows = linhas_da_categoria(category, state);
 
     if category == "about" {
         let lines = [
@@ -898,12 +899,23 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     } else {
         let mut ry = m.top + m.e(40).max(26);
         let borda = m.e(12).max(6);
-        for (title, value) in &rows {
+        for (i, (title, value)) in rows.iter().enumerate() {
             if ry + theme::TOUCH > m.foot_y {
                 break;
             }
+            let focado = state.focus.zone == Zone::SettingsContent && state.focus.index == i;
             p.fill_round_rect(content_x, ry, content_w, theme::TOUCH, r_caixa, theme::with_alpha(theme::BLACK, 70));
-            p.stroke_round_rect(content_x, ry, content_w, theme::TOUCH, r_caixa, theme::LINE);
+            p.stroke_round_rect(
+                content_x,
+                ry,
+                content_w,
+                theme::TOUCH,
+                r_caixa,
+                if focado { theme::ACCENT } else { theme::LINE },
+            );
+            layout
+                .hits
+                .push((Rect::new(content_x, ry, content_w as u32, theme::TOUCH as u32), Hit::SettingsRow(i)));
             // Título e valor no mesmo y: em 640×480 a coluna tem ~320 px, então
             // o título é truncado pelo espaço que sobra depois do valor. Sem
             // isso os dois se desenham por cima.
@@ -916,6 +928,66 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
             p.text_right(content_x + content_w - borda, vy, &valor, theme::F_SMALL, theme::ACCENT);
             ry += theme::TOUCH + m.e(7).max(3);
         }
+    }
+}
+
+/// Linhas do painel de conteúdo de uma categoria.
+///
+/// Fica em função própria porque o **núcleo também precisa saber o número**:
+/// `settings_rows()` decide até onde o foco pode andar. Antes ele era um `match`
+/// separado, e dois lugares descrevendo a mesma lista é como o carrossel ficou
+/// dessincronizado do foco. Aqui há um teste que compara os dois.
+fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
+    match category {
+        "appearance" => vec![
+            ("Tema Giochi Dark".into(), "Otimizado para OLED".into()),
+            ("Escala da interface".into(), "Letterbox centrado, sem corte".into()),
+        ],
+        "sound" => vec![
+            ("Volume geral".into(), format!("{}%", state.settings.volume)),
+            ("Saída padrão".into(), "Alto-falante estéreo".into()),
+        ],
+        // O valor vem do que o sistema **respondeu**, não de um booleano da UI.
+        //
+        // Antes as duas linhas mostravam "Ligado/Desligado" de um campo que
+        // ninguém alternava: a informação era sempre a mesma e não dizia se
+        // havia conexão. Agora mostra o SSID conectado ou "não conectado".
+        "network" => vec![
+            (
+                "Wi-Fi".into(),
+                match &state.sem_fio.conectado {
+                    Some(ssid) => ssid.clone(),
+                    None => "não conectado".into(),
+                },
+            ),
+            (
+                "Bluetooth".into(),
+                match &state.sem_fio.bt_conectado {
+                    Some(mac) => state
+                        .sem_fio
+                        .dispositivos
+                        .iter()
+                        .find(|d| &d.mac == mac)
+                        .map(|d| d.nome.clone())
+                        .unwrap_or_else(|| mac.clone()),
+                    None => "não conectado".into(),
+                },
+            ),
+        ],
+        "controller" => vec![
+            ("A / Cross".into(), "Confirmar".into()),
+            ("B / Circle".into(), "Voltar".into()),
+            ("X / Square".into(), "Detalhes".into()),
+            ("Y / Triangle".into(), "Buscar".into()),
+            ("LB / RB".into(), "Trocar aba".into()),
+            ("Select".into(), "Ajustes rápidos".into()),
+            ("Start".into(), "Menu de energia".into()),
+        ],
+        "system" => vec![
+            ("Versão".into(), "launcher 0.1.0".into()),
+            ("Desempenho".into(), state.settings.perf.label().into()),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -987,6 +1059,9 @@ pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
             Overlay::GameDetail => game_detail(p, state, layout),
             Overlay::PowerPopup => power_popup(p, state, layout),
             Overlay::Search => search(p, state, layout),
+            Overlay::WifiList => wifi_list(p, state, layout),
+            Overlay::WifiPassword => wifi_password(p, state, layout),
+            Overlay::BtList => bt_list(p, state, layout),
         }
     }
 
@@ -1483,6 +1558,30 @@ impl GameLabel for giochi_launcher_core::Game {
 mod tests {
     use super::grade_para;
 
+    /// O núcleo e o desenho precisam concordar sobre quantas linhas a categoria
+    /// tem.
+    ///
+    /// Divergir não dá erro em lugar nenhum: o foco simplesmente para antes da
+    /// última linha, ou anda por uma linha que não existe. É a mesma classe de
+    /// erro do carrossel dessincronizado — dois lugares descrevendo a mesma
+    /// lista. Este teste é o elo que faltava entre `views::linhas_da_categoria`
+    /// e `state::settings_rows`.
+    #[test]
+    fn foco_e_desenho_concordam_no_numero_de_linhas() {
+        use giochi_launcher_core::{settings_rows, State, SETTINGS_CATEGORIES};
+
+        let state = State::new(Vec::new(), Vec::new());
+        for (i, categoria) in SETTINGS_CATEGORIES.iter().enumerate() {
+            let desenhadas = super::linhas_da_categoria(categoria, &state).len();
+            assert_eq!(
+                desenhadas,
+                settings_rows(i),
+                "categoria {categoria} (índice {i}): o desenho tem {desenhadas}                  linha(s) e o foco permite {}",
+                settings_rows(i)
+            );
+        }
+    }
+
     /// As escolhas medidas nos painéis que existem de fato.
     ///
     /// 640×480 e 1280×720 são aparelhos reais (X35H e X55); os números aqui são
@@ -1554,5 +1653,248 @@ mod tests {
         // Sem ano no catálogo a UI diz que não sabe; não inventa número.
         let sem_ano = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false);
         assert_eq!(sem_ano.year_label(), "—");
+    }
+}
+
+// ── Wi-Fi e Bluetooth ──────────────────────────────────────
+
+/// Painel de lista, usado por Wi-Fi e Bluetooth.
+///
+/// Os dois são a mesma forma: uma lista com um item final que dispara nova
+/// varredura. Escrever duas telas quase iguais garantiria que uma envelhecesse
+/// diferente da outra.
+struct Lista<'a> {
+    titulo: &'a str,
+    rodape: String,
+    itens: Vec<(String, String)>, // (título, detalhe)
+    /// Texto do item final ("Procurar redes", "Procurar aparelhos").
+    acao: &'a str,
+    /// Texto do item final quando não há nada na lista. Vazio = usa `acao`.
+    vazio: String,
+}
+
+fn painel_lista(p: &mut Painter, state: &State, layout: &mut Layout, lista: Lista, zona: Zone) {
+    let m = Moldura::de(p);
+    let w = m.safe_w.min(m.e(620).max(300));
+    let x = m.w / 2 - w / 2;
+
+    let linha_h = m.e(theme::TOUCH).max(34);
+    let gap = m.e(4).max(2);
+    let total = lista.itens.len() + 1;
+    let altura_lista = linha_h * total as i32 + gap * (total as i32 - 1).max(0);
+
+    let cabecalho = m.e(44).max(28);
+    let rodape_h = m.e(26).max(18);
+    let h = (cabecalho + altura_lista + rodape_h + m.e(16).max(8)).min(m.main_h);
+    let y = (m.top + (m.main_h - h) / 2).max(m.top);
+
+    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::PANEL);
+    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::LINE2);
+    p.text_left(x + m.e(16).max(8), y + m.e(12).max(6), lista.titulo, theme::F_BODY, theme::TEXT);
+
+    let mut ry = y + cabecalho;
+    let borda = m.e(10).max(5);
+
+    for (i, (titulo, detalhe)) in lista.itens.iter().enumerate() {
+        let focado = state.focus.zone == zona && state.focus.index == i;
+        p.fill_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3),
+            if focado { theme::PANEL2 } else { theme::with_alpha(theme::BLACK, 70) });
+        if focado {
+            p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::ACCENT);
+        }
+        let dw = p.text_size(detalhe, theme::F_TINY).0;
+        let t = truncate(titulo, w - borda * 3 - dw, &mut |s| p.text_size(s, theme::F_SMALL).0);
+        let ty = vcenter(ry, linha_h, p.text_size(&t, theme::F_SMALL).1);
+        p.text_left(x + borda, ty, &t, theme::F_SMALL, theme::TEXT);
+        let dy = vcenter(ry, linha_h, p.text_size(detalhe, theme::F_TINY).1);
+        p.text_right(x + w - borda, dy, detalhe, theme::F_TINY, theme::ACCENT);
+        layout.hits.push((
+            Rect::new(x + m.e(6).max(3), ry, (w - m.e(12).max(6)) as u32, linha_h as u32),
+            if zona == Zone::BtDevices { Hit::BtDevice(i) } else { Hit::WifiNet(i) },
+        ));
+        ry += linha_h + gap;
+    }
+
+    // Item final: nova varredura. Sempre presente, mesmo com lista vazia — é o
+    // único caminho de volta quando a primeira varredura não achou nada.
+    let i = lista.itens.len();
+    let focado = state.focus.zone == zona && state.focus.index == i;
+    p.fill_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3),
+        if focado { theme::PANEL2 } else { theme::with_alpha(theme::BLACK, 70) });
+    if focado {
+        p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::ACCENT);
+    }
+    let texto_acao = if lista.vazio.is_empty() { lista.acao.to_string() } else { lista.vazio.to_string() };
+    let cor = if lista.vazio.is_empty() { theme::ACCENT } else { theme::DIM };
+    let ty = vcenter(ry, linha_h, p.text_size(&texto_acao, theme::F_SMALL).1);
+    p.text_left(x + borda, ty, &texto_acao, theme::F_SMALL, cor);
+    layout.hits.push((
+        Rect::new(x + m.e(6).max(3), ry, (w - m.e(12).max(6)) as u32, linha_h as u32),
+        if zona == Zone::BtDevices { Hit::BtDevice(i) } else { Hit::WifiNet(i) },
+    ));
+
+    // Rodapé: o estado real, não uma promessa.
+    let rodape = truncate(&lista.rodape, w - borda * 2, &mut |s| p.text_size(s, theme::F_TINY).0);
+    p.text_left(x + borda, y + h - rodape_h + m.e(4).max(2), &rodape, theme::F_TINY, theme::DIM);
+}
+
+fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let sf = &state.sem_fio;
+
+    let itens: Vec<(String, String)> = sf
+        .redes
+        .iter()
+        .map(|r| {
+            let detalhe = if Some(&r.ssid) == sf.conectado.as_ref() {
+                "conectada".to_string()
+            } else if r.salva {
+                "salva".to_string()
+            } else if r.protegida {
+                format!("{}% ▮", r.sinal)
+            } else {
+                "aberta".to_string()
+            };
+            (r.ssid.clone(), detalhe)
+        })
+        .collect();
+
+    let (rodape, vazio) = if let Some(erro) = &sf.erro {
+        (format!("erro: {erro}"), String::new())
+    } else if sf.escaneando {
+        ("procurando redes…".to_string(), "Procurando…".to_string())
+    } else if itens.is_empty() {
+        ("nenhuma rede encontrada".to_string(), "Nenhuma rede — A para procurar".to_string())
+    } else {
+        (
+            format!("{} rede(s) · A conecta", itens.len()),
+            "Procurar de novo".to_string(),
+        )
+    };
+
+    painel_lista(
+        p,
+        state,
+        layout,
+        Lista {
+            titulo: "Wi-Fi",
+            rodape,
+            itens,
+            acao: "Procurar redes",
+            vazio: if vazio.is_empty() { String::new() } else { vazio },
+        },
+        Zone::WifiNetworks,
+    );
+}
+
+fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let sf = &state.sem_fio;
+    let itens: Vec<(String, String)> = sf
+        .dispositivos
+        .iter()
+        .map(|d| {
+            let detalhe = if Some(&d.mac) == sf.bt_conectado.as_ref() {
+                "conectado".to_string()
+            } else if d.pareado {
+                "pareado".to_string()
+            } else {
+                d.mac.clone()
+            };
+            (d.nome.clone(), detalhe)
+        })
+        .collect();
+
+    let (rodape, vazio) = if let Some(erro) = &sf.erro {
+        (format!("erro: {erro}"), String::new())
+    } else if sf.bt_escaneando {
+        ("procurando aparelhos…".to_string(), "Procurando…".to_string())
+    } else if itens.is_empty() {
+        ("nenhum aparelho".to_string(), "Nenhum — A para procurar".to_string())
+    } else {
+        (format!("{} aparelho(s) · A pareia", itens.len()), "Procurar de novo".to_string())
+    };
+
+    painel_lista(
+        p,
+        state,
+        layout,
+        Lista {
+            titulo: "Bluetooth",
+            rodape,
+            itens,
+            acao: "Procurar aparelhos",
+            vazio: vazio,
+        },
+        Zone::BtDevices,
+    );
+}
+
+/// Teclado de senha.
+///
+/// Reusa o `KEYBOARD` da busca — mesma grade, mesmas teclas, `Cmd` diferente.
+/// Inventar um teclado de senha separado duplicaria 40 linhas de layout para
+/// ganhar nada: os caracteres são os mesmos.
+fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
+    use giochi_launcher_core::{KEYBOARD, KEYBOARD_COLS};
+
+    let m = Moldura::de(p);
+    let w = m.safe_w.min(m.e(600).max(300));
+    let x = m.w / 2 - w / 2;
+
+    let ssid = state.sem_fio.alvo.clone().unwrap_or_else(|| "rede".into());
+    let campo_h = m.e(34).max(24);
+    let tecla_h = m.e(theme::TOUCH).max(30);
+    let gap = m.e(4).max(2);
+    let linhas = KEYBOARD.len() as i32;
+    let cabecalho = m.e(30).max(20);
+    let h = (cabecalho + campo_h + gap * 2 + tecla_h * linhas + gap * (linhas - 1) + m.e(20).max(10))
+        .min(m.main_h);
+    let y = (m.top + (m.main_h - h) / 2).max(m.top);
+
+    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::PANEL);
+    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::LINE2);
+
+    let titulo = truncate(&format!("Senha de {ssid}"), w - m.e(24).max(12), &mut |s| p.text_size(s, theme::F_BODY).0);
+    p.text_left(x + m.e(12).max(6), y + m.e(8).max(4), &titulo, theme::F_BODY, theme::TEXT);
+
+    // Campo: bolinhas ou claro, alternado por X. O comprimento aparece sempre —
+    // sem isso não se sabe se a tecla pegou.
+    let cy = y + cabecalho;
+    let borda = m.e(10).max(5);
+    p.fill_round_rect(x + m.e(8).max(4), cy, w - m.e(16).max(8), campo_h, m.e(6).max(3),
+        theme::with_alpha(theme::BLACK, 120));
+    p.stroke_round_rect(x + m.e(8).max(4), cy, w - m.e(16).max(8), campo_h, m.e(6).max(3), theme::LINE);
+    let visivel = &state.sem_fio.senha;
+    let mostrado = if state.sem_fio.senha_visivel {
+        visivel.clone()
+    } else {
+        "•".repeat(visivel.chars().count().min(32))
+    };
+    let mostrado = truncate(&mostrado, w - m.e(28).max(14), &mut |s| p.text_size(s, theme::F_BODY).0);
+    let ty = vcenter(cy, campo_h, p.text_size(&mostrado, theme::F_BODY).1);
+    p.text_left(x + borda + m.e(4).max(2), ty, &mostrado, theme::F_BODY, theme::ACCENT);
+
+    // Teclado.
+    let ky0 = cy + campo_h + gap * 2;
+    let tecla_w = (w - m.e(16).max(8) - gap * (KEYBOARD_COLS as i32 - 1)) / KEYBOARD_COLS as i32;
+    for (r, linha) in KEYBOARD.iter().enumerate() {
+        for (c, ch) in linha.iter().enumerate() {
+            let idx = r * KEYBOARD_COLS + c;
+            let focado = state.focus.zone == Zone::PasswordKeys && state.focus.index == idx;
+            let tx = x + m.e(8).max(4) + c as i32 * (tecla_w + gap);
+            let ty2 = ky0 + r as i32 * (tecla_h + gap);
+            p.fill_round_rect(tx, ty2, tecla_w, tecla_h, m.e(6).max(3),
+                if focado { theme::ACCENT } else { theme::PANEL2 });
+            if focado {
+                p.stroke_round_rect(tx, ty2, tecla_w, tecla_h, m.e(6).max(3), theme::WHITE);
+            }
+            let rotulo = if *ch == '\u{8}' { "⌫".to_string() } else { ch.to_string() };
+            let cor = if focado { theme::BG } else { theme::TEXT };
+            let tcy = vcenter(ty2, tecla_h, p.text_size(&rotulo, theme::F_SMALL).1);
+            p.text_center(tx + tecla_w / 2, tcy, &rotulo, theme::F_SMALL, cor);
+            layout.hits.push((
+                Rect::new(tx, ty2, tecla_w as u32, tecla_h as u32),
+                Hit::PasswordKey(idx),
+            ));
+        }
     }
 }

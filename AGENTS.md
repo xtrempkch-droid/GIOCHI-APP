@@ -297,7 +297,7 @@ Giochi app/
 │   ├── compilar-jogo-arm64.sh      # idem para o jogo volley (reusa o cache)
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
-│   ├── verificar-telas.mjs    # as 9 telas em 3 tamanhos: cabe? ocupa quanto?
+│   ├── verificar-telas.mjs    # as 12 telas em 3 tamanhos: cabe? ocupa quanto?
 │   ├── verificar-jogos.mjs    # geometria dos jogos: a célula é legível?
 │   ├── gerar-catalogo.mjs     # projeta o índice do aparelho
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
@@ -445,7 +445,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 153 testes do launcher
+cd app/launcher && cargo test --workspace  # 169 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -469,7 +469,7 @@ bash scripts/aparelho.sh catalogo         # gera e publica o índice de apps
 
 node scripts/gerar-catalogo.mjs --lista   # quem entra no catálogo e quem fica fora
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
-node scripts/verificar-telas.mjs         # as 9 telas em 640x480, 800x600, 1280x720
+node scripts/verificar-telas.mjs         # as 12 telas em 640x480, 800x600, 1280x720
 node scripts/verificar-jogos.mjs         # a geometria dos jogos nos mesmos 3 tamanhos
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
 bash scripts/canal.sh                    # janela de contato com o Giochi System
@@ -682,8 +682,8 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 6 módulos, 64 testes | **compila, testa e passa** |
-| `crates/ui-sdl` — 11 módulos, 57 testes | **compila, linka e roda** |
+| `crates/core` — 7 módulos, 64 testes | **compila, testa e passa** |
+| `crates/ui-sdl` — 13 módulos, 105 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
@@ -712,6 +712,12 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Ciclo jogar → sair → voltar | **nos dois aparelhos** — X35H e X55, com rotação |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
+| Aba de configurações | **navegável** — `Zone::SettingsContent` existe; anel de foco medido no X55 (x 446..1107) |
+| Wi-Fi: varredura real | **no aparelho** — `wi-fi: 11 rede(s) em wlan0`, lista desenhada |
+| Wi-Fi: senha | **corrente de comandos provada** com senha errada; conexão real **não testada** (falta a senha) |
+| Bluetooth: varredura real | **no aparelho** — `bluetooth: 1 aparelho(s) conhecido(s)` |
+| Bluetooth: pareamento real | **não testado** — sem aparelho disponível; o caminho de erro foi exercitado |
+| Telas de rede no X35H | **não testadas** — risco declarado, ver `docs/rede.md` §5 |
 
 ### Suposições de API do `sdl2` 0.37 — resolvidas
 
@@ -946,7 +952,7 @@ pedido**. É o que permite afirmar antes de o hardware existir.
 
 #### O launcher cabe nos três
 
-`node scripts/verificar-telas.mjs` — as 9 telas, margens e ocupação:
+`node scripts/verificar-telas.mjs` — as 12 telas, margens e ocupação:
 
 | Tamanho | home | busca | detalhe | sono |
 | --- | --- | --- | --- | --- |
@@ -1025,6 +1031,85 @@ A primeira versão logava só quando a **bateria** mudava. Uma leitura de
 temperatura que falhasse (sensor ausente, caminho diferente) ficava invisível: a
 HUD mostrava `—` e nada dizia se era ausência real ou bug. Agora os dois valores
 saem juntos quando qualquer um muda.
+
+### A aba de configurações não era navegável — e Wi-Fi/BT não existiam
+
+**Duas queixas do usuário em 06/11/2026:**
+
+> "na haba config nao e navegavel"
+> "as configuraçoes do wifi e bluetooh nao tem lugar para parear e por senha"
+
+Nenhuma das duas era falta de código: eram **ausências de contrato** entre o
+desenho e o núcleo.
+
+| Queixa | Causa real |
+| --- | --- |
+| aba não navegável | existia `Zone::SettingsSidebar` e **não** existia `Zone::SettingsContent` |
+| sem lugar para parear/senha | painel da direita era texto puro: nenhuma linha tinha `hits`, nenhum overlay existia |
+
+O painel desenhava `("Wi-Fi", "Ligado")` de um booleano que **ninguém alternava**.
+Informação estável e falsa: sempre "Ligado", houvesse conexão ou não. É a mesma
+classe do `year_label()` que formatava o id do cartão — **texto desenhado não é
+funcionalidade**, e o usuário descobre isso apertando A e nada acontecendo.
+
+Hoje: `→` entra no painel, `←` volta, andar na coluna troca a categoria na hora,
+e as linhas de rede abrem lista de Wi-Fi, lista de Bluetooth e teclado de senha.
+O valor das duas linhas passou a ser o que o sistema **respondeu** (SSID
+conectado, nome do aparelho) em vez do booleano decorativo.
+
+**Medido no X55:** anel de foco no painel da direita em x 446..1107; `wi-fi: 11
+rede(s) em wlan0`; `bluetooth: 1 aparelho(s) conhecido(s)`. Desenho completo,
+armadilhas e o que **não** foi provado em [`docs/rede.md`](docs/rede.md).
+
+#### A senha errada provou a corrente inteira
+
+Não tenho a senha de nenhuma rede do usuário, então a conexão real não foi
+testada. Mas `--conectar "ORLEANS:senha-errada-de-proposito"` provou duas coisas
+que nenhum teste de unidade provaria:
+
+1. `add_network` criou a rede com o SSID certo e `set_network`, `enable_network`
+   e `select_network` responderam OK — a corrente de comandos executou. Uma falha
+   de sintaxe apareceria como `set_network: FAIL`, não como estado do supplicant.
+2. **`save_config` não rodou**: `/etc/wpa_supplicant.conf` ficou intacto. É a
+   guarda funcionando — senha errada não é persistida, então o aparelho não tenta
+   sozinho no próximo boot e falha sem ninguém entender por quê.
+
+#### Esperar a associação é o que separa "aceitou" de "conectou"
+
+`select_network` responde OK antes de qualquer associação. Sem esperar
+`wpa_state=COMPLETED`, a tela diria "Conectado" para uma rede que nunca conectou.
+A espera tem 12 s e, ao falhar, devolve **o último estado do supplicant** — não
+"deu errado". `4-WAY_HANDSHAKE` é senha recusada; `SCANNING` é a rede fora de
+alcance; são ações diferentes do usuário.
+
+#### Três armadilhas de ambiente, todas medidas
+
+- **Não existe `timeout` na imagem.** As janelas usam `--timeout` do próprio
+  `bluetoothctl` e espera fixa no `wpa_cli`. Um comando que não existe falha em
+  silêncio se ninguém olhar.
+- **`wlan0` sobe DOWN.** O `S40wifi` do sistema não levanta a interface quando o
+  `wpa_supplicant.conf` está vazio, e o `wpa_cli scan` responde `FAIL-BUSY` com o
+  rádio parado. O sintoma é "não acha nenhuma rede", não "erro" — então o app
+  chama `ip link set up` antes de varrer.
+- **`wpa_cli` está em `/usr/sbin` e `ip` em `/sbin`.** O PATH do `giochi-init`
+  cobre os dois, mas o launcher também é iniciado à mão por SSH no diagnóstico.
+  `semfio::programa()` procura nos diretórios padrão antes de desistir.
+
+#### O que ainda não foi provado
+
+| Alegação | Estado |
+| --- | --- |
+| conectar com a senha **certa** | **não testado** — falta a senha |
+| parear um aparelho BT real | **não testado** — sem aparelho; o caminho de erro foi exercitado (`Device ... not available`) |
+| **telas de rede no X35H** | **não testadas** — 640×480 é o único caminho de desenho que o X55 não exercita |
+
+#### Vigiar: foco e desenho descrevem a mesma lista
+
+`settings_rows()` no núcleo decide até onde o foco anda; `views::linhas_da_categoria`
+monta o que é desenhado. Dois lugares descrevendo a mesma lista foi exatamente
+como o carrossel ficou dessincronizado do foco. Agora há um teste
+(`foco_e_desenho_concordam_no_numero_de_linhas`) que reprova se divergirem —
+antes a divergência não dava erro em lugar nenhum.
 
 ### O BOOT AUTOMÁTICO FUNCIONA — medido em 06/11/2026
 

@@ -10,7 +10,7 @@ nenhum foi escrito "por completude".
 | --- | --- | --- |
 | `scripts/aparelho.sh` | PC | operação e diagnóstico do aparelho por SSH |
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
-| `scripts/verificar-telas.mjs` | PC | as 9 telas em 3 tamanhos: cabe? ocupa quanto? |
+| `scripts/verificar-telas.mjs` | PC | as 12 telas em 3 tamanhos: cabe? ocupa quanto? |
 | `scripts/verificar-jogos.mjs` | PC | geometria dos jogos: a célula é legível? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
@@ -267,10 +267,11 @@ sempre desenha o estado inicial. `--tela <nome>` escolhe outra:
 
 ```bash
 ./giochi-launcher --tamanho 640x480 --tela busca --dump-frame busca.bmp
-# nomes: home, biblioteca, apps, ajustes, busca, rapido, detalhe, energia, sono
+# nomes: home, biblioteca, apps, ajustes, busca, rapido, detalhe, energia, sono,
+#        wifi, senha, bluetooth
 ```
 
-`verificar-telas.mjs` percorre as nove nos tamanhos que existem de fato e mede
+`verificar-telas.mjs` percorre as doze nos tamanhos que existem de fato e mede
 margem e ocupação de cada uma, reprovando quem toca a borda:
 
 ```bash
@@ -279,6 +280,46 @@ node scripts/verificar-telas.mjs          # 640x480, 800x600, 1280x720
 
 É o que prova layout adaptativo sem aparelho na mão. Não substitui o olho: mede
 **se cabe**, não se está legível.
+
+#### Duas chaves que a foto de tela parada exige
+
+```bash
+--foco zona:indice     # põe o anel de foco onde o teste precisa vê-lo
+--esperar-ms <n>       # espera antes de gravar o quadro
+```
+
+`--foco` existe porque um quadro no estado inicial **nunca** mostra o anel de
+foco da tela fotografada, e foi justamente a falta de foco no painel de
+configurações a queixa do usuário: sem ele, "tem anel" e "não tem anel" produzem
+o mesmo BMP. Zonas: `home`, `filtros`, `biblioteca`, `apps`, `categorias`,
+`conteudo`, `wifi`, `senha`, `bluetooth`, `teclado`, `resultados`, `rapido`,
+`detalhe`, `energia`.
+
+`--esperar-ms` existe porque `--dump-frame` grava no **primeiro** quadro: uma
+tela que depende de trabalho assíncrono sai antes de ter conteúdo. A lista de
+Wi-Fi chega do `wpa_cli` uns 5 s depois de abrir.
+
+#### `--rede-real`: exemplo × verdade
+
+As telas de rede abrem com dados de exemplo, para fotografar o layout sem
+hardware. Isso é bom para olhar o desenho e **péssimo** para provar que o
+`wpa_cli` funciona: a foto mostraria números inventados e chamaria de sucesso.
+
+```bash
+# desenho (exemplo)
+SDL_VIDEODRIVER=dummy ./giochi-launcher --tamanho 640x480 --tela wifi --dump-frame /tmp/w.bmp
+
+# verdade (varredura de verdade; no aparelho, kmsdrm em vez de dummy)
+SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher \
+  --tela wifi --rede-real --esperar-ms 12000 --dump-frame /tmp/w.bmp
+```
+
+`--conectar SSID:senha` e `--parear MAC` exercitam a rede sem dedo na tela e
+imprimem o veredito. Foi com `--conectar` e uma senha errada que a corrente de
+comandos do `wpa_cli` foi provada, e com `--parear` num MAC inexistente que a
+mensagem real do `bluetoothctl` chegou à tela. Detalhes em
+[`rede.md`](rede.md).
 
 ### Lançar um app sem apertar botão: `--lancar`
 

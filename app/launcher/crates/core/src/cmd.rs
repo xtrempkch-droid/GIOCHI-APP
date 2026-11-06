@@ -14,7 +14,11 @@ pub enum Dir {
 }
 
 /// Tudo que pode acontecer com o launcher.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Deixou de ser `Copy` quando passou a carregar listas (`RedesWifi`,
+/// `DispositivosBt`): uma varredura devolve `Vec`, e copiar isso a cada
+/// despacho seria desperdício. `Clone` basta — o reducer consome o comando.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
     /// Direcional (d-pad ou analógico).
     Nav(Dir),
@@ -105,6 +109,34 @@ pub enum Cmd {
     OpenApp(usize),
     /// Vai direto para uma categoria de configuração.
     GoSettingsCat(usize),
+
+    // ── Wi-Fi e Bluetooth ────────────────────────────────────
+    //
+    // A UI **pede**; quem executa é o `ui-sdl` (`wpa_cli`, `bluetoothctl`).
+    // O núcleo continua puro: estes comandos só mudam o que a tela sabe.
+
+    /// Abre a lista de redes. Dispara `Cmd::PediScanWifi` do lado da UI.
+    AbrirWifi,
+    /// Uma varredura terminou. `redes` vazia + `erro` explica o motivo.
+    RedesWifi(Vec<crate::state::Rede>, Option<String>),
+    /// Começou a varrer: a UI mostra "procurando…" em vez de lista vazia.
+    EscaneandoWifi(bool),
+    /// Escolheu a linha da lista. Rede protegida abre o teclado; aberta conecta.
+    EscolherRede(usize),
+    /// Confirmou a senha digitada.
+    ConectarSenha,
+    /// Cancelou a senha (não conecta).
+    CancelarSenha,
+    /// Alterna mostrar a senha em claro. Não muda o valor, só o desenho.
+    MostrarSenha,
+    /// Resultado de uma tentativa de conexão. `None` = deu certo.
+    ResultadoWifi(Option<String>),
+    AbrirBluetooth,
+    DispositivosBt(Vec<crate::state::DispositivoBt>, Option<String>),
+    EscaneandoBt(bool),
+    /// Escolheu um dispositivo da lista para parear.
+    ParearBt(usize),
+    ResultadoBt(Option<String>),
 }
 
 impl Cmd {
@@ -113,7 +145,7 @@ impl Cmd {
     /// É o que separa "o usuário pressionou algo" de "o sistema reportou algo".
     /// Só o primeiro acorda a tela: uma leitura de bateria que chega enquanto o
     /// aparelho dorme não pode acendê-lo, senão a tela ligaria sozinha.
-    pub fn is_user_input(self) -> bool {
+    pub fn is_user_input(&self) -> bool {
         match self {
             Cmd::Nav(_)
             | Cmd::Confirm
@@ -140,11 +172,24 @@ impl Cmd {
             | Cmd::GoTab(_)
             | Cmd::OpenGame(_)
             | Cmd::OpenApp(_)
-            | Cmd::GoSettingsCat(_) => true,
+            | Cmd::GoSettingsCat(_)
+            | Cmd::AbrirWifi
+            | Cmd::AbrirBluetooth
+            | Cmd::EscolherRede(_)
+            | Cmd::ConectarSenha
+            | Cmd::CancelarSenha
+            | Cmd::MostrarSenha
+            | Cmd::ParearBt(_) => true,
 
             // Relógio do HUD, bateria, temperatura, presença de controle, boot
             // e o próprio despertar não vêm de um dedo ou de um botão.
             Cmd::TickHud
+            | Cmd::RedesWifi(_, _)
+            | Cmd::EscaneandoWifi(_)
+            | Cmd::ResultadoWifi(_)
+            | Cmd::DispositivosBt(_, _)
+            | Cmd::EscaneandoBt(_)
+            | Cmd::ResultadoBt(_)
             | Cmd::SetBattery(_)
             | Cmd::SetTemperature(_)
             | Cmd::SetPad(_)

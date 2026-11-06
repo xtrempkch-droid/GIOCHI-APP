@@ -72,6 +72,12 @@ pub enum Overlay {
     QuickSettings,
     GameDetail,
     PowerPopup,
+    /// Lista de redes Wi-Fi descobertas, com opção de escanear e conectar.
+    WifiList,
+    /// Teclado para a senha da rede escolhida.
+    WifiPassword,
+    /// Dispositivos Bluetooth descobertos.
+    BtList,
 }
 
 impl Overlay {
@@ -81,6 +87,9 @@ impl Overlay {
             Overlay::QuickSettings => Zone::QuickSettings,
             Overlay::GameDetail => Zone::GameDetailActions,
             Overlay::PowerPopup => Zone::PowerActions,
+            Overlay::WifiList => Zone::WifiNetworks,
+            Overlay::WifiPassword => Zone::PasswordKeys,
+            Overlay::BtList => Zone::BtDevices,
         }
     }
 }
@@ -199,7 +208,64 @@ impl App {
     }
 }
 
-/// Ajustes rápidos.
+/// Uma rede Wi-Fi vista pelo `wpa_supplicant`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Rede {
+    pub ssid: String,
+    /// Sinal em 0..=100, derivado do `signal` do `wpa_cli` (que vem em dBm).
+    pub sinal: u8,
+    /// Tem criptografia. Rede aberta não pede senha.
+    pub protegida: bool,
+    /// Já existe um bloco salvo para ela em `/etc/wpa_supplicant.conf`.
+    pub salva: bool,
+}
+
+/// Dispositivo Bluetooth descoberto.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct DispositivoBt {
+    pub mac: String,
+    pub nome: String,
+    pub pareado: bool,
+}
+
+/// Estado das conexões sem fio.
+///
+/// ## Por que isto vive no núcleo, e não na UI
+///
+/// O reducer é puro e testável sem hardware — e "qual rede escolher", "que
+/// teclas formam a senha", "o que acontece ao confirmar" são decisões, não
+/// desenho. A UI só desenha o resultado e traduz tecla em `Cmd`; quem executa
+/// `wpa_cli` é o `ui-sdl`, como já acontece com `poweroff`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct SemFio {
+    pub redes: Vec<Rede>,
+    /// Escaneamento em andamento — a UI mostra "procurando…" em vez de lista
+    /// vazia, que pareceria "nenhuma rede".
+    pub escaneando: bool,
+    /// Último erro do `wpa_cli`, para aparecer na tela em vez de só no log.
+    pub erro: Option<String>,
+    /// SSID escolhido, esperando a senha.
+    pub alvo: Option<String>,
+    /// Senha sendo digitada. Limpa ao abrir e ao confirmar — nunca persiste.
+    pub senha: String,
+    pub senha_visivel: bool,
+    pub dispositivos: Vec<DispositivoBt>,
+    pub bt_escaneando: bool,
+    /// MAC escolhido para parear.
+    pub bt_alvo: Option<String>,
+    pub conectado: Option<String>,
+    pub bt_conectado: Option<String>,
+}
+
+impl SemFio {
+    pub fn limpar_senha(&mut self) {
+        self.senha.clear();
+        self.senha_visivel = false;
+        self.alvo = None;
+    }
+}
+
+/// Configurações gerais do aparelho.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub volume: u8,
@@ -270,6 +336,8 @@ pub struct State {
     pub battery: Option<u8>,
     /// Controle detectado. A barra superior mostra o estado real.
     pub pad_connected: bool,
+    /// Wi-Fi e Bluetooth: redes, dispositivos, senha em digitação.
+    pub sem_fio: SemFio,
     /// Id do app que a UI pediu para iniciar.
     ///
     /// O núcleo decide **que** iniciar; quem sabe abrir processo e liberar o
@@ -301,6 +369,7 @@ impl State {
             toast: Toast::default(),
             battery: None,
             pad_connected: false,
+            sem_fio: SemFio::default(),
             lancar: None,
         }
     }
@@ -363,12 +432,32 @@ impl State {
             Zone::LibraryGrid => self.filtered_games().len(),
             Zone::AppsGrid => self.apps.len(),
             Zone::SettingsSidebar => SETTINGS_CATEGORIES.len(),
+            Zone::SettingsContent => settings_rows(self.settings_category),
             Zone::SearchKeyboard => KEYBOARD_ROWS * KEYBOARD_COLS,
+            Zone::WifiNetworks => self.sem_fio.redes.len() + 1, // + "procurar de novo"
+            Zone::PasswordKeys => KEYBOARD_ROWS * KEYBOARD_COLS,
+            Zone::BtDevices => self.sem_fio.dispositivos.len() + 1,
             Zone::SearchResults => self.search_results().len(),
             Zone::QuickSettings => QUICK_SETTINGS_ROWS,
             Zone::GameDetailActions => GAME_DETAIL_ACTIONS,
             Zone::PowerActions => POWER_ACTIONS,
         }
+    }
+}
+
+/// Quantas linhas o painel de conteúdo de uma categoria tem.
+///
+/// Precisa bater com o que `views::settings` desenha — senão o foco anda por
+/// linhas que não existem, ou para antes da última. É a mesma classe de erro do
+/// carrossel dessincronizado: dois lugares descrevendo a mesma lista.
+pub fn settings_rows(category: usize) -> usize {
+    match SETTINGS_CATEGORIES.get(category).copied().unwrap_or("about") {
+        "appearance" => 2,
+        "sound" => 2,
+        "network" => 2,
+        "controller" => 7,
+        "system" => 2,
+        _ => 0,
     }
 }
 
