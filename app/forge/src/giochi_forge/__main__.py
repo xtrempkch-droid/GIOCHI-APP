@@ -204,7 +204,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _saida_utf8() -> None:
+    """Forca UTF-8 em stdout/stderr.
+
+    ## Por que isto e necessario, e nao "detalhe de Windows"
+
+    No Windows, quando a saida e um **pipe** (redirecionamento, `| tee`, o CI),
+    o Python usa o encoding do locale — `cp1252` num Windows pt-BR/en-US — e nao
+    UTF-8. O resultado medido:
+
+        $ PYTHONIOENCODING=cp1252 giochi-forge check --device x55 --project ...
+        Compat?vel          <- o "i" acentuado virou um byte cp1252
+
+    Isso quebrou o job de Windows do `pc-apps.yml`: o passo comparava a saida com
+    "Compatível" em UTF-8 e nao achava. Mas o defeito e do produto antes de ser
+    do CI — o usuario no Windows leria `Compat?vel`.
+
+    `reconfigure` existe desde o Python 3.7; o piso declarado e 3.9.
+    `errors="replace"` em vez de deixar estourar: um caracter estranho num nome
+    de jogo nao pode derrubar a ferramenta.
+    """
+    for fluxo in (sys.stdout, sys.stderr):
+        if hasattr(fluxo, "reconfigure"):
+            try:
+                fluxo.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # stdout fechado, por exemplo
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _saida_utf8()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

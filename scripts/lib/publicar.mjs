@@ -176,9 +176,14 @@ export function gerarChaves() {
  * pacote**, não sobre o manifesto. Assinar o manifesto permitiria trocar o
  * pacote mantendo o manifesto.
  */
-export function assinar(pacote, chavePrivadaPem, { slug, version }) {
+export function assinar(pacote, chavePrivadaPem, { slug, version, nomePacote }) {
   const privada = createPrivateKey(chavePrivadaPem);
   const hash = createHash("sha256").update(pacote).digest("hex");
+  // Ed25519 devolve 64 bytes crus. Eles vao para o `.sig` **binario** porque e
+  // esse o formato que `openssl pkeyutl -verify -rawin -sigfile` consome — o
+  // caminho que o antecessor usa e que o aparelho pode usar. Gravar base64 em
+  // texto aqui produz um arquivo de 89 bytes que o openssl recusa, e o teste
+  // JS nao pega porque assina e verifica com a mesma biblioteca.
   const assinatura = sign(null, pacote, privada);
 
   return {
@@ -188,9 +193,11 @@ export function assinar(pacote, chavePrivadaPem, { slug, version }) {
       version,
       sha256: hash,
       size_bytes: pacote.length,
-      signature: assinatura.toString("base64"),
+      // O manifesto aponta o arquivo, nao carrega a assinatura: e o formato do
+      // antecessor e o que mantem uma unica fonte para os bytes assinados.
+      signature: `${nomePacote}.sig`,
     },
-    assinatura: assinatura.toString("base64"),
+    assinatura,
   };
 }
 
@@ -201,7 +208,7 @@ export function assinar(pacote, chavePrivadaPem, { slug, version }) {
  * para o que ele mesmo produziu não verifica nada. O teste de ida e volta do
  * antecessor **adultera** o pacote e exige recusa — é esse o padrão aqui.
  */
-export function verificar(pacote, manifesto, chavePublicaPem) {
+export function verificar(pacote, manifesto, chavePublicaPem, assinaturaBytes) {
   const erros = [];
   const hash = createHash("sha256").update(pacote).digest("hex");
 
@@ -215,9 +222,20 @@ export function verificar(pacote, manifesto, chavePublicaPem) {
   let assinaturaOk = false;
   try {
     const publica = createPublicKey(chavePublicaPem);
-    const bruta = Buffer.from(manifesto?.signature ?? "", "base64");
+    // O manifesto tem de **nomear** a assinatura. Sem isto, um manifesto com
+    // `signature: ""` seria aceito sempre que alguem passasse os bytes por fora.
+    if (!manifesto?.signature) {
+      erros.push("manifesto nao declara assinatura (campo signature vazio)");
+    }
+    const bruta = Buffer.isBuffer(assinaturaBytes) ? assinaturaBytes : Buffer.alloc(0);
     if (bruta.length === 0) {
-      erros.push("assinatura ausente no manifesto");
+      erros.push(
+        `assinatura ausente: ${manifesto?.signature ?? "(manifesto sem campo signature)"}`,
+      );
+    } else if (bruta.length !== 64) {
+      // Ed25519 tem tamanho fixo. Um `.sig` de 89 bytes e assinatura em base64
+      // gravada como texto — erro que ja passou por aqui uma vez.
+      erros.push(`assinatura com ${bruta.length} bytes; Ed25519 tem 64`);
     } else {
       assinaturaOk = verificaAssinatura(null, pacote, publica, bruta);
       if (!assinaturaOk) erros.push("assinatura Ed25519 não confere — pacote adulterado ou chave errada");

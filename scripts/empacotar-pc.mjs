@@ -53,6 +53,17 @@ const RAIZ = path.resolve(import.meta.dirname, "..");
 const ALVOS = {
   store: { pasta: "app/store", pacote: "giochi_store", entrada: "giochi_store.cli", binario: "giochi-store" },
   forge: { pasta: "app/forge", pacote: "giochi_forge", entrada: "giochi_forge.__main__", binario: "giochi-forge" },
+  // O painel **chama** o forge e o store em vez de reimplementar a
+  // classificação e o empacotamento. No PC do usuário isso resolve por
+  // `PYTHONPATH`; num `.pyz` os três módulos têm de estar no mesmo zip, porque
+  // não há diretório ao lado do executável. `extras` é o que diz isso.
+  painel: {
+    pasta: "app/painel",
+    pacote: "giochi_painel",
+    entrada: "giochi_painel.__main__",
+    binario: "giochi-painel",
+    extras: ["app/forge/src/giochi_forge", "app/store/src/giochi_store"],
+  },
 };
 
 function lerArgs(argv) {
@@ -87,23 +98,25 @@ Windows, Linux e macOS: os apps não têm dependência fora da biblioteca padrã
  * `zipimport` compila na primeira execução e guarda em memória) e só faria o
  * checksum depender de quem empacotou.
  */
-function arquivosPython(dirSrc, modulo) {
-  const base = path.join(dirSrc, modulo);
+function arquivosDoPacote(base) {
   const saida = [];
 
   const visitar = (atual) => {
     for (const nome of readdirSync(atual).sort()) {
       if (nome === "__pycache__" || nome.endsWith(".pyc")) continue;
       const completo = path.join(atual, nome);
-      const rel = path.relative(dirSrc, completo).split(path.sep).join("/");
+      const rel = path.relative(path.dirname(base), completo).split(path.sep).join("/");
       if (statSync(completo).isDirectory()) visitar(completo);
-      else if (nome.endsWith(".py")) saida.push({ caminho: rel, conteudo: readFileSync(completo) });
+      // Não só `.py`: o painel serve `estatico/*.html|css|js` de dentro do
+      // pacote, e um `.pyz` sem eles abre a página em branco. O filtro é por
+      // arquivo, não por extensão.
+      else saida.push({ caminho: rel, conteudo: readFileSync(completo) });
     }
   };
 
-  if (!existsSync(base)) throw new Error(`módulo ausente: ${base}`);
+  if (!existsSync(base)) throw new Error(`pacote ausente: ${base}`);
   visitar(base);
-  if (saida.length === 0) throw new Error(`nenhum .py em ${base}`);
+  if (saida.length === 0) throw new Error(`pacote vazio: ${base}`);
   return saida;
 }
 
@@ -213,7 +226,15 @@ function principal() {
     const alvo = ALVOS[nome];
     const dirSrc = path.join(RAIZ, alvo.pasta, "src");
 
-    const entradas = arquivosPython(dirSrc, alvo.pacote);
+    const entradas = arquivosDoPacote(path.join(dirSrc, alvo.pacote));
+    for (const extra of alvo.extras ?? []) {
+      for (const e of arquivosDoPacote(path.join(RAIZ, extra))) {
+        if (entradas.some((x) => x.caminho === e.caminho)) {
+          throw new Error(`${alvo.binario}: módulo duplicado no zip: ${e.caminho}`);
+        }
+        entradas.push(e);
+      }
+    }
     // `__main__.py` na raiz é o que faz `python arquivo.pyz` executar: é a
     // convenção do `zipimport`, não uma escolha nossa.
     entradas.push({

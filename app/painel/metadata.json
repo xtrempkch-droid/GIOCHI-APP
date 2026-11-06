@@ -1,0 +1,12 @@
+{
+  "title": "Giochi Painel",
+  "slug": "painel",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "any",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-painel",
+  "license": "Proprietary",
+  "releaseYear": 2026,
+  "category": "Ferramenta"
+}

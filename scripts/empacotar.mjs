@@ -202,15 +202,18 @@ function principal() {
   // O slug **não** é o nome da pasta: `jogos/pacman` → `pacman`, e um app
   // renomeado na árvore não pode mudar o diretório no aparelho.
   const { slug, origem: origemSlug } = slugDoPacote(metadata, idDoIndice(dirApp));
+  const nomePacote = `${slug}.giochi`;
   const { manifesto, assinatura } = assinar(pacote, chave.privada, {
     slug,
     version: metadata.version,
+    nomePacote,
   });
 
   mkdirSync(opcoes.saida, { recursive: true });
-  const caminhoPacote = join(opcoes.saida, `${slug}.giochi`);
+  const caminhoPacote = join(opcoes.saida, nomePacote);
   writeFileSync(caminhoPacote, pacote);
-  writeFileSync(`${caminhoPacote}.sig`, assinatura + "\n");
+  // Os 64 bytes crus: e o que `openssl pkeyutl -verify -rawin -sigfile` le.
+  writeFileSync(`${caminhoPacote}.sig`, assinatura);
   writeFileSync(`${caminhoPacote}.manifest.json`, JSON.stringify(manifesto, null, 2) + "\n");
 
   if (opcoes.json) {

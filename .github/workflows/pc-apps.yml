@@ -157,12 +157,50 @@ jobs:
 
       # `--help` prova que o zipimport resolveu todos os módulos. Um `.pyz` com
       # caminho errado morre aqui, e não na máquina do usuário.
-      - name: Os dois apps abrem
+      - name: Os três apps abrem
         shell: bash
         run: |
           python dist/pc/giochi-store.pyz --help > /dev/null
           python dist/pc/giochi-forge.pyz --help > /dev/null
           python dist/pc/giochi-forge.pyz --version
+          # O painel arrasta o forge e o store para dentro do mesmo `.pyz`.
+          # Se um dos três pacotes faltar no zip, o import falha aqui.
+          python dist/pc/giochi-painel.pyz --versao
+
+      # O painel é o único app com servidor: "o import resolveu" não prova que a
+      # página é servida. Sem os estáticos dentro do `.pyz` ele abre e devolve
+      # 404 na própria página — erro que só apareceria com o usuário na frente.
+      - name: O painel serve a página e fala HTTP
+        shell: bash
+        run: |
+          python dist/pc/giochi-painel.pyz --porta 8791 --sem-navegador &
+          PID=$!
+          # Até 20s esperando a porta: no Windows o primeiro `import` compila
+          # bytecode e é visivelmente mais lento que no Linux.
+          for i in $(seq 1 40); do
+            if python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8791/', timeout=2)" 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          python - <<'FIM'
+          import json, sys, urllib.error, urllib.request
+          base = "http://127.0.0.1:8791"
+          pagina = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
+          assert "Giochi" in pagina, "a página não é o painel"
+          for nome in ("app.js", "estilo.css"):
+              corpo = urllib.request.urlopen(base + "/" + nome, timeout=5).read()
+              assert corpo, nome + " vazio"
+          dados = json.load(urllib.request.urlopen(base + "/api/aparelhos", timeout=5))
+          assert any(a["id"] == "x55" for a in dados["aparelhos"]), "sem perfil x55"
+          try:
+              urllib.request.urlopen(base + "/nao-existe.js", timeout=5)
+              sys.exit("arquivo inexistente devolveu 200")
+          except urllib.error.HTTPError as e:
+              assert e.code == 404, e.code
+          print("painel: página, estáticos e API respondem")
+          FIM
+          kill "$PID" || true
 
       # Exercita o que escreve em disco: `Path.mkdir`, `os.replace` e leitura de
       # arquivo. É aqui que Windows e macOS diferem de Linux de verdade.
@@ -190,10 +228,32 @@ jobs:
       # traz o runtime (medido — docs/godot.md).
       - name: Classifica contra o X55
         shell: bash
+        # Pelo **código de saída**, não pelo texto. `check` já devolve
+        # 0=compatível, 1=parcial, 2=incompatível — essa é a interface de
+        # máquina. Comparar a saída com "Compatível" em UTF-8 quebrou o job de
+        # Windows, onde o Python escrevia cp1252 e o acento virava outro byte
+        # (corrigido na origem, mas o teste não deve depender disso).
         run: |
           python dist/pc/giochi-forge.pyz check --device x55 \
-            --project app/jogos/arcade-volleyball | tee /tmp/check.txt
-          grep -q "Compatível" /tmp/check.txt
+            --project app/jogos/arcade-volleyball
+          echo "código de saída 0 = compatível"
+
+      - name: E o jogo Godot tem de ser REPROVADO
+        shell: bash
+        # O outro lado da classificação. `check` devolve 2 para incompatível;
+        # o `|| true` mantém o passo verde para que a asserção seja explícita —
+        # se um dia voltar 0, o passo falha por não ter reprovado.
+        run: |
+          set +e
+          python dist/pc/giochi-forge.pyz check --device x55 \
+            --project app/jogos/spacewar > /tmp/godot.txt 2>&1
+          codigo=$?
+          cat /tmp/godot.txt
+          if [ "$codigo" -eq 0 ]; then
+            echo "spacewar tem de ser incompatível no X55 (não há runtime Godot na imagem)"
+            exit 1
+          fi
+          echo "reprovado com código $codigo, como esperado"
 
       # O JSON do perfil, produzido pelo `.pyz` empacotado — não pela árvore de
       # origem. É o arquivo que o usuário recebe. A conferência é por `grep`

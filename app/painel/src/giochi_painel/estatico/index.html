@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giochi Painel</title>
+<link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+<header>
+  <h1>Giochi <span>Painel</span></h1>
+  <p class="sub">Loja e forge no computador. Só esta máquina alcança.</p>
+</header>
+
+<main>
+  <!-- Classificar + empacotar: o caminho de quem publica um app. -->
+  <section>
+    <h2>Publicar um app</h2>
+    <p class="dica">Aponta para a pasta do app (a que tem <code>metadata.json</code>).</p>
+
+    <label>Pasta do app
+      <input id="projeto" placeholder="/caminho/para/app/jogos/arcade-volleyball" autocomplete="off">
+    </label>
+
+    <div class="linha">
+      <label>Aparelho
+        <select id="aparelho"></select>
+      </label>
+      <button id="btn-classificar">Classificar</button>
+    </div>
+
+    <div id="veredito" class="saida"></div>
+
+    <details>
+      <summary>Empacotar em <code>.giochi</code></summary>
+      <label>Pasta de saída
+        <input id="saida" placeholder="dist/pacotes" autocomplete="off">
+      </label>
+      <label>Chave privada (opcional — sem ela o pacote sai sem assinatura)
+        <input id="chave" placeholder="~/.giochi/chave-privada.pem" autocomplete="off">
+      </label>
+      <button id="btn-empacotar">Empacotar</button>
+      <div id="pacote" class="saida"></div>
+    </details>
+  </section>
+
+  <!-- Catálogo: o caminho de quem compra. -->
+  <section>
+    <h2>Catálogo de pacotes</h2>
+    <p class="dica">Lê os <code>.giochi</code> de uma pasta e diz quais servem.</p>
+    <div class="linha">
+      <input id="origem" placeholder="pasta com .giochi" autocomplete="off">
+      <button id="btn-pacotes">Listar</button>
+    </div>
+    <div id="lista" class="saida"></div>
+  </section>
+
+  <!-- Destinos: onde o console aparece. -->
+  <section>
+    <h2>Console conectado</h2>
+    <div class="linha">
+      <button id="btn-destinos">Procurar</button>
+    </div>
+    <div id="destinos" class="saida"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">pronto</span>
+  <span class="versao">localhost · sem dependência externa</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

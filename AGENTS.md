@@ -274,6 +274,7 @@ Giochi app/
 │   ├── _template/             # modelo para app novo
 │   ├── forge/                 # empacotador/classificador (host, roda no PC)
 │   ├── store/                 # loja (host, roda no PC)
+│   ├── painel/                # interface web local (host, roda no PC) — ver §17
 │   ├── jogos/                 # GRUPO: não é app, não tem metadata.json
 │   │   ├── pacman/            # nativo, labirinto 21x21, 4 fantasmas
 │   │   ├── cobrinha/          # nativo, grade discreta
@@ -495,6 +496,14 @@ node scripts/verificar-jogos.mjs         # a geometria dos jogos nos mesmos 3 ta
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
 node scripts/verificar-mapa.mjs --mapa <buttons.map>   # símbolos que o app entende
 bash scripts/canal.sh                    # janela de contato com o Giochi System
+
+# Apps de PC (rodam no computador, não no aparelho) — ver §15 e §17
+bash scripts/testar-apps-pc.sh           # 90 testes Python (58 forge + 32 painel)
+bash scripts/testar-apps-pc.sh --painel  # só o painel
+node scripts/empacotar-pc.mjs            # .pyz + .sh + .cmd + SHA256SUMS dos três
+app/painel/bin/giochi-painel             # interface web em 127.0.0.1:8710
+node scripts/empacotar.mjs app/jogos/pacman        # pasta do app → .giochi assinado
+node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
 ```
 
 ### Canal com o Giochi System
@@ -2396,3 +2405,103 @@ O launcher está certo: `tem_bt` é `Option<bool>` e este caso é `Some(false)`.
 Se algum dia aparecer `Some(true)` com adaptador em `/sys/class/bluetooth/`,
 então é bug do app. A distinção entre "não tem rádio" (R35S), "tem e não
 registrou" (este caso) e "não medido" é o que evita os três diagnósticos errados.
+
+## 17. Painel: a interface web dos apps de PC (06/11/2026)
+
+`app/painel` é o **terceiro** app com `distribution: "host"`. Serve uma página em
+`127.0.0.1:8710` que mostra os aparelhos reais, classifica um app e empacota o
+`.giochi`. Existe porque loja e forge são CLI, e ler código de saída em terminal
+não é o que um usuário faz.
+
+```bash
+app/painel/bin/giochi-painel            # http://127.0.0.1:8710
+app/painel/bin/giochi-painel --porta 9000 --sem-navegador
+python3 dist/pc/giochi-painel.pyz       # a mesma coisa, empacotada
+bash scripts/testar-apps-pc.sh --painel # 32 testes
+```
+
+### Ele chama o forge e o store; não os copia
+
+`acoes.py` importa `giochi_forge.classify`, `giochi_forge.package`,
+`giochi_store.catalogo` e `giochi_store.destino`. Uma segunda implementação da
+regra de compatibilidade envelheceria diferente da primeira — e a primeira é a
+que decide o que o usuário pode comprar. A separação `acoes` × `servidor` é o que
+permite testar "o que acontece" sem abrir socket.
+
+### Os dois bugs que só apareceram quando o painel chamou o forge
+
+Nenhum dos dois era do painel; os dois eram **duas cópias divergentes da mesma
+regra**, escondidas porque cada lado testava a si mesmo.
+
+1. **`sign_package` exige `version`, keyword-only.** O painel chamava sem ela, o
+   `TypeError` virava 500 no navegador e o pacote saía **sem manifesto**. O
+   `forge build` já passava a versão, então o caminho nunca tinha sido exercitado.
+2. **A assinatura tinha dois formatos.** O Python gravava 64 bytes crus no `.sig`
+   e o **nome do arquivo** no manifesto — igual ao antecessor e consumível por
+   `openssl pkeyutl -verify -rawin -sigfile`. O JS (`publicar.mjs`) gravava
+   base64 **em texto** (89 bytes com `\n`) e a assinatura **inline** no manifesto.
+   Os testes JS assinavam e verificavam com a mesma biblioteca, então passavam
+   com qualquer formato.
+
+O formato canônico é o do antecessor, e agora há três guardas:
+
+| Guarda | Onde |
+| --- | --- |
+| `manifesto.signature` aponta o arquivo `.sig` | `assinar()` + teste JS |
+| assinatura com tamanho diferente de 64 é recusada | `verificar()` + teste JS |
+| o `.sig` do painel tem 64 bytes e nenhum `\n` | `tests/painel/test_acoes.py` |
+
+E a prova que faltava — **ferramenta externa**, não a mesma lib dos dois lados:
+
+```text
+openssl pkeyutl -verify -pubin -inkey ~/.giochi/chave-privada-publica.pem \
+  -rawin -in arcade-volleyball.giochi -sigfile arcade-volleyball.giochi.sig
+Signature Verified Successfully     ← tanto o .sig do Python quanto o do JS
+```
+
+### `importlib.resources`, não `Path(__file__)`
+
+Dentro de um `.pyz` não existe diretório ao lado do módulo: `__file__` aponta
+para dentro do zip e `Path.exists()` devolve `False`. Com `Path`, o painel
+**empacotado** serve 404 na própria página, e o defeito só apareceria com o
+usuário na frente. `servidor.py` usa `resources.files(__package__).
+
+### O `.pyz` do painel leva três pacotes
+
+Num zip não há `PYTHONPATH`. `ALVOS` em `scripts/empacotar-pc.mjs` ganhou
+`extras: ["app/forge/src/giochi_forge", "app/store/src/giochi_store"]`, e
+`arquivosDoPacote` passou a incluir **qualquer** arquivo, não só `.py` — os
+estáticos (`index.html`, `estilo.css`, `app.js`) precisam viajar dentro.
+
+Dois testes protegem isso, e a diferença entre eles é a lição de sempre:
+
+- um lê o **índice do zip** e exige os seis caminhos;
+- outro **executa** o `.pyz` (`--versao`), porque "está no zip" e "roda" são
+  afirmações diferentes. Remover `extras` reprova os dois.
+
+Os hashes de `store` e `forge` **não mudaram** com a generalização — conferido
+comparando `SHA256SUMS` antes e depois.
+
+### Segurança: loopback não basta
+
+O servidor escuta só `127.0.0.1` **e confere o cabeçalho `Host`** contra
+`127.0.0.1`, `localhost` e `[::1]`. Sem a checagem, uma página na internet
+resolve um domínio para o loopback e fala com o painel (*DNS rebinding*) — a
+origem da requisição não protege nada nesse cenário. Caminhos estáticos recusam
+`..` antes de tocar no disco. Testado: `Host` estrangeiro → 403;
+`/%2e%2e/%2e%2e/etc/passwd` e `/..%2f..%2fetc%2fpasswd` → 404.
+
+### O que ele não faz
+
+Não instala no aparelho (isso é `aparelho.sh instalar-pacote`, por SSH) e não
+guarda chave nenhuma: recebe o caminho de uma chave existente e repassa ao
+`sign_package`.
+
+### Números de 06/11/2026
+
+```text
+validate-app.mjs --all   11 apps válidos (3 em scaffold)
+tests/run-all.mjs        162/162 JS
+testar-apps-pc.sh        58 forge + 32 painel = 90 Python
+openssl pkeyutl -verify  aceita o .sig do Python e o do JS
+```

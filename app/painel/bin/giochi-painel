@@ -1,0 +1,15 @@
+#!/bin/sh
+# Lancador POSIX do Giochi Painel - interface web local (127.0.0.1).
+#
+# Precisa das duas ferramentas no PYTHONPATH: o painel CHAMA a loja e o forge,
+# nao reimplementa a regra de compatibilidade. Sem elas o import falha com
+# ModuleNotFoundError, que e a mensagem certa (diferente de "nao compativel").
+#
+# Windows nao executa `sh`: ali o caminho e `giochi-painel.cmd` da release, ou
+#   py -3 -m giochi_painel --sem-navegador
+# com app/painel/src, app/forge/src e app/store/src no PYTHONPATH.
+set -eu
+AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RAIZ="$AQUI/../../.."
+PYTHONPATH="$AQUI/../src:$RAIZ/app/forge/src:$RAIZ/app/store/src${PYTHONPATH:+:$PYTHONPATH}" \
+  exec python3 -m giochi_painel "$@"

@@ -236,9 +236,9 @@ test("todos os erros saem de uma vez", () => {
 test("ida e volta: assina, verifica, aceita", () => {
   const chaves = gerarChaves();
   const pacote = pacoteDeExemplo();
-  const { manifesto } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0" });
+  const { manifesto, assinatura } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0", nomePacote: "teste.giochi" });
 
-  const r = verificar(pacote, manifesto, chaves.publica);
+  const r = verificar(pacote, manifesto, chaves.publica, assinatura);
   assert.equal(r.ok, true, r.erros.join(" | "));
   assert.equal(r.sha256, manifesto.sha256);
 });
@@ -248,10 +248,10 @@ test("pacote adulterado é recusado", () => {
   // aceitar um byte a mais, ele não verifica nada.
   const chaves = gerarChaves();
   const pacote = pacoteDeExemplo();
-  const { manifesto } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0" });
+  const { manifesto, assinatura } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0", nomePacote: "teste.giochi" });
 
   const adulterado = Buffer.concat([pacote, Buffer.from([0])]);
-  const r = verificar(adulterado, manifesto, chaves.publica);
+  const r = verificar(adulterado, manifesto, chaves.publica, assinatura);
   assert.equal(r.ok, false, "pacote com um byte a mais foi ACEITO");
   assert.ok(r.erros.some((e) => e.includes("sha256")), r.erros.join(" | "));
   assert.ok(r.erros.some((e) => e.includes("tamanho")), r.erros.join(" | "));
@@ -262,14 +262,14 @@ test("pacote trocado por outro válido é recusado", () => {
   // manifesto: trocar o pacote e manter o manifesto.
   const chaves = gerarChaves();
   const original = pacoteDeExemplo();
-  const { manifesto } = assinar(original, chaves.privada, { slug: "teste", version: "1.0.0" });
+  const { manifesto, assinatura } = assinar(original, chaves.privada, { slug: "teste", version: "1.0.0", nomePacote: "teste.giochi" });
 
   const outro = pacoteDeExemplo({
     binarios: [
       { caminho: "bin/app", conteudo: Buffer.from("#!/bin/sh\necho outro\n"), modo: 0o755 },
     ],
   });
-  const r = verificar(outro, manifesto, chaves.publica);
+  const r = verificar(outro, manifesto, chaves.publica, assinatura);
   assert.equal(r.ok, false, "pacote diferente com o manifesto do original foi ACEITO");
 });
 
@@ -277,9 +277,9 @@ test("assinatura feita com outra chave é recusada", () => {
   const minha = gerarChaves();
   const outra = gerarChaves();
   const pacote = pacoteDeExemplo();
-  const { manifesto } = assinar(pacote, minha.privada, { slug: "teste", version: "1.0.0" });
+  const { manifesto, assinatura } = assinar(pacote, minha.privada, { slug: "teste", version: "1.0.0", nomePacote: "teste.giochi" });
 
-  const r = verificar(pacote, manifesto, outra.publica);
+  const r = verificar(pacote, manifesto, outra.publica, assinatura);
   assert.equal(r.ok, false);
   assert.ok(r.erros.some((e) => e.includes("assinatura")), r.erros.join(" | "));
 });
@@ -287,12 +287,46 @@ test("assinatura feita com outra chave é recusada", () => {
 test("manifesto sem assinatura é recusado, não aceito por omissão", () => {
   const chaves = gerarChaves();
   const pacote = pacoteDeExemplo();
-  const { manifesto } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0" });
+  const { manifesto, assinatura } = assinar(pacote, chaves.privada, { slug: "teste", version: "1.0.0", nomePacote: "teste.giochi" });
   const semAssinatura = { ...manifesto, signature: "" };
 
-  const r = verificar(pacote, semAssinatura, chaves.publica);
+  const r = verificar(pacote, semAssinatura, chaves.publica, null);
   assert.equal(r.ok, false);
   assert.ok(r.erros.some((e) => e.includes("ausente")), r.erros.join(" | "));
+});
+
+test("assinatura gravada como base64 em texto é recusada", () => {
+  // Regressao de 06/11/2026: o empacotador JS gravava a assinatura em base64
+  // com um newline (89 bytes) em vez dos 64 bytes crus. `openssl pkeyutl
+  // -verify -rawin -sigfile` recusa, e o aparelho recusaria o pacote. Os testes
+  // de ida e volta nao pegavam porque assinavam e verificavam com a mesma
+  // biblioteca; o tamanho fixo do Ed25519 e o que separa os dois formatos.
+  const chaves = gerarChaves();
+  const pacote = pacoteDeExemplo();
+  const { manifesto, assinatura } = assinar(pacote, chaves.privada, {
+    slug: "teste",
+    version: "1.0.0",
+    nomePacote: "teste.giochi",
+  });
+
+  assert.equal(assinatura.length, 64, "Ed25519 tem 64 bytes crus");
+
+  const emTexto = Buffer.from(assinatura.toString("base64") + "\n", "utf8");
+  const r = verificar(pacote, manifesto, chaves.publica, emTexto);
+  assert.equal(r.ok, false, "assinatura em base64-texto foi ACEITA");
+  assert.ok(r.erros.some((e) => e.includes("64")), r.erros.join(" | "));
+});
+
+test("o manifesto aponta o arquivo .sig, não carrega a assinatura", () => {
+  // Formato do antecessor: uma única fonte para os bytes assinados, e o
+  // `openssl` do aparelho consegue consumir o arquivo diretamente.
+  const chaves = gerarChaves();
+  const { manifesto } = assinar(pacoteDeExemplo(), chaves.privada, {
+    slug: "teste",
+    version: "1.0.0",
+    nomePacote: "teste.giochi",
+  });
+  assert.equal(manifesto.signature, "teste.giochi.sig");
 });
 
 // ── Leitor ──────────────────────────────────────────────────

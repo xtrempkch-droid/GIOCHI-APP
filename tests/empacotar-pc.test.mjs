@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -50,6 +50,44 @@ test("gera os dois .pyz com __main__.py na raiz", () => {
         `${nome}: entrada não comprimida — o zipimport aceita, mas o ZIP tem de ser deflate`,
       );
     }
+  });
+});
+
+test("o .pyz do painel leva os estáticos e os três pacotes", () => {
+  // O painel **chama** o forge e o store, e serve `estatico/*.html|css|js`.
+  // Num zip não existe diretório ao lado do módulo nem `PYTHONPATH`: se um dos
+  // três pacotes faltar, o app empacotado morre com ModuleNotFoundError; se os
+  // estáticos faltarem, ele abre e serve **404 na própria página**. Os dois
+  // casos só apareceriam depois de distribuir, por isso são testados aqui.
+  comSaida((dir) => {
+    empacotar(dir);
+    const caminhos = lerIndiceZip(readFileSync(path.join(dir, "giochi-painel.pyz")))
+      .entradas.map((e) => e.caminho);
+
+    for (const esperado of [
+      "giochi_painel/servidor.py",
+      "giochi_forge/classify.py",
+      "giochi_store/catalogo.py",
+      "giochi_painel/estatico/index.html",
+      "giochi_painel/estatico/app.js",
+      "giochi_painel/estatico/estilo.css",
+    ]) {
+      assert.ok(caminhos.includes(esperado), `giochi-painel.pyz sem ${esperado}`);
+    }
+  });
+});
+
+test("o .pyz do painel roda de fato", () => {
+  // "Está no zip" e "executa" são afirmações diferentes. Um `import` que só
+  // resolve no diretório do código passa no teste acima e falha aqui.
+  comSaida((dir) => {
+    empacotar(dir);
+    const saida = execFileSync(
+      "python3",
+      [path.join(dir, "giochi-painel.pyz"), "--versao"],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    assert.match(saida, /giochi-painel \d+\.\d+\.\d+/);
   });
 });
 
@@ -103,9 +141,13 @@ test("SHA256SUMS tem o formato que sha256sum -c entende", () => {
     empacotar(dir);
     const texto = readFileSync(path.join(dir, "SHA256SUMS"), "utf8");
     const linhas = texto.trim().split("\n");
-    assert.equal(linhas.length, 2);
+    // O número vem dos atalhos .sh gerados, não de um literal: fixar "2" fez
+    // este teste falhar quando o painel entrou, e o defeito era o teste, não o
+    // empacotador. Assim, um app novo só precisa empacotar para passar.
+    const esperados = readdirSync(dir).filter((n) => n.endsWith(".sh")).length;
+    assert.equal(linhas.length, esperados, `esperava ${esperados} linhas`);
     for (const linha of linhas) {
-      assert.match(linha, /^[0-9a-f]{64} {2}giochi-(store|forge)\.pyz$/);
+      assert.match(linha, /^[0-9a-f]{64} {2}giochi-(store|forge|painel)\.pyz$/);
     }
     // LF, não CRLF: `sha256sum -c` e `shasum -c` esperam LF, e um arquivo
     // gerado no Windows com CRLF falharia nos dois.

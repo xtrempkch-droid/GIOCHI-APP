@@ -4,6 +4,7 @@
 # Uso:
 #   bash scripts/testar-apps-pc.sh
 #   bash scripts/testar-apps-pc.sh --forge     # só o forge
+#   bash scripts/testar-apps-pc.sh --painel    # só o painel
 #
 # ## Por que um script, se `python3 -m unittest` já resolve
 #
@@ -23,10 +24,15 @@ erro(){ printf '  %sERRO%s %s\n' "$VERMELHO" "$ZERA" "$*" >&2; exit 1; }
 command -v python3 >/dev/null || erro "python3 não encontrado"
 
 rodar() {
-  local nome="$1" pacote="$2" src="$3"
+  local nome="$1" pacote="$2" src="$3" extras="${4:-}"
   printf '\n%s\n' "$nome"
   local saida
-  saida=$(cd "$src" && PYTHONPATH="." python3 -m unittest discover \
+  # `extras` existe para o painel: ele **importa** o forge e o store, e num
+  # teste isso resolve por PYTHONPATH. Sem estes dois, o import falha e o
+  # unittest reporta "erro ao importar" em vez de rodar os testes.
+  local caminho="$src"
+  if [ -n "$extras" ]; then caminho="$src:$extras"; fi
+  saida=$(cd "$src" && PYTHONPATH="$caminho" python3 -m unittest discover \
     -s "$RAIZ/tests/$pacote" -t "$RAIZ/tests/$pacote" 2>&1) || {
       printf '%s\n' "$saida" >&2
       erro "$nome: testes falharam"
@@ -39,12 +45,18 @@ rodar() {
   ok "$n teste(s)"
 }
 
+PAINEL_EXTRAS="$RAIZ/app/forge/src:$RAIZ/app/store/src"
+
 case "$ALVO" in
   --forge) rodar "giochi-forge" forge "$RAIZ/app/forge/src" ;;
   --store) rodar "giochi-store" store "$RAIZ/app/store/src" 2>/dev/null || \
              printf '  (o store ainda não tem testes próprios)\n' ;;
+  --painel) rodar "giochi-painel" painel "$RAIZ/app/painel/src" "$PAINEL_EXTRAS" ;;
   *)
     rodar "giochi-forge" forge "$RAIZ/app/forge/src"
     if [ -d "$RAIZ/tests/store" ]; then rodar "giochi-store" store "$RAIZ/app/store/src"; fi
+    if [ -d "$RAIZ/tests/painel" ]; then
+      rodar "giochi-painel" painel "$RAIZ/app/painel/src" "$PAINEL_EXTRAS"
+    fi
     ;;
 esac

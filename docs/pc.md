@@ -1,11 +1,12 @@
-# Apps de PC: a loja e o forge nos três sistemas
+# Apps de PC: a loja, o forge e o painel nos três sistemas
 
 > Medido em 06/11/2026. **Linux: executado.** Windows e macOS: o workflow está
 > escrito para executar os dois, mas **ainda não rodou no GitHub** — ver
 > [o que está provado](#o-que-está-provado-e-o-que-não-está).
 
-Os dois apps com `distribution: "host"` são a **loja** (`app/store`) e o
-**forge** (`app/forge`). Eles rodam no computador do usuário, não no console:
+Os três apps com `distribution: "host"` são a **loja** (`app/store`), o
+**forge** (`app/forge`) e o **painel** (`app/painel`, interface web local). Eles
+rodam no computador do usuário, não no console:
 
 ```text
 PC do usuário                                  aparelho
@@ -28,6 +29,7 @@ $ node scripts/gerar-catalogo.mjs --lista
 | Peça | Onde | Estado |
 | --- | --- | --- |
 | `giochi-store` / `giochi-forge` | `app/*/bin/` | lançador POSIX: roda o módulo de `../src` |
+| `giochi-painel` | `app/painel/bin/` | idem; abre a interface web em `127.0.0.1:8710` |
 | `.pyz` (um arquivo, três sistemas) | `dist/pc/` | gerado por `scripts/empacotar-pc.mjs` |
 | `.sh` e `.cmd` | `dist/pc/` | atalhos por sistema |
 | `SHA256SUMS` | `dist/pc/` | o que o usuário confere antes de rodar |
@@ -142,11 +144,53 @@ O passo 4 é o que pegou o defeito de 06/11/2026: o forge e o store tinham **dua
 cópias** da lista de `runtime`, e as duas divergiam do schema. Ver
 [`docs/diario/2026-11-06.md`](diario/2026-11-06.md).
 
+## O painel: interface web local
+
+A loja e o forge são CLI, e conferir à mão o que eles respondem — num terminal,
+com `--json`, lendo código de saída — não é o que um usuário faz. O painel é uma
+página servida por `http.server`, sem framework e sem dependência de terceiro.
+
+```bash
+app/painel/bin/giochi-painel            # http://127.0.0.1:8710
+app/painel/bin/giochi-painel --porta 9000 --sem-navegador
+python3 dist/pc/giochi-painel.pyz       # a versão empacotada, igual
+```
+
+**O painel não reimplementa o forge nem o store**: ele chama. Classificar é
+`giochi_forge.classify`, empacotar é `giochi_forge.package`, listar pacotes é
+`giochi_store.catalogo`. Uma segunda cópia da regra de compatibilidade
+envelheceria diferente da primeira — e a primeira é a que decide o que o usuário
+pode comprar.
+
+### Três decisões que vieram de erro real
+
+1. **`importlib.resources`, não `Path(__file__)`.** Dentro de um `.pyz` não
+   existe diretório ao lado do módulo: `__file__` aponta para dentro do zip e
+   `Path.exists()` devolve `False`. Com `Path`, o painel empacotado serve **404
+   na própria página** — e só depois de distribuído alguém descobriria.
+2. **O `.pyz` do painel leva três pacotes.** Num zip não há `PYTHONPATH`, então
+   `giochi_painel`, `giochi_forge` e `giochi_store` têm de estar dentro dele. É o
+   campo `extras` de `ALVOS` em `scripts/empacotar-pc.mjs`, e dois testes
+   reprovam se um dos três faltar — um lê o índice do zip, o outro **executa**.
+3. **Só `127.0.0.1`, com o `Host` conferido.** Sem essa checagem, uma página
+   qualquer resolve um domínio para o loopback e fala com o painel (*DNS
+   rebinding*). Caminhos estáticos recusam `..` antes de tocar no disco.
+
+### O que o painel não faz
+
+- **Não instala no aparelho.** Enviar o pacote é `aparelho.sh instalar-pacote`,
+  por SSH. O painel para no `.giochi` assinado.
+- **Não guarda chave.** Recebe o caminho de uma chave existente e repassa ao
+  `sign_package`. A privada continua sendo um arquivo do usuário.
+
 ## O que está provado, e o que não está
 
 | Afirmação | Como foi verificado |
 | --- | --- |
-| os dois `.pyz` rodam | **executado**, Linux, `python3` 3.14 |
+| os três `.pyz` rodam | **executado**, Linux, `python3` 3.14 |
+| o painel serve página, estáticos e API | **executado**: `/`, `/app.js`, `/estilo.css`, `/api/aparelhos` |
+| o painel recusa `Host` estrangeiro e `..` | **executado**: 403 e 404 |
+| um `.giochi` assinado pelo painel verifica | **executado**: `openssl pkeyutl -verify` aceita |
 | o forge empacota um jogo | **executado**: `av.giochi`, 81920 bytes, sha256 conferido |
 | o store lê e cataloga | **executado**: `1 de 1 pacote(s) no catalogo` |
 | o `.sh` funciona | **executado** |
@@ -164,5 +208,5 @@ lá, o honesto é: **Linux está provado, Windows e macOS estão preparados.**
 - **Assinatura de código no macOS** (notarização) e no Windows (Authenticode) só
   fazem falta quando existir binário nativo — um `.pyz` é dado, não executável.
 - **PyInstaller**, se a loja for distribuída a quem não tem Python.
-- **Ícone e nome de janela**: hoje os dois são CLI. Uma loja com interface
-  gráfica é outro app, não um passo deste.
+- **Instalar no aparelho pelo painel** (hoje termina no `.giochi` assinado).
+- **Assinatura de código** só faz falta com binário nativo; um `.pyz` é dado.

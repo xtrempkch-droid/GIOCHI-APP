@@ -96,7 +96,14 @@ function principal() {
         "(use --chave-publica, ou gere um par com scripts/empacotar.mjs)",
     );
   } else {
-    assinatura = verificar(pacote, manifesto, chave);
+    // Os bytes vem do arquivo que o manifesto aponta. Ler o `.sig` aqui, e nao
+    // dentro de `verificar`, mantem a verificacao pura e testavel com buffers.
+    const caminhoSig = manifesto?.signature
+      ? join(dirname(opcoes.pacote), manifesto.signature)
+      : `${opcoes.pacote}.sig`;
+    let bytesSig = null;
+    if (existsSync(caminhoSig)) bytesSig = readFileSync(caminhoSig);
+    assinatura = verificar(pacote, manifesto, chave, bytesSig);
     erros.push(...assinatura.erros);
   }
 

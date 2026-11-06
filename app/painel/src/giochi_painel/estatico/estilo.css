@@ -1,0 +1,121 @@
+/* A paleta é a do launcher (theme.rs), para o painel não parecer outro produto. */
+:root {
+  --fundo: #0f0f0f;
+  --superficie: #16181d;
+  --card: #22304a;
+  --linha: #333333;
+  --texto: #f1f5f9;
+  --texto2: #a0a0a0;
+  --fraco: #6b7280;
+  --acento: #66c0f4;
+  --ok: #4ade80;
+  --aviso: #fbbf24;
+  --erro: #e50914;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header { padding: 28px 24px 8px; }
+header h1 { margin: 0; font-size: 26px; letter-spacing: -0.5px; }
+header h1 span { color: var(--acento); font-weight: 300; }
+.sub { margin: 4px 0 0; color: var(--texto2); font-size: 13px; }
+
+main {
+  display: grid;
+  gap: 16px;
+  padding: 20px 24px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  max-width: 1200px;
+}
+
+section {
+  background: var(--superficie);
+  border: 1px solid var(--linha);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.dica { margin: 0 0 14px; color: var(--fraco); font-size: 12.5px; }
+
+label { display: block; margin-bottom: 12px; color: var(--texto2); font-size: 12.5px; }
+.linha { display: flex; gap: 10px; align-items: flex-end; }
+.linha label { flex: 1; margin-bottom: 0; }
+
+input, select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 11px;
+  background: #0b0d11;
+  border: 1px solid var(--linha);
+  border-radius: 8px;
+  color: var(--texto);
+  font: inherit;
+  font-size: 13.5px;
+}
+input:focus, select:focus { outline: 2px solid var(--acento); outline-offset: 1px; }
+
+button {
+  padding: 9px 18px;
+  background: var(--card);
+  border: 1px solid var(--acento);
+  border-radius: 8px;
+  color: var(--texto);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover { background: #2a3b56; }
+button:disabled { opacity: 0.45; cursor: default; }
+
+details { margin-top: 14px; }
+summary { cursor: pointer; color: var(--texto2); font-size: 13px; margin-bottom: 12px; }
+summary:hover { color: var(--texto); }
+
+.saida { margin-top: 14px; font-size: 13px; }
+.saida:empty { margin-top: 0; }
+
+.veredito {
+  padding: 12px 14px;
+  border-radius: 8px;
+  border-left: 3px solid var(--linha);
+  background: #0b0d11;
+}
+.veredito.ok { border-left-color: var(--ok); }
+.veredito.parcial { border-left-color: var(--aviso); }
+.veredito.erro { border-left-color: var(--erro); }
+.veredito strong { font-size: 15px; }
+
+ul.problemas { margin: 8px 0 0; padding-left: 18px; color: var(--texto2); }
+ul.problemas li { margin-bottom: 4px; }
+ul.problemas code { color: var(--acento); }
+
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--linha); }
+th { color: var(--fraco); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.4px; }
+td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; color: var(--texto2); }
+.ok-min { color: var(--ok); }
+.erro-min { color: var(--erro); }
+
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--acento); }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 24px 24px;
+  color: var(--fraco);
+  font-size: 12px;
+  max-width: 1200px;
+}
+
+.vazio { color: var(--fraco); font-style: italic; }

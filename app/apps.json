@@ -94,6 +94,16 @@
       "distribution": "store",
       "license": "GPL-3.0-only",
       "note": "GPL-3.0: proibido na imagem assinada, permitido pela loja em /user. Ver docs/licenciamento.md."
+    },
+    {
+      "id": "painel",
+      "folder": "painel",
+      "slug": "painel",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "host",
+      "license": "Proprietary",
+      "note": "Interface web local do PC: classifica apps pelos aparelhos reais, empacota e assina .giochi. Chama o forge e o store em vez de reimplementar; o .pyz leva os tres modulos. 127.0.0.1 apenas."
     }
   ]
 }
