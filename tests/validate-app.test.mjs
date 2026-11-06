@@ -96,11 +96,50 @@ test("aceita runtime native para app não-Godot", () => {
   });
 });
 
-test("recusa arquitetura diferente de aarch64", () => {
+// `x86_64` passou a ser um valor **válido** de `arch` (app de PC), então a
+// recusa aqui não é mais "valor desconhecido" e sim o pareamento: app que vai
+// para o aparelho não declara arquitetura de PC.
+test("recusa arquitetura de PC num app do aparelho", () => {
   withTempDir((dir) => {
     const result = validateApp(makeApp(dir, "a", { metadata: { arch: "x86_64" } }));
+    assert.ok(
+      codes(result).includes("arquitetura_de_pc_em_app_do_aparelho"),
+      `códigos: ${codes(result).join(", ")}`,
+    );
+  });
+});
+
+test("recusa valor de arch inventado", () => {
+  withTempDir((dir) => {
+    const result = validateApp(makeApp(dir, "a", { metadata: { arch: "mips" } }));
     assert.ok(codes(result).includes("arquitetura_invalida"));
   });
+});
+
+// O bug real: `store` e `forge` declararam `aarch64` durante meses sendo apps
+// que rodam no PC do usuário. O pareamento existe para o campo significar algo.
+test("recusa aarch64 num app de PC (distribution host)", () => {
+  withTempDir((dir) => {
+    const appDir = makeApp(dir, "a", { metadata: { arch: "aarch64" } });
+    const result = validateApp(appDir, { distribution: "host" });
+    assert.ok(
+      codes(result).includes("arquitetura_de_console_em_app_de_pc"),
+      `códigos: ${codes(result).join(", ")}`,
+    );
+  });
+});
+
+test("aceita as três arquiteturas de PC num app de PC", () => {
+  for (const arch of ["x86_64", "arm64", "any"]) {
+    withTempDir((dir) => {
+      const appDir = makeApp(dir, "a", { metadata: { arch } });
+      const result = validateApp(appDir, { distribution: "host" });
+      assert.ok(
+        !codes(result).some((c) => c.startsWith("arquitetura")),
+        `${arch}: ${JSON.stringify(result.errors)}`,
+      );
+    });
+  }
 });
 
 test("exige todos os campos obrigatórios", () => {

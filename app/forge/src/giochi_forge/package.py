@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-ALLOWED_RUNTIMES = {"godot", "retroarch", "proton"}
+# `native` foi acrescentado ao schema do Giochi app em 02/11/2026: sem ele, as
+# ferramentas em Python e os jogos compilados aqui (volley, pacman, cobrinha,
+# arcade-volleyball) não tinham como se declarar. O forge herdado do antecessor
+# não sabia disso e recusava o pacote com "runtime 'native' desconhecido" — o
+# erro só aparece quando se empacota um app deste repositório.
+ALLOWED_RUNTIMES = {"godot", "retroarch", "proton", "native"}
 REQUIRED_FIELDS = ("title", "developer", "version", "arch", "runtime", "entrypoint")
 MAX_METADATA_BYTES = 16 * 1024
 

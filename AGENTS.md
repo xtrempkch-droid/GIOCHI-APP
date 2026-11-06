@@ -301,12 +301,14 @@ Giochi app/
 │   ├── verificar-telas.mjs    # as 12 telas em 3 tamanhos: cabe? ocupa quanto?
 │   ├── verificar-mapa.mjs     # buttons.map contra os símbolos do launcher
 │   ├── empacotar.mjs          # app → .giochi assinado (Ed25519)
+│   ├── empacotar-pc.mjs       # apps de PC → .pyz + .sh/.cmd + SHA256SUMS
 │   ├── verificar-pacote.mjs   # estrutura + sha256 + assinatura
 │   ├── verificar-jogos.mjs    # geometria dos jogos: a célula é legível?
 │   ├── gerar-catalogo.mjs     # projeta o índice do aparelho
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
 │   └── lib/
 │       ├── tar.mjs            # ustar à mão: ordem, reprodutibilidade, exec bit
+│       ├── zip.mjs            # ZIP à mão: mesmo motivo, para o .pyz
 │       ├── publicar.mjs       # valida, ordena, assina, verifica o pacote
 │       ├── extrair-pacote.sh  # extrator que roda NO aparelho
 │       ├── apps.mjs
@@ -315,6 +317,9 @@ Giochi app/
 ├── tests/
 │   ├── validate-app.test.mjs
 │   ├── verificar-frame.test.mjs
+│   ├── zip-pyz.test.mjs
+│   ├── empacotar-pc.test.mjs
+│   ├── consistencia-runtimes.test.mjs
 │   ├── capacidades-input.test.mjs
 │   └── run-all.mjs
 ├── docs/
@@ -325,6 +330,8 @@ Giochi app/
 │   ├── forge.md
 │   ├── pacote.md
 │   ├── godot.md                # por que o Arcade Volleyball não roda como Godot
+│   ├── pc.md                   # loja e forge nos três sistemas
+│   ├── diario/2026-11-06.md
 │   ├── cartao-sd.md
 │   ├── loja.md
 │   ├── rede.md
@@ -339,7 +346,9 @@ Giochi app/
 │   ├── ferramentas.md
 │   ├── checklist-imagem.md
 │   └── mensagem-giochi-system.md   # ponteiro para o canal (fora do repo)
-└── .github/workflows/validate.yml
+└── .github/workflows/
+    ├── validate.yml
+    └── pc-apps.yml             # .pyz + matriz Windows/Linux/macOS
 ```
 
 ### Anatomia de um app
@@ -2049,3 +2058,125 @@ reducer) e pelo quadro. Ao retomar: `aparelho.sh instalar` e
 ```bash
 giochi-launcher --tela home --teclas "r,down"
 ```
+
+## 15. Apps de PC: um `.pyz`, quatro execuções (06/11/2026)
+
+Pedido: **"o app do pc, já deixe o workflow pronto para que ele gere suporte para
+windows linux e Mac."** Três coisas tiveram de ser feitas, e a primeira era um
+defeito silencioso.
+
+### 1. `arch` mentia nos dois apps
+
+O enum tinha **um** valor — `aarch64` — e `store` e `forge` são
+`distribution: "host"`, ou seja, rodam no **computador do usuário**. O campo era
+obrigatoriamente falso, e nada acusava.
+
+Agora o valor é validado em par com `distribution`:
+
+| `distribution` | `arch` aceito |
+| --- | --- |
+| `image`, `store` | `aarch64` |
+| `host` | `x86_64`, `arm64`, `any` |
+
+Códigos: `arquitetura_de_console_em_app_de_pc` e
+`arquitetura_de_pc_em_app_do_aparelho`. Só ampliar o enum teria deixado o campo
+voltar a não significar nada — a graça de um valor só era não poder estar errado.
+
+### 2. Empacotamento: `.pyz`, não PyInstaller
+
+Os dois apps usam **só a biblioteca padrão** (decisão de projeto: a loja tem de
+funcionar numa máquina limpa). Isso torna o `.pyz` possível — **um** arquivo,
+idêntico nos três sistemas — e o PyInstaller desnecessário para quem já tem
+Python.
+
+| | `.pyz` | PyInstaller |
+| --- | --- | --- |
+| artefatos | um | um por sistema e por arch |
+| determinístico | **sim** | não |
+| tamanho | ~14 KB | ~10 MB |
+| precisa de Python | **sim** (3.9+) | não |
+
+`scripts/lib/zip.mjs` escreve o ZIP à mão pela mesma razão do `tar.mjs`: o
+`zipapp` oficial grava o `mtime` de cada arquivo de origem, e dois empacotamentos
+do mesmo código dariam SHA-256 diferentes — o checksum deixaria de identificar
+conteúdo. `scripts/empacotar-pc.mjs` gera `.pyz` + `.sh` + `.cmd` + `SHA256SUMS`.
+**Medido: mesmo SHA-256 em duas rodadas.**
+
+### 3. O workflow: um pacote, quatro execuções
+
+`.github/workflows/pc-apps.yml`:
+
+```text
+empacotar (ubuntu)   → executar (matriz)              → publicar (tag)
+gera dist/pc         linux / linux-3.9 / win / macos    anexa na release
+confere determinismo
+```
+
+**Por que um pacote e três execuções, e não três pacotes:** o `.pyz` é idêntico
+byte a byte em qualquer sistema; empacotar três vezes produziria três hashes do
+mesmo código. O que muda é o que o **Python faz** com ele — `pathlib` com `\`,
+`os.replace` entre volumes, CRLF, permissão de execução. Isso não aparece num job
+que só roda `ubuntu-latest`.
+
+A matriz confere o `SHA256SUMS` (o mesmo comando do usuário), abre os dois apps,
+**o forge empacota o arcade-volleyball de verdade**, **o store lê o pacote que o
+forge acabou de fazer**, gera `store.json` e roda o atalho do sistema
+(`.sh` ou `.cmd`). A perna `linux-3.9` existe porque a documentação declara 3.9
+como piso — `ast.parse(feature_version=(3, 9))` passou nos 12 arquivos, mas
+gramática não é execução.
+
+### Três defeitos que só apareceram por executar
+
+1. **`forge` não tem `cli.py`.** O `store` expõe `main` em `cli.py`; o `forge`,
+   no `__main__.py`. A tabela do empacotador usava o mesmo nome para os dois, e o
+   `.pyz` do forge morria com `ModuleNotFoundError: No module named
+   'giochi_forge.cli'` **enquanto o do store funcionava**. Um teste que rodasse
+   um caso só teria aprovado o pacote quebrado — por isso
+   `tests/empacotar-pc.test.mjs` lê o `__main__.py` dos **dois**.
+2. **O forge herdado recusava `runtime: native`** (acrescentado ao schema em
+   02/11): `runtime 'native' desconhecido`.
+3. **O store tinha a mesma lista, também velha**, e recusou os dois pacotes do
+   próprio projeto: `runtime 'native' fora de godot|retroarch|proton`.
+
+O item 3 é a lição de sempre — **duas listas envelhecem diferente**. Agora
+`tests/consistencia-runtimes.test.mjs` exige que as **quatro** cópias do enum
+(`schemas/metadata.schema.json`, `scripts/lib/apps.mjs`, `package.py`,
+`catalogo.py`) concordem entre si. Reintroduzir o defeito faz 2 testes falharem.
+
+### O `.cmd` e o erro clássico de batch
+
+`py ... %* && exit /b %ERRORLEVEL%` **não funciona**: em `.cmd` o `%VAR%` é
+expandido quando a linha é **lida**, então `%ERRORLEVEL%` vale o valor de antes
+do comando. Reescrito com `where py` numa linha e `if %ERRORLEVEL%==0` na
+seguinte. O atalho tenta `py` e depois `python`, e diz o que instalar se nenhum
+existir — duplo-clique que abre e fecha sem texto é o pior resultado possível.
+
+### `bin/` ganhou lançador POSIX
+
+`app/*/bin/giochi-{store,forge}` roda o módulo de `../src`: o repositório clonado
+funciona sem instalar nada. Os dois apps passaram a `ready`. **Windows não executa
+`sh`** — ali o caminho é o `.cmd` da release, e isso está na documentação em vez
+de ser escondido.
+
+E a capa deixou de ser exigida para `distribution: "host"`: avisar sobre a capa
+de um app que **é** a loja é ruído que ensina a ignorar avisos.
+
+### O que está provado
+
+| Afirmação | Como |
+| --- | --- |
+| os dois `.pyz` rodam | **executado**, Linux |
+| forge empacota um jogo | **executado**: `av.giochi`, 81920 bytes |
+| store lê e cataloga | **executado**: `1 de 1 pacote(s)` |
+| reprodutível | **executado**: mesmo SHA-256 |
+| sintaxe 3.9 | **verificado** com `ast.parse(feature_version=(3, 9))` |
+| **Windows / macOS** | **NÃO verificado** — o workflow executa, mas não rodou no GitHub ainda |
+
+Estado honesto: **Linux provado, Windows e macOS preparados.** É o mesmo estado
+dos jobs `launcher-core`/`launcher-build`, que também nunca rodaram no GitHub.
+
+### Documentação do dia
+
+[`docs/diario/2026-11-06.md`](docs/diario/2026-11-06.md) fecha as quatro frentes
+do dia (jogo, dependências, navegação, apps de PC) com os números medidos e o que
+ficou aberto.

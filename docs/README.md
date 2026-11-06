@@ -9,6 +9,8 @@
 - [Formato do pacote](pacote.md) — o `.giochi`: ordem, assinatura Ed25519 e o empacotador que existe.
 - [Godot no aparelho](godot.md) — por que o Arcade Volleyball roda como C++/SDL2 e não como Godot: nenhum build oficial do motor tem KMSDRM.
 - [Jogos no cartão SD](cartao-sd.md) — o X55 roda o sistema do próprio cartão, 116 GB sem partição, e o que funciona hoje.
+- [Apps de PC](pc.md) — a loja e o forge nos três sistemas: um `.pyz` determinístico, matriz Windows/Linux/macOS e o que ainda não foi executado.
+- [Diário de 06/11/2026](diario/2026-11-06.md) — o jogo que não existia, a listagem que não era confiável, a navegação que não seguia a tela e o app de PC que não tinha como ser distribuído.
 - [Loja e multi-lojas](loja.md) — o que funciona, o que não existe e as decisões que faltam antes de escrever a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.

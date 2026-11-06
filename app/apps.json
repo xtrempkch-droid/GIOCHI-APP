@@ -5,19 +5,21 @@
       "id": "forge",
       "folder": "forge",
       "runtime": "native",
-      "status": "scaffold",
+      "status": "ready",
       "distribution": "host",
       "license": "Proprietary",
-      "note": "Roda no PC do usuário: empacota e classifica apps. Não vai para o aparelho."
+      "note": "Roda no PC do usuario: classifica e empacota apps em .giochi. Nao vai para o aparelho. Mesmo empacotamento do store (bin/ POSIX + .pyz/.cmd na release).",
+      "slug": "forge"
     },
     {
       "id": "store",
       "folder": "store",
       "runtime": "native",
-      "status": "scaffold",
+      "status": "ready",
       "distribution": "host",
       "license": "Proprietary",
-      "note": "Roda no PC do usuário: baixa/paga o pacote e envia pronto para o aparelho. Não vai para o aparelho."
+      "note": "Roda no PC do usuario: baixa/paga o pacote e envia pronto para o aparelho. Nao vai para o aparelho. Python puro (sem dependencia de terceiro): bin/giochi-store no Linux/macOS, .pyz e .cmd na release para os tres sistemas.",
+      "slug": "store"
     },
     {
       "id": "launcher",

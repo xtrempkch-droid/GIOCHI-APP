@@ -9,3 +9,6 @@ import "./capacidades-input.test.mjs";
 import "./catalogo.test.mjs";
 import "./verificar-mapa.test.mjs";
 import "./pacote.test.mjs";
+import "./zip-pyz.test.mjs";
+import "./consistencia-runtimes.test.mjs";
+import "./empacotar-pc.test.mjs";

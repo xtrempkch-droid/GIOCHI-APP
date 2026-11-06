@@ -20,6 +20,12 @@ desktop.ini
 *.swp
 *~
 
+# Python — bytecode é saída de execução, não fonte. Apareceu ao rodar os apps de
+# PC pela primeira vez (06/11/2026): `python3 -m giochi_store` grava `__pycache__`
+# ao lado do módulo, e ele entrava como não rastreado.
+__pycache__/
+*.py[cod]
+
 # Godot — cache de importação, não é fonte
 .godot/
 *.translation

@@ -52,9 +52,12 @@
     },
     "arch": {
       "enum": [
-        "aarch64"
+        "aarch64",
+        "x86_64",
+        "arm64",
+        "any"
       ],
-      "description": "Arquitetura única do console."
+      "description": "Arquitetura do binário. aarch64 = console; x86_64/arm64/any = app de PC (distribution: host). O validador exige o pareamento."
     },
     "runtime": {
       "enum": [

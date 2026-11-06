@@ -1,0 +1,15 @@
+#!/bin/sh
+# Lancador POSIX do Giochi forge - roda o modulo Python de ../src.
+#
+# Existe para o repositorio clonado ser executavel SEM instalar nada: um caminho
+# que funciona hoje, sem pacote, sem pip e sem versao de release.
+#
+# O `.pyz` gerado pelo workflow (e o `.cmd` do Windows) e o mesmo codigo
+# empacotado num arquivo so; este aqui e a versao de desenvolvimento.
+#
+# Windows nao executa `sh`: ali o caminho e `giochi-forge.cmd` da release, ou
+#   py -3 -m giochi_forge --help
+# com `app/forge/src` no PYTHONPATH.
+set -eu
+AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$AQUI/../src${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m giochi_forge "$@"

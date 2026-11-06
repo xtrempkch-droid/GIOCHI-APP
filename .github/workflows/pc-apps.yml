@@ -1,0 +1,206 @@
+# Apps de PC (loja e forge): empacota e prova que roda em Windows, Linux e macOS.
+#
+# ## Por que uma matriz, se o `.pyz` é o mesmo arquivo nos três
+#
+# Porque o artefato ser o mesmo **não prova** que ele roda. `zipapp` é idêntico
+# byte a byte em qualquer sistema; o que muda é o que o Python faz com ele —
+# `pathlib` com `\` no Windows, `os.replace` entre volumes, CRLF no `print`,
+# permissão de execução no macOS, caminho de fonte no `argparse`. Nada disso
+# aparece num job que só roda `ubuntu-latest`.
+#
+# Então o desenho é: **um** pacote (determinístico, com SHA-256) e **três**
+# execuções de verdade. É a mesma regra do resto do repositório: nada é
+# declarado funcionando sem ter rodado.
+name: PC apps
+
+on:
+  pull_request:
+    paths:
+      - "app/store/**"
+      - "app/forge/**"
+      - "scripts/empacotar-pc.mjs"
+      - "scripts/lib/zip.mjs"
+      - "tests/zip-pyz.test.mjs"
+      - "tests/consistencia-runtimes.test.mjs"
+      - ".github/workflows/pc-apps.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/store/**"
+      - "app/forge/**"
+      - "scripts/empacotar-pc.mjs"
+      - "scripts/lib/zip.mjs"
+      - ".github/workflows/pc-apps.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # só o job de publicação anexa artefatos à release
+
+jobs:
+  # ── 1. o pacote ────────────────────────────────────────────
+  # Um job só, de propósito: se cada sistema empacotasse, sairiam três
+  # artefatos com hashes diferentes para o mesmo código, e o SHA-256 deixaria
+  # de identificar o conteúdo.
+  empacotar:
+    name: empacotar .pyz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Empacotar
+        run: node scripts/empacotar-pc.mjs --saida dist/pc
+
+      - name: Conferir determinismo
+        # Empacotar duas vezes tem de dar o mesmo hash. Se não der, o
+        # SHA256SUMS publicado mente sobre o conteúdo — e este é o único jeito
+        # de descobrir isso sem comparar com uma execução anterior.
+        run: |
+          sha256sum dist/pc/*.pyz > /tmp/antes.txt
+          node scripts/empacotar-pc.mjs --saida dist/pc > /dev/null
+          sha256sum dist/pc/*.pyz > /tmp/depois.txt
+          diff /tmp/antes.txt /tmp/depois.txt
+          echo "reprodutível: mesmo sha256 nas duas rodadas"
+
+      - name: Mostrar o que saiu
+        run: |
+          cat dist/pc/SHA256SUMS
+          ls -la dist/pc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-apps
+          path: dist/pc/
+          if-no-files-found: error
+
+  # ── 2. provar que roda, em cada sistema ────────────────────
+  executar:
+    name: executar em ${{ matrix.rotulo }}
+    needs: empacotar
+    strategy:
+      fail-fast: false # um sistema quebrado não deve esconder os outros dois
+      matrix:
+        include:
+          - so: ubuntu-24.04
+            rotulo: linux
+            versao: "3.12"
+          # O piso declarado na documentação. `from __future__ import
+          # annotations` cobre `list[str]` e `str | None`, mas isso é raciocínio:
+          # esta perna é a execução que prova.
+          - so: ubuntu-24.04
+            rotulo: linux-3.9 (piso)
+            versao: "3.9"
+          - so: windows-2022
+            rotulo: windows
+            versao: "3.12"
+          - so: macos-14 # arm64: é o Mac que o usuário tem hoje
+            rotulo: macos
+            versao: "3.12"
+    runs-on: ${{ matrix.so }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.versao }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pc-apps
+          path: dist/pc
+
+      - name: Conferir o checksum publicado
+        # O usuário vai fazer exatamente isto antes de rodar. Se falhar aqui,
+        # falharia na mão dele.
+        shell: bash
+        run: |
+          cd dist/pc
+          if command -v sha256sum > /dev/null; then sha256sum -c SHA256SUMS; \
+          else shasum -a 256 -c SHA256SUMS; fi
+
+      - name: Versão do Python
+        shell: bash
+        run: python --version
+
+      # `--help` prova que o zipimport resolveu todos os módulos. Um `.pyz` com
+      # caminho errado morre aqui, e não na máquina do usuário.
+      - name: Os dois apps abrem
+        shell: bash
+        run: |
+          python dist/pc/giochi-store.pyz --help > /dev/null
+          python dist/pc/giochi-forge.pyz --help > /dev/null
+          python dist/pc/giochi-forge.pyz --version
+
+      # Exercita o que escreve em disco: `Path.mkdir`, `os.replace` e leitura de
+      # arquivo. É aqui que Windows e macOS diferem de Linux de verdade.
+      - name: Forge empacota um jogo de verdade
+        shell: bash
+        run: |
+          mkdir -p saida
+          python dist/pc/giochi-forge.pyz build \
+            --project app/jogos/arcade-volleyball --out saida/av.giochi
+          test -s saida/av.giochi
+
+      - name: Store lê o pacote que o forge fez
+        # Um app consome o outro: se as duas listas de `runtime` divergirem, esta
+        # etapa acusa — foi assim que o defeito apareceu em 06/11/2026.
+        shell: bash
+        run: |
+          mkdir -p catalogo
+          cp saida/av.giochi catalogo/
+          python dist/pc/giochi-store.pyz listar --src catalogo
+          python dist/pc/giochi-store.pyz listar --src catalogo | grep -q "Arcade Volleyball"
+
+      - name: Store gera o catálogo
+        shell: bash
+        run: |
+          python dist/pc/giochi-store.pyz catalogo --src catalogo --out saida/cache
+          test -s saida/cache/store.json
+          cat saida/cache/store.json
+
+      # O atalho só existe no Unix: no Windows o `.cmd` é testado no passo
+      # seguinte, porque `cmd.exe` não executa script `sh`.
+      - name: Atalho .sh funciona
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x dist/pc/giochi-forge.sh
+          ./dist/pc/giochi-forge.sh --version
+
+      - name: Atalho .cmd funciona
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: dist\pc\giochi-forge.cmd --version
+
+      - name: Resumo
+        shell: bash
+        run: |
+          echo "### ${{ matrix.rotulo }} — os dois apps executaram" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/pc/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 3. anexar à release, quando houver tag ────────────────
+  publicar:
+    name: anexar à release
+    needs: [empacotar, executar]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pc-apps
+          path: dist/pc
+
+      - name: Anexar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$TAG" dist/pc/* \
+            --repo "${{ github.repository }}" --clobber

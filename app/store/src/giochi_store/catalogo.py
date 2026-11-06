@@ -17,7 +17,13 @@ SCHEMA = "1.0"
 
 # O Launcher so' aceita aarch64 (ADR-13 proibe emulacao).
 ARCH_OK = "aarch64"
-RUNTIMES_OK = ("godot", "retroarch", "proton")
+# `native` entrou no schema do Giochi app em 02/11/2026 (jogos compilados aqui e
+# as proprias ferramentas). O forge foi corrigido em `package.ALLOWED_RUNTIMES`;
+# esta lista e' a segunda copia do mesmo enum, e ela ficou para tras — o store
+# recusou os dois pacotes do proprio projeto com "runtime 'native' fora de
+# godot|retroarch|proton". Duas listas envelhecem diferente, por isso existe
+# `tests/consistencia-runtimes.test.mjs`, que compara as duas com o schema.
+RUNTIMES_OK = ("godot", "retroarch", "proton", "native")
 
 # `id` NAO esta' aqui de proposito: o schemas/metadata.schema.json nao o exige
 # (required = title, developer, version, arch, runtime, entrypoint) e o

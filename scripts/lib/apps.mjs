@@ -7,7 +7,23 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { readPngSize } from "./png.mjs";
 
-export const ARCH_VALUES = ["aarch64"];
+/**
+ * Arquiteturas declaradas em `metadata.json`.
+ *
+ * `aarch64` é o chip do console. As outras existem porque app com
+ * `distribution: "host"` (loja, forge) roda no **computador do usuário** —
+ * Windows x86-64, macOS arm64 — e até aqui era obrigado a declarar `aarch64`,
+ * que é falso. `any` vale para código sem binário nativo (Python puro).
+ *
+ * O pareamento é validado abaixo: app de PC não pode dizer `aarch64` e app de
+ * console não pode dizer `x86_64`. Só ampliar o enum deixaria o campo voltar a
+ * não significar nada.
+ */
+export const ARCH_VALUES = ["aarch64", "x86_64", "arm64", "any"];
+/** Arquiteturas que fazem sentido dentro do aparelho. */
+export const ARCH_DO_APARELHO = ["aarch64"];
+/** Arquiteturas que fazem sentido no computador do usuário. */
+export const ARCH_DO_PC = ["x86_64", "arm64", "any"];
 // "native" foi acrescentado em 02/11/2026. O antecessor registrou a lacuna
 // (LOJA.md §6): com só godot/retroarch/proton, app nativo — como o forge e a
 // store, escritos em Python — não tinha como se declarar.
@@ -64,7 +80,7 @@ function readJson(filePath, label, errors) {
   }
 }
 
-function validateMetadata(metadata, appDir, errors) {
+function validateMetadata(metadata, appDir, errors, distribution = "image") {
   for (const key of REQUIRED_METADATA) {
     if (metadata[key] === undefined || metadata[key] === null || metadata[key] === "") {
       errors.push({
@@ -187,6 +203,27 @@ function validateMetadata(metadata, appDir, errors) {
       path: "metadata.json:arch",
       message: `arch só aceita ${ARCH_VALUES.join(", ")}; recebido "${metadata.arch}"`,
     });
+  } else if (metadata.arch !== undefined) {
+    // O pareamento é a parte que impede o campo de virar decoração: foi assim
+    // que `store` e `forge` declararam `aarch64` durante meses sendo apps de PC.
+    if (distribution === "host" && ARCH_DO_APARELHO.includes(metadata.arch)) {
+      errors.push({
+        code: "arquitetura_de_console_em_app_de_pc",
+        path: "metadata.json:arch",
+        message:
+          `"${metadata.arch}" é o chip do console, mas este app tem distribution "host" e roda no PC do usuário; ` +
+          `use ${ARCH_DO_PC.join(", ")}`,
+      });
+    }
+    if (distribution !== "host" && !ARCH_DO_APARELHO.includes(metadata.arch)) {
+      errors.push({
+        code: "arquitetura_de_pc_em_app_do_aparelho",
+        path: "metadata.json:arch",
+        message:
+          `"${metadata.arch}" é arquitetura de PC, mas este app vai para o aparelho (distribution "${distribution}"); ` +
+          `o console só aceita ${ARCH_DO_APARELHO.join(", ")}`,
+      });
+    }
   }
 
   if (metadata.runtime !== undefined && !RUNTIME_VALUES.includes(metadata.runtime)) {
@@ -307,7 +344,7 @@ function validateForge(forge, errors) {
   }
 }
 
-function validateImages(appDir, errors, warnings) {
+function validateImages(appDir, errors, warnings, distribution = "image") {
   const capa = path.join(appDir, "capa.png");
   if (existsSync(capa)) {
     const size = readPngSize(capa);
@@ -324,7 +361,10 @@ function validateImages(appDir, errors, warnings) {
         message: `capa.png precisa ser ${CAPA_SIZE}x${CAPA_SIZE}; recebido ${size.width}x${size.height}`,
       });
     }
-  } else {
+  } else if (distribution !== "host") {
+    // App de PC (`distribution: "host"`) não aparece na loja do console: ele
+    // **é** a loja. Avisar sobre a capa dele é ruído que ensina a ignorar
+    // avisos — o contrário do que este validador existe para fazer.
     warnings.push({
       code: "capa_ausente",
       path: "capa.png",
@@ -474,7 +514,7 @@ export function validateApp(appDir, { status = "ready", distribution = "image" }
     const metadata = readJson(metadataPath, "metadata.json", errors);
     if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
       parsedMetadata = metadata;
-      validateMetadata(metadata, appDir, errors);
+      validateMetadata(metadata, appDir, errors, distribution);
     } else if (metadata !== null) {
       errors.push({
         code: "metadata_invalido",
@@ -498,7 +538,7 @@ export function validateApp(appDir, { status = "ready", distribution = "image" }
     }
   }
 
-  validateImages(appDir, errors, warnings);
+  validateImages(appDir, errors, warnings, distribution);
   validateBin(appDir, errors, warnings);
 
   if (!existsSync(path.join(appDir, "README.md"))) {

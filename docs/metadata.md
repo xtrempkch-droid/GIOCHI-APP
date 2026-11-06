@@ -9,7 +9,7 @@ Identidade de um app. Schema em [`schemas/metadata.schema.json`](../schemas/meta
 | `title` | string | sim | nome exibido na loja, 1–120 caracteres |
 | `developer` | string | sim | 1–120 caracteres |
 | `version` | string | sim | **semver**: `1.0.0`, nunca `1.0` |
-| `arch` | enum | sim | `aarch64` (valor único) |
+| `arch` | enum | sim | `aarch64` no aparelho; `x86_64`, `arm64` ou `any` em app de PC |
 | `runtime` | enum | sim | `godot`, `retroarch`, `proton` ou `native` |
 | `entrypoint` | string | sim | começa em `bin/`, não absoluto, sem `..` |
 | `graphics_api` | enum | não | `gles2` ou `gles3` |
@@ -80,11 +80,28 @@ quem a ficha exibe. Não há campo separado de "publicadora" — se um dia houve
 diferença entre desenvolvedor e publicador, ela entra como campo novo, com a
 mesma regra dos três lugares.
 
-## Por que `arch` tem um valor só
+## Por que `arch` depende de `distribution`
 
 O console é `aarch64`. Emular outra arquitetura está fora de escopo (decisão
-herdada do antecessor, ADR-13). Um enum com um valor só deixa isso explícito em
-vez de aceitar `x86_64` e falhar depois.
+herdada do antecessor, ADR-13).
+
+Mas `distribution: "host"` descreve o oposto: o app roda no **computador do
+usuário**. Até 06/11/2026 o enum tinha um valor só, e a loja e o forge eram
+obrigados a declarar `aarch64` sendo programas de PC — o campo existia e era
+sempre falso.
+
+Hoje o valor é validado **em par** com `distribution`:
+
+| `distribution` | `arch` aceito | por quê |
+| --- | --- | --- |
+| `image`, `store` | `aarch64` | vai para o console |
+| `host` | `x86_64`, `arm64`, `any` | roda no PC; `any` = sem binário nativo (Python puro) |
+
+Declarar `aarch64` num app de PC reprova com
+`arquitetura_de_console_em_app_de_pc`, e o inverso com
+`arquitetura_de_pc_em_app_do_aparelho`. Só ampliar o enum teria deixado o campo
+voltar a não significar nada — a graça de um valor só era justamente não poder
+estar errado.
 
 ## Por que `entrypoint` precisa existir no disco
 
