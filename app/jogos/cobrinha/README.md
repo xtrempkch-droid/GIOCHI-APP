@@ -30,8 +30,18 @@ estado escondido. Se ele falhar, o problema é do launcher.
 ## Compilar
 
 ```bash
-bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2 --jogo cobrinha
+bash scripts/compilar-jogo-arm64.sh --jogo cobrinha --instalar 10.55.0.2
 ```
+
+## Conferir outro tamanho de painel
+
+```bash
+giochi-cobrinha --tamanho 800x600 --quadro /tmp/c.bmp
+node scripts/verificar-jogos.mjs --tamanhos 800x600
+```
+
+Medido: célula de **18,4 px** em 640×480, **23,0 px** em 800×600 e **27,7 px** em
+1280×720 (piso adotado: 14 px).
 
 ## Rotação
 

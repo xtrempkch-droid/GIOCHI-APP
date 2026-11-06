@@ -298,6 +298,8 @@ Giochi app/
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   ├── verificar-telas.mjs    # as 9 telas em 3 tamanhos: cabe? ocupa quanto?
+│   ├── verificar-jogos.mjs    # geometria dos jogos: a célula é legível?
+│   ├── gerar-catalogo.mjs     # projeta o índice do aparelho
 │   ├── capacidades-input.mjs  # códigos que cada /dev/input declara
 │   └── lib/
 │       ├── apps.mjs
@@ -468,6 +470,7 @@ bash scripts/aparelho.sh catalogo         # gera e publica o índice de apps
 node scripts/gerar-catalogo.mjs --lista   # quem entra no catálogo e quem fica fora
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
 node scripts/verificar-telas.mjs         # as 9 telas em 640x480, 800x600, 1280x720
+node scripts/verificar-jogos.mjs         # a geometria dos jogos nos mesmos 3 tamanhos
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
 bash scripts/canal.sh                    # janela de contato com o Giochi System
 ```
@@ -934,6 +937,54 @@ convenção do `Giochi System`, e a única informação do catálogo que não ve
 O cartão mostra `Cobrinha · Arcade · 2026`. Sem campo de gênero no metadata, o
 gerador não tinha de onde tirar e todos diriam "Aplicativo". Entrou nos três
 lugares de sempre: schema, validador e docs — mesma regra do `releaseYear`.
+
+### Três resoluções: 480p, 600p e 720p
+
+**600p (800×600) medido em 06/11/2026.** Não há aparelho com esse painel, então
+tudo aqui é medida no PC com `SDL_VIDEODRIVER=dummy` — que **respeita o tamanho
+pedido**. É o que permite afirmar antes de o hardware existir.
+
+#### O launcher cabe nos três
+
+`node scripts/verificar-telas.mjs` — as 9 telas, margens e ocupação:
+
+| Tamanho | home | busca | detalhe | sono |
+| --- | --- | --- | --- | --- |
+| 640×480 | 70% | 38% | 15% | 5% |
+| **800×600** | **71%** | **38%** | **13%** | **4%** |
+| 1280×720 | 72% | 51% | 17% | 3% |
+
+Ocupação praticamente igual nos três: o layout é proporcional desde o
+`Moldura`, então 600p não é um caso especial — é o mesmo desenho num terceiro
+tamanho.
+
+#### Os jogos: não é "cabe", é "serve"
+
+`node scripts/verificar-jogos.mjs` mede a **geometria**, não pixels iguais: a
+célula de uma grade precisa de tamanho mínimo para ser lida num painel de 3,5".
+Piso adotado: **14 px**, que é 25% de folga sobre o menor aparelho real.
+
+| Jogo | 640×480 | 800×600 | 1280×720 |
+| --- | --- | --- | --- |
+| `cobrinha` — célula | 18,4 px | **23,0 px** | 27,7 px |
+| `pacman` — célula | 22,2 px | **28,0 px** | 33,6 px |
+| `volley` — raquete | 57 px | **72 px** | 86 px |
+
+Tudo proporcional, tudo acima do piso. O `pacman` em 600p dá 28 px de célula —
+entre os dois aparelhos que existem, como esperado.
+
+#### Os jogos ganharam `--tamanho`
+
+Antes o `dummy` devolvia o desktop (1024×768) e não havia como pedir outro
+painel: testar 480p ou 600p exigia o hardware na mão. Agora
+`giochi-<nome> --tamanho 800x600 --quadro /tmp/x.bmp` funciona nos três, com a
+mesma flag do launcher.
+
+#### O que continua sendo afirmação
+
+**Nenhum aparelho de 600p foi tocado.** Tudo acima é medição de renderizador com
+painel simulado. O que muda num aparelho real não é o layout — é o driver, o
+`fbcon/rotate` e o KMSDRM, que são justamente o que o `dummy` não exercita.
 
 ### Bateria e temperatura: o dado existia e ninguém lia
 

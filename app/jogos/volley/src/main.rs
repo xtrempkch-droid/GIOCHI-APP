@@ -148,6 +148,27 @@ impl Tela {
     }
 }
 
+/// Tamanho de painel pedido em `--tamanho LxA`.
+///
+/// Existe pelo mesmo motivo que no launcher, e um a mais: os três jogos só
+/// tinham o painel do aparelho ou o desktop do PC (1024×768 no `dummy`). Sem
+/// isto, conferir 640×480 ou 800×600 exigiria o hardware na mão — e as contas de
+/// grade do `cobrinha` e do `pacman` dependem do tamanho.
+///
+/// Com `SDL_VIDEODRIVER=dummy` o tamanho pedido é respeitado, então dá para
+/// olhar qualquer painel.
+fn tamanho_pedido(args: &[String]) -> Option<(u32, u32)> {
+    let i = args.iter().position(|a| a == "--tamanho")?;
+    let texto = args.get(i + 1)?;
+    let (l, a) = texto.split_once(['x', 'X'])?;
+    let l: u32 = l.trim().parse().ok()?;
+    let a: u32 = a.trim().parse().ok()?;
+    if l == 0 || a == 0 {
+        return None;
+    }
+    Some((l, a))
+}
+
 fn main() -> Result<(), String> {
     if std::env::args().any(|a| a == "--versao" || a == "--version") {
         println!("giochi-volley 0.1.0");
@@ -163,9 +184,20 @@ fn main() -> Result<(), String> {
     // `fullscreen_desktop` deixa o `kmsdrm` usar o modo do conector. Pedir um
     // tamanho fixo num painel diferente do pedido produz letterbox ou recusa —
     // e o tamanho real só é conhecido depois de abrir.
-    let janela = video
-        .window("Volley", 640, 480)
-        .fullscreen_desktop()
+    // `--tamanho` só faz sentido com driver que respeite o pedido (`dummy`).
+    // No aparelho, `fullscreen_desktop` usa o modo do conector, que é o certo.
+    let args: Vec<String> = std::env::args().collect();
+    let pedido = tamanho_pedido(&args);
+
+    let mut construtor = video.window(
+        "Volley",
+        pedido.map(|(l, _)| l).unwrap_or(640),
+        pedido.map(|(_, a)| a).unwrap_or(480),
+    );
+    if pedido.is_none() {
+        construtor.fullscreen_desktop();
+    }
+    let janela = construtor
         .position_centered()
         .build()
         .map_err(|e| format!("janela: {e}"))?;

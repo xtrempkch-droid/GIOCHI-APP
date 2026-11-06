@@ -11,6 +11,7 @@ nenhum foi escrito "por completude".
 | `scripts/aparelho.sh` | PC | operação e diagnóstico do aparelho por SSH |
 | `scripts/verificar-frame.mjs` | PC | decide se o quadro renderizado é a UI ou lixo |
 | `scripts/verificar-telas.mjs` | PC | as 9 telas em 3 tamanhos: cabe? ocupa quanto? |
+| `scripts/verificar-jogos.mjs` | PC | geometria dos jogos: a célula é legível? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
@@ -307,6 +308,48 @@ o que prova que a janela foi recriada e que o texto continua aparecendo.
 **Cuidado com `| head` no `--dump-frame`.** O `head` fecha o pipe, o `SIGPIPE`
 mata o launcher antes de gravar, e o arquivo não aparece — o sintoma é "não
 gerou o quadro" com o programa retornando 0. Já aconteceu ao investigar.
+
+## `verificar-jogos.mjs`
+
+```bash
+node scripts/verificar-jogos.mjs                    # 640x480, 800x600, 1280x720
+node scripts/verificar-jogos.mjs --tamanhos 800x600
+node scripts/verificar-jogos.mjs --png              # uma imagem por caso
+```
+
+Irmão do `verificar-telas.mjs`, com uma diferença de fundo: aquele mede se o
+desenho **cabe**; este mede se a grade **serve**.
+
+Um jogo de grade não tem referência de pixels para comparar consigo mesma em
+outro tamanho — o desenho é proporcional por construção. O que pode dar errado é
+a célula ficar pequena demais para ler num painel de 3,5". Por isso a medida é
+geométrica:
+
+| Jogo | O que se mede | Piso |
+| --- | --- | --- |
+| `cobrinha` | passo da grade (24 colunas) | 14 px |
+| `pacman` | passo do labirinto (21 colunas) | 14 px |
+| `volley` | altura da raquete | 28 px |
+
+O piso de 14 px é 25% de folga sobre o menor aparelho real (640×480 dá 18,4 px no
+`cobrinha`). Abaixo disso o vão entre células, o corpo e a comida viram o mesmo
+borrão.
+
+Medido nos três tamanhos: tudo acima do piso, tudo proporcional. **600p não é um
+caso especial** — é o mesmo desenho num terceiro tamanho, porque o layout é
+proporcional desde `Moldura` (launcher) e desde a primeira linha (jogos).
+
+### O `--tamanho` dos jogos
+
+Sem ele, o `SDL_VIDEODRIVER=dummy` devolve o **desktop** (1024×768), e não havia
+como pedir outro painel — testar 480p ou 600p exigia o hardware na mão:
+
+```bash
+giochi-pacman --tamanho 800x600 --quadro /tmp/p.bmp
+```
+
+Mesma flag do launcher, mesma semântica. No aparelho, sem a flag, o
+`fullscreen_desktop` usa o modo do conector, que é o certo.
 
 ## `capacidades-input.mjs`
 

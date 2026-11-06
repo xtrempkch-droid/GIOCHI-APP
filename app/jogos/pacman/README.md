@@ -60,8 +60,19 @@ proteção está acabando.
 ## Compilar
 
 ```bash
-bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2 --jogo pacman
+bash scripts/compilar-jogo-arm64.sh --jogo pacman --instalar 10.55.0.2
 ```
+
+## Conferir outro tamanho de painel
+
+```bash
+giochi-pacman --tamanho 800x600 --quadro /tmp/p.bmp
+node scripts/verificar-jogos.mjs --tamanhos 800x600   # mede a célula
+```
+
+Medido: célula de **22,2 px** em 640×480, **28,0 px** em 800×600 e **33,6 px** em
+1280×720. O labirinto é proporcional por construção — 21 colunas em qualquer
+painel —, então o que muda é só o passo.
 
 ## Limitações
 
