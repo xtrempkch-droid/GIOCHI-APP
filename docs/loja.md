@@ -61,6 +61,7 @@ escrito à mão.
 | --- | --- | --- |
 | Login OAuth no itch.io | **não escrita, e não é o caminho** | a loja é da Giochi, não uma vitrine do itch.io; ver §4.2 |
 | butler / butlerd | **decidido não usar** | pacotes de 81 KB; ver §4 decisão 2 |
+| Gerador de catálogo | **existe**: `scripts/gerar-catalogo-loja.mjs` |
 | Backend de pagamento | **não existe** | exige conta no provedor, CNPJ e servidor; ver §4.2 |
 | Interface gráfica da loja | **escrita** — `app/loja`, Rust + SDL2, 4 telas | decisão de stack em §4 |
 | Transferência por USB automática | **parcial** | `aparelho.sh instalar-pacote` faz o envio; o "detectar pendrive" não existe |
@@ -300,17 +301,150 @@ pergunta já enviada ao Giochi System sobre `loja-publica.pem`.
 
 ---
 
+## 4.4 Como a lista de jogos é preenchida
+
+**Não é escrita à mão em lugar nenhum.** É o resultado de um pipeline, e cada
+etapa deixa um artefato que se pode conferir:
+
+```text
+app/<slug>/                     src/, metadata.json, capa.png, forge.json
+     │
+     │  node scripts/empacotar.mjs app/<slug> --saida dist/pacotes
+     ▼
+dist/pacotes/<slug>.giochi      pacote assinado
+                .sig            64 bytes crus
+                .manifest.json  sha256, versão, tamanho
+     │
+     │  node scripts/gerar-catalogo-loja.mjs --pacotes dist/pacotes
+     ▼
+dist/loja/catalogo.json         lista assinada por uma **segunda** chave
+     │
+     │  upload para o CDN
+     ▼
+loja no PC  ──►  aparelho
+```
+
+Quem publica um jogo roda **dois comandos**. Não existe tabela em banco para
+editar e esquecer, nem JSON de catálogo mantido a olho — foi assim que o catálogo
+do aparelho já ficou desatualizado neste projeto, com o usuário vendo um jogo só
+depois de dois instalados.
+
+### O que o gerador se recusa a fazer
+
+| Situação | O que acontece | Por quê |
+| --- | --- | --- |
+| pacote sem `.sig` | fica de fora, código de saída 1 | anunciar pacote que ninguém verifica é pior que não anunciar |
+| `.sig` com 89 bytes | fica de fora, com a mensagem do tamanho | é base64 gravado como texto; a assinatura não vale |
+| sha256 do manifesto ≠ arquivo | fica de fora | o comprador receberia "download corrompido" e o defeito estaria aqui |
+| sem `--url-base` | URL relativa **e aviso** | não inventa host: um host errado é um 404 para todo mundo |
+| URL em `http://` | nunca gerada | a própria loja recusa `http://` |
+
+### Metadados do item: de onde vêm
+
+| Campo | Origem |
+| --- | --- |
+| `slug`, `titulo`, `versao`, `tamanho`, `sha256` | do pacote — **nunca digitados** |
+| `preco` | `--preco <slug>=<centavos>`, ou `price_cents` no metadata |
+| `ano` | `--ano <slug>=<ano>`, ou `releaseYear` do metadata |
+| `descricao` | `--descricao`, ou `description` do metadata |
+| `chave_pacote` | a pública do catálogo (jogo da Giochi) ou a do desenvolvedor |
+| `url` | `--url-base` + nome do arquivo |
+
+Preço fica em **centavos**: `1990` é `R$ 19,90`. Ponto flutuante em dinheiro
+produz centavo que aparece e desaparece, e o bug só é notado na reclamação.
+
+### O contrato que já quebrou uma vez
+
+A mensagem assinada é montada **duas vezes**: no Rust (que verifica) e no JS
+(que assina). Na primeira execução o Rust escrevia `item=<slug>|…` e o JS
+`item|<slug>|…` — um caractere, e o catálogo assinado **nunca** verificava, com a
+mensagem "assinatura inválida — não foi a Giochi", que manda procurar no lugar
+errado.
+
+A defesa é o literal fixo nos dois lados:
+
+```rust
+// catalogo.rs — a_mensagem_bate_byte_a_byte_com_o_literal_do_gerador_js
+"giochi-catalogo-v1\ngerado=1700000000\ninvalida_antes=-\nitem=b|B|0|100|BRL|...\n"
+```
+
+```js
+// tests/catalogo-loja.test.mjs — a mensagem bate byte a byte com o literal do Rust
+"giochi-catalogo-v1\ngerado=1700000000\ninvalida_antes=-\nitem=b|B|0|100|BRL|...\n"
+```
+
+Divergir passa a ser impossível sem reprovar um dos dois. E há o caminho de
+diagnóstico: `giochi-loja --catalogo x.json --mensagem-catalogo` imprime os bytes
+que o binário usa.
+
+---
+
+## 4.5 O layout: itch.io como **referência visual**, não como integração
+
+A referência é o itch.io, e ela é de **desenho**: barra lateral estreita com
+navegação, grade de cartões com capa, título e preço embaixo. Nada mais.
+
+O que **não** existe e não vai existir neste caminho:
+
+| Item | Estado |
+| --- | --- |
+| OAuth no itch.io | não — a loja é da Giochi |
+| `butler`/`butlerd` | não — ver decisão 2 (pacotes de 81 KB) |
+| API do itch.io | não — não há compra por API de terceiros |
+| qualquer chamada de rede ao itch.io | **nenhuma** |
+
+Ou seja: nenhuma credencial, nenhum download, nenhuma dependência. O itch.io
+empresta a **forma**; a lista vem do catálogo assinado da Giochi, e o dinheiro
+passa pelo provedor que a Giochi contratar.
+
+### A grade é decidida em um lugar só
+
+`grade_para(espaco, cartao)` mora no núcleo e é usada **pelo desenho e pela
+navegação**. Num layout de grade, `↓` desce uma **linha** (não um item) e `←`/`→`
+param no fim da linha. No launcher este projeto já teve o bug oposto: navegação
+supondo 4 colunas enquanto a tela calculava 2 — a seta para baixo não ia a lugar
+nenhum e a para a direita pulava na diagonal, sem erro nenhum.
+
+Aqui são 11 testes, incluindo um de **propriedade** (nenhuma tecla produz índice
+fora da lista, em nenhuma grade, com qualquer total) e um que reprova se `↓`
+voltar a andar 1.
+
+### As capas são desenhadas, e o motivo é medido
+
+O SDL2 puro lê BMP, não PNG; ler PNG exigiria `SDL2_image` (mais uma biblioteca
+para empacotar nos três sistemas). E a `capa.png` do pacote só existe **depois**
+do download, enquanto a grade desenha antes disso.
+
+Então a capa é derivada do slug: matiz, matiz do detalhe e deslocamento da faixa,
+tirados de bytes diferentes de um FNV-1a. Determinística — a mesma slug dá sempre
+a mesma arte, e `DefaultHasher` do Rust **não** serviria porque não é estável
+entre versões do compilador.
+
+Medi uma colisão de verdade: `volley` e `painel` caem na mesma matiz de 8 bits
+(com 12 itens, ~23% de chance por aniversário). Por isso a cor não é o único
+diferenciador — há o deslocamento e as iniciais do título, e o teste exige que o
+**conjunto** seja único. Um teste separado documenta a colisão da matiz sozinha,
+para ninguém "consertar" isso achando que é bug.
+
+Caminho para arte de verdade, quando houver: `SDL2_image` + cache local da capa
+baixada, e esta função passa a ser o *fallback* de item sem arte.
+
+---
+
 ## 5. Estado, medido em 06/11/2026
 
 | Peça | Estado |
 | --- | --- |
-| Núcleo (catálogo, chave, licença, pedido, pacote, baixador) | **65 testes**, sem SDL |
-| Interface (SDL2, quatro telas) | **9 testes** + prova de quadro |
+| Núcleo (catálogo, chave, licença, pedido, pacote, baixador, grade) | **77 testes**, sem SDL |
+| Interface (SDL2, quatro telas, capa procedural) | **16 testes** + prova de quadro |
+| Gerador de catálogo assinado | **9 testes** JS, e o Rust **verifica** o que ele produz |
+| Layout em grade | **medido**: `down` de 0 vai a 3 (uma linha), não a 1 |
 | `--dump-frame` / `--teclas` | **executado**: quadro de 3.587.254 bytes, navegação muda o quadro |
 | Build Linux, Windows e macOS | **executado no CI**, run `42222562164`: quatro jobs verdes |
 | Tamanho por sistema | linux 280.621 · macos 241.678 · windows 202.296 bytes |
 | Desenho nos três | **provado**: quadro de tamanho exato em cada runner |
 | Emissão de licença (ferramenta de teste) | **executado**: emite e **confere** o que emitiu |
+| Gerador de catálogo | **existe**: `scripts/gerar-catalogo-loja.mjs` |
 | Backend de pagamento | **não existe** |
 | Licença validada no aparelho | **não** — só no PC |
 

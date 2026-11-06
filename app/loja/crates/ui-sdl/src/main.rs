@@ -17,6 +17,7 @@
 //! `SDL_VIDEODRIVER=dummy` faz o mesmo caminho rodar sem tela — no PC, e é
 //! assim que o teste roda.
 
+mod capa;
 mod desenho;
 mod ui;
 
@@ -38,7 +39,7 @@ fn ajuda() {
   --teclas <lista>       teclas separadas por vírgula: up,down,left,right,enter,esc
   --json                 imprime o estado em JSON, sem texto acentuado
   --fonte <ttf>          fonte alternativa
-  --chave-catalogo <b64> chave pública que assina o catálogo (só verifica)
+  --chave-catalogo <arg> chave pública do catálogo: arquivo .pem ou o valor
   --ajuda                esta mensagem
 
 Variáveis:
@@ -133,6 +134,7 @@ fn main() -> Result<(), String> {
     let mut fonte = fonte_padrao();
     let mut chave_catalogo: Option<String> = None;
     let mut json = false;
+    let mut mostrar_mensagem = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -166,6 +168,11 @@ fn main() -> Result<(), String> {
             }
             "--demo" => demo = true,
             "--json" => json = true,
+            // Diagnóstico do contrato: imprime exatamente os bytes que este
+            // binário assina/verifica. Foi o que permitiu achar a divergência
+            // com o gerador em JS, e voltará a ser útil na próxima mudança de
+            // formato.
+            "--mensagem-catalogo" => mostrar_mensagem = true,
             outro => return Err(format!("argumento desconhecido: {outro} (use --ajuda)")),
         }
         i += 1;
@@ -180,8 +187,16 @@ fn main() -> Result<(), String> {
 
         match &chave_catalogo {
             Some(b64) => {
-                let chave = giochi_loja_core::ChavePublica::de_texto(b64)
-                    .map_err(|e| format!("chave do catálogo: {e}"))?;
+                // Aceita **caminho de arquivo** ou o valor direto. Quem publica
+                // tem o `.pub.pem` no disco; exigir que ele cole a chave no
+                // terminal é o tipo de atrito que produz erro de aspas — e
+                // produzir "chave com 0 bytes" como primeira mensagem.
+                let chave = if std::path::Path::new(b64).is_file() {
+                    giochi_loja_core::ChavePublica::de_arquivo(b64)
+                } else {
+                    giochi_loja_core::ChavePublica::de_texto(b64)
+                }
+                .map_err(|e| format!("chave do catálogo ({b64}): {e}"))?;
                 // Verificar é obrigatório quando a chave é dada: um catálogo que
                 // não passa não abre, e a loja não "avisa e continua".
                 assinado
@@ -203,7 +218,14 @@ fn main() -> Result<(), String> {
         catalogo_de_demonstracao()
     };
 
-    let mut estado = Estado::novo().com_catalogo(catalogo);
+    if mostrar_mensagem {
+        // A mensagem canônica do catálogo **como carregado**, antes de qualquer
+        // transformação: é o que o gerador precisa produzir byte a byte.
+        print!("{}", String::from_utf8_lossy(&catalogo.mensagem()));
+        return Ok(());
+    }
+
+    let mut estado = Estado::novo(LARGURA as i32, ALTURA as i32).com_catalogo(catalogo);
     if demo {
         estado = estado.demo();
     }

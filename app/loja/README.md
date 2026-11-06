@@ -39,6 +39,34 @@ mais; `LicencaAssinada` prova compra e carrega a chave do aparelho.
   "sem provedor de pagamento configurado". Com `--demo`, o código sai com um
   aviso vermelho dizendo que não é pagável.
 
+## Como a lista de jogos é preenchida
+
+Não há lista escrita à mão. Publicar um jogo são **dois comandos**:
+
+```bash
+node scripts/empacotar.mjs app/jogos/meu-jogo --saida dist/pacotes
+node scripts/gerar-catalogo-loja.mjs --pacotes dist/pacotes \
+     --chave ~/.giochi/catalogo.pem --url-base https://cdn.giochi.example
+```
+
+O primeiro gera `<slug>.giochi` + `.sig` + `.manifest.json`; o segundo lê os
+pacotes e produz `catalogo.json` **assinado** com a chave de catálogo. A loja lê
+esse arquivo; o aparelho confia na chave pública dele e em mais nada.
+
+O gerador **recusa** pacote sem assinatura, assinatura de tamanho errado (89
+bytes = base64 gravado como texto) e hash que não bate com o manifesto. Slug,
+título, versão, tamanho e sha256 vêm do pacote — nunca digitados.
+
+## O layout: itch.io como referência visual
+
+Barra lateral estreita, grade de cartões com capa, título e preço. Isso é
+**desenho**, não integração: nenhuma chamada ao itch.io, nenhuma credencial,
+nenhum `butlerd`. Ver decisão 2 em [`docs/loja.md`](../../docs/loja.md).
+
+As capas são **desenhadas** a partir do slug (matiz + detalhe + deslocamento), não
+carregadas: o SDL2 puro não lê PNG, e a `capa.png` do pacote só existe depois do
+download.
+
 ## Estrutura
 
 ```text
@@ -49,10 +77,11 @@ crates/core/     # sem SDL, sem rede: catálogo, chave, licença, pedido, pacote
   pagamento.rs   # máquina de estados; só `Pago` libera, e exige licença
   pacote.rs      # confere hash + assinatura + ordem dos membros do tar
   baixador.rs    # trait + curl (com retomada) + simulado para teste
+  grade.rs       # geometria da grade: desenho e navegação usam a MESMA
 crates/ui-sdl/   # janela, desenho, 4 telas, navegação por teclado
 ```
 
-`cargo test` roda 74 testes. Os 65 do núcleo **não precisam de tela** — é a mesma
+`cargo test` roda 93 testes. Os 77 do núcleo **não precisam de tela** — é a mesma
 separação do launcher, pelo mesmo motivo: teste que precisa de GPU falha no lugar
 errado.
 
@@ -74,4 +103,6 @@ ela era sobre imitar um console. Uma loja precisa de lista, texto e botão.
 | build Linux | 525.456 bytes em release |
 | emite e confere licença | `cargo run --example emitir_licenca` |
 | Windows e macOS | **executado no CI** (run `42222562164`): os três desenharam quadro e navegaram |
+| catálogo assinado | **provado ponta a ponta**: JS assina, o Rust verifica e carrega |
+| grade | `down` de 0 vai a **3** (uma linha), não a 1 |
 | tamanho dos binários | linux 280.621 · macos 241.678 · windows 202.296 bytes |

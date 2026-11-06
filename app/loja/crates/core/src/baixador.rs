@@ -211,8 +211,20 @@ impl Baixador for Simulado {
 mod testes {
     use super::*;
 
+    /// Diretório único **por chamada**.
+    ///
+    /// A primeira versão usava o pid, e os testes rodam em paralelo no mesmo
+    /// processo: um `remove_dir_all` de um apagava o arquivo do outro, e o teste
+    /// falhava de forma intermitente — o pior tipo de teste, porque "passou na
+    /// minha máquina" vira sorte.
     fn temp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("giochi-baixa-{}", std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "giochi-baixa-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

@@ -30,10 +30,12 @@
 pub mod baixador;
 pub mod catalogo;
 pub mod chave;
+pub mod grade;
 pub mod licenca;
 pub mod pacote;
 pub mod pagamento;
 pub mod preco;
 
 pub use chave::{ChavePublica, ErroDeChave};
+pub use grade::{mover, grade_para, Grade, Passo};
 pub use preco::{Moeda, Preco};

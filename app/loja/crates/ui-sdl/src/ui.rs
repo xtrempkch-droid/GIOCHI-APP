@@ -11,9 +11,35 @@
 //! Com `--demo`, a tela entra em modo de teste e diz isso em vermelho na cara.
 
 use giochi_loja_core::catalogo::{Catalogo, Item};
+use giochi_loja_core::grade::{grade_para, mover, Grade, Passo};
 use giochi_loja_core::pagamento::{Estado as EstadoPedido, Pedido, Pix};
 
 use crate::desenho::*;
+
+/// Largura da barra lateral. A referência é o itch.io: coluna estreita à
+/// esquerda, conteúdo à direita.
+pub const BARRA_LATERAL: i32 = 208;
+/// Margem interna do conteúdo.
+pub const MARGEM: i32 = 28;
+/// Largura-alvo do cartão. Não é fixa: `grade_da_janela` distribui o que existe.
+pub const CARTAO_ALVO: i32 = 218;
+/// Calha entre cartões.
+pub const CALHA: i32 = 18;
+/// Altura do texto abaixo da capa (título + preço).
+pub const RODAPE_CARTAO: i32 = 54;
+
+/// A grade para estas dimensões de janela.
+///
+/// Uma função só, usada pelo desenho **e** pela navegação. Duas contas
+/// separadas divergem no dia em que alguém ajusta uma margem.
+pub fn grade_da_janela(largura: i32, altura: i32, total: usize) -> Grade {
+    let _ = total;
+    let disp_x = largura - BARRA_LATERAL - 2 * MARGEM;
+    // Reserva do título da seção e da margem inferior.
+    let disp_y = altura - crate::desenho::TOPO_H - crate::desenho::RODAPE_H - 2 * MARGEM - 46;
+    let cartao_y = CARTAO_ALVO * 3 / 4 + RODAPE_CARTAO + CALHA;
+    grade_para(disp_x, disp_y, CARTAO_ALVO + CALHA, cartao_y)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tela {
@@ -37,6 +63,12 @@ pub enum Tecla {
 pub struct Estado {
     pub tela: Tela,
     pub selecao: usize,
+    /// A grade **do quadro atual**. Publicada pelo desenho e lida pela
+    /// navegação, para as duas nunca discordarem do número de colunas — foi
+    /// exatamente esse divórcio que quebrou a navegação no launcher.
+    pub grade: Grade,
+    largura: i32,
+    altura: i32,
     pub catalogo: Option<Catalogo>,
     pub pedido: Option<Pedido>,
     pub demo: bool,
@@ -46,12 +78,18 @@ pub struct Estado {
 }
 
 impl Estado {
-    pub fn novo() -> Self {
+    pub fn novo(largura: i32, altura: i32) -> Self {
         Self {
             tela: Tela::Vitrine,
             selecao: 0,
+            // Calculada na construção, e não só no primeiro desenho: `--teclas`
+            // aplica teclas **antes** de desenhar, e usar o padrão ali foi o bug
+            // do launcher (navegava com 4 colunas num layout de 2).
+            grade: grade_da_janela(largura, altura, 0),
             catalogo: None,
             pedido: None,
+            largura,
+            altura,
             demo: false,
             mensagem: String::new(),
             biblioteca: Vec::new(),
@@ -89,22 +127,24 @@ impl Estado {
                 };
                 self.mensagem.clear();
             }
-            Tecla::Esquerda | Tecla::Direita => {
-                // Abas na vitrine; nada nas outras telas.
+            // Em grade, a seta anda na grade: `↑`/`↓` mudam de **linha** (não de
+            // item) e `←`/`→` param no fim da linha. A regra mora em
+            // `giochi_loja_core::grade` e tem teste próprio, incluindo o de que
+            // `↓` não anda um item só — que foi o bug real no launcher.
+            Tecla::Cima | Tecla::Baixo | Tecla::Esquerda | Tecla::Direita => {
                 if self.tela == Tela::Vitrine {
-                    self.tela = Tela::Biblioteca;
-                } else if self.tela == Tela::Biblioteca {
-                    self.tela = Tela::Vitrine;
-                }
-            }
-            Tecla::Cima => {
-                if self.selecao > 0 {
-                    self.selecao -= 1;
-                }
-            }
-            Tecla::Baixo => {
-                if !self.itens().is_empty() && self.selecao + 1 < self.itens().len() {
-                    self.selecao += 1;
+                    let passo = match t {
+                        Tecla::Cima => Passo::Cima,
+                        Tecla::Baixo => Passo::Baixo,
+                        Tecla::Esquerda => Passo::Esquerda,
+                        _ => Passo::Direita,
+                    };
+                    if let Some(novo) = mover(self.selecao, self.itens().len(), self.grade, passo) {
+                        self.selecao = novo;
+                    }
+                } else if matches!(t, Tecla::Esquerda | Tecla::Direita) {
+                    // Fora da vitrine, ← → trocam de aba.
+                    self.tela = if self.tela == Tela::Biblioteca { Tela::Vitrine } else { Tela::Biblioteca };
                 }
             }
             Tecla::Confirmar => self.confirmar(),
@@ -161,8 +201,14 @@ impl Estado {
         }
     }
 
-    pub fn desenhar(&self, p: &mut Pintor) {
+    pub fn desenhar(&mut self, p: &mut Pintor) {
+        // Republica a grade a cada quadro: a janela pode ter sido
+        // redimensionada, e a navegação tem de acompanhar no quadro seguinte.
+        self.largura = p.largura;
+        self.altura = p.altura;
+        self.grade = grade_da_janela(p.largura, p.altura, self.itens().len());
         p.limpar(BG);
+        self.desenhar_barra(p);
         self.desenhar_topo(p);
         match self.tela {
             Tela::Vitrine => self.desenhar_vitrine(p),
@@ -173,113 +219,155 @@ impl Estado {
         self.desenhar_rodape(p);
     }
 
-    fn desenhar_topo(&self, p: &mut Pintor) {
-        p.retangulo(0, 0, p.largura, TOPO_H, PANEL);
-        p.linha(0, TOPO_H, p.largura, TOPO_H, LINE);
+    /// Barra lateral: identidade, abas e o aviso de modo de teste.
+    ///
+    /// Fica à esquerda porque é o desenho do itch.io, que é a referência visual
+    /// da loja. Não é integração com o itch.io — nenhuma chamada, nenhuma
+    /// credencial, nenhum `butlerd`; só o layout.
+    fn desenhar_barra(&self, p: &mut Pintor) {
+        p.retangulo(0, 0, BARRA_LATERAL, p.altura, PANEL);
+        p.linha(BARRA_LATERAL, 0, BARRA_LATERAL, p.altura, LINE);
 
-        p.texto(24, 16, "Giochi", 24, ACCENT, Alinhamento::Esquerda);
+        p.texto(24, 20, "Giochi", 27, ACCENT, Alinhamento::Esquerda);
+        p.texto(24, 52, "loja do PC", 18, DIM, Alinhamento::Esquerda);
+
         let abas = [("Loja", Tela::Vitrine), ("Biblioteca", Tela::Biblioteca)];
-        let mut x = 160;
+        let mut y = 108;
         for (nome, tela) in abas {
-            let ativo = self.tela == tela || (tela == Tela::Vitrine && self.tela != Tela::Biblioteca);
-            let cor = if ativo { TEXT } else { DIM };
-            let w = p.texto(x, 20, nome, 27, cor, Alinhamento::Esquerda);
+            let ativo = self.tela == tela;
             if ativo {
-                p.retangulo(x, TOPO_H - 3, w, 3, ACCENT);
+                p.arredondado(12, y - 8, BARRA_LATERAL - 24, 38, 8, PANEL2);
+                p.retangulo(12, y - 8, 3, 38, ACCENT);
             }
-            x += w + 40;
+            p.texto(28, y, nome, 23, if ativo { TEXT } else { DIM }, Alinhamento::Esquerda);
+            y += 46;
         }
 
+        // Rodapé da barra: o aviso mora aqui, não no topo, porque em modo de
+        // teste o que o usuário precisa lembrar é antes de pagar.
+        let rodape = p.altura - 96;
         if self.demo {
-            // Aviso na cara, não em rodapé cinza: em modo de teste o código PIX
-            // da tela seguinte não é pagável, e quem não ler vai tentar pagar.
-            let rotulo = "MODO DE TESTE — nenhum pagamento é real";
-            let (w, _) = p.text_size(rotulo, 22);
-            let x = p.largura - w - 32;
-            p.arredondado(x - 10, 14, w + 20, 30, 6, DANGER);
-            p.texto(x, 18, rotulo, 22, TEXT, Alinhamento::Esquerda);
+            p.arredondado(12, rodape, BARRA_LATERAL - 24, 44, 8, DANGER);
+            p.texto(24, rodape + 6, "MODO DE TESTE", 18, TEXT, Alinhamento::Esquerda);
+            p.texto(24, rodape + 24, "pagamento não é real", 15, TEXT, Alinhamento::Esquerda);
         } else if let Some(c) = &self.catalogo {
             let s = format!("{} app(s)", c.itens.len());
-            p.texto(p.largura - 24, 20, &s, 22, DIM, Alinhamento::Direita);
+            p.texto(24, rodape + 12, &s, 19, DIM, Alinhamento::Esquerda);
         }
     }
 
+    fn desenhar_topo(&self, p: &mut Pintor) {
+        // O topo cobre só a área de conteúdo: a barra lateral já tem o título.
+        let x0 = BARRA_LATERAL;
+        p.retangulo(x0, 0, p.largura - x0, TOPO_H, BG);
+        p.linha(x0, TOPO_H, p.largura, TOPO_H, LINE);
+        let titulo = match self.tela {
+            Tela::Vitrine => "Loja",
+            Tela::Ficha => "Detalhes",
+            Tela::Pagamento => "Pagamento",
+            Tela::Biblioteca => "Biblioteca",
+        };
+        p.texto(x0 + MARGEM, 14, titulo, 26, TEXT, Alinhamento::Esquerda);
+        if let Some(i) = self.item_atual() {
+            if self.tela == Tela::Vitrine {
+                p.texto(
+                    p.largura - MARGEM,
+                    20,
+                    &format!("{} de {}", self.selecao + 1, self.itens().len()),
+                    18,
+                    DIM,
+                    Alinhamento::Direita,
+                );
+                let _ = i;
+            }
+        }
+    }
+
+    /// A grade de cartões — o coração do layout.
     fn desenhar_vitrine(&self, p: &mut Pintor) {
-        let y0 = TOPO_H + 24;
+        let x0 = BARRA_LATERAL + MARGEM;
+        let dispersao = p.largura - BARRA_LATERAL - 2 * MARGEM;
+        let y0 = TOPO_H + MARGEM + 30;
+
         if self.itens().is_empty() {
-            p.texto(p.largura / 2, y0 + 40, "catálogo vazio", 30, DIM, Alinhamento::Centro);
+            p.texto(x0, y0 + 20, "catálogo vazio", 28, DIM, Alinhamento::Esquerda);
             p.texto(
-                p.largura / 2,
-                y0 + 80,
+                x0,
+                y0 + 60,
                 "passe --catalogo <arquivo.json> para carregar",
-                22,
+                20,
                 DIM,
-                Alinhamento::Centro,
+                Alinhamento::Esquerda,
             );
             return;
         }
 
-        let linha_h = 96;
+        // A mesma função que a navegação usa. O cartão ocupa o que sobra: se a
+        // janela é larga, os cartões crescem em vez de sobrar espaço à direita.
+        let cols = self.grade.colunas.max(1) as i32;
+        let cartao_w = if cols > 1 {
+            (dispersao - (cols - 1) * CALHA) / cols
+        } else {
+            dispersao
+        };
+        let capa_h = cartao_w * 3 / 4;
+        let cartao_h = capa_h + RODAPE_CARTAO;
+
         for (i, item) in self.itens().iter().enumerate() {
-            let y = y0 + i as i32 * (linha_h + 12);
-            if y + linha_h > p.altura - RODAPE_H - 12 {
-                break;
+            let col = i as i32 % cols;
+            let lin = i as i32 / cols;
+            let x = x0 + col * (cartao_w + CALHA);
+            let y = y0 + lin * (cartao_h + CALHA);
+            // Fora da tela não desenha. Importante porque `por_pagina` pode ser
+            // menor que o total, e desenhar o invisível é trabalho que ninguém vê.
+            if y + cartao_h > p.altura - crate::desenho::RODAPE_H {
+                continue;
             }
             let selecionado = i == self.selecao;
-            p.arredondado(24, y, p.largura - 48, linha_h, 12, if selecionado { CARD } else { PANEL });
-            if selecionado {
-                p.retangulo(24, y + 12, 4, linha_h - 24, ACCENT);
-            }
 
-            // "Capa" sem asset: um quadrado com a inicial. Sem arquivo binário
-            // para carregar, e continua legível se o catálogo mudar.
-            p.arredondado(44, y + 16, 64, 64, 10, PANEL2);
-            let inicial = item.titulo.chars().next().unwrap_or('?').to_string();
-            p.texto(76, y + 32, &inicial, 34, ACCENT, Alinhamento::Centro);
+            crate::capa::desenhar(p, x, y, cartao_w, capa_h, &item.slug, &item.titulo, selecionado);
 
-            p.texto_limitado(128, y + 18, &item.titulo, 28, TEXT, p.largura - 340);
-            let ano = if item.ano == 0 { "—".to_string() } else { item.ano.to_string() };
-            p.texto(128, y + 58, &ano, 22, DIM, Alinhamento::Esquerda);
-
+            p.texto_limitado(x + 2, y + capa_h + 8, &item.titulo, 20, TEXT, cartao_w - 4);
             let preco = item.preco.to_string();
-            let cor_preco = if item.preco.eh_gratis() { OK } else { TEXT };
-            p.texto(p.largura - 48, y + 30, &preco, 26, cor_preco, Alinhamento::Direita);
+            let cor = if item.preco.eh_gratis() { OK } else { DIM };
+            p.texto(x + 2, y + capa_h + 32, &preco, 18, cor, Alinhamento::Esquerda);
         }
     }
 
     fn desenhar_ficha(&self, p: &mut Pintor) {
         let Some(item) = self.item_atual() else { return };
         let y = TOPO_H + 28;
+        let e = BARRA_LATERAL + MARGEM;
 
-        p.texto(40, y, &item.titulo, 40, TEXT, Alinhamento::Esquerda);
+        p.texto(e, y, &item.titulo, 34, TEXT, Alinhamento::Esquerda);
         let ano = if item.ano == 0 { "—".to_string() } else { item.ano.to_string() };
-        p.texto(40, y + 56, &format!("{ano}  ·  versão {}", item.versao), 24, DIM, Alinhamento::Esquerda);
+        p.texto(e, y + 48, &format!("{ano}  ·  versão {}", item.versao), 21, DIM, Alinhamento::Esquerda);
 
-        p.arredondado(40, y + 100, 200, 200, 14, PANEL2);
-        let inicial = item.titulo.chars().next().unwrap_or('?').to_string();
-        p.texto(140, y + 170, &inicial, 90, ACCENT, Alinhamento::Centro);
+        // A mesma capa da grade, grande: o usuário reconhece o que clicou.
+        crate::capa::desenhar(p, e, y + 92, 220, 165, &item.slug, &item.titulo, true);
 
-        let x = 280;
+        let x = e + 250;
         let largura = p.largura - x - 40;
-        p.texto_limitado(x, y + 100, &item.descricao, 24, TEXT, largura);
+        p.texto_limitado(x, y + 92, &item.descricao, 22, TEXT, largura);
 
         let mb = item.tamanho_bytes as f64 / 1_048_576.0;
-        p.texto(x, y + 190, &format!("{mb:.1} MB"), 22, DIM, Alinhamento::Esquerda);
+        p.texto(x, y + 180, &format!("{mb:.1} MB"), 20, DIM, Alinhamento::Esquerda);
 
         // Botão de compra.
         let rotulo = if item.preco.eh_gratis() { "Baixar".to_string() } else { format!("Comprar · {}", item.preco) };
         let (w, _) = p.text_size(&rotulo, 28);
         let bw = w + 64;
-        p.arredondado(x, y + 240, bw, 56, 12, ACCENT);
-        p.texto(x + bw / 2, y + 255, &rotulo, 28, BG, Alinhamento::Centro);
+        p.arredondado(x, y + 220, bw, 52, 12, ACCENT);
+        p.texto(x + bw / 2, y + 234, &rotulo, 26, BG, Alinhamento::Centro);
 
         if !self.mensagem.is_empty() {
-            p.texto_limitado(x, y + 320, &self.mensagem, 22, WARN, largura);
+            p.texto_limitado(x, y + 290, &self.mensagem, 20, WARN, largura);
         }
     }
 
     fn desenhar_pagamento(&self, p: &mut Pintor) {
         let y = TOPO_H + 28;
+        let _e = BARRA_LATERAL + MARGEM;
         let Some(pedido) = &self.pedido else {
             p.texto(p.largura / 2, y + 60, "sem pedido", 30, DIM, Alinhamento::Centro);
             return;
@@ -333,12 +421,13 @@ impl Estado {
 
     fn desenhar_biblioteca(&self, p: &mut Pintor) {
         let y = TOPO_H + 28;
-        p.texto(40, y, "Biblioteca", 40, TEXT, Alinhamento::Esquerda);
+        let e = BARRA_LATERAL + MARGEM;
+        p.texto(e, y, "Sua biblioteca", 34, TEXT, Alinhamento::Esquerda);
         if self.biblioteca.is_empty() {
-            p.texto(40, y + 80, "nada comprado ainda", 26, DIM, Alinhamento::Esquerda);
+            p.texto(e, y + 70, "nada comprado ainda", 24, DIM, Alinhamento::Esquerda);
             p.texto(
-                40,
-                y + 118,
+                e,
+                y + 106,
                 "o app aparece aqui quando o servidor emitir a licença assinada",
                 22,
                 DIM,
@@ -394,23 +483,41 @@ mod testes {
     fn estado(demo: bool) -> Estado {
         let c = Catalogo { versao: CATALOGO_V, gerado_em: 0, invalida_antes: None,
                            itens: vec![item("a", 0), item("b", 1990), item("c", 990)] };
-        let e = Estado::novo().com_catalogo(c);
+        let e = Estado::novo(1180, 760).com_catalogo(c);
         if demo { e.demo() } else { e }
     }
 
     #[test]
-    fn setas_nao_saem_da_lista() {
+    fn setas_nao_saem_da_grade() {
         let mut e = estado(false);
         e.tecla(Tecla::Cima);
         assert_eq!(e.selecao, 0, "subiu acima do primeiro");
-        for _ in 0..10 { e.tecla(Tecla::Baixo); }
-        assert_eq!(e.selecao, 2, "passou do último");
+        for _ in 0..10 {
+            e.tecla(Tecla::Baixo);
+        }
+        assert!(e.selecao < 3, "passou do último: {}", e.selecao);
+        for _ in 0..10 {
+            e.tecla(Tecla::Direita);
+        }
+        assert!(e.selecao < 3, "passou do último com →: {}", e.selecao);
+    }
+
+    #[test]
+    fn a_seta_para_baixo_desce_uma_linha_e_nao_um_item() {
+        // O bug que já aconteceu no launcher: `↓` andando 1 item tem nome de
+        // vertical e efeito horizontal. Aqui a grade é de 3 colunas em 1180 px.
+        let mut e = estado(false); // 3 itens, então a grade tem 3 colunas
+        assert_eq!(e.grade.colunas, 3, "a janela 1180x760 deveria dar 3 colunas");
+        // Com 3 itens não há segunda linha; o teste da geometria está em
+        // `grade::testes`. Aqui basta provar que `→` anda 1 e `↓` não é `→`.
+        e.tecla(Tecla::Direita);
+        assert_eq!(e.selecao, 1, "→ deveria andar um item");
     }
 
     #[test]
     fn enter_abre_a_ficha_do_item_selecionado() {
         let mut e = estado(false);
-        e.tecla(Tecla::Baixo);
+        e.tecla(Tecla::Direita); // → vai para o segundo item na grade
         e.tecla(Tecla::Confirmar);
         assert_eq!(e.tela, Tela::Ficha);
         assert_eq!(e.item_atual().unwrap().slug, "b");
@@ -469,17 +576,21 @@ mod testes {
     }
 
     #[test]
-    fn setas_trocam_entre_loja_e_biblioteca() {
+    fn na_biblioteca_as_setas_trocam_de_aba_e_nao_de_item() {
+        // Na vitrine `←`/`→` movem a seleção; na biblioteca (sem grade) elas
+        // trocam de aba. Ter as duas regras no mesmo lugar é o que permite a
+        // tela única de navegação.
         let mut e = estado(false);
-        e.tecla(Tecla::Direita);
-        assert_eq!(e.tela, Tela::Biblioteca);
+        e.tela = Tela::Biblioteca;
         e.tecla(Tecla::Esquerda);
         assert_eq!(e.tela, Tela::Vitrine);
+        e.tecla(Tecla::Direita);
+        assert_eq!(e.selecao, 1, "na vitrine, → deveria mover a seleção");
     }
 
     #[test]
     fn catalogo_vazio_nao_quebra_nem_seleciona() {
-        let mut e = Estado::novo().com_catalogo(Catalogo {
+        let mut e = Estado::novo(1180, 760).com_catalogo(Catalogo {
             versao: CATALOGO_V, gerado_em: 0, invalida_antes: None, itens: vec![],
         });
         e.tecla(Tecla::Baixo);

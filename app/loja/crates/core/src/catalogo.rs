@@ -341,6 +341,41 @@ mod testes {
     }
 
     #[test]
+    fn a_mensagem_bate_byte_a_byte_com_o_literal_do_gerador_js() {
+        // **O literal é o contrato.** O gerador em JS (`scripts/lib/catalogo-loja.mjs`)
+        // monta a mesma mensagem, e há um teste lá com esta string exata. Se um
+        // lado mudar, um dos dois falha.
+        //
+        // Já aconteceu: o Rust escrevia `item=<slug>|…` e o JS `item|<slug>|…`.
+        // Um caractere, e o catálogo assinado pelo JS **nunca** verificava — com
+        // a mensagem "assinatura inválida, não foi a Giochi", que manda procurar
+        // no lugar errado.
+        let cat = Catalogo {
+            versao: VERSAO,
+            gerado_em: 1_700_000_000,
+            invalida_antes: None,
+            itens: vec![Item {
+                slug: "b".into(),
+                titulo: "B".into(),
+                ano: 0,
+                descricao: String::new(),
+                preco: Preco::new(100, Moeda::BRL),
+                versao: "1.0.0".into(),
+                tamanho_bytes: 10,
+                sha256: "aa".into(),
+                url: "https://x/b".into(),
+                assinatura: "sig".into(),
+                chave_pacote: "chave".into(),
+            }],
+        };
+        let esperado = "giochi-catalogo-v1\n\
+gerado=1700000000\n\
+invalida_antes=-\n\
+item=b|B|0|100|BRL|1.0.0|10|aa|https://x/b|sig|chave\n";
+        assert_eq!(String::from_utf8(cat.mensagem()).unwrap(), esperado);
+    }
+
+    #[test]
     fn item_de_http_simples_e_marcado_invalido() {
         let mut i = item("x");
         assert!(i.url_valida());

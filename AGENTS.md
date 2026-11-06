@@ -2787,3 +2787,79 @@ licença, ou rodar `bin/pacman` direto sem passar pelo launcher. **Em aparelho q
 o usuário controla, qualquer trava no cliente é contornável.** O objetivo é que a
 cópia casual pare e que a proteção real seja o pagamento no servidor. Ofuscação
 aqui seria teatro.
+
+## 20. Encher a loja, e o layout (06/11/2026)
+
+Duas perguntas do dono do projeto: *"como será preenchida a lista de jogos?"* e
+*"pensei em algo com itch.io, mas como app local"*.
+
+### A lista não é escrita à mão — é um pipeline de dois comandos
+
+```bash
+node scripts/empacotar.mjs app/<slug> --saida dist/pacotes      # .giochi + .sig
+node scripts/gerar-catalogo-loja.mjs --pacotes dist/pacotes \\
+     --chave ~/.giochi/catalogo.pem --url-base https://cdn.giochi.example
+```
+
+`dist/loja/catalogo.json` sai **assinado**, e é a única coisa que o aparelho
+precisa conhecer. Não há tabela para editar e esquecer: foi assim que o catálogo
+do aparelho já ficou desatualizado com 1 jogo mostrado e 2 instalados.
+
+Metadados vêm **do pacote** (`slug`, `titulo`, `versao`, `tamanho`, `sha256`);
+preço e ano vêm de flag, ou do metadata, e são **centavos** (`1990` = `R$ 19,90`)
+— ponto flutuante em dinheiro produz centavo que aparece e desaparece.
+
+O gerador recusa, com código de saída 1: pacote sem `.sig`; `.sig` de 89 bytes
+(base64 gravado como texto); sha256 do manifesto diferente do arquivo. E **avisa**
+quando a URL fica relativa por falta de `--url-base` — nunca inventa host.
+
+### O contrato quebrou na primeira execução, e a defesa é literal fixo
+
+A mensagem assinada é montada em Rust (verifica) e em JS (assina). O Rust
+escrevia `item=<slug>|…`, o JS `item|<slug>|…`. Um caractere, e o catálogo
+assinado **nunca** verificava — com a mensagem "assinatura inválida, não foi a
+Giochi", que manda procurar no lugar errado.
+
+Agora os dois lados têm o mesmo literal com teste
+(`a_mensagem_bate_byte_a_byte_com_o_literal_do_gerador_js` no Rust,
+`a mensagem bate byte a byte com o literal do verificador Rust` no JS), e há
+`giochi-loja --mensagem-catalogo` para imprimir os bytes quando algo divergir.
+
+### itch.io é layout, não integração
+
+Barra lateral + grade de cartões com capa, título e preço. **Zero** chamadas ao
+itch.io: sem OAuth, sem `butlerd`, sem API. O itch.io empresta a forma; a lista
+vem do catálogo da Giochi.
+
+### Uma função decide a grade; desenho e navegação leem dela
+
+`giochi_loja_core::grade::grade_para` + `mover`. Em grade, `↓` desce uma **linha**
+e `←`/`→` param no fim da linha.
+
+No launcher este projeto já teve o bug oposto — navegação supondo 4 colunas com a
+tela calculando 2 — e o sintoma foi "a seta para baixo não faz nada". 11 testes
+aqui, incluindo um de **propriedade** (nenhuma tecla produz índice fora da lista,
+em nenhuma grade, com qualquer total). Reintroduzir `↓ = +1` reprova 3.
+
+### As capas são desenhadas, e a colisão foi medida
+
+O SDL2 puro lê BMP, não PNG — `SDL2_image` seria mais uma biblioteca em três
+sistemas. E a `capa.png` do pacote só existe **depois** do download; a grade
+desenha antes.
+
+Capa derivada do slug: FNV-1a (não `DefaultHasher`, que **não é estável entre
+versões** do compilador) → matiz, matiz do detalhe e deslocamento da faixa.
+
+**Colidiu de verdade**: `volley` e `painel` na mesma matiz de 8 bits (12 itens,
+~23% por aniversário). Daí a cor não ser o único diferenciador — deslocamento e
+iniciais separam, e o teste exige que o **conjunto** seja único. Um teste
+separado **documenta** a colisão da matiz sozinha, para ninguém "consertar" isso
+achando que é bug.
+
+### Números
+
+```text
+93 testes Rust (77 núcleo + 16 interface)   9 testes JS do gerador
+187 testes JS totais                        12 apps válidos
+catalogo.json assinado pelo JS → verificado pelo Rust: ok
+```
