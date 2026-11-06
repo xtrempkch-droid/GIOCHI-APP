@@ -1,0 +1,16 @@
+[package]
+name = "giochi-loja-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Núcleo da loja Giochi: catálogo, pedido, licença e verificação de pacote"
+
+# Sem SDL, sem rede, sem disco: o que precisa de teste tem de rodar em qualquer
+# máquina. Mesmo desenho do núcleo do launcher, e pelo mesmo motivo.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+sha2 = "0.10"

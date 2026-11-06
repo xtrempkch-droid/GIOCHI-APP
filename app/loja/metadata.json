@@ -1,0 +1,12 @@
+{
+  "title": "Giochi Loja",
+  "slug": "loja",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "any",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-loja",
+  "license": "Proprietary",
+  "releaseYear": 2026,
+  "category": "Ferramenta"
+}

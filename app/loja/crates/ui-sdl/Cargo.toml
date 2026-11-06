@@ -1,0 +1,24 @@
+[package]
+name = "giochi-loja"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Loja Giochi para o PC — SDL2 com renderer próprio"
+
+[[bin]]
+name = "giochi-loja"
+path = "src/main.rs"
+
+[dependencies]
+giochi-loja-core = { path = "../core" }
+
+# SDL2 e nada mais: a loja não precisa de toolkit. Formulário de cartão não
+# existe aqui de propósito (ver `docs/loja.md`), então o que sobra é lista,
+# texto e botão — desenhável com primitivas do SDL_Renderer.
+sdl2 = "0.37"
+serde_json = "1"
+
+[features]
+default = ["texto"]
+texto = ["sdl2/ttf"]

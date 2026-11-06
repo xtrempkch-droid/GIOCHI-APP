@@ -1,0 +1,49 @@
+#!/bin/sh
+# Lança a loja já compilada. Se não houver binário, diz como compilar.
+#
+# ## Por que um script, e não o binário no repositório
+#
+# O launcher guarda o binário aarch64 em `bin/` porque ele é **um alvo só** e vai
+# dentro da imagem — ter o artefato versionado é o que permite conferir o sha256
+# do que está no aparelho.
+#
+# A loja é o contrário: roda no PC do usuário, e são **três** alvos (Linux,
+# Windows, macOS) com arquiteturas diferentes. Versionar três binários aqui
+# significaria três arquivos de 10 MB que ninguém consegue reproduzir a partir do
+# fonte. Os binários saem do CI, em `dist/loja/`, um por sistema.
+#
+# Então `bin/giochi-loja` é o ponto de entrada de desenvolvimento, e o
+# `metadata.json` aponta para ele porque é o que existe no repositório.
+set -eu
+
+AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RAIZ=$(CDPATH= cd -- "$AQUI/.." && pwd)
+
+# O prefixo local do SDL2 (usado quando a máquina não tem os pacotes de sistema)
+# precisa estar no LD_LIBRARY_PATH — o binário linka contra ele, mas o loader não
+# sabe onde procurar. Sem isto o erro é "libSDL2_ttf-2.0.so.0: cannot open",
+# que parece binário corrompido.
+if [ -z "${LD_LIBRARY_PATH:-}" ] && [ -d "$HOME/.cache/giochi-sdl2/root/usr/lib/x86_64-linux-gnu" ]; then
+  LD_LIBRARY_PATH="$HOME/.cache/giochi-sdl2/root/usr/lib/x86_64-linux-gnu"
+  export LD_LIBRARY_PATH
+fi
+
+for candidato in \
+  "$RAIZ/target/release/giochi-loja" \
+  "$RAIZ/target/debug/giochi-loja" \
+  "$AQUI/giochi-loja"
+do
+  if [ -x "$candidato" ]; then
+    exec "$candidato" "$@"
+  fi
+done
+
+cat >&2 <<FIM
+erro: a loja ainda não foi compilada.
+
+  bash scripts/compilar-loja.sh      # resolve o SDL2 e compila
+  app/loja/bin/giochi-loja           # depois disto, isto funciona
+
+Em Windows e macOS o binário vem pronto de dist/loja/ (gerado pelo CI).
+FIM
+exit 1

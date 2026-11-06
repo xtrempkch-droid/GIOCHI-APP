@@ -2645,3 +2645,121 @@ Era uma lista de `import` fixa. O arquivo novo desta sessão **não rodou**, e
 Agora a lista vem de `readdirSync`, e um arquivo `.test.mjs` novo entra sozinho:
 172 testes. Um teste que existe e não roda é pior que teste nenhum, porque
 parece cobertura.
+
+## 19. A loja do PC: três chaves e um executável (06/11/2026)
+
+`app/loja/` é a loja gráfica: Rust + SDL2, binário nativo por sistema
+(`distribution: host`). 74 testes — 65 no núcleo sem SDL, 9 na interface.
+
+```bash
+bash scripts/compilar-loja.sh              # resolve SDL2, compila, prova que desenha
+bash scripts/compilar-loja.sh --testes     # 74 testes
+app/loja/bin/giochi-loja --demo            # fluxo de pagamento de teste
+app/loja/bin/giochi-loja --teclas down,down --dump-frame /tmp/q.bmp
+```
+
+### A resposta à pergunta que originou tudo
+
+O dono perguntou: *"minha preocupação é só usarem essa chave para ter acesso aos
+dados e roubarem os jogos via rede"*.
+
+**Uma chave pública não permite nada além de conferir assinaturas.** Ela não
+decifra, não abre catálogo, não emite licença. Publicá-la é publicar um cadeado
+aberto. O risco real nunca foi ela:
+
+| Risco | Mitigação |
+| --- | --- |
+| chave **privada** vaza | `invalida_antes` no catálogo: o que foi assinado antes do corte não vale |
+| **"autêntico" tratado como "comprado"** | licença separada, amarrada ao aparelho |
+| catálogo trocado na rede | catálogo assinado; item sem assinatura não entra |
+| servidor de pacote comprometido | sha256 + assinatura do `.giochi` |
+
+O segundo é o que rouba jogo de verdade, e é o mais fácil de errar sem perceber.
+Daí **três chaves e três perguntas**:
+
+| Pergunta | Responde | Privada vive em |
+| --- | --- | --- |
+| "veio da Giochi?" | assinatura do pacote | servidor |
+| "este aparelho pagou?" | **licença** (chave separada) | servidor |
+| "é este aparelho?" | par gerado **no aparelho** | aparelho |
+
+E no código são **tipos diferentes**: `PacoteVerificado` prova origem e nada
+mais; `LicencaAssinada` prova compra e exige a chave do aparelho. Confundir os
+dois é o que faria um único pacote copiado servir para todos.
+
+### O que a loja não faz, de propósito
+
+- **Não vê cartão.** Cartão vai para checkout hospedado no navegador. Assumir
+  formulário de cartão é assumir PCI-DSS SAQ D; redirecionar é SAQ A.
+- **Não se declara paga.** `Estado::Pago` carrega `LicencaAssinada`, e a chave de
+  licença não está no cliente. Não é disciplina, é o sistema de tipos. O teste
+  `a_tela_de_pagamento_nao_se_declara_paga` aperta "Já paguei" dez vezes e exige
+  que continue `Aguardando`.
+- **Não inventa código PIX.** Sem provedor, a tela diz "sem provedor de pagamento
+  configurado". Com `--demo`, o código aparece com aviso vermelho de que não é
+  pagável. Um "copia e cola" falso é a pior falha possível: o usuário tenta pagar.
+
+### `butlerd`: decidido **não** usar, com número
+
+`arcade-volleyball.giochi` tem **81.408 bytes**. O `butlerd` é um daemon JSON-RPC
+de download incremental para builds de dezenas de GB; aqui ele custaria um
+processo a supervisionar para economizar zero.
+
+**Regra para reconsiderar, escrita para não ser redescoberta por intuição:
+pacotes acima de ~500 MB.** Antes disso, `curl -C -` (retomada) resolve, e o
+`curl` já existe nos três sistemas.
+
+### Stack: medida, não escolhida por gosto
+
+`egui/eframe` seria o natural para interface de PC, mas `winit` exige
+`libx11-dev`, `libxkbcommon-dev` e `libwayland-dev` — **nenhum dos três nesta
+máquina** (conferido com `pkg-config`). SDL2 já é resolvido pelo
+`compilar-launcher.sh`.
+
+E a objeção do launcher ao `egui` ("desenho custom limitado") **não se
+transfere**: ela era sobre imitar um console com navegação por controle. Loja
+precisa de lista, texto e botão.
+
+### Provar desenho sem tela
+
+Mesmo caminho do launcher, e pelos mesmos motivos:
+
+```text
+SDL_VIDEODRIVER=dummy giochi-loja --dump-frame /tmp/q.bmp
+  → 3.587.254 bytes = 1180*760*4 + 54   (tamanho errado = read_pixels devolveu outra coisa)
+
+SDL_VIDEODRIVER=dummy giochi-loja --teclas down,down --dump-frame /tmp/b.bmp
+  → "seleção: 2" e o BMP DIFERE do primeiro   (quadros iguais = entrada ignorada)
+```
+
+O `--teclas` aplica **antes** do primeiro desenho. No launcher a ordem inversa
+foi um bug: a navegação usava o valor padrão de grade em vez do real.
+
+### Armadilhas de API do `sdl2` 0.37 (cobradas pelo compilador)
+
+1. **`WindowCanvas` já é `Canvas<Window>`** — escrever `Canvas<WindowCanvas>` dá
+   `Canvas<Canvas<Window>>` e o erro aparece como "trait bound `RenderTarget` não
+   satisfeita", que não sugere o tipo errado.
+2. **`read_pixels` devolve `Vec<u8>`** na 0.37; a assinatura com `&mut [u8]` era
+   da 0.34, e o erro é "argumentos a mais".
+3. **`video.window(..)` e `.position_centered()` devolvem builders diferentes**,
+   então um `if/else` entre eles não unifica tipo. Monta-se um builder e encadeia.
+4. **`sd2::ttf::init()` não pode ser chamado duas vezes** — mesmo problema do
+   launcher; o contexto é vazado com `Box::leak`.
+
+### Onde a chave pública mora: ainda em aberto
+
+O verificador de pacote já roda no aparelho (`verificador-ed25519`), mas `/etc/giochi/`
+tem só `buttons.map`. Falta `loja-publica.pem` **e** `licenca-publica.pem` — duas
+chaves, dois arquivos, mesma pergunta ao Giochi System.
+
+E falta o **launcher** consultar a licença antes de lançar. O binário de licença é
+o mesmo formato e a mesma `libcrypto`, então é trabalho pequeno.
+
+### O que a loja **não** consegue garantir, e não finge
+
+Quem tem root no aparelho pode copiar a chave privada do aparelho junto com a
+licença, ou rodar `bin/pacman` direto sem passar pelo launcher. **Em aparelho que
+o usuário controla, qualquer trava no cliente é contornável.** O objetivo é que a
+cópia casual pare e que a proteção real seja o pagamento no servidor. Ofuscação
+aqui seria teatro.

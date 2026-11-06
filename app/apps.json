@@ -104,6 +104,16 @@
       "distribution": "host",
       "license": "Proprietary",
       "note": "Interface web local do PC: classifica apps pelos aparelhos reais, empacota e assina .giochi. Chama o forge e o store em vez de reimplementar; o .pyz leva os tres modulos. 127.0.0.1 apenas."
+    },
+    {
+      "id": "loja",
+      "folder": "loja",
+      "slug": "loja",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "host",
+      "license": "Proprietary",
+      "note": "Loja do PC: executavel nativo Rust+SDL2 para Linux, Windows e macOS. Separa autenticidade (assinatura do pacote) de licenca (por aparelho). Nao manipula dado de cartao: PIX copia-e-cola ou checkout hospedado. Ver docs/loja.md."
     }
   ]
 }

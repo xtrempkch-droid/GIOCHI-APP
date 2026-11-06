@@ -1,0 +1,197 @@
+# Loja do PC: compila e prova que roda nos três sistemas.
+#
+# ## Por que três builds nativos, se o código é o mesmo
+#
+# Porque "compila" e "roda" são afirmações diferentes, e compilar para outro
+# sistema é onde essa diferença fica cara:
+#
+# - **SDL2 não vem no sistema** no Windows nem no macOS: precisa ser levada junto
+#   (`.dll` / `.dylib`). Sem isso o `.exe` abre e fecha na mesma hora, sem
+#   mensagem — o pior suporte possível.
+# - **No macOS o binário precisa ser assinado** (mesmo que ad-hoc) para o
+#   Gatekeeper não matar o processo na primeira execução.
+# - **No Linux o loader procura `libSDL2`** em caminhos que variam por
+#   distribuição.
+#
+# Compilar cruzado a partir do Ubuntu produziria três arquivos que ninguém testou
+# no sistema de destino. Aqui cada runner roda o binário de verdade, com
+# `SDL_VIDEODRIVER=dummy`, e confere que um quadro foi desenhado.
+name: Loja (PC)
+
+on:
+  pull_request:
+    paths:
+      - "app/loja/**"
+      - "scripts/compilar-loja.sh"
+      - "tests/loja/**"
+      - ".github/workflows/loja.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/loja/**"
+      - "scripts/compilar-loja.sh"
+      - ".github/workflows/loja.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Os testes do núcleo não precisam de SDL, de janela nem de GPU: só de Rust.
+  # Roda primeiro e em paralelo porque é a parte que pode falhar por lógica.
+  nucleo:
+    name: núcleo sem SDL
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Testes do núcleo
+        run: |
+          cd app/loja
+          cargo test -p giochi-loja-core
+          # Contagem > 0: `cargo test` com zero testes sai com 0, e um verde que
+          # não rodou nada é o falso positivo mais fácil de todos.
+          N=$(cargo test -p giochi-loja-core 2>&1 | sed -n 's/^test result: ok\. \([0-9]\+\) passed.*/\1/p' | head -1)
+          echo "testes do núcleo: $N"
+          test "${N:-0}" -gt 0
+
+  construir:
+    name: construir e rodar em ${{ matrix.rotulo }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - so: ubuntu-24.04
+            rotulo: linux
+          - so: windows-2022
+            rotulo: windows
+          - so: macos-15 # arm64: é o Mac que o usuário tem hoje (macos-14 morreu em 02/11/2026)
+            rotulo: macos
+    runs-on: ${{ matrix.so }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # ── dependências de SDL2 ───────────────────────────────
+      - name: SDL2 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev
+          # A fonte não vai no repositório (decisão do launcher, mantida aqui):
+          # sem ela o texto não desenha e o quadro se parece com um app quebrado.
+          sudo apt-get install -y fonts-dejavu-core
+
+      - name: SDL2 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl2 sdl2_ttf
+
+      - name: SDL2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # O `vcpkg` do runner já vem com o cache; instalar SDL2 por ele é o
+          # caminho documentado pelo sdl2-sys no Windows.
+          vcpkg install sdl2:x64-windows sdl2-ttf:x64-windows
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          echo "SDL2_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" >> $env:GITHUB_ENV
+
+      # ── build ──────────────────────────────────────────────
+      - name: Compilar (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        # A feature `texto` é o padrão. Sem `SDL2_ttf` o build falha no link, e
+        # é melhor falhar aqui do que distribuir um app sem texto.
+        run: |
+          cd app/loja
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export LIBRARY_PATH="$(brew --prefix)/lib"
+            export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
+          fi
+          cargo build --release
+          ls -la target/release/
+
+      - name: Compilar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd app/loja
+          cargo build --release
+          Get-ChildItem target\release\
+
+      # ── a prova que importa: o binário desenha ─────────────
+      - name: O binário desenha um quadro (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd app/loja
+          if [ "$RUNNER_OS" = "macOS" ]; then export DYLD_LIBRARY_PATH="$(brew --prefix)/lib"; fi
+          # `dummy` = sem tela. É o mesmo caminho que o launcher usa e o que
+          # permite verificar desenho em runner sem display.
+          SDL_VIDEODRIVER=dummy ./target/release/giochi-loja --dump-frame /tmp/quadro.bmp
+          test -s /tmp/quadro.bmp
+          # 1 180 x 760 x 4 + cabeçalho de 54 bytes. Um BMP de tamanho errado
+          # significa que o `read_pixels` devolveu outra coisa.
+          ESPERADO=$((1180 * 760 * 4 + 54))
+          TAM=$(wc -c < /tmp/quadro.bmp)
+          echo "quadro: $TAM bytes (esperado $ESPERADO)"
+          test "$TAM" -eq "$ESPERADO"
+
+      - name: O binário desenha um quadro (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd app/loja
+          $env:SDL_VIDEODRIVER = "dummy"
+          # As DLLs do vcpkg precisam estar ao lado do .exe, senão o processo
+          # morre antes de desenhar e o erro é "0xc0000135".
+          Copy-Item "$env:SDL2_DIR\bin\*.dll" target\release\ -Force
+          .\target\release\giochi-loja.exe --dump-frame $env:TEMP\quadro.bmp
+          $tam = (Get-Item $env:TEMP\quadro.bmp).Length
+          $esperado = 1180 * 760 * 4 + 54
+          Write-Host "quadro: $tam bytes (esperado $esperado)"
+          if ($tam -ne $esperado) { exit 1 }
+
+      # ── navegação: teclas mudam a tela ─────────────────────
+      - name: A navegação muda a tela (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd app/loja
+          if [ "$RUNNER_OS" = "macOS" ]; then export DYLD_LIBRARY_PATH="$(brew --prefix)/lib"; fi
+          export SDL_VIDEODRIVER=dummy
+          # Duas teclas para baixo: a seleção tem de ir de 0 para 2. Se o
+          # programa ignorasse a entrada, os dois quadros sairiam idênticos.
+          ./target/release/giochi-loja --teclas down,down --dump-frame /tmp/baixo.bmp | tee /tmp/saida.txt
+          grep -q "seleção: 2" /tmp/saida.txt
+          # E o quadro tem de ser diferente do primeiro: seleção diferente é
+          # pixel diferente. `cmp` sem argumento devolve 1 quando difere.
+          if cmp -s /tmp/quadro.bmp /tmp/baixo.bmp; then
+            echo "os dois quadros são idênticos — a navegação não desenhou nada"
+            exit 1
+          fi
+
+      - name: A navegação muda a tela (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd app/loja
+          $env:SDL_VIDEODRIVER = "dummy"
+          .\target\release\giochi-loja.exe --teclas down,down --dump-frame $env:TEMP\baixo.bmp | Tee-Object -Variable saida
+          if ($saida -notmatch "seleção: 2") { exit 1 }
+          $a = Get-FileHash $env:TEMP\quadro.bmp
+          $b = Get-FileHash $env:TEMP\baixo.bmp
+          if ($a.Hash -eq $b.Hash) { Write-Host "quadros idênticos"; exit 1 }
+
+      - name: Anexar binários
+        uses: actions/upload-artifact@v4
+        with:
+          name: loja-${{ matrix.rotulo }}
+          path: |
+            app/loja/target/release/giochi-loja
+            app/loja/target/release/giochi-loja.exe
+          if-no-files-found: warn
+          retention-days: 14

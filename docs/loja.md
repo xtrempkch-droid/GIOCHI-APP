@@ -55,18 +55,20 @@ escrito à mão.
 
 ---
 
-## 2. O que NÃO existe: a loja
+## 2. O que existe e o que não existe na loja
 
 | Peça | Estado | Por que não foi feita |
 | --- | --- | --- |
-| Login OAuth no itch.io | **não escrita** | precisa de `client_id` registrado no itch.io; sem ele o código não executa uma linha |
-| butler / butlerd | **não integrado** | precisa de rede e de credencial; e o binário não está nesta máquina |
-| Interface gráfica da loja | **não escrita** | depende de decidir a stack (ver §4) |
+| Login OAuth no itch.io | **não escrita, e não é o caminho** | a loja é da Giochi, não uma vitrine do itch.io; ver §4.2 |
+| butler / butlerd | **decidido não usar** | pacotes de 81 KB; ver §4 decisão 2 |
+| Backend de pagamento | **não existe** | exige conta no provedor, CNPJ e servidor; ver §4.2 |
+| Interface gráfica da loja | **escrita** — `app/loja`, Rust + SDL2, 4 telas | decisão de stack em §4 |
 | Transferência por USB automática | **parcial** | `aparelho.sh instalar-pacote` faz o envio; o "detectar pendrive" não existe |
-| Compra/checkout | **não escrita** | não há API pública; ver §3 |
+| Compra/checkout | **modelo pronto, backend não** | `pagamento.rs` tem a máquina de estados; falta o servidor |
 
-`app/store/` e `app/forge/` estão em `scaffold`, sem `bin/`, e declarados como
-`distribution: host` (rodam no PC, não vão para a imagem).
+`app/store/` (CLI) e `app/forge/` rodam no PC com `distribution: host`. A
+**interface gráfica** é `app/loja/`, um binário nativo por sistema, também
+`host`. A separação é de propósito: a CLI serve script e CI, a loja serve pessoa.
 
 ---
 
@@ -89,49 +91,231 @@ projetos Godot sem export.
 
 ---
 
-## 4. Decisões que precisam ser tomadas antes de escrever a loja
+## 4. As quatro decisões — tomadas em 06/11/2026
 
-Não são detalhes de implementação — mudam o desenho:
+### 1. Onde a loja roda, e em que stack
 
-1. **Onde a loja roda.** O relatório diz "no PC do usuário", e é o que o
-   `apps.json` já declara (`distribution: host`). Confirmar: uma loja gráfica no
-   PC pressupõe uma stack de UI que este repositório não tem (o launcher é
-   SDL2/Rust específico para o aparelho).
-2. **butlerd ou butler.** O `butlerd` é um daemon JSON-RPC e faz download
-   incremental; o `butler` é CLI. Para uma loja gráfica o `butlerd` é a escolha,
-   mas é mais uma peça para empacotar e supervisionar.
-3. **Assinatura: quem tem a chave.** Hoje a chave privada fica em
-   `~/.giochi/` na máquina de quem empacota. Numa loja, a chave do **catálogo**
-   (o que a Giochi assina) é diferente da chave de **terceiro** (o que um
-   desenvolvedor assina). O formato tem um campo de assinatura só; multi-assinatura
-   é mudança de formato.
-4. **O aparelho confia no cabo.** Hoje a verificação é no PC, antes de enviar. Se
-   o `.giochi` puder chegar por pendrive, o aparelho precisa verificar — e isso
-   exige ter a chave pública no rootfs, o que é decisão de imagem (Giochi System).
+**No PC, como executável nativo em Rust + SDL2.** Um binário por sistema, gerado
+pelo CI em runner nativo.
+
+A medição veio antes da escolha. `egui`/`eframe` seria a escolha natural para uma
+interface de PC — formulário, lista, rolagem —, mas `winit` exige
+`libx11-dev`, `libxkbcommon-dev` e `libwayland-dev`, e **nenhum dos três está
+nesta máquina de desenvolvimento**. SDL2 já está resolvido por
+`scripts/compilar-launcher.sh`, e é a mesma stack do launcher.
+
+Isso não é escolher o conhecido por preguiça. É que a objeção do launcher ao
+`egui` ("desenho custom limitado") **não se transfere**: ela era sobre imitar um
+console, com layout próprio e navegação por controle. Uma loja precisa de lista,
+texto e botão — exatamente o que o renderer de primitivas já faz.
+
+O que se perde: campo de texto nativo e IME. A consequência está na decisão
+seguinte, e ela é boa.
+
+### 2. `butlerd` — **não**. `curl` com retomada.
+
+O `butlerd` é um daemon JSON-RPC do itch.io que faz download incremental por
+blocos. Ele resolve um problema que **não temos**, e o número é medido:
+
+```text
+arcade-volleyball.giochi    81.408 bytes  (81 KB)
+```
+
+Baixar 81 KB de novo não é problema. O `butlerd` acrescentaria um daemon para
+empacotar, supervisionar, versionar e explicar no suporte, para economizar zero.
+
+| | butlerd | curl com retomada |
+| --- | --- | --- |
+| peças a empacotar e supervisionar | daemon + protocolo + estado | **nenhuma** |
+| retomada de download interrompido | sim | **sim** (`-C -`) |
+| ganho com 81 KB | zero | zero |
+| ganho com 5 GB | grande | nenhum |
+
+**A regra para reconsiderar, escrita para não ser redescoberta por intuição:
+quando o catálogo tiver pacotes acima de ~500 MB.** Antes disso, é peça a mais.
+
+`curl` e não uma crate de HTTP: ele existe nos três sistemas que a loja suporta
+(Linux, macOS, e Windows desde a 10 1803). Trocar uma dependência de sistema **já
+presente** por uma árvore de crates de TLS aumenta a superfície de atualização de
+um binário que o usuário baixa e executa. O preço é traduzir código de saída em
+mensagem, e é o que `baixador.rs` faz.
+
+### 3. A chave: **três**, não uma
+
+Esta era a pergunta mais importante, e a resposta está em
+[§4.1](#41-a-segurança-três-perguntas-três-chaves).
+
+### 4. A chave pública no rootfs — e por que ela não é o risco
+
+A preocupação do dono do projeto foi: *"usarem essa chave para ter acesso aos
+dados e roubarem os jogos via rede"*.
+
+**Uma chave pública não dá acesso a nada.** Ela só confere assinaturas: não
+decifra, não abre catálogo, não emite licença, não autentica. Publicá-la na
+imagem é o mesmo que publicar um cadeado aberto.
+
+O risco real é outro, e tem nome:
+
+| Risco | Consequência | Mitigação implementada |
+| --- | --- | --- |
+| **chave privada vaza** do servidor | qualquer um publica pacote "oficial" | `invalida_antes` no catálogo: tudo assinado antes do corte deixa de valer |
+| **"autêntico" tratado como "comprado"** | um pacote copiado serve para todos | licença separada, amarrada ao aparelho |
+| **catálogo trocado no meio da rede** | app do atacante aparece na loja | catálogo assinado; item sem assinatura válida não entra |
+| servidor de pacote comprometido | binário diferente do publicado | SHA-256 do catálogo + assinatura Ed25519 do `.giochi` |
+
+O segundo é o que realmente rouba jogo, e é o mais fácil de errar sem perceber.
+É por isso que `pacote.rs` e `licenca.rs` são módulos diferentes, com tipos
+diferentes: `PacoteVerificado` prova **origem** e nada mais;
+`LicencaVerificada` prova **compra** e exige o aparelho.
 
 ---
 
-## 5. Ordem sugerida
+## 4.1 A segurança: três perguntas, três chaves
 
-O que dá para fazer sem depender de credencial nem de decisão alheia:
+```text
+                     servidor (nunca no cliente)
+                     ┌──────────────────────┐
+                     │ chave de CATÁLOGO    │ assina a lista e os pacotes
+                     │ chave de LICENÇA     │ assina "este aparelho pagou"
+                     └──────────────────────┘
+                                │ públicas
+                                ▼
+   PC (loja)                                    aparelho
+   ┌────────────────────┐                      ┌──────────────────────┐
+   │ verifica catálogo  │  ── baixa .giochi ─► │ verifica pacote      │
+   │ verifica pacote    │  ── envia ─────────► │ verifica licença     │
+   │ NÃO assina nada    │                      │ tem a privada DELE   │
+   └────────────────────┘                      └──────────────────────┘
+```
 
-1. ~~Empacotador + assinador~~ — **feito**.
-2. ~~Extrator + catálogo automático~~ — **feito**.
-3. **Verificação no aparelho** — o launcher ganha `verificar-pacote` em Rust e
-   lê `.giochi` de `/media` ou `/user`. Isso tira a dependência de PC e é
-   inteiramente deste repositório. **É o próximo passo natural.**
-4. **Um jogo Godot empacotado** — depende de export ARM64, que depende de
-   template de exportação. Sem isso, o formato está provado mas só com jogos
-   nativos.
-5. **butlerd** — só depois de existir `client_id` e uma rede para testar.
+| Pergunta | Quem responde | Chave | Onde a privada vive |
+| --- | --- | --- | --- |
+| "veio da Giochi?" | assinatura do pacote | catálogo | servidor |
+| "este aparelho pagou?" | licença | licença (**outra**) | servidor |
+| "é este aparelho?" | identidade | par gerado **no aparelho** | aparelho, nunca sai |
 
-Sobre (3): hoje quem verifica é o PC, e o aparelho confia no cabo. Enquanto o
-cabo for o único caminho, isso é aceitável e está registrado. Deixa de ser quando
-o arquivo puder vir de um pendrive.
+### Por que a licença é o que impede a cópia
+
+Copiar `pacman.giochi` e o arquivo de licença para o aparelho do vizinho não
+funciona: a licença carrega a **chave pública do aparelho de origem**, e a
+verificação compara com a do aparelho que está rodando.
+
+```text
+licença.aparelho == aparelho.base64()   → válida
+senão                                   → OutroAparelho  (recusa)
+```
+
+Testado nos dois sentidos, em `licenca.rs`: `copiar_o_pacote_e_a_licenca_para_outro_aparelho_falha`.
+
+### O que isto **não** garante
+
+Não é DRM inquebrável, e não fingimos que seja. Quem tem root no aparelho pode:
+
+- copiar a chave privada do aparelho junto com a licença;
+- rodar `bin/pacman` direto, sem passar pelo launcher.
+
+**Em aparelho que o usuário controla, qualquer trava no cliente é contornável.**
+O objetivo é outro e mais honesto:
+
+1. a **cópia casual** para, que é o que acontece de verdade;
+2. a proteção real é o **pagamento no servidor** — o pacote só é liberado depois
+   do webhook do provedor;
+3. nenhuma chave privada viaja para o cliente, então vazar binário não vaza
+   capacidade de emitir licença.
+
+Gastar esforço em ofuscação aqui seria teatro. O que dá para fazer bem, foi
+feito.
+
+### Cinco estados, não dois
+
+`Veredito` tem `Valida`, `AssinaturaInvalida`, `OutroAparelho`, `OutroApp`,
+`Expirada` e `NaoSei`. O último existe por um motivo concreto: **o aparelho liga
+sem RTC** e o NTP corrige segundos depois. Sem hora confiável, uma licença
+vencida parece válida e uma válida parece vencida.
+
+`NaoSei` **não libera**. É a escolha conservadora: um verificador que aceita o que
+não entendeu transforma qualquer falha de configuração em porta aberta. E licença
+perpétua (`expira_em: None`) não depende do relógio — robustez de graça.
 
 ---
+
+## 4.2 O pagamento: a loja não vê cartão
+
+**PIX é o caminho principal.** O pagamento é um *pedido* — uma string que a loja
+mostra sem manipular credencial nenhuma.
+
+**Cartão vai para checkout hospedado**, aberto no navegador. O dado do cartão
+nunca passa pelo processo da loja. Não é preciosismo: implementar formulário de
+cartão significa assumir PCI-DSS SAQ D; redirecionar significa SAQ A. É a
+diferença entre uma auditoria e nenhuma.
+
+O desenho é o mesmo nos dois casos:
+
+```text
+1. loja   ── cria pedido ──────────────────────────►  backend
+2. backend ── cria cobrança ───────────────────────►  provedor (PIX/Stripe)
+3. loja   ◄── código PIX / URL de checkout ───────  backend
+4. usuário paga
+5. provedor ── webhook ────────────────────────────►  backend
+6. loja   ── "já caiu?" ───────────────────────────►  backend
+7. loja   ◄── licença ASSINADA (amarrada ao aparelho)
+8. loja   ── baixa pacote, verifica, envia ao aparelho
+```
+
+O passo 7 é o único que produz `Estado::Pago`, e o tipo garante: `Pago` carrega
+uma `LicencaAssinada`, que só existe com a chave do servidor. **O cliente não
+consegue se declarar pago** — não é disciplina, é o compilador.
+
+Teste que prova: `a_tela_de_pagamento_nao_se_declara_paga` aperta "Já paguei" dez
+vezes e exige que o pedido continue em `Aguardando`.
+
+### O que falta para cobrar de verdade
+
+| Item | Estado |
+| --- | --- |
+| cliente do backend | **não escrito** — a loja hoje tem catálogo e demonstração |
+| provedor (PIX/Stripe) | **não integrado** — exige conta, credencial e backend |
+| webhook de confirmação | **do backend**, que não existe |
+| contrato de API | **não escrito** — é o próximo documento |
+
+Nada disso é deste repositório sozinho: cobrar exige CNPJ, conta no provedor e um
+servidor. O que dá para fazer aqui — e está feito — é o **cliente correto** para
+esse backend e o modelo de dados que ele vai usar.
+
+---
+
+## 4.3 A licença no aparelho: quem confere
+
+O verificador de pacote já roda no aparelho (`verificador-ed25519`, §18 do
+AGENTS). Falta o mesmo para licença, e falta o **launcher consultar**:
+
+```text
+launcher ── app tem licença válida? ── sim ──► lança
+                                     └─ não ─► explica e oferece comprar
+```
+
+O binário de licença é o mesmo formato e a mesma `libcrypto`, então é trabalho
+pequeno. Falta decidir **onde a chave pública de licença mora** — e é a mesma
+pergunta já enviada ao Giochi System sobre `loja-publica.pem`.
+
+---
+
+## 5. Estado, medido em 06/11/2026
+
+| Peça | Estado |
+| --- | --- |
+| Núcleo (catálogo, chave, licença, pedido, pacote, baixador) | **65 testes**, sem SDL |
+| Interface (SDL2, quatro telas) | **9 testes** + prova de quadro |
+| `--dump-frame` / `--teclas` | **executado**: quadro de 3.587.254 bytes, navegação muda o quadro |
+| Build Linux | **executado**: 525.456 bytes em release |
+| Build Windows e macOS | **CI escrito, não executado** |
+| Emissão de licença (ferramenta de teste) | **executado**: emite e **confere** o que emitiu |
+| Backend de pagamento | **não existe** |
+| Licença validada no aparelho | **não** — só no PC |
 
 ## 6. O que este documento não promete
 
-Não promete loja funcionando, nem data. A parte que existe foi executada no
-aparelho; a que não existe está listada como ausente, com o motivo.
+Não promete cobrança funcionando: sem backend e conta no provedor, não há
+pagamento. O que existe hoje é o **cliente** — catálogo assinado, licença amarrada
+ao aparelho, verificação de pacote, baixador com retomada — e a interface que o
+mostra. A parte que não existe está listada como ausente, com o motivo.
