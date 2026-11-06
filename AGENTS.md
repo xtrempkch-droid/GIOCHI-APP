@@ -3,6 +3,29 @@
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
 > Atualizado em: 06/11/2026 (com acesso ao aparelho real).
 
+## 0. Estado em uma tela (leia isto primeiro)
+
+> **06/11/2026: os sete jogos foram removidos.** `app/jogos/` está vazia de
+> propósito — o dono do projeto vai entregar o jogo novo. Tudo abaixo que citar
+> `volley`, `pacman`, `cobrinha`, `arcade-volleyball`, `spacewar`,
+> `colossal-cave-adventure` ou `shattered-pixel-dungeon` é **histórico**: as
+> medições foram reais e servem de referência, mas os arquivos não existem mais.
+
+O que existe hoje, verificado:
+
+| Item | Estado |
+| --- | --- |
+| apps em `apps.json` | **5**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) |
+| jogos | **nenhum** — `app/jogos/` vazia |
+| `validate-app.mjs --all` | 5 apps válidos |
+| `tests/run-all.mjs` | 189/189 JS |
+| `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
+| `compilar-launcher.sh --testes` | 223/223 Rust |
+| `compilar-loja.sh --testes` | 116/116 Rust |
+
+O que roda no aparelho: **só o launcher**. Ele desenha com catálogo vazio (cai no
+catálogo de demonstração) — medido: 354 cores, 0,00 % de preto em 1280×720.
+
 ## 1. Objetivo
 
 Este repositório é a **camada de experiência** do projeto Giochi: os apps e jogos
@@ -276,13 +299,9 @@ Giochi app/
 │   ├── store/                 # loja (host, roda no PC)
 │   ├── painel/                # interface web local (host, roda no PC) — ver §17
 │   ├── jogos/                 # GRUPO: não é app, não tem metadata.json
-│   │   ├── pacman/            # nativo, labirinto 21x21, 4 fantasmas
-│   │   ├── cobrinha/          # nativo, grade discreta
-│   │   ├── volley/            # nativo (Rust+SDL2) — ver §12
-│   │   ├── arcade-volleyball/     # jogo padrão (image, godot)
-│   │   ├── colossal-cave-adventure/   # jogo padrão (image, godot)
-│   │   ├── spacewar/          # jogo padrão (image, godot)
-│   │   └── shattered-pixel-dungeon/   # GPL-3.0 (store, native)
+│   │   └── .gitkeep           # VAZIA desde 06/11/2026 — os 7 jogos foram removidos
+│   │                          # (pacman, cobrinha, volley, arcade-volleyball,
+│   │                          #  colossal-cave-adventure, spacewar, shattered-pixel-dungeon)
 │   └── launcher/              # Rust + SDL2 (image, native)
 │       ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
 │       ├── crates/core/       # núcleo puro, sem SDL
@@ -462,13 +481,19 @@ ausente. As dependências de pacote ficam no `Config.in` do **Giochi System**.
 node scripts/validate-app.mjs --all       # valida todos
 node scripts/validate-app.mjs app/store   # valida um
 node scripts/validate-app.mjs --all --json
-node tests/run-all.mjs                    # 133 testes JS
+node tests/run-all.mjs                    # 189 testes JS
 bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
+bash scripts/compilar-launcher.sh --testes  # 223 testes do launcher
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 203 testes do launcher
+bash scripts/compilar-loja.sh --testes    # 116 testes da loja
 ```
+
+**Não rode `cargo test --workspace` direto em `app/launcher`.** O crate linka com
+`rust-lld`, que ignora `LIBRARY_PATH`; sem `RUSTFLAGS=-L .../giochi-sdl2/root/usr/lib/x86_64-linux-gnu`
+o link falha com `unable to find library -lSDL2` **mesmo com o build passando**.
+O script já exporta isso — use `--testes`.
 
 ### Ferramentas do aparelho
 
@@ -502,8 +527,8 @@ bash scripts/testar-apps-pc.sh           # 90 testes Python (58 forge + 32 paine
 bash scripts/testar-apps-pc.sh --painel  # só o painel
 node scripts/empacotar-pc.mjs            # .pyz + .sh + .cmd + SHA256SUMS dos três
 app/painel/bin/giochi-painel             # interface web em 127.0.0.1:8710
-node scripts/empacotar.mjs app/jogos/pacman        # pasta do app → .giochi assinado
-node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
+node scripts/empacotar.mjs tests/fixtures/app-nativo   # pasta do app → .giochi assinado
+node scripts/verificar-pacote.mjs dist/pacotes/app-nativo.giochi
 ```
 
 ### Canal com o Giochi System
@@ -2528,9 +2553,11 @@ silêncio.
 ### Números de 06/11/2026
 
 ```text
-validate-app.mjs --all   11 apps válidos (3 em scaffold)
-tests/run-all.mjs        164/164 JS
+validate-app.mjs --all   5 apps válidos (0 em scaffold)   ← era 11; os 7 jogos saíram
+tests/run-all.mjs        189/189 JS                        ← era 164; a lista de testes é dinâmica
 testar-apps-pc.sh        58 forge + 32 painel = 90 Python
+compilar-launcher.sh --testes   223/223 Rust
+compilar-loja.sh --testes       116/116 Rust
 3.9.25 (local)           3 .pyz abrem, passo HTTP roda, 32/32 do painel
 openssl pkeyutl -verify  aceita o .sig do Python e o do JS
 GitHub Actions           7/7 jobs verdes: linux, linux-3.9, windows, macos

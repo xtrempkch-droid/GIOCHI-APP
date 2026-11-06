@@ -54,7 +54,12 @@ erro(){ printf '  %sERRO%s %s\n' "$VERMELHO" "$ZERA" "$*" >&2; exit 1; }
 
 JOGO="$RAIZ/app/jogos/$NOME_JOGO"
 BINARIO="giochi-$NOME_JOGO"
-[ -f "$JOGO/Cargo.toml" ] || erro "jogo desconhecido: $NOME_JOGO (esperado em app/jogos/<nome>)"
+if [ ! -f "$JOGO/Cargo.toml" ]; then
+  disponiveis="$(find "$RAIZ/app/jogos" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
+  erro "jogo desconhecido: $NOME_JOGO (esperado em app/jogos/<nome>)
+  em app/jogos/ existe: ${disponiveis:-nada}
+  use: --jogo <nome>"
+fi
 
 # ── 1. o cache do cross-compile precisa existir ─────────────
 # Sem ele não há como linkar: `rust-lld` sozinho produz um ELF sem `PT_INTERP`

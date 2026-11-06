@@ -17,11 +17,12 @@ gerado pelo **Giochi System** e que são reunidos com ele no **Giochi os**.
 Giochi app/
 ├── app/                      # cada app em sua própria pasta
 │   ├── _template/            # modelo para app novo
+│   ├── launcher/             # interface do aparelho (Rust + SDL2)
+│   ├── loja/                 # loja do PC (Rust + SDL2)
+│   ├── painel/               # interface web local do PC
 │   ├── forge/                # empacotador/classificador (native, Python)
-│   ├── store/                # loja (native, Python)
-│   ├── arcade-volleyball/    # jogo (godot)
-│   ├── colossal-cave-adventure/
-│   └── spacewar/
+│   ├── store/                # CLI da loja (native, Python)
+│   └── jogos/                # VAZIA desde 06/11/2026 — jogo novo em preparação
 ├── schemas/                  # JSON Schema do metadata.json e do forge.json
 ├── scripts/                  # validador e migração
 ├── tests/

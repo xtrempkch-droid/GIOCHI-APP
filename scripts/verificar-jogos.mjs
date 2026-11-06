@@ -98,10 +98,25 @@ function binarioDoJogo(id) {
   if (!existsSync(alvo)) {
     throw new Error(
       `binário ausente: app/jogos/${id}/target/release/giochi-${id}\n` +
-        `compile com: cd app/jogos/${id} && bash ../../../scripts/compilar-launcher.sh --release`,
+        `compile com: cd app/jogos/${id} && cargo build --release`,
     );
   }
   return alvo;
+}
+
+/**
+ * Os jogos que existem de fato, não a lista escrita à mão.
+ *
+ * A lista `JOGOS` descreve **como medir** cada jogo — isso é conhecimento de
+ * cada um e não dá para derivar. Mas *quais* jogos medir é fato do diretório,
+ * e manter isso à mão significava que apagar um jogo deixava o script
+ * procurando um binário que nunca mais existiria. Mesma regra do catálogo:
+ * projeção, não segunda fonte da verdade.
+ */
+function jogosPresentes() {
+  return JOGOS.filter((jogo) =>
+    existsSync(path.join(RAIZ, "app", "jogos", jogo.id, "metadata.json")),
+  );
 }
 
 function opcoes(argv) {
@@ -117,6 +132,19 @@ function main() {
   const o = opcoes(process.argv.slice(2));
   mkdirSync(SAIDA, { recursive: true });
 
+  // Sem jogo no diretório não há o que medir — e isso não é falha. Antes, a
+  // lista fixa fazia o script parar em "binário ausente" mesmo com o grupo
+  // vazio, o que parece defeito de build e é ausência de conteúdo.
+  const jogos = jogosPresentes();
+  if (jogos.length === 0) {
+    console.log(
+      "nenhum jogo em app/jogos/ — nada a medir.\n" +
+        "Um jogo entra aqui quando a pasta tem `metadata.json` e o `id` está " +
+        "descrito em JOGOS neste script (a medida varia por jogo).",
+    );
+    return 0;
+  }
+
   // `dummy` respeita o tamanho pedido; `x11` devolveria o desktop.
   const ambiente = { ...process.env, SDL_VIDEODRIVER: "dummy", SDL_RENDER_DRIVER: "software" };
   let falhou = 0;
@@ -125,7 +153,7 @@ function main() {
     console.log(`\n── ${tamanho} ──`);
     console.log("  jogo        medida              valor    mínimo   estado");
 
-    for (const jogo of JOGOS) {
+    for (const jogo of jogos) {
       const bin = binarioDoJogo(jogo.id);
       const bmp = path.join(SAIDA, `${jogo.id}-${tamanho}.bmp`);
       execFileSync(bin, ["--tamanho", tamanho, "--quadro", bmp], { env: ambiente, stdio: "ignore" });

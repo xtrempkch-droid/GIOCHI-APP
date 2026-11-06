@@ -4,6 +4,7 @@
 # Uso:
 #   bash scripts/compilar-launcher.sh            # cargo build --workspace
 #   bash scripts/compilar-launcher.sh --release  # repassa o argumento ao cargo
+#   bash scripts/compilar-launcher.sh --testes   # roda os testes do workspace
 #
 # Por que este script existe: o `sdl2-sys` precisa de `pkg-config` para achar
 # `sdl2` e, com a feature `ttf`, de `SDL2_ttf`. Sem elas o `rustc` compila e o
@@ -11,10 +12,26 @@
 # extrair os `.deb` num prefixo local e apontar `PKG_CONFIG_PATH`/`LIBRARY_PATH`
 # para lá, sem instalar nada no sistema.
 #
+# `LIBRARY_PATH` não basta para os testes: o crate compila com `rust-lld`
+# (`-fuse-ld=lld`), que **ignora** `LIBRARY_PATH` e só olha `-L`. Por isso o
+# `RUSTFLAGS` abaixo. Sem ele, `cargo test --workspace` falha com
+# `unable to find library -lSDL2` mesmo com o build passando.
+#
 # Variáveis:
 #   GIOCHI_SDL2_PREFIX  onde extrair os pacotes (padrão: ~/.cache/giochi-sdl2/root)
 #   GIOCHI_SDL2_DEB_URL base dos pacotes (padrão: archive.ubuntu.com)
 set -euo pipefail
+
+MODO="build"
+ARGS_CARGO=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --testes) MODO="test" ;;
+    -h|--ajuda) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) ARGS_CARGO+=("$arg") ;;
+  esac
+done
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCHER="$RAIZ/app/launcher"
@@ -92,8 +109,19 @@ else
 fi
 
 cd "$LAUNCHER"
-log "cargo build --workspace $*"
-cargo build --workspace "$@"
+
+# `rust-lld` ignora `LIBRARY_PATH`; só `-L` conta. Sem isto o build passa e o
+# `cargo test` falha no link, que é o pior tipo de erro: parece defeito do teste.
+export RUSTFLAGS="-L $PREFIXO/usr/lib/x86_64-linux-gnu${RUSTFLAGS:+ $RUSTFLAGS}"
+
+if [ "$MODO" = "test" ]; then
+  log "cargo test --workspace"
+  cargo test --workspace "${ARGS_CARGO[@]}" 2>&1 | grep -E "^test result|^error" || true
+  exit 0
+fi
+
+log "cargo build --workspace ${ARGS_CARGO[*]-}"
+cargo build --workspace "${ARGS_CARGO[@]}"
 
 cat <<FIM
 
