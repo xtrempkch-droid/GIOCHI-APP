@@ -1,0 +1,49 @@
+; Colossal Cave Adventure -- Giochi Konsol OS (ADR-07: Godot 4.x + GLES3)
+;
+; Alvo: RK3566 (X55, X35S, X35H) -- Mali-G52, 128 MB de VRAM, 2 GB de RAM.
+; Orcamento do jogo: 700 MB de RAM e 128 MB de VRAM (teto dos jogos padrao).
+
+config_version=5
+
+[application]
+
+config/name="Colossal Cave"
+config/description="Colossal Cave Adventure (1976) em 2,5D para o Giochi Konsol OS."
+config/version="1.0.0"
+run/main_scene="res://scenes/Main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+config/icon="res://icon.svg"
+boot_splash/bg_color=Color(0.039216, 0.039216, 0.039216, 1)
+boot_splash/show_image=false
+
+[audio]
+
+driver/enable_input=false
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/vsync/vsync_mode=1
+
+[physics]
+
+common/physics_ticks_per_second=60
+common/max_physics_steps_per_frame=4
+common/physics_jitter_fix=0.0
+2d/default_gravity=0
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+anti_aliasing/quality/msaa_2d=0
+anti_aliasing/quality/screen_space_aa=0
+environment/defaults/default_clear_color=Color(0.039216, 0.039216, 0.039216, 1)
+limits/opengl/max_renderable_elements=2048
+limits/opengl/max_renderable_lights=4

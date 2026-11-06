@@ -24,6 +24,12 @@ desktop.ini
 .godot/
 *.translation
 
+# Build do port nativo C++ — o artefato mora em bin/, dentro do app. Este é só
+# o objeto intermediário do make, e commitá-lo criaria duas cópias do mesmo
+# binário que envelhecem separado.
+app/jogos/*/src/nativo/arcade-volleyball
+app/jogos/*/src/nativo/*-host
+
 # NÃO ignore bin/: é exatamente o que vai para o aparelho.
 
 # Rust — saída de build

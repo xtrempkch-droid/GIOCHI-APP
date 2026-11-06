@@ -226,12 +226,18 @@ test("serialização termina com newline e é JSON válido", () => {
   assert.deepEqual(JSON.parse(texto), { schemaVersion: 1, apps: [] });
 });
 
-// A árvore real do repositório: os três jogos entram, o launcher não.
-test("na árvore real: três jogos, sem o launcher", () => {
+// A árvore real do repositório: os jogos com binário entram, o launcher não.
+//
+// A lista é um retrato do que está pronto, de propósito: ela reprova quando um
+// app ganha binário sem ninguém revisar o catálogo, e quando um perde. O que o
+// teste realmente garante é a segunda parte — `distribution: image` + `bin/`
+// entram, `distribution: host` (o launcher) fica fora.
+test("na árvore real: os jogos prontos entram, o launcher não", () => {
   const appRoot = path.resolve(import.meta.dirname, "..", "app");
   const { catalogo } = gerarCatalogo(appRoot);
   const ids = catalogo.apps.map((a) => a.id).sort();
-  assert.deepEqual(ids, ["cobrinha", "pacman", "volley"]);
+  assert.deepEqual(ids, ["arcade-volleyball", "cobrinha", "pacman", "volley"]);
+  assert.ok(!ids.includes("launcher"), "o launcher não pode estar no catálogo");
   for (const app of catalogo.apps) {
     assert.ok(app.dir.startsWith(DIR_BASE_PADRAO), `${app.id}: dir fora da base`);
     assert.ok(app.title, `${app.id}: sem título`);

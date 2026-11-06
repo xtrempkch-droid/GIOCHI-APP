@@ -11,6 +11,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   analisar,
+  avaliarQuadro,
   comparar,
   correlacaoDeTexto,
   desRotacionar,
@@ -322,4 +323,31 @@ test("correlação de texto separa deitado de girado", () => {
     `girado 90° deveria preferir colunas (linhas ${virado.porLinha.toFixed(2)}, ` +
       `colunas ${virado.porColuna.toFixed(2)})`
   );
+});
+
+// O piso de cores era 8 fixo e reprovava o arcade-volleyball, que desenha
+// exatamente as 6 cores da sua paleta. Estes três testes fixam a distinção:
+// "poucas cores" só é sintoma quando é baixo PARA A PALETA DO APP.
+test("avaliarQuadro aceita paleta plana de jogo (6 cores, nada de preto)", () => {
+  const { problemas, paletaPlana } = avaliarQuadro({ cores: 6, pctPreto: 0 });
+  assert.deepEqual(problemas, []);
+  assert.equal(paletaPlana, true);
+});
+
+test("avaliarQuadro reprova paleta plana quando o app promete mais cores", () => {
+  const { problemas } = avaliarQuadro({ cores: 6, pctPreto: 0, minCores: 8 });
+  assert.equal(problemas.length, 1);
+  assert.match(problemas[0], /6 cores/);
+});
+
+test("avaliarQuadro reprova quadro de uma cor, sem --min-cores", () => {
+  const { problemas } = avaliarQuadro({ cores: 1, pctPreto: 0 });
+  assert.equal(problemas.length, 1);
+  assert.match(problemas[0], /parou cedo/);
+});
+
+test("avaliarQuadro separa preto de contagem de cores", () => {
+  const { problemas } = avaliarQuadro({ cores: 300, pctPreto: 97 });
+  assert.equal(problemas.length, 1);
+  assert.match(problemas[0], /97% de preto/);
 });

@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 03/11/2026 (com acesso ao aparelho real).
+> Atualizado em: 06/11/2026 (com acesso ao aparelho real).
 
 ## 1. Objetivo
 
@@ -228,15 +228,14 @@ Duas coisas mudaram no ambiente e já estão no toolkit:
 
 ### Ainda pendente
 
-- **Código-fonte dos apps não foi migrado.** Nenhum `src/` tem conteúdo. O script
-  existe e passa por `bash -n`, mas **nunca rodou de verdade** — falta um clone do
-  antecessor para apontar.
-- **Nenhum `bin/` tem conteúdo, exceto o launcher e o volley.** Os jogos Godot
-  precisam de export ARM64; as ferramentas são Python e precisam ser empacotadas.
-  `app/jogos/volley` é o único jogo que roda hoje — ver §12.
-- **`capa.png` só existe no launcher e no volley.** Os outros cinco apps não têm
-  320×320, então não podem ser publicados na loja (o validador avisa).
-- **Não há empacotador `.giochi`**, nem assinatura Ed25519.
+- **`bin/`:** quatro apps rodam — `launcher`, `volley`, `pacman`, `cobrinha` e
+  `arcade-volleyball`. `colossal-cave-adventure`, `spacewar` e `shattered-pixel-dungeon`
+  continuam com `bin/` vazia.
+- **`capa.png`** existe no launcher, no volley e no arcade-volleyball. Os outros
+  não têm 320×320, então não podem ser publicados na loja (o validador avisa).
+- **Empacotador `.giochi` e assinatura Ed25519: feitos** (§13). O que falta é a
+  **verificação da assinatura no aparelho** — hoje o instalador confere SHA-256,
+  tamanho e a estrutura, mas o Ed25519 só é verificado no PC (`verificar-pacote.mjs`).
 - **Texto: o X55 em uso é a imagem ANTIGA (03/11) e não tem `SDL2_ttf`.** O
   X35H roda a imagem nova, com as libs, e desenha texto sozinho. Não confie no
   nome do aparelho para decidir: o `compilar-launcher-arm64.sh` **pergunta ao
@@ -294,7 +293,8 @@ Giochi app/
 │   ├── migrar-do-antecessor.sh
 │   ├── compilar-launcher.sh   # resolve SDL2 e compila o launcher
 │   ├── compilar-launcher-arm64.sh  # cross-compile + instala no aparelho
-│   ├── compilar-jogo-arm64.sh      # idem para o jogo volley (reusa o cache)
+│   ├── compilar-jogo-arm64.sh      # idem para os jogos Rust (reusa o cache)
+│   ├── compilar-jogo-cpp-arm64.sh  # idem para o jogo C++ (monta o compilador cruzado)
 │   ├── aparelho.sh            # operação e diagnóstico do aparelho por SSH
 │   ├── verificar-frame.mjs    # decide se o quadro renderizado é a UI ou lixo
 │   ├── verificar-telas.mjs    # as 12 telas em 3 tamanhos: cabe? ocupa quanto?
@@ -323,6 +323,11 @@ Giochi app/
 │   ├── metadata.md
 │   ├── forge.md
 │   ├── pacote.md
+│   ├── godot.md                # por que o Arcade Volleyball não roda como Godot
+│   ├── cartao-sd.md
+│   ├── loja.md
+│   ├── rede.md
+│   ├── r35s.md
 │   ├── licenciamento.md
 │   ├── controles.md
 │   ├── integracao.md
@@ -1796,3 +1801,119 @@ des-rotacionado e comparado com o render x86 → **99,9 % igual**.
 - **Comandos de ponteiro no núcleo** (`FocusAt`, `GoTab`, `OpenGame`,
   `OpenApp`, `GoSettingsCat`): sem eles a UI teria de simular dezenas de `Nav`
   para chegar ao item tocado.
+
+## 13. Arcade Volleyball: o Godot não roda, o port roda (06/11/2026)
+
+O usuário pediu "instale o arcade-volley no aparelho" e depois esclareceu: "é um
+jogo escrito em Godot". As duas coisas são verdade ao mesmo tempo, e a conclusão
+medida é que **o Godot não consegue desenhar no X55**.
+
+### O que foi medido, não deduzido
+
+| Medida | Resultado |
+| --- | --- |
+| o aparelho tem servidor gráfico? | **não** — sem X11, sem Wayland, sem compositor |
+| tem libX11 / libwayland-client / libxkbcommon? | **ausentes** |
+| tem libEGL / libGLESv2 / libgbm / libdrm? | **presentes** — é por KMSDRM que o launcher desenha |
+| `Godot 4.7.2` oficial tem driver KMSDRM? | **não** — só `X11`, `Wayland`, `Headless` |
+| e o template de export `linux_release.arm64`? | **também não** — mesmo conjunto |
+
+Ou seja: exportar o projeto para aarch64 produz um binário que tenta X11, tenta
+Wayland e cai em `Headless`. Não é configuração; é plataforma compilada fora.
+O assunto completo está em [`docs/godot.md`](docs/godot.md).
+
+O projeto Godot em si está são: os testes dele passam com 4.7.2 (o projeto
+declara 4.3), com orçamento de 255 MB de RAM e 23,8 MB de VRAM.
+
+### O que foi feito
+
+O antecessor já tinha a resposta no próprio Makefile — *"o projeto Godot vai na
+imagem, mas NÃO roda no aparelho… quem roda hoje é este port nativo em
+C++/SDL2"*. Ele foi migrado, e o port precisou de três correções:
+
+1. **Rotação e escala explícitas** (`struct Tela`), no lugar de
+   `SDL_RenderSetLogicalSize`. O logical size escala **mas não gira**: num painel
+   retrato o jogo sairia deitado. A matemática é a de `app/jogos/volley`, que veio
+   do launcher.
+2. **Entrada por evdev** no lugar de `SDL_GameController`. A API de gamepad do SDL
+   devolve `nullptr` para os `gpio-keys` do aparelho — o jogo abriria, desenharia
+   e **nenhum botão responderia**, sem erro nenhum no log.
+3. **`runtime: "native"`** no `metadata.json`, porque o campo descreve como o app
+   roda no aparelho, não de que linguagem veio.
+
+### Medido no X55
+
+```text
+arcade-volleyball: painel 720x1280, projeto 1280x720 (Ccw90), escala 1.00, renderer opengles2
+arcade-volleyball: 5 dispositivo(s) de entrada abertos
+arcade-volleyball: quadro 720x1280 gravado em /tmp/jogo.bmp
+```
+
+| Medida | Valor |
+| --- | --- |
+| rotação | `Ccw90`, de `fbcon/rotate=3` — a mesma fonte que o launcher usa |
+| escala | **1,00** — nada encolhe |
+| renderer | **`opengles2`** (acelerado) |
+| RAM de pico (`VmHWM`) | **19 MB** — o `forge.json` declarava 512 |
+| comparação com o PC | **97,9 %**; a diferença é a bola e os jogadores, que se movem |
+| geometria (chão, rede, jogador) | **pixels idênticos** aos da referência do PC |
+| `640x480` (X35H) | escala 0,50, faixa de **25,00 %** — a mesma proporção do launcher em 4:3 |
+| ciclo launcher → jogo → launcher | ppid do jogo = launcher (`fork`+`wait`); volta com 363 cores e 99,1 % |
+
+O `forge.json` passou a dizer `ram_min_mb: 32` (medido 19) e `runtime: native`;
+antes declarava 512 MB e Godot, que era requisito de um motor que não roda ali.
+
+### A migração do antecessor rodou pela primeira vez
+
+Estava anotada como pendente desde 03/11 ("`bash -n` passa, execução nunca
+testada — falta um clone"). Com o clone em mãos:
+
+```text
+Apps:   forge (módulo + atalho), store (módulo + atalho)     OK
+Jogos:  arcade-volleyball (Godot + port nativo + documento)  OK
+        colossal-cave-adventure, spacewar (+ listing PDP-1)  OK
+Resumo: 10 copiado(s), 0 pulado(s), 0 ausente(s).
+```
+
+Três defeitos que só apareceram por rodar:
+
+- **os destinos não tinham o grupo `jogos/`** — o script escreveria em
+  `app/arcade-volleyball`, criando um app paralelo que o validador reprovaria
+  com `app_nao_registrado`;
+- **`copy_tree` da pasta do jogo copiou 300 KB de `godot/` para dentro de
+  `src/nativo/`** — virou `copy_file` arquivo a arquivo;
+- o script não trazia o port nativo, que é justamente o que roda.
+
+### Ferramenta nova: `aparelho.sh verificar-jogo`
+
+Prova que um jogo desenha no aparelho sem ninguém olhar a tela: roda com
+`--dump-frame`, traz o BMP e analisa. **Não compara pixel a pixel com o PC** como
+`verificar` faz, porque um jogo avança a simulação a cada quadro e o `opengles2`
+do aparelho não entrega os quadros no mesmo instante que o render por software do
+PC. O que a comparação ainda prova é a geometria.
+
+### `verificar-frame.mjs`: o piso de cores agora é do app
+
+O limiar era 8 fixo e **reprovava um quadro perfeito**: o arcade-volleyball
+desenha exatamente as 6 cores da sua paleta. Para o launcher, 6 cores significa
+que parou cedo; para um jogo de retângulos, significa que desenhou tudo. Mesmo
+número, significados opostos — então `--min-cores` passou a ser do chamador
+(padrão 3; use 8 para o launcher). A heurística saiu de dentro do `principal()`
+para `avaliarQuadro()`, que é pura e tem 4 testes; reintroduzir o limiar 8 faz o
+teste falhar, como manda a regra.
+
+### Como reconstruir
+
+```bash
+bash scripts/compilar-jogo-cpp-arm64.sh                    # monta o cache e compila
+bash scripts/aparelho.sh verificar-jogo arcade-volleyball  # roda e analisa o quadro
+node scripts/empacotar.mjs app/jogos/arcade-volleyball     # .giochi assinado
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/arcade-volleyball.giochi
+```
+
+O compilador cruzado de C++ **não precisa de root**: os `.deb` do Ubuntu são
+extraídos em `~/.cache/giochi-crosscpp/root`, os scripts de linker do pacote são
+reescritos (eles apontam para caminhos de instalação real) e a `libSDL2` vem do
+**aparelho**, não do Ubuntu. O Makefile é a única fonte das bandeiras; o binário
+que ele produz tem o sha256 do que rodou no aparelho
+(`2dc8b70a…`), conferido nas duas pontas.

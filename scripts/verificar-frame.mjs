@@ -308,13 +308,14 @@ function comparar(captura, referencia, rotacao, tolerancia, emitir = console.log
 // ── linha de comando ────────────────────────────────────────
 
 function lerArgs(argv) {
-  const args = { rotacao: 'none', tolerancia: 12 };
+  const args = { rotacao: 'none', tolerancia: 12, minCores: 3 };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--captura') args.captura = argv[++i];
     else if (a === '--referencia') args.referencia = argv[++i];
     else if (a === '--rotacao') args.rotacao = argv[++i];
     else if (a === '--tolerancia') args.tolerancia = Number(argv[++i]);
+    else if (a === '--min-cores') args.minCores = Number(argv[++i]);
     else if (a === '--png') args.png = argv[++i];
     else if (a === '--ajuda' || a === '-h') args.ajuda = true;
     else throw new Error(`argumento desconhecido: ${a}`);
@@ -324,20 +325,54 @@ function lerArgs(argv) {
 
 function ajuda() {
   console.log(`
-verificar-frame.mjs — confere um quadro renderizado pelo launcher
+verificar-frame.mjs — confere um quadro renderizado por um app
 
   --captura <bmp>       quadro capturado no aparelho (obrigatório)
-  --referencia <bmp>    render de 1280x720 do PC, para comparação
+  --referencia <bmp>    render do PC, para comparação
   --rotacao <modo>      none | cw | ccw  (padrão: none)
   --tolerancia <n>      soma de diferença RGB aceita por pixel (padrão: 12)
+  --min-cores <n>       piso de cores distintas para não ser suspeito (padrão: 3)
   --png <arquivo>       grava o quadro (des-rotacionado) em PNG para inspeção
 
-Sai com código 1 quando o quadro é suspeito: menos de 8 cores, mais de 90% de
-preto, ou menos de 90% de acerto na comparação.
+Sai com código 1 quando o quadro é suspeito: menos de --min-cores cores, mais de
+90% de preto, ou menos de 90% de acerto na comparação.
+
+Sobre --min-cores: o padrão já foi 8, e isso dava falso positivo em jogo
+desenhado por retângulos — o arcade-volleyball usa seis cores de paleta e um
+quadro perfeito tem seis. O launcher, que mistura antialiasing e texto, tem
+centenas. Um número de cores baixo só é sintoma quando é BAIXO ATÉ PARA A
+PALETA DO APP: passe --min-cores 8 para o launcher e deixe 3 para os jogos.
 `);
 }
 
-export { analisar, comparar, correlacaoDeTexto, desRotacionar, gravarPng, lerBmp, medirFaixas };
+export { analisar, avaliarQuadro, comparar, correlacaoDeTexto, desRotacionar, gravarPng, lerBmp, medirFaixas };
+
+/**
+ * Decide se um quadro é suspeito, a partir de duas medidas.
+ *
+ * Fica aqui, fora do `principal`, para poder ser testada: enquanto o limiar
+ * morava dentro do CLI, a única forma de exercitá-lo era rodar o binário.
+ *
+ * `minCores` é do chamador porque **o piso de cores é do app**, não do
+ * verificador. O launcher desenha texto antialiasing e tem centenas de cores:
+ * um quadro com 6 significa que ele parou cedo. Um jogo desenhado por
+ * retângulos declara 6 cores na paleta e desenha exatamente 6 — o mesmo número,
+ * significado oposto. Já houve falso positivo nisso: o arcade-volleyball
+ * desenhava perfeitamente e era reprovado.
+ */
+function avaliarQuadro({ cores, pctPreto, minCores = 3 }) {
+  const piso = Number.isFinite(minCores) && minCores > 0 ? minCores : 3;
+  const problemas = [];
+
+  if (cores < piso) {
+    problemas.push(`só ${cores} cores distintas — o render provavelmente parou cedo`);
+  }
+  if (pctPreto > 90) {
+    problemas.push(`${pctPreto.toFixed(0)}% de preto — tela apagada ou letterbox`);
+  }
+
+  return { problemas, paletaPlana: cores >= piso && cores < 8 };
+}
 
 function principal() {
   let args;
@@ -363,9 +398,11 @@ function principal() {
   console.log(`quadro: ${args.captura}`);
   const { cores, pctPreto } = analisar(captura);
 
-  let problemas = [];
-  if (cores < 8) problemas.push(`só ${cores} cores distintas — o render provavelmente parou cedo`);
-  if (pctPreto > 90) problemas.push(`${pctPreto.toFixed(0)}% de preto — tela apagada ou letterbox`);
+  const avaliacao = avaliarQuadro({ cores, pctPreto, minCores: args.minCores });
+  const problemas = avaliacao.problemas;
+  if (avaliacao.paletaPlana) {
+    console.log(`  paleta:     plana (${cores} cores) — normal em app desenhado por retângulos`);
+  }
 
   // Análise de POSIÇÃO de faixa é enganosa em BMP, e é melhor avisar do que
   // deixar alguém concluir errado. `read_pixels` — que o `--dump-frame` usa —

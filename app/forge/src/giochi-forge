@@ -1,0 +1,5 @@
+#!/bin/sh
+# Atalho para nao exigir PYTHONPATH: apps/forge/giochi-forge check --project ...
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m giochi_forge "$@"

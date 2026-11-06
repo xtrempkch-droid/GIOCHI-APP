@@ -24,14 +24,23 @@
 #    partição duas vezes. O teste correto é a existência de
 #    `/sys/class/block/<nome>/partition`: o kernel só cria esse arquivo para
 #    partições.
-# 3. **O cartão do sistema inteiro tem de ser ignorado**, não só a partição do
-#    rootfs. A `GIOCHI_BOOT` dele também é um sistema de arquivos válido — mas
-#    não é cartão de jogos.
+# 3. **A partição do rootfs nunca é mídia.** O disco do sistema entra na lista de
+#    exclusão, mas **por partição, não por disco**: a `GIOCHI_BOOT` do mesmo
+#    cartão é a área de transferência que o PC lê, e num aparelho de um slot é a
+#    **única** forma de levar um jogo sem SSH. Excluir o disco inteiro desligava
+#    justamente o caminho útil.
+#
+#    O critério para aceitar uma partição do disco do sistema é o **rótulo**
+#    `GIOCHI_BOOT` — contrato declarado pelo Giochi System, não nome de
+#    dispositivo. Qualquer outra partição do sistema fica fora.
 #
 # ## O critério que funciona
 #
-# Qual disco sustenta a partição montada em `/`? Esse disco está fora. Todo o
-# resto com partição legível é candidato. Assim o mesmo script serve para:
+# Qual disco sustenta a partição montada em `/`? A partição do rootfs dele está
+# fora. Fora dele, **só a `GIOCHI_BOOT`** (pelo rótulo) é aceita — é a área de
+# transferência designada. Todo disco que não é o do sistema entra inteiro.
+#
+# Assim o mesmo script serve para:
 #
 #   - 1 cartão (o do sistema)          → 0 candidatos, e é o correto;
 #   - 2 cartões                        → 1 candidato (o de jogos);
@@ -89,8 +98,8 @@ for disco in $PADROES; do
     *boot*|*rpmb*) continue ;;
   esac
 
-  # O disco do sistema está fora — as duas partições dele.
-  [ "$nome" = "$disco_da_raiz" ] && continue
+  do_sistema=0
+  [ "$nome" = "$disco_da_raiz" ] && do_sistema=1
 
   tam=$(cat "$disco/size" 2>/dev/null || echo 0)
   [ "$tam" -gt 0 ] 2>/dev/null || continue
@@ -122,6 +131,13 @@ for disco in $PADROES; do
     # partição de firmware produz erro no console a cada boot.
     tipo=$(blkid -s TYPE -o value "$dev" 2>/dev/null)
     [ -n "$tipo" ] || continue
+
+    # Partição do disco do sistema: só a de transferência, pelo rótulo. O resto
+    # (rootfs, dados) nunca é mídia.
+    if [ "$do_sistema" = "1" ]; then
+      rotulo=$(blkid -s LABEL -o value "$dev" 2>/dev/null)
+      [ "$rotulo" = "GIOCHI_BOOT" ] || continue
+    fi
 
     n=$((n + 1))
     ponto="${BASE}${n}"

@@ -109,11 +109,24 @@ copy_file "$SOURCE/apps/store/giochi-store" "$APPS/store/src/giochi-store" "stor
 echo
 
 echo "Jogos:"
-copy_tree "$SOURCE/Jogos/Arcade Volleyball/godot" "$APPS/arcade-volleyball/src" "arcade-volleyball (projeto Godot)"
-copy_tree "$SOURCE/Jogos/Colossal Cave Adventure/godot" "$APPS/colossal-cave-adventure/src" "colossal-cave-adventure (projeto Godot)"
-copy_tree "$SOURCE/Jogos/Spacewar/godot" "$APPS/spacewar/src" "spacewar (projeto Godot)"
+# Os jogos vivem em app/jogos/<slug>, não em app/<slug>: existe um nível de
+# grupo (ver AGENTS.md §5). Sem o "jogos/" o script criaria um app paralelo e
+# o validador reprovaria com app_nao_registrado.
+copy_tree "$SOURCE/Jogos/Arcade Volleyball/godot" "$APPS/jogos/arcade-volleyball/src" "arcade-volleyball (projeto Godot)"
+# O port C++/SDL2 é o que roda no aparelho: não há engine Godot no rootfs e
+# nenhum template oficial aarch64 tem driver KMSDRM. Ver docs/godot.md.
+# Arquivo a arquivo de propósito: a pasta do antecessor também contém o projeto
+# Godot, e copiar a árvore inteira duplicaria 300 KB em src/nativo/godot.
+for f in arcade_volleyball.cpp Makefile; do
+  copy_file "$SOURCE/Jogos/Arcade Volleyball/$f" \
+    "$APPS/jogos/arcade-volleyball/src/nativo/$f" "arcade-volleyball (port nativo: $f)"
+done
+copy_file "$SOURCE/Jogos/Arcade Volleyball/Arcade Volleyball.md" \
+  "$APPS/jogos/arcade-volleyball/assets/Arcade-Volleyball-porte.md" "arcade-volleyball (documento do porte)"
+copy_tree "$SOURCE/Jogos/Colossal Cave Adventure/godot" "$APPS/jogos/colossal-cave-adventure/src" "colossal-cave-adventure (projeto Godot)"
+copy_tree "$SOURCE/Jogos/Spacewar/godot" "$APPS/jogos/spacewar/src" "spacewar (projeto Godot)"
 copy_file "$SOURCE/Jogos/Spacewar/Spacewar-1962-listing.pdp1" \
-  "$APPS/spacewar/assets/Spacewar-1962-listing.pdp1" "spacewar (listing histórico do PDP-1)"
+  "$APPS/jogos/spacewar/assets/Spacewar-1962-listing.pdp1" "spacewar (listing histórico do PDP-1)"
 echo
 
 echo "Não migrados por decisão:"

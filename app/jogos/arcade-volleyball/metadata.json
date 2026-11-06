@@ -1,9 +1,12 @@
 {
-    "title":  "Arcade Volleyball",
-    "developer":  "Giochi",
-    "version":  "1.0.0",
-    "arch":  "aarch64",
-    "runtime":  "godot",
-    "entrypoint":  "bin/arcade-volleyball",
-    "license":  "Proprietary"
+  "title": "Arcade Volleyball",
+  "slug": "arcade-volleyball",
+  "developer": "Giochi",
+  "version": "1.0.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/arcade-volleyball",
+  "license": "Proprietary",
+  "releaseYear": 1988,
+  "category": "Esporte"
 }

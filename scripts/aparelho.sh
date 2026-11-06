@@ -1074,6 +1074,85 @@ cmd_verificar() {
   fi
 }
 
+# ── verificar um jogo no aparelho ───────────────────────────
+#
+# Responde "o jogo desenha no aparelho?" sem depender de olhar a tela. Roda o
+# binário com `--dump-frame`, traz o BMP e analisa.
+#
+# ## Por que não compara pixel a pixel com o PC como `verificar` faz
+#
+# Aqui **não dá**: o launcher desenha uma Home parada, então a mesma entrada
+# produz o mesmo quadro; um jogo avança a simulação por quadro, e o
+# `opengles2` do aparelho não entrega os quadros no mesmo instante que o
+# render por software do PC. Medido no arcade-volleyball: 97,9 % de acerto, e
+# os 2,1 % restantes são exatamente a bola e os jogadores — que se movem.
+#
+# O que a comparação ainda prova é a **geometria**: chão, rede e o jogador que
+# não se moveu caem nos mesmos pixels. Por isso o piso de cores e o percentual
+# aparecem, mas o veredito de "desenhou" é: processo vivo, quadro do tamanho do
+# painel, sem lixo.
+cmd_verificar_jogo() {
+  local jogo="${1:-}" quadros="${2:-240}"
+  [ -n "$jogo" ] || morrer "uso: aparelho.sh verificar-jogo <jogo> [quadros]"
+
+  local bin_local="$RAIZ/app/jogos/$jogo/bin/$jogo"
+  [ -f "$bin_local" ] || morrer "sem binário em app/jogos/$jogo/bin/$jogo (rode compilar-jogo-cpp-arm64.sh)"
+
+  exigir_aparelho
+  titulo "jogo $jogo"
+
+  local painel rot
+  painel=$(resolucao_do_aparelho)
+  [ -n "$painel" ] || morrer "não descobri a resolução do painel"
+  rot=$(rotacao_do_aparelho)
+  ok "painel $painel, rotação $rot"
+
+  local remoto="/user/apps/$jogo/bin/$jogo"
+  # `test -x` não imprime nada: canalizar para `grep` nunca casaria e o script
+  # diria "não existe" com o arquivo lá. A resposta tem de ser explícita.
+  local existe
+  existe=$(no_aparelho "[ -x $remoto ] && echo SIM || echo NAO")
+  [ "${existe:-NAO}" = "SIM" ] || morrer "$remoto não existe no aparelho"
+
+  titulo "rodando no aparelho"
+  # O `inittab` ressuscita o launcher em ~1 s e o KMSDRM é exclusivo: matar uma
+  # vez não basta. As duas mortes e a execução vão na MESMA sessão ssh, senão o
+  # respawn ganha a corrida e o jogo recebe "kmsdrm not available".
+  local saida
+  saida=$(no_aparelho "
+    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 1.5
+    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 0.5
+    cd /user/apps/$jogo &&
+    SDL_VIDEODRIVER=kmsdrm ./bin/$jogo --quadros $quadros --dump-frame /tmp/jogo.bmp 2>&1
+    echo \"STATUS=\$?\"
+    ls -l /tmp/jogo.bmp 2>/dev/null | awk '{print \"TAMANHO=\"\$5}'
+  ")
+  printf '%s\n' "$saida" | sed 's/^/  /'
+
+  local status
+  status=$(printf '%s' "$saida" | sed -n 's/^STATUS=//p')
+  [ "${status:-1}" = "0" ] || falha "o jogo saiu com código ${status:-?}"
+
+  local tamanho
+  tamanho=$(printf '%s' "$saida" | sed -n 's/^TAMANHO=//p')
+  [ -n "$tamanho" ] || morrer "o jogo não gravou /tmp/jogo.bmp — não desenhou"
+
+  local tmp
+  tmp=$(mktemp -d)
+  if "${SCP_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST:/tmp/jogo.bmp" "$tmp/jogo.bmp" 2>/dev/null; then
+    titulo "quadro"
+    node "$RAIZ/scripts/verificar-frame.mjs" --captura "$tmp/jogo.bmp" --min-cores "${3:-3}" |
+      sed 's/^/  /'
+  else
+    falha "não consegui baixar o quadro"
+  fi
+  no_aparelho 'rm -f /tmp/jogo.bmp'
+
+  titulo "retomando o launcher"
+  iniciar_launcher | while IFS= read -r linha; do printf '  %s\n' "$linha"; done
+  rm -rf "$tmp"
+}
+
 # ── entrada ─────────────────────────────────────────────────
 
 case "${1:-ajuda}" in
@@ -1093,6 +1172,9 @@ case "${1:-ajuda}" in
     shift
     cmd_instalar_pacote "${1:-}" ;;
   instalar-do-cartao|cartao) cmd_instalar_do_cartao ;;
+  verificar-jogo)
+    shift
+    cmd_verificar_jogo "${1:-}" "${2:-}" "${3:-}" ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.

@@ -18,7 +18,8 @@ nenhum foi escrito "por completude".
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
-| `scripts/compilar-jogo-arm64.sh` | PC | idem para o jogo `volley`, reusando o cache |
+| `scripts/compilar-jogo-arm64.sh` | PC | idem para os jogos em Rust (`volley`, `pacman`, `cobrinha`), reusando o cache |
+| `scripts/compilar-jogo-cpp-arm64.sh` | PC | idem para o jogo em C++ (`arcade-volleyball`), montando o compilador cruzado sem root |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
 | `scripts/migrar-do-antecessor.sh` | PC | traz as fontes do repositório antecessor |
 
@@ -31,6 +32,7 @@ bash scripts/aparelho.sh instalar        # cross-compila e instala, conferindo s
 bash scripts/aparelho.sh subir           # inicia o launcher e mostra pid + log
 bash scripts/aparelho.sh parar           # encerra pelo pid
 bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comparado
+bash scripts/aparelho.sh verificar-jogo arcade-volleyball   # roda o jogo e analisa o quadro
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
 bash scripts/aparelho.sh capacidades     # códigos que cada dispositivo declara
@@ -144,6 +146,24 @@ node scripts/verificar-frame.mjs --captura frame.bmp --png saida.png
 Sem dependência externa: lê BMP (24 ou 32 bpp, de cima ou de baixo para cima)
 com o `Buffer` do node e escreve PNG com `zlib`. Não há ImageMagick no PC nem no
 aparelho — e não precisa haver.
+
+### `--min-cores`: o piso de cores é do app, não do verificador
+
+O limiar de cores já foi 8 fixo, e isso dava **falso positivo em jogo**. O
+`arcade-volleyball` desenha exatamente as 6 cores da sua paleta (fundo, chão,
+rede, dois jogadores, bola) — um quadro perfeito tem 6 cores, e a ferramenta o
+reprovava dizendo "o render provavelmente parou cedo".
+
+O mesmo número tem significado oposto nos dois casos:
+
+| App | Cores de um quadro bom | 6 cores significa |
+| --- | --- | --- |
+| launcher | 350–400 (texto com antialiasing) | parou cedo |
+| arcade-volleyball | 6 (retângulos, paleta fixa) | desenhou tudo |
+
+Por isso o piso é do chamador: `--min-cores 8` para o launcher, o padrão `3`
+para os jogos. Abaixo do piso continua sendo suspeito; entre o piso e 8 a
+ferramenta imprime `paleta: plana` e explica, sem reprovar.
 
 Sai com código 1 quando desconfia do quadro:
 

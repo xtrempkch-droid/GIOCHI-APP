@@ -59,11 +59,12 @@
     {
       "id": "arcade-volleyball",
       "folder": "jogos/arcade-volleyball",
-      "runtime": "godot",
-      "status": "scaffold",
+      "runtime": "native",
+      "status": "ready",
       "distribution": "image",
       "license": "Proprietary",
-      "note": "Jogo padrão. Projeto Godot não migrado; falta export ARM64 para bin/."
+      "note": "Jogo padrao do sistema. O projeto Godot original esta em src/ (referencia) e NAO roda no aparelho: nenhum build oficial do Godot tem driver KMSDRM. O que roda e o port C++/SDL2 em src/nativo — ver docs/godot.md.",
+      "slug": "arcade-volleyball"
     },
     {
       "id": "colossal-cave-adventure",
