@@ -88,3 +88,98 @@ jobs:
           echo "::group::sem texto"
           cargo build --locked --no-default-features
           echo "::endgroup::"
+
+  # O jogo, em dois jobs pelo mesmo motivo do launcher: o núcleo não precisa de
+  # SDL, e quem falha sem ele é o link. Sem a separação, um verde do núcleo daria
+  # a impressão de que o jogo inteiro compila.
+  cobrinha-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Test core (sem SDL)
+        working-directory: app/jogos/cobrinha
+        run: cargo test -p giochi-cobrinha-core --locked
+
+  # Os testes da interface não precisam de janela; precisam de SDL2 para linkar.
+  # O `dummy` respeita o tamanho pedido, então a prova de desenho roda no runner.
+  cobrinha-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Test workspace
+        working-directory: app/jogos/cobrinha
+        run: cargo test --workspace --locked
+
+      # Desenhar é diferente de compilar. Este passo exige um quadro do tamanho
+      # exato e com as cores da paleta: um BMP preto passaria num teste que só
+      # conferisse "o arquivo existe".
+      - name: Desenha em 640x480 (o painel do RK3326)
+        working-directory: app/jogos/cobrinha
+        run: |
+          set -e
+          SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+            cargo run --quiet -- --tamanho 640x480 --passos 60 \
+              --quadro /tmp/cobrinha.bmp
+          test -s /tmp/cobrinha.bmp
+          # Lê o cabeçalho em vez de fixar o tamanho do arquivo: o SDL grava
+          # BITMAPV4HEADER (108 bytes) e um número mágico quebraria na próxima
+          # versão sem nada estar errado. O que importa é dimensão e bpp.
+          python3 - /tmp/cobrinha.bmp <<'PY'
+          import struct, sys
+          dados = open(sys.argv[1], "rb").read(30)
+          assert dados[:2] == b"BM", "não é BMP"
+          largura, altura = struct.unpack_from("<ii", dados, 18)
+          bpp = struct.unpack_from("<H", dados, 28)[0]
+          print(f"quadro: {largura}x{altura} {bpp} bpp, {len(open(sys.argv[1], 'rb').read())} bytes")
+          assert (largura, altura) == (640, 480), (largura, altura)
+          assert bpp == 32, bpp
+          PY
+
+      # O ritmo é a exigência do projeto: 45 fps sem upscaling. O modo `--json`
+      # existe para isto — saída ASCII, sem acento que quebre comparação.
+      - name: Sustenta 45 fps em 640x480
+        working-directory: app/jogos/cobrinha
+        run: |
+          set -e
+          saida=$(SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+            cargo run --quiet -- --tamanho 640x480 --quadros 90 --json)
+          echo "$saida"
+          python3 - "$saida" <<'PY'
+          import json, sys
+          dados = json.loads(sys.argv[1])
+          assert dados["quadros"] == 90, dados
+          assert 40.0 <= dados["fps"] <= 50.0, f"fps fora da faixa: {dados['fps']}"
+          assert dados["atrasados"] == 0, f"quadros atrasados: {dados['atrasados']}"
+          assert dados["celula"] == 22, dados
+          PY
+
+      # A rotação do X55 tem de continuar valendo. 720x1280 é painel retrato:
+      # o projeto sai 1280x720 e o BMP tem 720x1280.
+      - name: Painel retrato gira (o caso do X55)
+        working-directory: app/jogos/cobrinha
+        run: |
+          set -e
+          SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+            cargo run --quiet -- --tamanho 720x1280 --passos 40 \
+              --quadro /tmp/retrato.bmp | tee /tmp/retrato.log
+          grep -q "projeto 1280x720 (Ccw90)" /tmp/retrato.log
+          python3 - /tmp/retrato.bmp <<'PY'
+          import struct, sys
+          dados = open(sys.argv[1], "rb").read(30)
+          largura, altura = struct.unpack_from("<ii", dados, 18)
+          print(f"quadro retrato: {largura}x{altura}")
+          assert (largura, altura) == (720, 1280), (largura, altura)
+          PY

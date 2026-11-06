@@ -45,29 +45,15 @@ const CELULA_MINIMA = 14;
  */
 const JOGOS = [
   {
-    id: "volley",
-    // Sem grade: a medida é a raquete, que precisa ser alcançável com o dedo e
-    // visível. 28 px é o piso (ALTURA * 0.12 num painel de 240 px daria menos).
-    medir: (img) => {
-      const caixa = caixaDeCor(img, (c) => Math.abs(c[0] - 96) < 14 && Math.abs(c[1] - 165) < 14 && Math.abs(c[2] - 250) < 14);
-      return { nome: "raquete (altura)", valor: caixa.h, minimo: 28 };
-    },
-  },
-  {
     id: "cobrinha",
+    // Campo de 24 colunas emoldurado em BORDA (45,52,74). A moldura tem 2 px de
+    // cada lado, então a célula é (largura - 4) / 24.
     medir: (img) => {
-      // A grade é desenhada em 30,34,50 e ocupa o quadrado central.
-      const caixa = caixaDeCor(img, (c) => Math.abs(c[0] - 30) < 10 && Math.abs(c[1] - 34) < 10 && Math.abs(c[2] - 50) < 12);
-      const celula = caixa.w / 24; // 24 colunas, fixo em `Jogo::novo`
-      return { nome: "célula", valor: Math.round(celula * 10) / 10, minimo: CELULA_MINIMA };
-    },
-  },
-  {
-    id: "pacman",
-    medir: (img) => {
-      // Parede em 37,62,160; o labirinto tem 21 colunas e 21 linhas.
-      const caixa = caixaDeCor(img, (c) => Math.abs(c[0] - 37) < 14 && Math.abs(c[1] - 62) < 14 && Math.abs(c[2] - 160) < 22);
-      const celula = caixa.w / 21;
+      const caixa = caixaDeCor(
+        img,
+        (c) => Math.abs(c[0] - 45) < 8 && Math.abs(c[1] - 52) < 8 && Math.abs(c[2] - 74) < 10,
+      );
+      const celula = (caixa.w - 4) / 24;
       return { nome: "célula", valor: Math.round(celula * 10) / 10, minimo: CELULA_MINIMA };
     },
   },

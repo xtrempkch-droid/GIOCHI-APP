@@ -32,6 +32,16 @@
       "role": "shell"
     },
     {
+      "id": "cobrinha",
+      "folder": "jogos/cobrinha",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Jogo nativo Rust+SDL2 sobre KMSDRM. Grade 24x18, passo fixo de simulacao com desenho limitado a 45 fps, escala 1,0 e sem upscaling. Tres bibliotecas NEEDED: SDL2, libgcc_s, libc.",
+      "slug": "cobrinha"
+    },
+    {
       "id": "painel",
       "folder": "painel",
       "slug": "painel",

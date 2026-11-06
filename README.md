@@ -22,7 +22,8 @@ Giochi app/
 │   ├── painel/               # interface web local do PC
 │   ├── forge/                # empacotador/classificador (native, Python)
 │   ├── store/                # CLI da loja (native, Python)
-│   └── jogos/                # VAZIA desde 06/11/2026 — jogo novo em preparação
+│   └── jogos/
+│       └── cobrinha/         # jogo (Rust + SDL2, 45 fps)
 ├── schemas/                  # JSON Schema do metadata.json e do forge.json
 ├── scripts/                  # validador e migração
 ├── tests/

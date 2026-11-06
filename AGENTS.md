@@ -5,26 +5,29 @@
 
 ## 0. Estado em uma tela (leia isto primeiro)
 
-> **06/11/2026: os sete jogos foram removidos.** `app/jogos/` está vazia de
-> propósito — o dono do projeto vai entregar o jogo novo. Tudo abaixo que citar
-> `volley`, `pacman`, `cobrinha`, `arcade-volleyball`, `spacewar`,
-> `colossal-cave-adventure` ou `shattered-pixel-dungeon` é **histórico**: as
-> medições foram reais e servem de referência, mas os arquivos não existem mais.
+> **06/11/2026: os sete jogos antigos foram removidos e o `cobrinha` foi
+> reescrito do zero.** Tudo abaixo que citar `volley`, `pacman`,
+> `arcade-volleyball`, `spacewar`, `colossal-cave-adventure` ou
+> `shattered-pixel-dungeon` é **histórico**: as medições foram reais e servem de
+> referência, mas os arquivos não existem mais. O `cobrinha` que existe hoje é
+> outro programa — ver [`app/jogos/cobrinha/README.md`](app/jogos/cobrinha/README.md).
 
 O que existe hoje, verificado:
 
 | Item | Estado |
 | --- | --- |
-| apps em `apps.json` | **5**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) |
-| jogos | **nenhum** — `app/jogos/` vazia |
+| apps em `apps.json` | **6**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) + `cobrinha` (image) |
+| jogos | **1**: `cobrinha` — Rust+SDL2, 45 fps, escala 1,0, sem upscaling |
 | `validate-app.mjs --all` | 5 apps válidos |
 | `tests/run-all.mjs` | 189/189 JS |
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
 | `compilar-launcher.sh --testes` | 223/223 Rust |
 | `compilar-loja.sh --testes` | 116/116 Rust |
 
-O que roda no aparelho: **só o launcher**. Ele desenha com catálogo vazio (cai no
-catálogo de demonstração) — medido: 354 cores, 0,00 % de preto em 1280×720.
+O que roda no aparelho: **o launcher e o `cobrinha`**. O launcher desenha com
+catálogo vazio (cai no catálogo de demonstração) — medido: 354 cores, 0,00 % de
+preto em 1280×720. O `cobrinha` compila para aarch64 (356 KB, `NEEDED` = SDL2 +
+libgcc_s + libc) e mediu **45,3 fps com 0 quadros atrasados** a 640×480.
 
 ## 1. Objetivo
 
@@ -299,9 +302,9 @@ Giochi app/
 │   ├── store/                 # loja (host, roda no PC)
 │   ├── painel/                # interface web local (host, roda no PC) — ver §17
 │   ├── jogos/                 # GRUPO: não é app, não tem metadata.json
-│   │   └── .gitkeep           # VAZIA desde 06/11/2026 — os 7 jogos foram removidos
-│   │                          # (pacman, cobrinha, volley, arcade-volleyball,
-│   │                          #  colossal-cave-adventure, spacewar, shattered-pixel-dungeon)
+│   │   └── cobrinha/          # Rust + SDL2, 45 fps — ver README do próprio app
+│   │       ├── crates/core/   # regras puras, sem SDL (27 testes)
+│   │       └── crates/ui-sdl/ # KMSDRM, rotação, evdev, desenho (32 testes)
 │   └── launcher/              # Rust + SDL2 (image, native)
 │       ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
 │       ├── crates/core/       # núcleo puro, sem SDL
@@ -488,7 +491,14 @@ bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve 
 bash scripts/compilar-launcher.sh --testes  # 223 testes do launcher
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
 bash scripts/compilar-loja.sh --testes    # 116 testes da loja
+
+bash scripts/compilar-jogo-arm64.sh --jogo cobrinha           # cross-compile aarch64
+cd app/jogos/cobrinha && cargo test --workspace               # 59 testes do jogo
 ```
+
+O `cobrinha` **não** precisa de `RUSTFLAGS=-L`: o `sdl2-sys` acha o SDL2 pelo
+`pkg-config`, e o link usa o `cc` do sistema, que respeita `LIBRARY_PATH`.
+`bash scripts/compilar-jogo-arm64.sh --jogo cobrinha` resolve o resto.
 
 **Não rode `cargo test --workspace` direto em `app/launcher`.** O crate linka com
 `rust-lld`, que ignora `LIBRARY_PATH`; sem `RUSTFLAGS=-L .../giochi-sdl2/root/usr/lib/x86_64-linux-gnu`

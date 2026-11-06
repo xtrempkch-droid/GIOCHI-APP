@@ -1,0 +1,18 @@
+# Workspace, como o launcher: o núcleo não conhece SDL e por isso é testável
+# numa máquina sem biblioteca gráfica — que é o caso do CI.
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/ui-sdl"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "Proprietary"
+rust-version = "1.75"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

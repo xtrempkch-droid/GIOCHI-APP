@@ -1,0 +1,17 @@
+[package]
+name = "giochi-cobrinha"
+description = "Cobrinha — SDL2 sobre KMSDRM, escala 1,0, sem upscaling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "giochi-cobrinha"
+path = "src/main.rs"
+
+[dependencies]
+giochi-cobrinha-core = { path = "../core" }
+# Só SDL2: sem ttf, sem asound, sem image. O R35S não tem libasound e um
+# binário que a exige não sobe — três `NEEDED`, nada mais.
+sdl2 = "0.37"
