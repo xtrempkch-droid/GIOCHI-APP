@@ -98,6 +98,67 @@ seja, uma decisão de dependência, não um `if`.
 
 ---
 
+## 3b. Vários cartões e eMMC — o desenho genérico
+
+Alguns aparelhos têm **dois slots de SD e ainda eMMC**: o sistema pode ficar num
+cartão e os jogos no outro, e haverá casos de jogos **nos dois**. A primeira
+versão deste código tinha `/dev/mmcblk1p1` fixo — o mesmo erro do
+`DEFAULT_ROTATION = Ccw90` que já foi corrigido na rotação: acerta num aparelho e
+mente no seguinte, sem avisar.
+
+### Três armadilhas, todas medidas no X55
+
+| Armadilha | O que se vê |
+| --- | --- |
+| **`removable` não serve** | `/sys/class/block/mmcblk1/removable = 0` para cartão SD **físico**. Filtrar por `removable=1` não acha nada, nem com dois slots |
+| **o glob pega partição** | `/sys/class/block/mmcblk*` casa com `mmcblk1`, `mmcblk1p1` e `mmcblk1p2`; tratar cada um como disco montou a mesma partição duas vezes |
+| **`/dev/root` não é caminho** | `/proc/mounts` mostra `/dev/root`, nome lógico; comparar por caminho nunca casa |
+
+### O critério que funciona
+
+1. O disco do sistema é **o que sustenta a partição montada em `/`**, descoberto
+   por major:minor em `/proc/self/mountinfo` (fato do kernel, não heurística).
+   Esse disco inteiro está fora — inclusive a `GIOCHI_BOOT` dele.
+2. Partição é o que tem `/sys/class/block/<nome>/partition`; o kernel só cria
+   esse arquivo para partições.
+3. Todo o resto com sistema de arquivos reconhecível é candidato.
+
+Assim o mesmo script serve para 1 cartão (0 candidatos, correto), 2 cartões
+(1 candidato) e eMMC + 2 cartões (2 candidatos).
+
+### Medido no X55, com dois cartões simulados
+
+No PC não há root para `losetup`; no aparelho não há como inventar um segundo
+slot. Então `scripts/lib/descobrir-cartoes.sh` aceita `CARTOES_PADROES` (só para
+teste) e o caminho de dois cartões foi **exercitado**, não afirmado:
+
+```text
+$ CARTOES_PADROES="…/loop0 …/loop1" aparelho.sh instalar-do-cartao
+  ok   2 cartão(ões): /mnt/cartao1 /mnt/cartao2
+  /mnt/cartao1: 1 pacote(s)
+      pacman.giochi: instalado em /user/apps/pacman
+  /mnt/cartao2: 1 pacote(s)
+      cobrinha.giochi: instalado em /user/apps/cobrinha
+  ok   tudo instalado
+```
+
+E o teste que mais importa: com o padrão real, **zero candidatos** — o cartão do
+sistema não é montado como se fosse mídia.
+
+### Jogo em cartão pode sumir — e não pode virar cartão morto
+
+Se um jogo for catalogado com `dir` num cartão e o cartão for removido, a Home
+mostraria um cartão que não abre. O launcher agora **poda em tempo de execução**
+(`Catalogo::podar_sem_binario`), e diz o motivo:
+
+```text
+catálogo: fantasma fora — /mnt/cartao-que-sumiu/fantasma/bin/x não existe (cartão removido?)
+catálogo: 1 app(s) de /tmp/cat-teste.json
+```
+
+A poda é em tempo de execução, não na geração: o PC que gera o índice não sabe se
+o cartão estará lá no próximo boot. Quem sabe é o aparelho.
+
 ## 4. O que é do Giochi System
 
 Levado ao canal em 06/11/2026 05:55, com os números acima.
@@ -105,6 +166,7 @@ Levado ao canal em 06/11/2026 05:55, com os números acima.
 | # | Item | Por que trava |
 | --- | --- | --- |
 | 1 | **Partição de dados** nos 116,5 GB | hoje `/user` é diretório **dentro do rootfs**. Regravar a imagem apaga os jogos comprados — e `distribution: store` ("fora da imagem assinada") deixa de ser verdade |
+| 1b | **Layout nos aparelhos com 2 slots + eMMC** | o app já descobre qualquer número de cartões, mas *onde* os jogos devem morar (instalar em `/user` ou rodar do cartão) muda com o layout da imagem |
 | 2 | **Montar `GIOCHI_BOOT`** no boot | não está no `fstab` nem montada. Se eles montarem num caminho fixo, o app para de montar |
 | 3 | **Automount** de mídia removível | não há `mdev.conf` nem udev ativo. Irrelevante para o cartão de boot; necessário para um segundo slot ou pendrive |
 

@@ -296,9 +296,13 @@ levam jogos sem SSH.
 bash scripts/aparelho.sh instalar-do-cartao
 ```
 
-O app monta `mmcblk1p1` **read-only** porque nada mais monta; confere o SHA-256 de
-cada pacote contra o manifesto, extrai em `/user/apps/<slug>` e põe no catálogo
-pelo próprio launcher (`--catalogo-adicionar`) — sem Node e sem PC no meio.
+Descobre **todos** os cartões sem nome de dispositivo (`scripts/lib/descobrir-cartoes.sh`),
+monta read-only, e instala de cada um — jogos podem estar nos dois. O disco que
+sustenta `/` é ignorado inteiro, senão o app montaria o próprio rootfs como mídia.
+
+Confere o SHA-256 de cada pacote contra o manifesto, extrai em `/user/apps/<slug>`
+e põe no catálogo pelo próprio launcher (`--catalogo-adicionar`) — sem Node e sem
+PC no meio.
 
 Um pacote corrompido é **recusado** e o comando sai com 1. Ver
 [`cartao-sd.md`](cartao-sd.md) para o que a verificação cobre (integridade) e o

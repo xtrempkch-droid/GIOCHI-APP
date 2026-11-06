@@ -165,6 +165,49 @@ impl Catalogo {
     pub fn vazio(&self) -> bool {
         self.games.is_empty()
     }
+
+    /// Descarta apps cujo executável não está no disco.
+    ///
+    /// ## Por que isto existe
+    ///
+    /// Com jogos em cartão removível, o `dir` do catálogo pode apontar para um
+    /// caminho que **não existe naquele boot** — o cartão foi tirado, ou montou
+    /// em outro lugar. Sem esta poda o cartão aparece na Home e não abre nada:
+    /// o pior modo de falha já registrado neste projeto ("cartão que abre nada é
+    /// pior que cartão ausente").
+    ///
+    /// A poda é feita em **tempo de execução**, não na geração do catálogo,
+    /// porque o PC que gera o índice não sabe se o cartão estará lá. Quem sabe é
+    /// o aparelho, no boot.
+    ///
+    /// `manter` recebe o motivo para virar uma linha de log — uma poda silenciosa
+    /// esconderia um cartão mal montado.
+    pub fn podar_sem_binario(mut self, mut manter: impl FnMut(&str, &str)) -> Self {
+        let antes = self.games.len();
+
+        let mut games = Vec::with_capacity(antes);
+        let mut alvos = Vec::with_capacity(antes);
+        for (game, alvo) in self.games.into_iter().zip(self.alvos.into_iter()) {
+            let executavel = alvo.executavel();
+            if std::path::Path::new(&executavel).is_file() {
+                games.push(game);
+                alvos.push(alvo);
+            } else {
+                manter(&alvo.slug, &executavel);
+            }
+        }
+
+        // `Game.id` é a **posição**: renumerar mantém a chave consistente com
+        // `alvos`, e essa chave nunca aparece na tela (ver "índice interno não é
+        // dado do jogo").
+        for (i, g) in games.iter_mut().enumerate() {
+            g.id = i as u32;
+        }
+
+        self.games = games;
+        self.alvos = alvos;
+        self
+    }
 }
 
 /// Acrescenta ou substitui um app no catálogo publicado.
@@ -282,6 +325,65 @@ mod tests {
             "slug": id, "title": "Jogo", "developer": "Giochi", "version": "1.0.0",
             "arch": "aarch64", "runtime": "native", "entrypoint": "bin/app"
         })
+    }
+
+    fn com_caminhos(exec: &[&str]) -> String {
+        let apps: Vec<String> = exec
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                format!(
+                    r#"{{ "id": "a{i}", "version": "1.0.0", "entrypoint": "{e}",
+                        "dir": "/nao/existe", "title": "T{i}", "developer": "g" }}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"schemaVersion":1,"apps":[{}]}}"#, apps.join(","))
+    }
+
+    /// Jogo em cartão removível: cartão fora = app fora da Home.
+    ///
+    /// Sem esta poda o cartão aparece e não abre — o pior modo de falha deste
+    /// projeto. O PC que gera o índice não sabe se o cartão estará lá; quem sabe
+    /// é o aparelho, no boot.
+    #[test]
+    fn poda_app_cujo_binario_nao_esta_no_disco() {
+        let texto = com_caminhos(&["bin/nao-existe-1", "bin/nao-existe-2"]);
+        let c = Catalogo::do_texto(&texto).unwrap();
+        assert_eq!(c.games.len(), 2, "o catálogo lê os dois");
+
+        let mut podados = Vec::new();
+        let c = c.podar_sem_binario(|slug, caminho| podados.push((slug.to_string(), caminho.to_string())));
+
+        assert!(c.vazio(), "nenhum binário existe, então nenhum cartão");
+        assert_eq!(podados.len(), 2, "a poda precisa dizer o que tirou");
+        assert_eq!(podados[0].0, "a0");
+    }
+
+    /// Binário que existe é preservado, e o `id` continua sendo a posição.
+    #[test]
+    fn poda_preserva_o_que_existe_e_renumera() {
+        // `entrypoint` precisa começar em `bin/` e não pode ter `..` — a
+        // checagem de segurança do leitor recusa, e é ela que impede um
+        // manifesto corrompido virar execução de binário arbitrário. Então o
+        // caminho existente é montado com `dir` + `bin/...`, não com `..`.
+        let texto = com_caminhos(&["bin/nao-existe", "bin/env"])
+            .replace(r#""dir": "/nao/existe""#, r#""dir": "/usr""#);
+        let c = Catalogo::do_texto(&texto).unwrap();
+
+        let c = c.podar_sem_binario(|_, _| {});
+        assert_eq!(c.games.len(), 1, "só o que existe fica");
+        assert_eq!(c.games[0].id, 0, "o id é a posição, e renumerar mantém consistente");
+        assert_eq!(c.alvos.len(), 1, "games e alvos têm de ficar alinhados");
+    }
+
+    #[test]
+    fn poda_sem_nada_a_podar_nao_muda_nada() {
+        let texto = com_caminhos(&["bin/env"]).replace(r#""dir": "/nao/existe""#, r#""dir": "/usr""#);
+        let c = Catalogo::do_texto(&texto).unwrap();
+        let antes = c.games.len();
+        let c = c.podar_sem_binario(|_, _| panic!("não devia podar nada"));
+        assert_eq!(c.games.len(), antes);
     }
 
     #[test]

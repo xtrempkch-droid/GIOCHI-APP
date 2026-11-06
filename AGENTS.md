@@ -451,7 +451,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 200 testes do launcher
+cd app/launcher && cargo test --workspace  # 203 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -690,7 +690,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | Item | Estado |
 | --- | --- |
 | `crates/core` — 7 módulos, 87 testes | **compila, testa e passa** |
-| `crates/ui-sdl` — 14 módulos, 113 testes | **compila, linka e roda** |
+| `crates/ui-sdl` — 14 módulos, 116 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
 | Protótipo HTML | **funcional** — `app/launcher/prototipo/launcher.html` |
@@ -724,6 +724,9 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 | R35S: tela sem rádio | **preparada e fotografada** com `--sem-radio` |
 | R35S: imagem / boot / botões | **não existe** — bloqueado no Giochi System (sem defconfig, sem driver) |
 | Instalar `.giochi` do cartão SD | **no X55** — corrompido recusado, bom instalado e aberto |
+| Dois cartões (jogos nos dois) | **exercitado no X55 com dois loops** — 2 candidatos, um jogo de cada |
+| Cartão do sistema não é montado | **medido** — 0 candidatos com o padrão real |
+| Poda de app sem binário | **no X55** — `fantasma fora … (cartão removido?)` |
 | Partição de dados (116 GB) | **não existe** — decisão do System, levada ao canal |
 | Analógico / desempenho (FPS) | **não exercitados** |
 | Leitura de bateria/temperatura | **temperatura: medida** (`40C` no X55, de `cpu-thermal`). **Bateria: não julgada** — o X55 não tem célula (ver abaixo) |
@@ -1083,6 +1086,51 @@ O app **monta** a partição read-only porque ninguém monta — mesmo motivo do
 atualizado **pelo launcher** (`--catalogo-adicionar`), não por `sed`: ele já tem
 `serde_json`, e um `sed` no `index.json` produziria JSON inválido no primeiro
 campo com vírgula.
+
+#### Vários cartões e eMMC: nada de nome de dispositivo
+
+O dono avisou: **alguns aparelhos têm dois slots de SD e ainda eMMC** — sistema
+num cartão, jogos no outro, e casos de jogos nos dois. A primeira versão tinha
+`/dev/mmcblk1p1` fixo. É a mesma classe do `DEFAULT_ROTATION = Ccw90`: acerta num
+aparelho e mente no seguinte.
+
+Três armadilhas, **todas medidas**:
+
+| Armadilha | Fato |
+| --- | --- |
+| `removable` não serve | `/sys/class/block/mmcblk1/removable = **0**` para cartão SD físico. Filtrar por `removable=1` não acha nada, nem com dois slots |
+| o glob pega partição | `mmcblk*` casa com `mmcblk1`, `p1` e `p2`; tratar cada um como disco montou a mesma partição **duas vezes** |
+| `/dev/root` não é caminho | `/proc/mounts` mostra nome lógico; comparar por caminho nunca casa |
+
+Critério: o disco do sistema é **o que sustenta a partição montada em `/`**,
+achado por major:minor em `/proc/self/mountinfo`. Esse disco sai inteiro. Partição
+é o que tem `/sys/class/block/<nome>/partition`. O resto com fs legível é
+candidato.
+
+**Exercitado, não afirmado:** no PC não há root para `losetup` e no aparelho não
+há segundo slot, então o script aceita `CARTOES_PADROES` (só teste) e o caso de
+dois cartões rodou de verdade:
+
+```text
+ok   2 cartão(ões): /mnt/cartao1 /mnt/cartao2
+/mnt/cartao1: pacman.giochi instalado em /user/apps/pacman
+/mnt/cartao2: cobrinha.giochi instalado em /user/apps/cobrinha
+```
+
+E com o padrão real, **zero candidatos** — o cartão do sistema não é montado.
+
+#### Jogo em cartão não pode virar cartão morto
+
+Com `dir` num cartão removível, a Home mostraria cartão que não abre. O launcher
+**poda em tempo de execução** (`Catalogo::podar_sem_binario`) — não na geração,
+porque o PC que gera o índice não sabe se o cartão estará lá. Medido:
+
+```text
+catálogo: fantasma fora — /mnt/cartao-que-sumiu/fantasma/bin/x não existe (cartão removido?)
+catálogo: 1 app(s) de /tmp/cat-teste.json
+```
+
+E o `id` é renumerado depois da poda, para continuar sendo a posição em `alvos`.
 
 #### A verificação cobre integridade, NÃO autenticidade
 

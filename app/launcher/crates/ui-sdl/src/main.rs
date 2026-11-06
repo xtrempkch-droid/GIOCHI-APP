@@ -270,13 +270,20 @@ fn main() -> Result<(), String> {
     let (mut state, catalogo) = {
         let caminho = catalogo::caminho();
         match catalogo::Catalogo::carregar(&caminho) {
-            Ok(c) if !c.vazio() => {
-                eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
-                (State::new(c.games.clone(), demo_apps()), Some(c))
-            }
-            Ok(_) => {
-                eprintln!("catálogo: vazio em {}; usando demonstração", caminho.display());
-                (State::new(demo_games(), demo_apps()), None)
+            Ok(c) => {
+                // Cartão removível pode não estar montado neste boot. Podar em
+                // tempo de execução é o que impede um cartão ausente de virar
+                // cartão que aparece e não abre.
+                let c = c.podar_sem_binario(|slug, caminho| {
+                    eprintln!("catálogo: {slug} fora — {caminho} não existe (cartão removido?)");
+                });
+                if c.vazio() {
+                    eprintln!("catálogo: nenhum app com binário presente; usando demonstração");
+                    (State::new(demo_games(), demo_apps()), None)
+                } else {
+                    eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
+                    (State::new(c.games.clone(), demo_apps()), Some(c))
+                }
             }
             Err(e) => {
                 eprintln!("catálogo: {e}; usando demonstração");

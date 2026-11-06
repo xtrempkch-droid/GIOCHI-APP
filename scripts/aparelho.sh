@@ -793,34 +793,34 @@ cmd_instalar_do_cartao() {
   exigir_aparelho
   titulo "instalando do cartão"
 
-  local part="/dev/mmcblk1p1"
-  local ponto="/mnt/cartao"
+  # Descobre os cartões **sem nome de dispositivo**.
+  #
+  # A primeira versão usava `/dev/mmcblk1p1` fixo, que é o que o X55 tem. O dono
+  # avisou que alguns aparelhos têm dois slots de SD e ainda eMMC, com o sistema
+  # num cartão e os jogos no outro — e casos de jogos nos dois. Nome fixo acerta
+  # num aparelho e mente no seguinte, sem avisar.
+  if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q \
+       "$RAIZ/scripts/lib/descobrir-cartoes.sh" "root@$HOST:/tmp/descobrir-cartoes.sh" 2>/dev/null; then
+    falha "não consegui enviar o descobridor de cartões"
+    return 1
+  fi
 
-  local estado
-  estado=$(no_aparelho "
-    if [ ! -b $part ]; then echo SEM_PARTICAO; exit 0; fi
-    mkdir -p $ponto 2>/dev/null
-    if mountpoint -q $ponto 2>/dev/null || grep -q ' $ponto ' /proc/mounts; then
-      echo JA_MONTADO
-    elif mount -o ro $part $ponto 2>/dev/null; then
-      echo MONTEI
-    else
-      echo FALHOU_MOUNT
-    fi
-  " 2>&1 | tr -d '\r')
+  # `CARTOES_PADROES` atravessa para o aparelho quando definida aqui: é a única
+  # forma de exercitar o caso de **dois cartões** sem hardware com dois slots.
+  # No uso normal não é definida e a descoberta usa os dispositivos reais.
+  local pontos
+  pontos=$(no_aparelho "${CARTOES_PADROES:+CARTOES_PADROES=\"$CARTOES_PADROES\" }sh /tmp/descobrir-cartoes.sh /mnt/cartao 2>/dev/null" | sed -n 's/^PONTO=//p')
 
-  case "$estado" in
-    SEM_PARTICAO)
-      falha "$part não existe neste aparelho"
-      printf '  este console pode não ter partição de boot separada\n'
-      return 1 ;;
-    FALHOU_MOUNT)
-      falha "não consegui montar $part em $ponto"
-      return 1 ;;
-    MONTEI)     ok "$part montado em $ponto (somente leitura)" ;;
-    JA_MONTADO) ok "$ponto já estava montado" ;;
-    *)          falha "estado inesperado ao montar: $estado"; return 1 ;;
-  esac
+  if [ -z "$pontos" ]; then
+    falha "nenhum cartão de jogos encontrado"
+    printf '  o cartão do sistema é ignorado de propósito (senão o app montaria\n'
+    printf '  o próprio rootfs como se fosse mídia removível).\n'
+    printf '  se você espera um cartão aqui, confira se ele está inserido e\n'
+    printf '  formatado (FAT32 ou ext4).\n'
+    return 1
+  fi
+
+  ok "$(printf '%s\n' "$pontos" | wc -l | tr -d ' ') cartão(ões): $(echo $pontos)"
 
   # Envia o instalador: roda no aparelho, sem Node e sem PC no meio.
   if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q \
@@ -829,38 +829,49 @@ cmd_instalar_do_cartao() {
     return 1
   fi
 
-  local conteudo
-  conteudo=$(no_aparelho "ls -1 $ponto/*.giochi 2>/dev/null | wc -l" 2>/dev/null | tr -d ' \r')
-  if [ "${conteudo:-0}" = "0" ]; then
-    aviso "nenhum .giochi em $ponto"
-    printf '  copie os pacotes para a partição GIOCHI_BOOT pelo leitor de cartão,\n'
-    printf '  devolva o cartão e rode de novo.\n'
+  # Instala de **todos** os cartões. Jogos podem estar nos dois.
+  local ponto total_ok=0 total_falhou=0 houve_pacote=0
+  for ponto in $pontos; do
+    local conteudo
+    conteudo=$(no_aparelho "ls -1 $ponto/*.giochi 2>/dev/null | wc -l" 2>/dev/null | tr -d ' \r')
+    if [ "${conteudo:-0}" = "0" ]; then
+      printf '  %s: nenhum .giochi\n' "$ponto"
+      continue
+    fi
+    houve_pacote=1
+    printf '  %s: %s pacote(s)\n' "$ponto" "$conteudo"
+
+    # O código de saída vem **dentro** da saída, não de `$?`.
+    #
+    # A primeira versão terminava o comando remoto com `; rm -f ...`, e o `rm`
+    # (que sempre dá 0) engolia o status do instalador: uma execução com pacote
+    # recusado reportava "ok pronto". O texto dizia "1 recusado" e o resultado
+    # dizia sucesso — a contradição que faz o usuário confiar no lugar errado.
+    local saida codigo
+    saida=$(no_aparelho "sh /tmp/instalar-do-cartao.sh $ponto; echo \"STATUS=\$?\"" 2>&1)
+    codigo=$(printf '%s\n' "$saida" | sed -n 's/^STATUS=//p' | tail -1)
+    : "${codigo:=1}"
+    printf '%s\n' "$saida" | grep -v '^STATUS=' | sed 's/^/    /'
+
+    if [ "$codigo" = "0" ]; then
+      total_ok=$((total_ok + 1))
+    else
+      total_falhou=$((total_falhou + 1))
+    fi
+  done
+
+  no_aparelho "rm -f /tmp/instalar-do-cartao.sh /tmp/descobrir-cartoes.sh" >/dev/null 2>&1
+  for ponto in $pontos; do
+    no_aparelho "umount $ponto 2>/dev/null; rmdir $ponto 2>/dev/null" >/dev/null 2>&1
+  done
+
+  if [ "$houve_pacote" = "0" ]; then
+    aviso "nenhum .giochi em cartão nenhum"
+    printf '  copie os pacotes pelo leitor de cartão, devolva o cartão e rode de novo.\n'
     return 1
   fi
-  ok "$conteudo pacote(s) para instalar"
-
-  # O código de saída vem **dentro** da saída, não de `$?`.
-  #
-  # A primeira versão terminava o comando remoto com `; rm -f ...`, e o `rm`
-  # (que sempre dá 0) engolia o status do instalador: uma execução com pacote
-  # recusado reportava "ok pronto". O texto dizia "1 recusado" e o resultado
-  # dizia sucesso — a contradição que faz o usuário confiar no lugar errado.
-  local saida
-  saida=$(no_aparelho "sh /tmp/instalar-do-cartao.sh $ponto; echo \"STATUS=\$?\"; rm -f /tmp/instalar-do-cartao.sh" 2>&1)
-
-  local codigo
-  codigo=$(printf '%s\n' "$saida" | sed -n 's/^STATUS=//p' | tail -1)
-  : "${codigo:=1}"
-  printf '%s\n' "$saida" | grep -v '^STATUS=' | sed 's/^/  /'
-
-  no_aparelho "umount $ponto 2>/dev/null; rmdir $ponto 2>/dev/null" >/dev/null 2>&1
-
-  if printf '%s\n' "$saida" | grep -q "RESUMO 0 instalado"; then
-    falha "nada foi instalado"
-    return 1
-  fi
-  if [ "$codigo" != "0" ]; then
-    aviso "instalação terminou com pacote(s) recusado(s)"
+  if [ "$total_falhou" -gt 0 ]; then
+    aviso "$total_falhou cartão(ões) com pacote recusado ($total_ok ok)"
     return 1
   fi
 
