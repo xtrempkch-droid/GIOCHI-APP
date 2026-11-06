@@ -1,12 +1,18 @@
-# Apps de PC: a loja, o forge e o painel nos três sistemas
+# Apps de PC: a loja gráfica, a CLI, o forge e o painel
 
 > Medido em 06/11/2026. **Os três sistemas: executados no GitHub Actions** —
 > run `42214382640`, commit `f12051e`, sete jobs verdes incluindo macOS e
 > Windows. Ver [o que está provado](#o-que-está-provado-e-o-que-não-está).
 
-Os três apps com `distribution: "host"` são a **loja** (`app/store`), o
-**forge** (`app/forge`) e o **painel** (`app/painel`, interface web local). Eles
-rodam no computador do usuário, não no console:
+Quatro apps com `distribution: "host"` rodam no computador do usuário, não no
+console. Três são Python (`.pyz`): a **loja CLI** (`app/store`), o **forge**
+(`app/forge`) e o **painel** (`app/painel`, interface web local). O quarto é
+nativo: a **loja gráfica** (`app/loja`, Rust + SDL2), com build próprio em
+[`loja.yml`](../.github/workflows/loja.yml) — ver [`loja.md`](loja.md).
+
+A divisão entre `store` e `loja` é de público, não de função: a CLI serve script
+e CI, a loja serve pessoa. As duas leem o **mesmo formato** de catálogo; quem
+escreve é o backend, nunca um cliente.
 
 ```text
 PC do usuário                                  aparelho

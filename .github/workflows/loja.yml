@@ -93,11 +93,38 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # O `vcpkg` do runner já vem com o cache; instalar SDL2 por ele é o
-          # caminho documentado pelo sdl2-sys no Windows.
-          vcpkg install sdl2:x64-windows sdl2-ttf:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          echo "SDL2_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" >> $env:GITHUB_ENV
+          # **Não vcpkg.** O primeiro run falhou aqui, e a causa é o que o
+          # `sdl2-sys` faz por padrão: sem as features `use-vcpkg`/`use-pkgconfig`
+          # ele emite só `-l SDL2` e deixa o linker procurar. O `LIB` do MSVC é
+          # quem resolve isso; o `vcpkg` só ajudaria se eu ligasse a feature,
+          # que quebraria Linux e macOS.
+          #
+          # Os zips oficiais ("VC") são determinísticos, não compilam nada e
+          # trazem `include/` + `lib/x64/` prontos. Versão fixa: um runner que
+          # atualiza sozinho transforma "passou ontem" em "quebrou hoje".
+          $ErrorActionPreference = "Stop"
+          $sdl = "C:\sdl2"
+          New-Item -ItemType Directory -Force -Path $sdl | Out-Null
+
+          Invoke-WebRequest -Uri "https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-devel-2.30.9-VC.zip" -OutFile "$sdl\sdl2.zip"
+          Invoke-WebRequest -Uri "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-devel-2.22.0-VC.zip" -OutFile "$sdl\ttf.zip"
+          Expand-Archive "$sdl\sdl2.zip" -DestinationPath $sdl -Force
+          Expand-Archive "$sdl\ttf.zip" -DestinationPath $sdl -Force
+
+          $sdlDir = (Get-ChildItem $sdl -Directory | Where-Object { $_.Name -like "SDL2-2*" } | Select-Object -First 1).FullName
+          $ttfDir = (Get-ChildItem $sdl -Directory | Where-Object { $_.Name -like "SDL2_ttf-2*" } | Select-Object -First 1).FullName
+
+          # `SDL2_ttf.h` inclui `SDL2/SDL.h`, então os dois includes têm de estar
+          # no mesmo caminho de busca.
+          $env:SDL2_INCLUDE_PATH = "$sdlDir\include;$ttfDir\include"
+          # O linker do MSVC usa `LIB`, não `-L`.
+          $env:LIB = "$sdlDir\lib\x64;$ttfDir\lib\x64;$env:LIB"
+
+          "SDL2_INCLUDE_PATH=$env:SDL2_INCLUDE_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIB=$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SDL2_BIN=$sdlDir\lib\x64;$ttfDir\lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "SDL2: $sdlDir"
+          Write-Host "SDL2_ttf: $ttfDir"
 
       # ── build ──────────────────────────────────────────────
       - name: Compilar (Linux/macOS)
@@ -148,7 +175,12 @@ jobs:
           $env:SDL_VIDEODRIVER = "dummy"
           # As DLLs do vcpkg precisam estar ao lado do .exe, senão o processo
           # morre antes de desenhar e o erro é "0xc0000135".
-          Copy-Item "$env:SDL2_DIR\bin\*.dll" target\release\ -Force
+          # A DLL tem de ficar ao lado do .exe: o Windows não procura no
+          # diretório do lib, e a falha é "0xc0000135" sem mais nada.
+          foreach ($dir in $env:SDL2_BIN.Split(";")) {
+            if (Test-Path $dir) { Copy-Item "$dir\*.dll" target\release\ -Force }
+          }
+          Get-ChildItem target\release\*.dll | Select-Object Name
           .\target\release\giochi-loja.exe --dump-frame $env:TEMP\quadro.bmp
           $tam = (Get-Item $env:TEMP\quadro.bmp).Length
           $esperado = 1180 * 760 * 4 + 54
