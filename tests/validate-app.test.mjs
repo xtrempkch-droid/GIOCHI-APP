@@ -284,6 +284,36 @@ test("aceita forge.json completo e válido", () => {
   });
 });
 
+test("graphics_api_min 'none' sem fallback é aceito", () => {
+  // É o caso dos jogos nativos em SDL2: rodam em software, então não exigem API
+  // gráfica. Antes desta rodada eles não tinham forge.json nenhum, e o forge se
+  // recusava a classificá-los — inclusive os que rodam de verdade no aparelho.
+  withTempDir((dir) => {
+    const result = validateApp(
+      makeApp(dir, "a", { forge: { arch: "aarch64", runtime: "native", graphics_api_min: "none" } }),
+    );
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+});
+
+test("graphics_api_min 'none' COM fallback é contradição e reprova", () => {
+  // Se não exige API nenhuma, não há de onde cair. Aceitar os dois juntos faria
+  // o relatório dizer duas coisas sobre a mesma coisa.
+  withTempDir((dir) => {
+    const result = validateApp(
+      makeApp(dir, "a", {
+        forge: {
+          arch: "aarch64",
+          runtime: "native",
+          graphics_api_min: "none",
+          graphics_api_fallback: "gles2",
+        },
+      }),
+    );
+    assert.ok(codes(result).includes("forge_fallback_com_min_none"), JSON.stringify(result.errors));
+  });
+});
+
 test("readPngSize lê dimensões de PNG válido", () => {
   withTempDir((dir) => {
     const file = path.join(dir, "capa.png");

@@ -237,12 +237,26 @@ impl Pedido {
         aparelho: &crate::ChavePublica,
         agora: u64,
     ) -> Veredito {
+        self.validar_no_aparelho_em(chave_de_licenca, aparelho, agora, 0)
+    }
+
+    /// Igual, mas com o piso de tempo do catálogo assinado.
+    ///
+    /// Existe porque aparelho sem RTC e sem rádio (R35S) tem o relógio em 2017
+    /// para sempre, e sem piso a licença nunca valida.
+    pub fn validar_no_aparelho_em(
+        &self,
+        chave_de_licenca: &crate::ChavePublica,
+        aparelho: &crate::ChavePublica,
+        agora: u64,
+        piso_confiavel: u64,
+    ) -> Veredito {
         let Some(licenca) = self.licenca() else {
             return Veredito::NaoSei {
                 motivo: format!("pedido {} não foi pago ({})", self.id, self.estado.rotulo()),
             };
         };
-        let v = licenca.verificar(chave_de_licenca, aparelho, agora);
+        let v = licenca.verificar_em(chave_de_licenca, aparelho, agora, piso_confiavel);
         if !v.libera() {
             return v;
         }

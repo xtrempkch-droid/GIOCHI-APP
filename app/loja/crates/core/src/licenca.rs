@@ -171,12 +171,48 @@ impl LicencaAssinada {
     }
 
     /// Confere a licença **neste** aparelho, agora.
+    ///
+    /// Sem piso de tempo confiável: o relógio é a única referência. Prefira
+    /// [`verificar_em`](Self::verificar_em) quando houver um documento assinado
+    /// com data — é o caso do catálogo.
     pub fn verificar(
         &self,
         chave_de_licenca: &ChavePublica,
         aparelho: &ChavePublica,
         agora: u64,
     ) -> Veredito {
+        self.verificar_em(chave_de_licenca, aparelho, agora, 0)
+    }
+
+    /// Confere a licença usando o relógio **e** um piso de tempo confiável.
+    ///
+    /// # O problema que isto resolve, medido no R35S
+    ///
+    /// O R35S não tem RTC e não tem rádio. No boot o relógio diz **2017**, e a
+    /// licença foi emitida em 2026 — então `agora + tolerância < emitida_em`, e o
+    /// veredito saía `NaoSei`. Como `NaoSei` não libera, **nenhuma licença com
+    /// prazo funcionaria nesse aparelho, nunca**: sem rede, o relógio jamais
+    /// sincroniza.
+    ///
+    /// `piso_confiavel` é um instante que **provadamente** já passou: o
+    /// `gerado_em` do catálogo assinado. Ele não é palpite — está sob a
+    /// assinatura da Giochi, e um catálogo adulterado já foi recusado antes de
+    /// chegar aqui.
+    ///
+    /// O relógio do aparelho pode estar adiantado por acidente (usuário mexeu),
+    /// e nesse caso ele vale: `max` escolhe o maior dos dois, que é o mais
+    /// conservador para **expiração** e o mais generoso para "emitida no
+    /// futuro" — os dois lados erram para o lado de não liberar à toa.
+    pub fn verificar_em(
+        &self,
+        chave_de_licenca: &ChavePublica,
+        aparelho: &ChavePublica,
+        agora: u64,
+        piso_confiavel: u64,
+    ) -> Veredito {
+        // Um piso no futuro não existe: `gerado_em` no futuro é catálogo
+        // adulterado, e quem conferiu a assinatura já recusou.
+        let agora = agora.max(piso_confiavel);
         if self.licenca.versao != VERSAO {
             return Veredito::NaoSei {
                 motivo: format!(
@@ -406,6 +442,61 @@ mod testes {
         let v = assinada.verificar(&publica_de(&k), &ap, 0);
         assert!(matches!(v, Veredito::NaoSei { .. }), "{v:?}");
         assert!(!v.libera(), "NaoSei não pode liberar por omissão");
+    }
+
+    #[test]
+    fn relogio_em_2017_com_piso_do_catalogo_valida_a_licenca() {
+        // O caso do R35S, medido no aparelho em 06/11/2026: sem RTC e sem
+        // rádio, o relógio diz 2017 para sempre. Sem piso, a licença com prazo
+        // nunca valeria — `NaoSei` não libera.
+        let k = chave_de_licenca();
+        let ap = chave_do_aparelho();
+        let mut l = licenca(&ap);              // emitida em 1_700_000_000
+        l.expira_em = Some(1_800_000_000);
+        let assinada = LicencaAssinada::emitir(l, &k);
+
+        let relogio_2017 = 1_502_000_000;
+
+        // Sem piso: não sei julgar, e por isso não libera.
+        let sem_piso = assinada.verificar(&publica_de(&k), &ap, relogio_2017);
+        assert!(matches!(sem_piso, Veredito::NaoSei { .. }), "{sem_piso:?}");
+        assert!(!sem_piso.libera());
+
+        // Com o piso vindo do catálogo assinado: vale.
+        let com_piso = assinada.verificar_em(&publica_de(&k), &ap, relogio_2017, 1_700_000_100);
+        assert_eq!(com_piso, Veredito::Valida, "o piso não foi usado: {com_piso:?}");
+    }
+
+    #[test]
+    fn piso_nao_ressuscita_licenca_vencida() {
+        // O piso é "pelo menos este instante", não "agora é este instante".
+        // Usá-lo para perdoar expiração seria abrir a porta que ele fecha.
+        let k = chave_de_licenca();
+        let ap = chave_do_aparelho();
+        let mut l = licenca(&ap);
+        l.expira_em = Some(1_700_000_000);
+        let assinada = LicencaAssinada::emitir(l, &k);
+
+        let v = assinada.verificar_em(
+            &publica_de(&k),
+            &ap,
+            1_502_000_000,                       // relógio errado, 2017
+            1_800_000_000,                       // piso já depois do vencimento
+        );
+        assert!(matches!(v, Veredito::Expirada { .. }), "{v:?}");
+        assert!(!v.libera());
+    }
+
+    #[test]
+    fn relogio_adiantado_continua_valendo_sozinho() {
+        // Nenhum piso pode atrapalhar um relógio que já está certo.
+        let k = chave_de_licenca();
+        let ap = chave_do_aparelho();
+        let assinada = LicencaAssinada::emitir(licenca(&ap), &k);
+        assert_eq!(
+            assinada.verificar_em(&publica_de(&k), &ap, 1_700_000_500, 1_600_000_000),
+            Veredito::Valida
+        );
     }
 
     #[test]

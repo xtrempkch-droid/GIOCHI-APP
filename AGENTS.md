@@ -2958,3 +2958,96 @@ o aparelho faz no primeiro boot: gera 32 bytes e guarda só a pública.
 97 testes do núcleo (eram 77)    113 Rust no total
 CI: 16 passos por runner        `--ativar` exercitado em linux, macos e windows
 ```
+
+## 22. R35S: medido via TTL, e três coisas que mudaram (06/11/2026)
+
+O R35S **não tem rádio** e o `dwc2` nasce como *host*: não há SSH nem `usb0`.
+`aparelho.sh` é feito de `ssh`/`scp` e **não alcança** esse aparelho. A console
+serial (`ttyS2` @ 1500000) é o único caminho, e o toolkit não tinha como usá-la.
+
+```bash
+bash scripts/console-r35s.sh "uname -r"            # um comando
+bash scripts/console-r35s.sh "cmd1" "cmd2"         # vários
+bash scripts/console-r35s.sh --escutar 12          # só ouve (boot, panic)
+```
+
+Por dentro: container `--privileged -v /dev:/dev` com a imagem do System, porque
+o nó é `root:dialout` e o CH341 **cai do barramento** — com `-v /dev:/dev` o
+container sobrevive, com `--device=` fixado ele aborta quando o nó some. E
+leitores órfãos seguram a porta: matar antes é obrigatório, senão o erro é
+`returned no data`, que manda procurar defeito no cabo.
+
+### O que o aparelho disse
+
+| Medido | Valor | Consequência |
+| --- | --- | --- |
+| kernel | `6.12.0 #1 SMP Fri Nov 6 14:51:17 UTC 2026` | **boota em userspace** — as correções de U-Boot funcionaram |
+| `/sys/class/graphics/fb0/virtual_size` | `640,480` | paisagem, sem letterbox |
+| `/sys/class/graphics/fbcon/rotate` | `0` | `Rotation::None`, igual ao X35H |
+| `MemTotal` | `987596 kB` = **964 MB** | igual ao X35H |
+| DRM | `card0`, modo `640x480` | KMSDRM disponível |
+| SDL2 | `2.0.so.0.2800.5` | o mesmo do X55 |
+| SDL2_ttf / freetype / harfbuzz | **presentes** | **texto funciona** |
+| `/etc/giochi` | `buttons.map`, `loja-publica.pem`, `licenca-publica.pem`, `pontos-de-montagem` | tudo o que eu pedi, entregue |
+| `/opt/giochi/apps/bin` | `verificador-ed25519` | o verificador já vem na imagem |
+| `/etc/giochi/buttons.map` | sha256 `e4cec50d…` | **idêntico ao do repositório** |
+| bateria / térmica | **ausentes** | `—` na UI, e é do System |
+
+`pontos-de-montagem` veio no formato proposto (`/user`, `/opt/giochi`, `/media`),
+com comentário explicando por que `/media` evita duplicata.
+
+### Três coisas que mudaram por causa disto
+
+**1. Perfil `r35s` no forge** — antes só existia `rk3326-1gb` genérico. Agora é
+medido: RK3326, 640×480, 964 MB, sem rádio, sem `KEY_POWER`.
+
+**2. Três jogos nativos não tinham `forge.json`** — `pacman`, `cobrinha` e
+`volley` eram **impossíveis de classificar** ("sem requisitos não há o que
+classificar"), justamente os que rodam de verdade. Ganharam `graphics_api_min:
+"none"` (SDL2 funciona em software: medido no X55 e no X35H). A matriz agora sai
+completa:
+
+```
+pacman / cobrinha / volley / arcade-volleyball   Compatível em r35s, x55, x35h
+spacewar / colossal-cave-adventure               Incompatível (sem runtime Godot)
+```
+
+**3. O R35S não declara `KEY_POWER`.** O kernel declara **19 códigos**: 2 do
+`gpio-keys-vol` (114/115) e 17 do `r36s_Gamepad`. **116 não está entre eles** —
+o botão de energia do R35S corta energia no hardware e nunca chega ao kernel.
+O X55 tem `rk805 pwrkey`.
+
+Consequência real: o launcher oferecia "toque curto para dormir" em todo
+aparelho, e nesse aparelho o toque nunca chega. O menu de energia continua
+alcançável pelo **START** (`if start_edge` → `PowerHold`), então não há função
+perdida — há **promessa falsa**, e silêncio no campo.
+
+Agora o launcher lê o que o kernel **promete** e avisa uma vez:
+
+```
+aviso: nenhum /dev/input declara KEY_POWER (19 código(s) no total);
+       toque curto para dormir indisponível neste aparelho — o menu de
+       energia continua no START
+```
+
+### `capacidades.rs`: a regra das palavras, agora no app
+
+`app/launcher/crates/core/src/capacidades.rs` decodifica
+`/sys/class/input/event*/device/capabilities/key`. **As palavras de 64 bits vêm
+em ordem DECRESCENTE**, então a última coluna é a palavra 0 — ler da esquerda
+desloca tudo em múltiplos de 64 e produz mapa plausível e errado.
+
+Os testes usam as **três strings reais**, medidas em aparelho:
+
+```text
+X55    c000000000000 0                    → 114, 115
+X55    10000000000000 0                   → 116  (e não 52)
+R35S   f00000000 0 0 0 7fdb000000000000 0 0 0 0  → 17 botões, sem 116
+```
+
+Cada arquivo é decodificado **separadamente**: a ordem decrescente vale por
+arquivo, e concatenar todos antes deslocaria os códigos dos seguintes.
+
+`None` (não medido) ≠ lista vazia (medido, não declara nada): no PC não há
+`/sys/class/input/event*`, e o launcher **não avisa** — só avisa quando mediu e
+o código não está lá.

@@ -227,6 +227,27 @@ O objetivo é outro e mais honesto:
 Gastar esforço em ofuscação aqui seria teatro. O que dá para fazer bem, foi
 feito.
 
+### Um aparelho sem relógio, e o piso que salva a licença
+
+Medido no R35S em 06/11/2026: **o relógio diz 2017** (sem RTC) e **não há rádio
+nem rede**, então ele nunca sincroniza. Com o relógio atrás da emissão, o
+veredito era `NaoSei` — e `NaoSei` não libera. Consequência: **nenhuma licença
+com prazo funcionaria nesse aparelho, jamais.**
+
+A saída não é afrouxar a checagem. É usar um instante que **provadamente** já
+passou: o `gerado_em` do **catálogo assinado**, que está sob a assinatura da
+Giochi e cujo catálogo adulterado já foi recusado antes de chegar ali.
+
+```rust
+verificar_em(chave, aparelho, agora, piso_confiavel)  // agora = max(agora, piso)
+```
+
+Dois testes fixam o comportamento:
+
+- relógio em 2017 **com** piso do catálogo → `Valida`; **sem** piso → `NaoSei`;
+- piso **depois** do vencimento → `Expirada` (o piso não ressuscita licença
+  vencida: ele diz "pelo menos este instante", não "agora é este instante").
+
 ### Cinco estados, não dois
 
 `Veredito` tem `Valida`, `AssinaturaInvalida`, `OutroAparelho`, `OutroApp`,

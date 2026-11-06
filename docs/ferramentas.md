@@ -697,3 +697,56 @@ Três armadilhas, todas encontradas na prática:
 
 Medido assim: `sha256sum`, `awk`, `sed`, `tar`, `head`, `cmp` e `od` existem
 (todos busybox); `openssl` e `python3` **não**.
+
+## R35S: console serial, porque não há outra porta
+
+O **R35S não tem rádio** e o `dwc2` nasce como *host*. Não há SSH nem `usb0`,
+então `aparelho.sh` — que é todo `ssh`/`scp` — **não alcança** esse aparelho. A
+console serial é o único caminho.
+
+```bash
+bash scripts/console-r35s.sh "uname -r"
+bash scripts/console-r35s.sh "cat /sys/class/graphics/fb0/virtual_size" "date -u"
+bash scripts/console-r35s.sh --escutar 12     # só ouve: boot, panic, prompt
+```
+
+### Como funciona, e as três armadilhas
+
+Roda dentro de um container (`--privileged -v /dev:/dev`) com a imagem do
+Giochi System, por dois motivos:
+
+1. o nó é `root:dialout`, e quem não está no grupo não abre;
+2. o **CH341 cai do barramento** de vez em quando — com `-v /dev:/dev` o
+   container sobrevive à queda; com `--device=/dev/ttyUSB0` fixado no `start`,
+   ele aborta quando o nó some.
+
+`--privileged` é necessário: montar `/dev` não basta, o cgroup de devices
+bloqueia a abertura com "Operation not permitted".
+
+**A terceira armadilha é a que engana:** um `docker run --rm` cujo script do host
+foi morto **continua rodando e segurando a porta**. O leitor seguinte recebe
+`returned no data` — a mesma mensagem de "adaptador desconectado", que manda
+procurar defeito no cabo. O script encerra leitores órfãos antes de abrir.
+
+### Por que marcador, e não `sleep` + ler
+
+Porque o shell **ecoa** o comando. Sem marcador, a saída se mistura com o eco e
+"achou" e "não achou" viram a mesma leitura. O comando é enviado entre dois
+`printf` com etiqueta aleatória, e a leitura termina no marcador final.
+
+E o marcador é montado **no aparelho**, com `%s`:
+
+```sh
+printf '\n@@%s-%s@@\n' INI <etiqueta>; <comando>; printf '@@%s-%s:%d@@\n' FIM <etiqueta> $?
+```
+
+Escrito literalmente, o marcador apareceria **no eco** antes da hora, e a
+leitura pararia ali — devolvendo vazio. Custou duas tentativas.
+
+O `$?` viaja no marcador porque o código de saída **é** o dado: texto vazio com
+status 0 e com status 1 significam coisas diferentes.
+
+### Baud
+
+`1500000` — é o que o `device.json` do R35S declara (`console=ttyS2,1500000`) e
+o que o aparelho responde. Outros aparelhos Rockchip usam o mesmo.

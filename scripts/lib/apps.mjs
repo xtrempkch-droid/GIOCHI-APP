@@ -322,6 +322,20 @@ function validateForge(forge, errors) {
       message: `graphics_api_fallback só aceita ${GRAPHICS_FALLBACK_VALUES.join(", ")}`,
     });
   }
+  // `min: none` + `fallback` é contradição: se o app não exige API gráfica
+  // nenhuma, não há de onde "cair". Aceitar os dois juntos faria o relatório
+  // dizer duas coisas sobre a mesma coisa, e o classificador escolheria uma.
+  if (
+    forge.graphics_api_min === "none" &&
+    forge.graphics_api_fallback !== undefined
+  ) {
+    errors.push({
+      code: "forge_fallback_com_min_none",
+      path: "forge.json:graphics_api_fallback",
+      message:
+        "com graphics_api_min 'none' não há fallback: remova graphics_api_fallback",
+    });
+  }
   if (forge.godot_version !== undefined && !GODOT_VERSION.test(String(forge.godot_version))) {
     errors.push({
       code: "forge_godot_version_invalida",

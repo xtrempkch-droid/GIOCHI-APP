@@ -20,6 +20,7 @@
 //! separada (`overlays`). Não existe estado representável onde o primeiro item
 //! da pilha não seja uma aba.
 
+pub mod capacidades;
 pub mod cmd;
 pub mod focus;
 pub mod gamepad;

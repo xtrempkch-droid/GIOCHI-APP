@@ -95,6 +95,24 @@ impl App {
         // Fica fora do literal da struct para poder mexer em `state` antes dele
         // ser movido, e também porque a ordem importa: ler primeiro, montar
         // depois.
+        // O botão de energia existe como **entrada** em alguns aparelhos e não
+        // em outros: o X55 tem `rk805 pwrkey` (KEY_POWER = 116), o **R35S não
+        // declara nenhum** — o botão dele corta energia no hardware e nunca
+        // chega ao kernel. Sem saber disso, o toque curto para dormir parece bug.
+        //
+        // Lido do `/sys` porque é o que o kernel promete; o que ele **entrega**
+        // ao apertar é outra pergunta (`aparelho.sh input`).
+        if let Some(codigos) = capacidades_do_kernel() {
+            if !giochi_launcher_core::capacidades::tem_power(&codigos) {
+                eprintln!(
+                    "aviso: nenhum /dev/input declara KEY_POWER ({} código(s) no total); \
+                     toque curto para dormir indisponível neste aparelho — \
+                     o menu de energia continua no START",
+                    codigos.len()
+                );
+            }
+        }
+
         let backlight = Backlight::discover();
         if let Some(pct) = backlight.fracao_atual() {
             state.settings.brightness = pct;
@@ -892,4 +910,39 @@ fn keyboard_command(key: Keycode) -> Option<Cmd> {
         Keycode::P => Some(Cmd::PowerShort),
         _ => None,
     }
+
+
+}
+
+/// Todos os códigos de tecla que os dispositivos de entrada declaram.
+///
+/// Junta o `capabilities/key` de cada `event*`. Devolve `None` quando não há
+/// nada para ler — em teste no PC, ou numa imagem sem `/sys/class/input`.
+/// `None` é **diferente** de lista vazia: o primeiro é "não medido", o segundo
+/// seria "medido e não declara nada", e o launcher não deve avisar sobre o
+/// primeiro.
+///
+/// Cada arquivo é decodificado **separadamente**: a ordem decrescente das
+/// palavras vale por arquivo, e concatenar todos antes de decodificar deslocaria
+/// os códigos dos arquivos seguintes.
+fn capacidades_do_kernel() -> Option<Vec<u16>> {
+    let entradas = std::fs::read_dir("/sys/class/input").ok()?;
+    let mut todos = Vec::new();
+    let mut leu = false;
+    for entrada in entradas.flatten() {
+        if !entrada.file_name().to_string_lossy().starts_with("event") {
+            continue;
+        }
+        let arquivo = entrada.path().join("device/capabilities/key");
+        if let Ok(texto) = std::fs::read_to_string(&arquivo) {
+            todos.extend(giochi_launcher_core::capacidades::decodificar(&texto));
+            leu = true;
+        }
+    }
+    if !leu {
+        return None;
+    }
+    todos.sort_unstable();
+    todos.dedup();
+    Some(todos)
 }

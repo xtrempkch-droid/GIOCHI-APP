@@ -250,6 +250,47 @@ MANUAL_PROFILES: dict[str, DeviceProfile] = {
             "proton": {"supported": False, "reason": "vulkan_absent"},
         }
     ),
+    # ── R35S: medido no aparelho via TTL, 06/11/2026 ────────
+    #
+    # O R35S não tem rádio e o `dwc2` nasce como *host*: não há SSH nem usb0. O
+    # único canal é a console serial (`ttyS2` @ 1500000), e foi por ela que estes
+    # números saíram: `scripts/console-r35s.sh`.
+    #
+    # O que muda em relação ao X35H (mesmo painel, SoC diferente):
+    #
+    # - **Sem `KEY_POWER`.** O kernel declara 19 códigos, e 116 não está entre
+    #   eles: `gpio-keys-vol` (114/115) e `r36s_Gamepad` (17). O X55 tem
+    #   `rk805 pwrkey`; aqui o botão de energia não é dispositivo de entrada.
+    # - **Sem RTC e sem rede**: o relógio diz 2017 para sempre. Isso é decisão de
+    #   licença, não de perfil — ver `docs/loja.md` §4.1.
+    # - Sem bateria e sem sensor térmico expostos nesta imagem.
+    "r35s": DeviceProfile.from_dict(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "device_id": "giochi-system-r35s",
+            "soc": "rk3326",
+            "cpu": {"arch": "aarch64", "cores": 4, "model": "Cortex-A35", "max_mhz": 1500},
+            "gpu": {"model": "Mali-G31", "driver": "panfrost", "gles_max": "3.1",
+                    "gl_desktop_max": "3.1"},
+            # 987.596 kB no /proc/meminfo = 964 MB, igual ao X35H.
+            "ram_mb": 964,
+            "vram_mb": 32,
+            "storage": {"system_mb": 1740, "user_free_mb": 0},
+            "os": {"name": "Giochi OS", "version": "1.2", "kernel": "6.12"},
+            "graphics_api": {"gles3": True, "gles2": True, "vulkan": False},
+            # Sem touchscreen e sem rádio; gamepad de 17 botões + 2 de volume.
+            "input": {"touchscreen": False, "gamepad": True},
+            # `fbcon/rotate` = 0 e DRM `card0` com modo 640x480: paisagem, sem
+            # letterbox e sem rotação — medido, não deduzido do formato.
+            "display": {"width": 640, "height": 480, "refresh_hz": 60},
+            "engine": {"godot_min": "3.5", "godot_max": "4.7",
+                       "renderer": "compatibility", "godot_runtime": False},
+            # Sem rádio integrado (não existe no DTB) e sem porta USB host livre
+            # no `dwc2`, que nasce como host mas é o canal de carga.
+            "network": {"wifi_usb": False, "bluetooth_usb": False, "integrated": False},
+            "proton": {"supported": False, "reason": "vulkan_absent"},
+        }
+    ),
     # X35S: mesmo chassi do X35H. Nunca medido em hardware
     # (`GIOCHI_TESTED=no`) e o rádio é desconhecido — os campos de rede dizem
     # "dongle USB, se houver", que é o que o device.conf declara.
