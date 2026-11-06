@@ -284,8 +284,10 @@ node scripts/verificar-telas.mjs          # 640x480, 800x600, 1280x720
 #### Duas chaves que a foto de tela parada exige
 
 ```bash
---foco zona:indice     # põe o anel de foco onde o teste precisa vê-lo
---esperar-ms <n>       # espera antes de gravar o quadro
+--foco zona:indice          # põe o anel de foco onde o teste precisa vê-lo
+--teclas right,left         # despacha uma sequência e mostra onde o foco parou
+--categoria sound           # escolhe a categoria das configurações
+--esperar-ms <n>            # espera antes de gravar o quadro
 ```
 
 `--foco` existe porque um quadro no estado inicial **nunca** mostra o anel de
@@ -294,6 +296,22 @@ configurações a queixa do usuário: sem ele, "tem anel" e "não tem anel" prod
 o mesmo BMP. Zonas: `home`, `filtros`, `biblioteca`, `apps`, `categorias`,
 `conteudo`, `wifi`, `senha`, `bluetooth`, `teclado`, `resultados`, `rapido`,
 `detalhe`, `energia`.
+
+`--teclas` existe porque `--foco` posiciona o destaque mas **não mostra o
+resultado de andar**. Uma seta que não voltava passou por 169 testes verdes: o
+teste olhava o estado, não o caminho. O log diz onde o foco parou, e o quadro
+mostra o anel no lugar certo:
+
+```text
+--teclas: right,left -> foco SettingsSidebar 0
+```
+
+`--categoria` existe porque `--tela ajustes` só troca a aba e deixa a primeira
+categoria — sem ela não há como fotografar "Som" nem exercitar uma linha
+ajustável. E `--foco categorias:N` **sozinho era enganoso**: punha o destaque na
+coluna sem mudar `settings_category`, então o `A` abria a linha da categoria
+anterior. O diagnóstico media outro estado e chamava de ok; agora os dois andam
+juntos, como no reducer.
 
 `--esperar-ms` existe porque `--dump-frame` grava no **primeiro** quadro: uma
 tela que depende de trabalho assíncrono sai antes de ter conteúdo. A lista de

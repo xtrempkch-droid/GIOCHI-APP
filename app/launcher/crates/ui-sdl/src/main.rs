@@ -267,7 +267,72 @@ fn main() -> Result<(), String> {
             .parse()
             .map_err(|_| format!("--foco: índice inválido: {indice}"))?;
         state.focus = giochi_launcher_core::Focus::at(zona, indice);
-        eprintln!("foco forcado por --foco: {zona:?} {indice}");
+        // Andar na coluna troca a categoria no reducer (`nav`); o flag tem de
+        // fazer o mesmo, senão o destaque e o conteúdo divergem — que é
+        // exatamente o estado que ele deveria ajudar a investigar.
+        if zona == giochi_launcher_core::Zone::SettingsSidebar
+            && indice < giochi_launcher_core::SETTINGS_CATEGORIES.len()
+        {
+            state.settings_category = indice;
+        }
+        eprintln!(
+            "foco forcado por --foco: {zona:?} {indice} (categoria {})",
+            state.settings_category
+        );
+    }
+
+    // `--categoria <nome|indice>`: escolhe a categoria das configurações.
+    //
+    // `--tela ajustes` só troca a aba; a categoria fica na primeira. Sem esta
+    // chave não havia como fotografar "Som" nem exercitar uma linha ajustável
+    // — e `--foco categorias:N` sozinho era **enganoso**: punha o destaque na
+    // coluna sem mudar `settings_category`, então o `A` abria a linha da
+    // categoria anterior. O diagnóstico media outro estado e chamava de ok.
+    if let Some(i) = args.iter().position(|a| a == "--categoria") {
+        let pedido = args.get(i + 1).ok_or("--categoria precisa de um nome")?;
+        let indice = pedido
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n < giochi_launcher_core::SETTINGS_CATEGORIES.len())
+            .or_else(|| {
+                giochi_launcher_core::SETTINGS_CATEGORIES
+                    .iter()
+                    .position(|c| c.eq_ignore_ascii_case(pedido))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "--categoria: {pedido} desconhecida\nuse: {}",
+                    giochi_launcher_core::SETTINGS_CATEGORIES.join(", ")
+                )
+            })?;
+        state.settings_category = indice;
+        state.tab = giochi_launcher_core::Tab::Settings;
+        eprintln!("--categoria: {pedido} (indice {indice})");
+    }
+
+    // `--teclas "left,left,up"`: despacha uma sequência de comandos.
+    //
+    // Existe porque a navegação não tem como ser provada de fora: `--foco`
+    // posiciona o destaque, mas não consegue mostrar o **resultado de andar**.
+    // Foi justamente uma seta que não voltava ("não consigo voltar") que
+    // passou por 169 testes verdes — o teste olhava o estado, não o caminho.
+    //
+    // Aceita só teclas: é diagnóstico de navegação, não um interpretador.
+    if let Some(i) = args.iter().position(|a| a == "--teclas") {
+        let lista = args.get(i + 1).ok_or("--teclas precisa de uma lista")?;
+        for tecla in lista.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            let cmd = match tecla.to_ascii_lowercase().as_str() {
+                "up" | "cima" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Up),
+                "down" | "baixo" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Down),
+                "left" | "esquerda" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Left),
+                "right" | "direita" => giochi_launcher_core::Cmd::Nav(giochi_launcher_core::Dir::Right),
+                "a" | "confirmar" => giochi_launcher_core::Cmd::Confirm,
+                "b" | "voltar" => giochi_launcher_core::Cmd::Back,
+                outra => return Err(format!("--teclas: tecla desconhecida: {outra}")),
+            };
+            state = giochi_launcher_core::update(state, cmd);
+        }
+        eprintln!("--teclas: {lista} -> foco {:?} {}", state.focus.zone, state.focus.index);
     }
 
     // `--lancar <id|slug>`: pede o lançamento já na abertura.
@@ -649,13 +714,13 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
         // justamente o que interessa conferir: truncamento de SSID longo,
         // muitas redes empilhadas, senha comprida demais para o campo.
         "wifi" => {
-            state.tab = Tab::Settings;
+            state.tab = giochi_launcher_core::Tab::Settings;
             state.settings_category = 2;
             state.sem_fio = exemplo_redes();
             state.overlays.push(Overlay::WifiList);
         }
         "senha" | "wifisenha" => {
-            state.tab = Tab::Settings;
+            state.tab = giochi_launcher_core::Tab::Settings;
             state.settings_category = 2;
             state.sem_fio = exemplo_redes();
             state.sem_fio.alvo = Some("Kill.exe".into());
@@ -663,7 +728,7 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
             state.overlays.push(Overlay::WifiPassword);
         }
         "bluetooth" | "bt" => {
-            state.tab = Tab::Settings;
+            state.tab = giochi_launcher_core::Tab::Settings;
             state.settings_category = 2;
             state.sem_fio = exemplo_redes();
             state.overlays.push(Overlay::BtList);

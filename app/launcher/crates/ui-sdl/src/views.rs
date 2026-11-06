@@ -7,7 +7,8 @@
 //! saírem de sincronia.
 
 use giochi_launcher_core::state::{
-    Filter, Overlay, Tab, KEYBOARD, KEYBOARD_COLS, QUICK_SETTINGS_ROWS, SETTINGS_CATEGORIES,
+    settings_ajustavel, Filter, Overlay, Tab, KEYBOARD, KEYBOARD_COLS, QUICK_SETTINGS_ROWS,
+    SETTINGS_CATEGORIES,
 };
 use giochi_launcher_core::{State, Zone};
 use sdl2::rect::Rect;
@@ -368,10 +369,18 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
             ("LB/RB", "Aba"),
             ("Select", "Ajustes"),
         ],
+        // Linha com valor ajustável: as setas ajustam, e a saída é o `B`.
+        // Sem isto o rodapé prometia "← Categorias" numa linha onde ← ajustava.
+        None if state.tab == Tab::Settings
+            && state.focus.zone == Zone::SettingsContent
+            && settings_ajustavel(state.settings_category, state.focus.index) =>
+        {
+            &[("←→", "Ajustar"), ("B", "Categorias"), ("↑↓", "Linha")]
+        }
         None if state.tab == Tab::Settings => &[
             ("A", "Abrir"),
-            ("←→", "Ajustar"),
             ("←", "Categorias"),
+            ("↑↓", "Linha"),
             ("B", "Voltar"),
         ],
         None => &[
@@ -939,9 +948,21 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
 /// dessincronizado do foco. Aqui há um teste que compara os dois.
 fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
     match category {
+        // Estes dois diziam o que **não é**:
+        //
+        // - "Tema Giochi Dark" sugeria uma lista de temas que não existe: a
+        //   paleta é constante em `theme.rs`, uma só. O usuário apertou → para
+        //   trocar e nada aconteceu, porque nada havia para trocar.
+        // - "Letterbox centrado, sem corte" descrevia o layout anterior. Desde
+        //   `draw::projecao` não há letterbox: a área de projeto **é** o painel
+        //   (0,00 % de preto medido nos dois aparelhos).
+        //
+        // Substituto de dado ausente precisa ser declarado ausente, não
+        // preenchido com o que era verdade antes — a mesma regra do
+        // `year_label()`, que formatava o id do cartão.
         "appearance" => vec![
-            ("Tema Giochi Dark".into(), "Otimizado para OLED".into()),
-            ("Escala da interface".into(), "Letterbox centrado, sem corte".into()),
+            ("Tema".into(), "Giochi Dark (único)".into()),
+            ("Escala".into(), "acompanha o painel".into()),
         ],
         "sound" => vec![
             ("Volume geral".into(), format!("{}%", state.settings.volume)),

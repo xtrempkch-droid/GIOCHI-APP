@@ -445,7 +445,7 @@ bash scripts/migrar-do-antecessor.sh <clone>   # migra do antecessor
 
 bash scripts/compilar-launcher.sh         # build do launcher (x86-64), resolve o SDL2
 bash scripts/compilar-launcher-arm64.sh   # cross-compile (acha o aparelho sozinho)
-cd app/launcher && cargo test --workspace  # 169 testes do launcher
+cd app/launcher && cargo test --workspace  # 173 testes do launcher
 ```
 
 ### Ferramentas do aparelho
@@ -682,7 +682,7 @@ descartadas: egui (desenho custom limitado) e Slint (DSL + runtime grande para
 
 | Item | Estado |
 | --- | --- |
-| `crates/core` — 7 módulos, 64 testes | **compila, testa e passa** |
+| `crates/core` — 7 módulos, 68 testes | **compila, testa e passa** |
 | `crates/ui-sdl` — 13 módulos, 105 testes | **compila, linka e roda** |
 | `cargo build --workspace` | zero erro, zero aviso, com e sem a feature `texto` |
 | Execução real | **roda** — `--dump-frame` grava a Home em BMP |
@@ -1094,6 +1094,46 @@ alcance; são ações diferentes do usuário.
 - **`wpa_cli` está em `/usr/sbin` e `ip` em `/sbin`.** O PATH do `giochi-init`
   cobre os dois, mas o launcher também é iniciado à mão por SSH no diagnóstico.
   `semfio::programa()` procura nos diretórios padrão antes de desistir.
+
+#### O bug da seta esquerda — 169 testes verdes e a tela sem saída
+
+Relatado pelo usuário **depois** de tudo medido e commitado:
+
+> "se eu entrar em uma das configs não consigo voltar… aperto seta para direita
+> para trocar o tema depois se eu apertar seta para esquerda ele não faz nada"
+
+A causa era uma linha minha: o `if` de "linha ajustável" rodava **antes** de
+`navigate()` e terminava em `return state`, engolindo a seta esquerda de toda
+linha que não fosse o volume. O ramo `SettingsContent + ← → Sidebar` existia em
+`focus.rs`, estava testado, e era **inalcançável** pelo reducer.
+
+A regra correta separa dado de controle de fluxo:
+`state::settings_ajustavel(category, index)`. Linha com valor → setas ajustam;
+linha sem valor → setas navegam; `B` sobe um nível sempre, inclusive sem overlay.
+Quem desenha consulta a mesma função para escolher as dicas do rodapé — antes o
+rodapé prometia `← Categorias` numa linha onde `←` ajustava.
+
+**Como passou por 169 testes:** o teste olhava o estado, não o caminho.
+`focus.rs` provava `SettingsContent + ← → Sidebar` isolado; ninguém verificava que
+o **reducer** deixava a seta chegar lá. Agora
+`sair_do_painel_com_esquerda_funciona_em_toda_linha` percorre as seis categorias ×
+todas as linhas.
+
+**Medido no X55**, anel em espaço de projeto: `--foco conteudo:0` → x 446..1107
+(linha "Tema", preso); `--teclas right,left` → x 172..419 (coluna esquerda);
+`--teclas right,b` → x 172..419.
+
+#### As linhas de aparência mentiam — e o tema não existe
+
+Junto veio o motivo de o usuário ter apertado `→` esperando algo: "Tema Giochi
+Dark" sugeria uma lista de temas e há **um**, constante em `theme.rs`.
+"Escala da interface — Letterbox centrado, sem corte" descrevia o layout
+**anterior** — desde `draw::projecao` não há letterbox (0,00 % de preto medido).
+Agora dizem `"Tema — Giochi Dark (único)"` e `"Escala — acompanha o painel"`.
+
+**Trocar de tema de verdade exige paleta em tempo de execução** e não foi feito:
+`theme::ACCENT` é `const` em centenas de lugares, e mexer nisso arrisca o layout
+que acabou de ser medido. Declarado, não fingido.
 
 #### O que ainda não foi provado
 

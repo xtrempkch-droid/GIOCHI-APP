@@ -193,6 +193,10 @@ aparelho** — é a mesma distinção que fez o letterbox passar despercebido an
 SDL_VIDEODRIVER=dummy app/launcher/bin/giochi-launcher \
   --tamanho 640x480 --tela wifi --dump-frame /tmp/wifi.bmp
 
+# navegação: onde o anel está, e para onde ele vai depois de uma tecla
+giochi-launcher --tela ajustes --categoria appearance --foco conteudo:0 \
+  --teclas right,left --dump-frame /tmp/depois.bmp
+
 # no aparelho, com a varredura de verdade
 giochi-launcher --tela wifi --rede-real --esperar-ms 12000 --dump-frame /tmp/wifi.bmp
 
@@ -212,9 +216,85 @@ Sem ele, "tem anel" e "não tem anel" produzem o mesmo BMP.
 fotografar o layout e péssimo para provar que o `wpa_cli` funciona: a foto
 mostraria números inventados e chamaria de sucesso.
 
+`--teclas right,left` e `--categoria sound` existem pelo bug da seta esquerda:
+`--foco` sozinho posiciona o destaque, mas não mostra o **resultado de andar** — e
+foi uma seta que não voltava que passou por 169 testes verdes. Com os dois, o
+caminho inteiro é verificável sem dedo na tela, e o log diz onde o foco parou:
+
+```text
+--categoria: appearance (indice 0)
+foco forcado por --foco: SettingsContent 0 (categoria 0)
+--teclas: right,left -> foco SettingsSidebar 0
+```
+
 ---
 
-## 7. Como o foco e o desenho não divergem
+## 7. O bug da seta esquerda — e o que ele ensina
+
+Relatado no aparelho, depois de tudo verde:
+
+> "se eu entrar em uma das configs não consigo voltar… aperto seta para direita
+> para trocar o tema depois se eu apertar seta para esquerda ele não faz nada"
+
+**169 testes passando e a tela sem saída.** A causa era minha, e de uma linha:
+
+```rust
+if zone == Zone::SettingsContent && matches!(dir, Left | Right) {
+    if categoria == "sound" && index == 0 { /* ajusta volume */ }
+    return state;   // ← engole a seta esquerda de TODA outra linha
+}
+```
+
+Esse `if` rodava **antes** de `navigate()`, então `←` nunca chegava ao código que
+devolve o foco à coluna. O ramo existia, estava testado em `focus.rs`, e era
+**inalcançável**.
+
+A regra correta separa dado de controle de fluxo:
+
+```rust
+pub fn settings_ajustavel(category: usize, index: usize) -> bool
+```
+
+- linha **com** valor → `←`/`→` ajustam (volume, desempenho);
+- linha **sem** valor → as setas caem no `navigate()` e `←` volta para a coluna;
+- `B` sobe um nível **sempre**, inclusive sem overlay.
+
+Quem desenha consulta a mesma função para escolher as dicas do rodapé. Antes o
+rodapé prometia `← Categorias` numa linha onde `←` ajustava: duas descrições do
+mesmo fato, e a errada era a que o usuário lia.
+
+### As duas linhas de aparência mentiam
+
+Junto com o bug apareceu o motivo de o usuário ter apertado `→` esperando algo:
+
+| Dizia | Era |
+| --- | --- |
+| "Tema Giochi Dark — Otimizado para OLED" | **um** tema, constante em `theme.rs`; `→` nunca poderia trocar |
+| "Escala da interface — Letterbox centrado, sem corte" | o layout **anterior**; desde `draw::projecao` não há letterbox (0,00 % de preto medido) |
+
+Agora dizem `"Tema — Giochi Dark (único)"` e `"Escala — acompanha o painel"`. É a
+mesma regra do `year_label()`: substituto de dado ausente precisa ser declarado
+ausente, não preenchido com o que era verdade antes.
+
+**Trocar de tema de verdade exige uma paleta em tempo de execução** — hoje
+`theme::ACCENT` é `const` e aparece em centenas de lugares. Não foi feito: seria
+um refactor grande com risco real de regressão no layout que acabou de ser
+medido. Fica declarado em vez de fingido.
+
+### Como isto passou por 169 testes
+
+O teste olhava o estado, não o caminho. `focus.rs` provava que
+`SettingsContent + ← → Sidebar` funciona — e funcionava, isolado. O que ninguém
+verificava era que o **reducer** deixa a seta chegar lá.
+
+Agora há `sair_do_painel_com_esquerda_funciona_em_toda_linha`, que percorre as
+seis categorias × todas as linhas e reprova qualquer combinação que não devolva o
+foco à coluna — inclusive categorias que ainda não existem, quando existirem.
+
+E, no aparelho, `--teclas` prova o caminho de verdade: com `--foco conteudo:0` o
+anel está em x 446..1107; depois de `--teclas right,left` ele está em x 172..419.
+
+## 8. Como o foco e o desenho não divergem
 
 `SETTINGS_CATEGORIES` no núcleo decide quantas linhas o foco pode percorrer
 (`settings_rows`). O desenho monta as mesmas linhas em

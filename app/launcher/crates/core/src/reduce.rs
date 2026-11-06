@@ -361,18 +361,42 @@ fn nav(state: State, dir: Dir) -> State {
         };
     }
 
-    // Configurações: ← → numa linha do painel ajustam o valor, não navegam.
-    if state.focus.zone == Zone::SettingsContent && matches!(dir, Dir::Left | Dir::Right) {
+    // Configurações: ← → **só** ajustam quando a linha tem o que ajustar.
+    //
+    // ## O bug que isto conserta
+    //
+    // A versão anterior tratava toda linha do painel como ajustável e terminava
+    // com `return state`, que descarta a seta esquerda antes de `navigate()` vê-la.
+    // Resultado medido no aparelho: entrar em "Aparência → Tema", apertar ← e
+    // nada acontecer — o painel não tinha saída, e o `← Categorias` do rodapé
+    // era promessa vazia.
+    //
+    // A consulta agora é à mesma função que o desenho usa
+    // (`settings_ajustavel`), então linha ajustável e linha navegável não podem
+    // divergir. Nas demais, a seta cai no `navigate()` e `←` volta para a coluna.
+    if state.focus.zone == Zone::SettingsContent
+        && matches!(dir, Dir::Left | Dir::Right)
+        && crate::state::settings_ajustavel(state.settings_category, state.focus.index)
+    {
+        let passo: isize = if dir == Dir::Right { 1 } else { -1 };
         let categoria = crate::state::SETTINGS_CATEGORIES
             .get(state.settings_category)
             .copied()
-            .unwrap_or("about");
-        if categoria == "sound" && state.focus.index == 0 {
-            let delta: i16 = if dir == Dir::Right { 5 } else { -5 };
-            let alvo = state.settings.volume as i16 + delta;
-            return set_volume(state, alvo);
-        }
-        return state;
+            .unwrap_or("");
+        return match categoria {
+            "sound" => {
+                let alvo = state.settings.volume as i16 + (passo * 5) as i16;
+                set_volume(state, alvo)
+            }
+            "system" => State {
+                settings: Settings {
+                    perf: state.settings.perf.step(passo),
+                    ..state.settings
+                },
+                ..state
+            },
+            _ => state,
+        };
     }
 
     // Filtros: horizontal troca o filtro ativo.
@@ -712,6 +736,25 @@ fn push(state: State, overlay: Overlay) -> State {
 /// Desempilha e devolve o foco para onde estava.
 fn go_back(state: State) -> State {
     if state.overlays.is_empty() {
+        // Sem overlay, "voltar" sobe um nível dentro da própria aba.
+        //
+        // Antes isto devolvia o estado intacto: dentro do painel de
+        // configurações `B` não fazia nada, e como `←` também estava engolido
+        // pela linha ajustável, a tela não tinha **nenhuma** saída. Quem entra
+        // numa categoria fica preso se as duas rotas de volta falham juntas.
+        //
+        // Vale só para o painel: nas abas de conteúdo único (Home, Biblioteca)
+        // não há nível acima, e voltar continua sem efeito.
+        if state.focus.zone == Zone::SettingsContent {
+            return focus_on(
+                State {
+                    focus: Focus::at(Zone::SettingsSidebar, state.settings_category),
+                    ..state
+                },
+                Zone::SettingsSidebar,
+                state.settings_category,
+            );
+        }
         return state;
     }
 
@@ -1360,6 +1403,97 @@ mod tests {
         let s = demo();
         let after = reduce(s.clone(), Cmd::TickHud);
         assert_eq!(s, after, "TickHud é no-op até haver leitura real");
+    }
+
+    /// O bug relatado no aparelho: "se eu entrar em uma das configs não
+    /// consigo voltar".
+    ///
+    /// A causa era um `if` de linha ajustável que terminava em `return state` e
+    /// descartava a seta esquerda **antes** de `navigate()` rodar. O teste
+    /// percorre as seis categorias e todas as linhas de cada uma: qualquer uma
+    /// que não devolva o foco à coluna reprova aqui, e nenhuma combinação nova
+    /// escapa.
+    #[test]
+    fn sair_do_painel_com_esquerda_funciona_em_toda_linha() {
+        for (cat, _) in crate::state::SETTINGS_CATEGORIES.iter().enumerate() {
+            let linhas = crate::state::settings_rows(cat);
+            for linha in 0..linhas {
+                let mut s = demo();
+                s.tab = Tab::Settings;
+                s.settings_category = cat;
+                s.focus = Focus::at(Zone::SettingsContent, linha);
+
+                s = reduce(s, Cmd::Nav(Dir::Left));
+
+                // Linha ajustável: ← ajusta, então o foco **fica**. É o único
+                // caso legítimo de não voltar, e tem saída pelo `B`.
+                if crate::state::settings_ajustavel(cat, linha) {
+                    assert_eq!(
+                        s.focus.zone,
+                        Zone::SettingsContent,
+                        "categoria {cat} linha {linha}: ajustável, ← deve ajustar"
+                    );
+                    continue;
+                }
+
+                assert_eq!(
+                    s.focus.zone,
+                    Zone::SettingsSidebar,
+                    "categoria {cat} linha {linha}: ← NÃO voltou para a coluna"
+                );
+                assert_eq!(
+                    s.focus.index, cat,
+                    "categoria {cat} linha {linha}: voltou na categoria errada"
+                );
+            }
+        }
+    }
+
+    /// A outra saída: `B` sobe um nível mesmo sem overlay.
+    ///
+    /// Precisa existir porque nas linhas ajustáveis `←` não volta — e ter só
+    /// uma rota de saída foi o que transformou um bug pequeno em tela sem saída.
+    #[test]
+    fn b_volta_do_painel_para_a_coluna() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 1;
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+
+        s = reduce(s, Cmd::Back);
+        assert_eq!(s.focus.zone, Zone::SettingsSidebar);
+        assert_eq!(s.focus.index, 1);
+    }
+
+    #[test]
+    fn seta_na_linha_ajustavel_muda_o_valor_e_nao_o_foco() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 1; // som
+        s.settings.volume = 40;
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+
+        s = reduce(s, Cmd::Nav(Dir::Right));
+        assert_eq!(s.settings.volume, 45, "→ aumenta o volume");
+        assert_eq!(s.focus.zone, Zone::SettingsContent);
+
+        s = reduce(s, Cmd::Nav(Dir::Left));
+        assert_eq!(s.settings.volume, 40, "← diminui o volume");
+    }
+
+    #[test]
+    fn linha_nao_ajustavel_nao_tem_rodape_de_ajuste() {
+        // `settings_ajustavel` é consultada pelo rodapé; se ela dissesse "sim"
+        // para o tema, a tela voltaria a prometer um ajuste que não existe.
+        for (cat, _) in crate::state::SETTINGS_CATEGORIES.iter().enumerate() {
+            let nome = crate::state::SETTINGS_CATEGORIES[cat];
+            for linha in 0..crate::state::settings_rows(cat) {
+                let ajustavel = crate::state::settings_ajustavel(cat, linha);
+                if nome == "appearance" {
+                    assert!(!ajustavel, "aparência não tem valor ajustável");
+                }
+            }
+        }
     }
 
     #[test]

@@ -461,6 +461,31 @@ pub fn settings_rows(category: usize) -> usize {
     }
 }
 
+/// Uma linha do painel tem valor ajustável com ← →?
+///
+/// ## Por que isto é função, e não um `if` no reducer
+///
+/// Foi exatamente um `if` solto antes de `navigate()` que **engoliu a seta
+/// esquerda** e prendeu o usuário dentro do painel: a condição cobria qualquer
+/// linha, e o `return state` do ramo não-ajustável impedia a navegação de
+/// voltar para a coluna. A tela ficava sem saída — relatado no aparelho como
+/// "se eu entrar em uma das configs não consigo voltar".
+///
+/// A regra precisa ser **dado**, não controle de fluxo: quem desenha a tela e
+/// quem move o foco consultam a mesma resposta. `views` usa isto para escolher
+/// as dicas do rodapé, então a tela não pode prometer "←→ Ajustar" numa linha
+/// que não ajusta nada.
+pub fn settings_ajustavel(category: usize, index: usize) -> bool {
+    let categoria = SETTINGS_CATEGORIES.get(category).copied().unwrap_or("");
+    matches!(
+        (categoria, index),
+        // Volume geral: ±5 por passo.
+        ("sound", 0)
+        // Desempenho: Eco ↔ Balanceado ↔ Boost.
+        | ("system", 1)
+    )
+}
+
 /// Categorias da aba Config.
 pub const SETTINGS_CATEGORIES: [&str; 6] = [
     "appearance",
