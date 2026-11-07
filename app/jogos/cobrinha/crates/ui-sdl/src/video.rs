@@ -245,3 +245,142 @@ mod testes {
         assert_eq!(Rotacao::do_valor("lixo"), None);
     }
 }
+
+/// Quem está segurando o DRM master, se for caso.
+///
+/// ## Por que isto existe
+///
+/// Quando o KMSDRM falha, a mensagem que aparece é `kmsdrm not available` — ou,
+/// pior, `Is a DRM device that is a GPU and is being used by an X server`,
+/// que manda parar um X server que **não existe** no aparelho. A equipe da
+/// engine documentou a mesma armadilha (`KMSDRM.md` §8): o que segura o
+/// dispositivo é o **launcher do próprio console**.
+///
+/// O KMSDRM é exclusivo: um segundo processo não abre o mesmo conector. Então a
+/// pergunta útil não é "deu erro?", é **"quem está com ele?"** — e a resposta
+/// tem de sair na mensagem, com o comando que resolve.
+///
+/// Devolve a linha de comando do processo, se ele for do Giochi.
+pub fn quem_segura_o_drm() -> Option<String> {
+    let entradas = std::fs::read_dir("/proc").ok()?;
+    for entrada in entradas.flatten() {
+        let nome = entrada.file_name();
+        let nome = nome.to_string_lossy();
+        if !nome.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entrada.path().join("cmdline")) else {
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        let cmdline = String::from_utf8_lossy(&bytes).replace('\0', " ");
+        let cmdline = cmdline.trim();
+        // Só processos do Giochi interessam: apontar o `git` do usuário como
+        // culpado seria a mesma mentira do "pare seu X server".
+        if cmdline.contains("giochi-launcher") || cmdline.contains("giochi-init") {
+            return Some(format!("pid {nome}: {cmdline}"));
+        }
+    }
+    None
+}
+
+/// Mensagem para quando o dispositivo de vídeo não abre.
+///
+/// Separa três causas que exigem ações diferentes:
+///
+/// | causa | o que a mensagem diz |
+/// | --- | --- |
+/// | ninguém do Giochi está rodando | o driver não expõe KMSDRM |
+/// | o launcher está rodando | ele segura o DRM; libere e tente de novo |
+/// | só o `giochi-init` | o supervisor está sozinho (provável `RESTART_MAX`) |
+pub fn erro_de_video(original: &str) -> String {
+    let mut msg = format!("não consegui abrir o vídeo ({original}).");
+
+    if !std::path::Path::new("/dev/dri/card0").exists() {
+        msg.push_str(
+            "\n  /dev/dri/card0 não existe: o driver não expôs o conector.",
+        );
+        msg.push_str("\n  Isso é imagem/driver (Giochi System), não o app.");
+        return msg;
+    }
+
+    match quem_segura_o_drm() {
+        Some(quem) if quem.contains("giochi-launcher") => {
+            msg.push_str(&format!("\n  O launcher está rodando e detém o DRM master: {quem}"));
+            msg.push_str(
+                "\n  O KMSDRM é exclusivo — um segundo processo não abre o conector.",
+            );
+            msg.push_str(
+                "\n  \"pare seu X server\" não se aplica: não há X nem Wayland neste aparelho.",
+            );
+            msg.push_str("\n  Libere o console e tente de novo:");
+            msg.push_str("\n    bash scripts/aparelho.sh verificar-jogo <jogo>");
+        }
+        Some(quem) => {
+            msg.push_str(&format!("\n  O supervisor está sozinho: {quem}"));
+            msg.push_str(
+                "\n  Provável `RESTART_MAX` esgotado (5 quedas em 60 s): ele para de",
+            );
+            msg.push_str(
+                "\n  reiniciar e fica dormindo. `bash scripts/aparelho.sh subir` reinicia",
+            );
+            msg.push_str("\n  o supervisor e recupera a cota.");
+        }
+        None => {
+            msg.push_str(
+                "\n  Nenhum processo do Giochi está rodando, então ninguém segura o DRM:",
+            );
+            msg.push_str("\n  o driver não abriu o conector (imagem/driver, Giochi System).");
+        }
+    }
+    msg
+}
+
+#[cfg(test)]
+mod testes_erro {
+    use super::*;
+
+    #[test]
+    fn a_mensagem_sempre_nomeia_uma_causa() {
+        // A regra que veio do campo: mensagem que sugere a causa errada custa
+        // mais que nenhuma mensagem. Qualquer que seja o ramo, ela tem de dizer
+        // de quem é o problema.
+        let msg = erro_de_video("kmsdrm not available");
+        assert!(msg.contains("kmsdrm not available"), "preserva o erro original");
+        assert!(
+            msg.contains("/dev/dri/card0")
+                || msg.contains("DRM master")
+                || msg.contains("RESTART_MAX")
+                || msg.contains("driver"),
+            "mensagem sem causa identificável: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_deteccao_nao_casa_com_o_proprio_processo_de_teste() {
+        // O processo que procura também aparece na lista — foi assim que o
+        // `pid_do_giochi_init` do `aparelho.sh` devolveu o pid do próprio
+        // `ssh`. Aqui a busca filtra por nome do Giochi, e o binário de teste
+        // não é o launcher.
+        let proprio = std::fs::read("/proc/self/cmdline")
+            .map(|b| String::from_utf8_lossy(&b).replace('\0', " "))
+            .unwrap_or_default();
+        assert!(
+            !proprio.contains("giochi-launcher"),
+            "o binário de teste não pode se identificar como launcher"
+        );
+    }
+
+    #[test]
+    fn a_mensagem_nega_o_x_server_quando_o_launcher_segura() {
+        // A frase "stop your X server" aparece em app com KMSDRM e manda
+        // procurar um servidor gráfico que este aparelho não tem.
+        let msg = erro_de_video("Is a DRM device that is a GPU and is being used by an X server");
+        assert!(
+            msg.contains("não há X nem Wayland") || msg.contains("/dev/dri/card0"),
+            "{msg}"
+        );
+    }
+}

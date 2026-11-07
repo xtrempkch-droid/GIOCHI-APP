@@ -815,3 +815,99 @@ com o `cobrinha`:
 
 E ele força `SDL_RENDER_DRIVER=software`: com GLES o swap esvazia o buffer e o
 BMP sai preto, o que faria a função reprovar um jogo que desenha.
+
+## Duas armadilhas do KMSDRM (relatadas pela equipe da engine)
+
+A equipe do Giochi System documentou as duas em `KMSDRM.md` §8, e as duas já
+tinham custado uma sessão aqui antes de eles escreverem. Ficam registradas do
+nosso lado porque **quem opera o aparelho pelo toolkit é afetado primeiro**.
+
+### 1. O DRM master é do launcher, e a mensagem mente
+
+O KMSDRM é **exclusivo**: um segundo processo não abre o mesmo conector. Quando o
+launcher está rodando (e ele está sempre, supervisionado pelo `giochi-init`), o
+SDL/Mesa responde:
+
+```text
+kmsdrm not available
+```
+
+ou, pior:
+
+```text
+Is a DRM device that is a GPU and is being used by an X server
+```
+
+A segunda manda procurar um X server que **não existe** neste aparelho — não há
+X11 nem Wayland no rootfs. O que segura o dispositivo é o launcher do próprio
+console (PID do processo, não um servidor gráfico).
+
+Quem resolve é o toolkit, matando o launcher duas vezes na mesma sessão SSH (o
+`inittab` o ressuscita em ~1 s; matar uma vez só perde a corrida). O `cobrinha`
+agora também **detecta** e nomeia o dono:
+
+```text
+erro: não consegui abrir o vídeo (kmsdrm not available).
+  O launcher está rodando e detém o DRM master: pid 5426: /opt/giochi/apps/launcher/bin/giochi-launcher
+  O KMSDRM é exclusivo — um segundo processo não abre o conector.
+  "pare seu X server" não se aplica: não há X nem Wayland neste aparelho.
+```
+
+Três causas separadas na mensagem, porque exigem três ações diferentes:
+
+| causa detectada | o que fazer |
+| --- | --- |
+| `/dev/dri/card0` ausente | driver/imagem — é do **Giochi System** |
+| launcher rodando | liberar o console (`aparelho.sh verificar-jogo`) |
+| só o `giochi-init` vivo | `RESTART_MAX` esgotado — `aparelho.sh subir` |
+
+### 2. O supervisor desiste em silêncio e estaciona
+
+`giochi-init` com `RESTART_MAX=5` dentro de `RESTART_WINDOW` para de reiniciar o
+launcher e fica em `sleep 3600`: **vivo, para o kernel não ficar sem init, e com
+a tela preta**. Só sai sinalizando `giochi-init` — o `::respawn:` do `inittab` o
+reinicia com `restarts=0`.
+
+É o que aconteceu ao liberar o console para testar: cada `verificar` derruba o
+launcher uma vez, e seis rodadas seguidas deixam o aparelho sem interface. O
+efeito colateral aparece no **próximo** comando, não no que causou — o sintoma é
+"o launcher não volta", sem nenhum erro.
+
+`aparelho.sh subir` e `verificar` tratam: se o launcher não aparece em 30 s,
+matam o `giochi-init` e esperam mais 60 s. Medido:
+
+```text
+aviso o giochi-init (pid 4139) parou de reiniciar — provável RESTART_MAX
+  reiniciando o supervisor (o inittab o respawna com a cota zerada)
+ok   pid=5426 ppid=5422 drm=6
+```
+
+**Nada disso é contornável pelo app**: a cota é do supervisor. O que o app pode
+fazer é não piorar — e é por isso que o `verificar-jogo` faz as duas mortes na
+mesma sessão, em vez de uma por comando.
+
+## Catálogo ausente não vira catálogo inventado
+
+O Giochi System apontou (canal, 19:45) que `/opt/giochi/apps/index.json` **não
+existe na imagem** e o selftest avisa `[WARN] sem ... — a grade ficaria vazia`.
+
+A grade não ficava vazia: ficava **cheia de jogos que não existem**. O fallback
+desenhava quatro jogos de demonstração (Arcade Volleyball, Colossal Cave,
+Spacewar, Shattered Pixel Dungeon) e oito apps. Apertar A dava
+`este app não está no catálogo do sistema` — exatamente o cartão que aparece e
+não abre que `podar_sem_binario` existe para impedir.
+
+A regra agora:
+
+| situação | tela |
+| --- | --- |
+| catálogo válido | os apps do índice |
+| catálogo ausente ou vazio | **"Nenhum jogo instalado."** + onde ele é lido |
+| `--demo` | catálogo de demonstração (foto, protótipo) |
+
+Medido: catálogo ausente → **122 cores** (só a moldura); `--demo` → **318 cores**
+com os cartões. O CI ganhou um passo que reprova se o log disser `demonstração`
+sem `--demo`.
+
+Quem decide o conteúdo da imagem é o **Giochi System**: se `index.json` deve ir
+junto, é lá. Do lado do app, a obrigação é não inventar.

@@ -442,11 +442,17 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     let m = Moldura::de(p);
     let n = state.games.len();
     if n == 0 {
+        // Duas linhas em vez de uma: "Catálogo vazio" descreve o sintoma, e
+        // quem está com o aparelho na mão precisa saber a causa. Aconteceu
+        // numa imagem nova, sem `index.json`, e a tela não dizia o que fazer.
+        let cx = m.safe_x + m.safe_w / 2;
+        let cy = m.top + m.main_h / 2;
+        p.text_center(cx, cy - m.e(10), "Nenhum jogo instalado.", theme::F_SMALL, theme::TEXT);
         p.text_center(
-            m.safe_x + m.safe_w / 2,
-            m.top + m.main_h / 2,
-            "Catálogo vazio.",
-            theme::F_SMALL,
+            cx,
+            cy + m.e(10),
+            "o launcher lê /opt/giochi/apps/index.json",
+            theme::F_TINY,
             theme::FAINT,
         );
         return;

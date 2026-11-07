@@ -78,6 +78,37 @@ jobs:
       #
       # O mixer ALSA não aparece aqui: ele é `dlopen` em tempo de execução, sem
       # feature e sem `-lasound`.
+      # A imagem nova não tem `/opt/giochi/apps/index.json` — o Giochi System
+      # avisou disso pelo canal. Antes, o launcher respondia com quatro jogos de
+      # demonstração que **não existem no aparelho**: cartão que aparece e não
+      # abre, que é o que `podar_sem_binario` existe para impedir.
+      #
+      # A regra agora é: sem catálogo, tela vazia e honesta; demonstração só com
+      # `--demo`. A asserção é por texto no log, não por contagem de cores, que
+      # quebraria na primeira mudança de paleta.
+      - name: Catalogo ausente nao inventa jogos
+        working-directory: app/launcher
+        run: |
+          set -e
+          printf '{"schemaVersion":1,"apps":[]}\n' > /tmp/vazio.json
+          export SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software
+          export GIOCHI_CATALOGO=/tmp/vazio.json
+
+          ./target/debug/giochi-launcher --dump-frame /tmp/sem.bmp \
+            --tamanho 640x480 > /tmp/sem.log 2>&1
+          test -s /tmp/sem.bmp
+          grep -q "nenhum app com binário presente" /tmp/sem.log
+          if grep -q "demonstração" /tmp/sem.log; then
+            echo "sem --demo o launcher nao pode usar o catalogo de demonstracao"
+            exit 1
+          fi
+          echo "sem catalogo: tela vazia, sem cartao falso"
+
+          ./target/debug/giochi-launcher --demo --dump-frame /tmp/com.bmp \
+            --tamanho 640x480 > /tmp/com.log 2>&1
+          grep -q -- "--demo: usando catálogo de demonstração" /tmp/com.log
+          echo "--demo: catalogo de demonstracao, como pedido"
+
       - name: Build com e sem texto
         working-directory: app/launcher/crates/ui-sdl
         run: |

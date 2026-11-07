@@ -24,6 +24,19 @@ O que existe hoje, verificado:
 | `compilar-launcher.sh --testes` | 223/223 Rust |
 | `compilar-loja.sh --testes` | 116/116 Rust |
 
+**Catálogo ausente não vira catálogo inventado.** Sem `index.json` (o normal numa
+imagem recém-gravada), o launcher mostra "Nenhum jogo instalado." — antes mostrava
+quatro jogos de demonstração que não existem no aparelho, e apertar A dava erro.
+Demonstração só com `--demo`. Medido: 122 cores (vazia) contra 318 (`--demo`).
+
+**As duas armadilhas do KMSDRM** (o System documentou em `KMSDRM.md` §8; detalhe
+em [`docs/ferramentas.md`](docs/ferramentas.md#duas-armadilhas-do-kmsdrm-relatadas-pela-equipe-da-engine)):
+
+1. quem segura o DRM master é **o launcher**, não um X server — a mensagem do
+   Mesa é enganosa e o app agora nomeia o processo;
+2. o `giochi-init` **desiste** após 5 quedas em 60 s e estaciona em `sleep 3600`
+   com a tela preta; só sai sinalizando-o, e o `inittab` devolve a cota.
+
 O que roda no aparelho: **o launcher e o `cobrinha`**. O launcher desenha com
 catálogo vazio (cai no catálogo de demonstração) — medido: 354 cores, 0,00 % de
 preto em 1280×720. O `cobrinha` compila para aarch64 (356 KB, `NEEDED` = SDL2 +
@@ -3232,3 +3245,203 @@ launcher não tinha voltado. Agora a comparação é **exata**
 
 É a mesma família de `pkill -f giochi-launcher` matando a sessão SSH: **o
 processo que procura também aparece na lista**.
+
+## 24. Imagem nova do R35S e a engine: o que rodou (07/11/2026)
+
+Rodada de teste pedida pelo dono: **"nova engine (requer muitos testes)"** e
+**"nova imagem no R35S ligada via ssh e ttl — teste tudo"**. Este repositório
+continua sendo o app; os dois motores vivem em repositórios próprios no mesmo
+workspace (`GIOCHI-ENGINE`, 2D; `GIOCHI-ENGINE-3D`). O que segue foi executado,
+não deduzido.
+
+### O ambiente medido
+
+| Item | Valor |
+| --- | --- |
+| R35S | kernel `6.12.0 #1 SMP PREEMPT Sat Nov 7 07:47:25 -03 2026`, Buildroot 2024.02, 964 MB |
+| acesso | **`usb0`, `10.55.0.2`, chave** — e a serial em `/dev/ttyUSB0` continua disponível |
+| painel | `640x480`, `fbcon/rotate=0` → `Rotation::None` |
+| build da imagem | commit `1c197a1`, `built_at_utc=2026-11-07T09:00:38Z` |
+| `/etc/giochi` | `buttons.map`, `loja-publica.pem`, `licenca-publica.pem`, `pontos-de-montagem`, `asound.state`, `build-info.txt` |
+| **`/dev/uinput`** | **ausente** — não há como sintetizar entrada no aparelho |
+| `SDL_VIDEODRIVER=dummy` | **não existe** nesta imagem: `dummy not available`; teste headless no aparelho é sempre KMSDRM |
+
+### Números da rodada
+
+```text
+GIOCHI-APP      validate 6 apps · 189 testes JS · 90 testes Python · 223 testes Rust
+                launcher aarch64 instalado (sha256 conferido) · quadro 640x480, 300 cores, 0,00% preto
+                comparação com o PC: 97,6% · texto ok (linhas 0,96)
+GIOCHI-ENGINE   fmt · clippy · 45 testes · doc · 5 exemplos — e RODA no R35S
+GIOCHI-ENGINE-3D fmt · clippy · 209 testes · doc · header C · ffi-smoke (C e Python) — e RODA no R35S
+GIOCHI-SYSTEM   417 testes
+```
+
+### A engine no aparelho: "abriu" não é "desenhou"
+
+Os dois motores abriam e não havia como provar que desenhavam, porque nenhum dos
+dois tinha captura de quadro. Duas ferramentas nasceram desta rodada, e são o que
+separa as duas afirmações:
+
+- **`giochi-demo --quadro <arquivo.bmp>`** (3D) — laço manual, `read_pixels` antes
+  do swap e escritor de BMP próprio;
+- **`examples/captura.rs`** (2D) — desenha cinco retângulos primários e grava o
+  BMP do tamanho do destino.
+
+Medido no R35S, sem tela e por SSH:
+
+```text
+2D   captura --quadro /tmp/cap2d.bmp  → 640x480, 6 cores,
+     amostras: vermelho (255,0,0) verde (0,255,0) azul (0,0,255)
+               amarelo (255,255,0) magenta (255,0,255) fundo (10,20,40)
+3D   demo --frames 5 --quadro → 640x480, 6 cores, 0,00% preto
+3D   lua teste-render.lua     → 452 quadros desenhados, VmRSS 22,1 MB
+2D   mini_game                → VmRSS 21,6 MB, sem erro
+```
+
+As cores saem **exatamente** como pedidas: é o renderizador provado, não o log.
+
+### Três bugs de build que o cross-compile da 3D expôs
+
+Nenhum é do aparelho; os três são do *host*, e todos aparecem como erro de link
+que não cita a causa:
+
+1. **`pkg-config` do host responde primeiro.** Sem `PKG_CONFIG_LIBDIR` apontando
+   ao sysroot, o CMake do SDL2 *bundled* pega `libxkbcommon`, `libpulse` e
+   `libdecor` **x86-64** e o linker recusa com "skipping incompatible" três
+   vezes por biblioteca.
+2. **O `libm.so`/`libc.so` do staging do Buildroot são linker scripts com
+   caminho absoluto** (`/lib64/libm.so.6`, `/usr/lib64/libc_nonshared.a`) — válidos
+   no build do System, inexistentes aqui. A correção é um diretório de *stubs*
+   com os mesmos nomes apontando para os arquivos reais, injetado **antes** do
+   sysroot; `-L` no `RUSTFLAGS` não basta, porque o `pkg-config` emite o dele
+   primeiro.
+3. **`arch` do artefato.** `scripts/build-aarch64.sh` já confere com `file`; foi
+   ele que separou "compilou" de "compilou para a arquitetura certa".
+
+O wrapper que resolve 2 e 3 é `~/.cache/giochi-arm64/cc-r35s.sh` nesta máquina —
+ele reescreve `-L` colado **e** `-L` separado, porque o `pkg-config` e o `cargo`
+emitem as duas formas.
+
+### A imagem nova não decodifica PNG — e isso é config, não app
+
+**Achado principal da rodada**, com três medidas independentes:
+
+```text
+strings /usr/lib/libSDL2_image-2.0.so.0.800.2 → "PNG images are not supported"
+giochi-demo  (asset player.png)  → "Unsupported image format"
+c_smoke  da engine               → 2 falhas com BMP, 7 com PNG (todas o mesmo motivo)
+```
+
+A causa está no `defconfig`: `BR2_PACKAGE_SDL2_IMAGE=y` **não** liga o
+decodificador PNG — o `.mk` do Buildroot só passa `--enable-png` quando
+`BR2_PACKAGE_LIBPNG` existe por conta própria. Medido: **X55 e X35H declaram
+`LIBPNG=y`; o R35S não.**
+
+Corrigido em `GIOCHI-SYSTEM/device/r35s/defconfig`, com teste novo em
+`tests/engine-deps.test.mjs` que reprova os três aparelhos se a linha sumir
+(verificado: sem a linha o teste falha; com ela, 417/417 passam).
+
+**A imagem em uso no cartão ainda não tem a correção** — ela exige regravar. Até
+lá, o caminho para testar a engine é um BMP com nome `.png`: o `IMG_Load` detecta
+o formato pelo conteúdo, não pela extensão. Foi assim que os 452 quadros do Lua
+rodaram.
+
+### O `--teclas` não fazia nada, e imprimia um estado plausível
+
+O pior tipo de defeito em ferramenta de diagnóstico: resposta coerente e nenhum
+efeito. Medido no PC **e** no R35S:
+
+```text
+antes    --teclas r  → "foco HomeCarousel 0 | grade 4x8"
+depois   --teclas r  → "foco LibraryGrid 0 | grade 1x1"      ← 1 app no aparelho
+```
+
+Causa: a tela inicial é `Screen::Boot`, e `tab_step`/`nav` exigem
+`Screen::Running`. O `--teclas` aplica os comandos **antes** de entrar no laço,
+então nunca passava pelo `tick` que conta os quadros da animação de boot —
+os comandos eram descartados e o estado impresso era o inicial.
+
+Corrigido com `App::avancar_boot()`, chamado no ramo do `--teclas`. No PC:
+`r,down` → `LibraryGrid 2` (a célula de baixo numa grade de 2 colunas), `r,up` →
+`LibraryFilters`, `r,l2` cicla o filtro. No R35S, com catálogo de 1 app, a grade
+é `1x1` e `↓`/`→` não movem — que é o comportamento correto para um item.
+
+### O `instalar-pacote` recusava pacote que o aparelho aceitava
+
+```text
+PC      FALHA: assinatura Ed25519 não confere
+aparelho OK assinatura confere (373248 bytes)
+```
+
+O PC verificava com `~/.giochi/chave-privada-publica.pem` — uma chave de outra
+geração — e o aparelho com `/etc/giochi/loja-publica.pem`. Duas chaves, dois
+vereditos, e o sintoma aparecia como "pacote corrompido".
+
+Agora o `aparelho.sh instalar-pacote` **copia a chave do aparelho** e verifica com
+ela; sem chave no aparelho ele avisa que não conseguiu verificar em vez de usar
+uma qualquer. Verificar contra a chave errada é pior que não verificar, porque
+produz um veredito.
+
+Ciclo completo medido no R35S depois da correção: `empacotar` → `verificar` no PC
+com a chave do aparelho → `instalar-pacote` → `/user/apps/cobrinha` →
+`catálogo republicado` → `--lancar` → `giochi-cobrinha` filho do launcher.
+
+### A referência do PC podia ser gerada sem texto
+
+`gerar_referencia` usava `app/launcher/target/debug/giochi-launcher` com
+`>/dev/null 2>&1`. Depois de qualquer `cargo build --no-default-features`, esse
+binário fica **sem a feature `texto`**: desenha a tela inteira e nenhum glifo. A
+comparação cai de ~99% para ~96% **sem nenhuma regressão**, e o único sinal era o
+aviso em stderr que o script engolia.
+
+Agora o aviso vira erro com a instrução de recompilar. Verificado: com o binário
+sem texto, `verificar` responde `FALHA o binário do PC foi compilado SEM texto` e
+cai nas heurísticas.
+
+### O que explica os 2,4% que faltam (e não é o desenho)
+
+Medido, não suposto:
+
+- dois frames do **aparelho**, em execuções diferentes: **100,0%** iguais;
+- duas referências do **PC**, com o mesmo binário e o mesmo catálogo: **idênticas**
+  byte a byte (mesmo md5);
+- a diferença fica nas **faixas de texto** (topo, título do cartão, rodapé);
+- `SDL2_ttf` **2.22.0** no aparelho contra **2.24.0** no PC; a fonte é a mesma
+  (`DejaVuSans.ttf` chegou a ser trocado pela do aparelho e o número não mudou).
+
+Ou seja: layout e conteúdo iguais, rasterização de glifo diferente. O número
+honesto é **97,6% com texto ok**, e o que resta é versão de biblioteca de fonte,
+não erro de desenho.
+
+### A ABI C da engine no aparelho
+
+`libgiochi.so` aarch64 compilada contra o sysroot do R35S; `c_smoke.c` compilado
+com `aarch64-linux-gnu-gcc` e rodado no aparelho:
+
+```text
+com asset BMP   2 falhas — (1) largura==320 pedida vs 640x480 do painel;
+                            (2) o teste exige os bytes mágicos de PNG
+com asset PNG   7 falhas — todas "Unsupported image format" (o libpng que falta)
+```
+
+Conclusão: a ABI carrega, inicializa, lê asset e cria textura no aparelho. A
+falha de PNG é da imagem, e a de 320×240 é do teste — que assume desktop.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| PNG no R35S | **corrigido no defconfig, não na imagem em uso** — falta regravar |
+| entrada por botão no R35S | **não exercitada nesta rodada** — sem `/dev/uinput` não há como sintetizar; `--teclas` cobre a navegação, não o evdev |
+| áudio no R35S | **não distinguido** — `audio_test` degrada em silêncio por projeto; o mixer ALSA é provado pelo launcher (`volume: 100%`) |
+| desempenho (FPS) | **não medido** — segue pendente desde 04/11 |
+| `verificar` em 99,9% | **não acontece nesta imagem**: 97,6% é o teto com `SDL2_ttf` 2.22 × 2.24 |
+
+### Regra que sai desta rodada
+
+**Ferramenta de diagnóstico precisa de um teste que prove que ela mede.** O
+`--teclas` passou por 223 testes verdes e 20 minutos de coleta no aparelho
+imprimindo um estado que não tinha mudado. O que o pegou foi olhar o número
+esperado de uma medição anterior (`LibraryGrid`) e ver outro (`HomeCarousel`).
+MEDIR.md não basta: o valor tem de ser confrontado com o que já se sabia.

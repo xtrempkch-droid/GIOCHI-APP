@@ -292,6 +292,11 @@ fn main() -> Result<(), String> {
     // O catálogo vem do sistema. Sem ele, o launcher mostra o catálogo de
     // demonstração — o aparelho continua utilizável, mas nenhum app é
     // iniciável, porque não há caminho para executar.
+    // Catálogo de demonstração só por pedido explícito: ver o bloco do `Err`
+    // abaixo. Uma imagem recém-gravada não tem `index.json`, e mostrar jogos
+    // que não existem é pior que mostrar uma tela vazia e honesta.
+    let demo_explicito = args.iter().any(|a| a == "--demo");
+
     let (mut state, catalogo) = {
         let caminho = catalogo::caminho();
         match catalogo::Catalogo::carregar(&caminho) {
@@ -303,16 +308,43 @@ fn main() -> Result<(), String> {
                     eprintln!("catálogo: {slug} fora — {caminho} não existe (cartão removido?)");
                 });
                 if c.vazio() {
-                    eprintln!("catálogo: nenhum app com binário presente; usando demonstração");
-                    (State::new(demo_games(), demo_apps()), None)
+                    // Mesma regra do catálogo ausente: um app que está no
+                    // índice mas não tem binário não vira cartão. Se sobrar
+                    // zero, a tela diz isso — não finge que há jogos.
+                    eprintln!("catálogo: nenhum app com binário presente em {}", caminho.display());
+                    if demo_explicito {
+                        eprintln!("--demo: usando catálogo de demonstração");
+                        (State::new(demo_games(), demo_apps()), None)
+                    } else {
+                        (State::new(Vec::new(), demo_apps()), None)
+                    }
                 } else {
                     eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
                     (State::new(c.games.clone(), demo_apps()), Some(c))
                 }
             }
             Err(e) => {
-                eprintln!("catálogo: {e}; usando demonstração");
-                (State::new(demo_games(), demo_apps()), None)
+                // ## O catálogo de demonstração era um mentiroso
+                //
+                // Quando o `index.json` não existia, o launcher desenhava
+                // quatro jogos (Arcade Volleyball, Colossal Cave, Spacewar,
+                // Shattered Pixel Dungeon) e oito apps que **não estão no
+                // aparelho**. Apertar A dava "este app não está no catálogo do
+                // sistema" — um cartão que aparece e não abre, que é
+                // exatamente o que `podar_sem_binario` existe para impedir.
+                //
+                // O Giochi System avisou disso pelo canal: numa imagem nova o
+                // selftest dizia `[WARN] sem /opt/giochi/apps/index.json`.
+                // A resposta certa não é o System embarcar o arquivo; é o app
+                // **não inventar conteúdo**. A demonstração continua existindo
+                // para foto e protótipo, mas agora só com `--demo`.
+                eprintln!("catálogo: {e}");
+                if demo_explicito {
+                    eprintln!("--demo: usando catálogo de demonstração");
+                    (State::new(demo_games(), demo_apps()), None)
+                } else {
+                    (State::new(Vec::new(), demo_apps()), None)
+                }
             }
         }
     };

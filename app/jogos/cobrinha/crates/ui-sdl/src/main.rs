@@ -426,8 +426,11 @@ fn principal() -> Result<i32, String> {
         return Ok(0);
     }
 
-    let sdl = sdl2::init()?;
-    let video = sdl.video()?;
+    // A mensagem crua do SDL/Mesa é `kmsdrm not available` — ou "usado por um X
+    // server", que aqui manda parar um servidor que não existe. Trocar por uma
+    // que nomeia quem segura o DRM é o que transforma erro em instrução.
+    let sdl = sdl2::init().map_err(|e| video::erro_de_video(&e))?;
+    let video = sdl.video().map_err(|e| video::erro_de_video(&e))?;
     let _ttf = (); // sem SDL2_ttf: três `NEEDED`, nada de fonte.
 
     let painel = match o.tamanho {
