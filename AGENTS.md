@@ -4913,3 +4913,69 @@ E a flag `/run/giochi/dev-free-console` entrou no ciclo de captura: sem ela o
 supervisor ressuscita o launcher em ~1 s, o DRM nunca libera e o app errado leva
 a culpa. `iniciar_launcher` a remove antes de subir, senão o aparelho fica sem
 interface depois da primeira captura.
+
+## 35. Pendências para a próxima rodada (pedido do dono, 09/11/2026)
+
+Duas coisas, registradas aqui para não dependerem de memória. Nenhuma foi
+alterada nesta rodada — o dono disse "fica para próxima".
+
+### 1. "Parece que os carros estão correndo de ré" — causa localizada em leitura
+
+Não é física: é **180° entre o modelo e o rumo**. As duas convenções existem no
+código e discordam:
+
+| Onde | O que diz |
+| --- | --- |
+| `crates/core/src/carro.rs` — `direcao()` | `(sin(angulo), cos(angulo))` → com `angulo = 0` o carro **anda para +Z** |
+| `crates/ui-sdl/src/malha.rs` — `carro()` | faróis em `z = -2,14`, lanternas em `z = +2,14` → a **frente desenhada é -Z** |
+
+A rotação aplicada ao desenho é `Quat::from_axis_angle(UP, angulo)`, a mesma do
+rumo: um vetor `(0,0,-1)` girado por `θ` em Y dá `(-sin θ, -cos θ)`, que é
+**menos** a `direcao()`. Ou seja, o carro desenhado olha para o lado oposto ao
+que anda — e como a câmera fica atrás do movimento, o jogador vê os faróis
+apontando para ele. É exatamente "correndo de ré".
+
+O comentário de `malha::carro()` afirma que a frente é `-Z` "que é a convenção
+da câmera da engine". A engine de fato olha para `-Z`; o que não foi conferido é
+que a **física** usa `+Z`. Duas convenções documentadas em lugares diferentes, e
+ninguém as colocou lado a lado.
+
+**Duas correções possíveis, e a escolha depende de uma medição que falta:**
+
+1. **girar o desenho** — `matriz_do_carro` com `angulo + PI`. Uma linha, não
+   toca a física. Se a câmera já está correta em relação ao movimento (parece
+   estar, porque o jogador vê o carro de trás), esta é a correção cirúrgica.
+2. **inverter a malha** — frente em `+Z`, o que exige trocar o sinal de todos os
+   `z` de faróis, lanternas, capô, aerofólio e cabine. Mais linhas, e o risco de
+   deixar uma peça para trás é real.
+
+**O teste que faltava** (e que decide qual das duas): comparar a posição média
+dos faróis com `direcao()` no mesmo `angulo`. Enquanto ele não existe, nenhuma
+das duas convenções está afirmada por teste, e o defeito pode voltar em qualquer
+refatoração de malha. Vale escrever **antes** de corrigir.
+
+Não confirmei em imagem: o carro do jogador sai escuro no quadro noturno e não
+tem silhueta legível a 640×480. A leitura de código é conclusiva quanto ao
+sinal; o que falta é a imagem que mostre o efeito ao dono.
+
+### 2. Mais três mapas
+
+Pedido do dono: *"quero mais 3 mapas"*. O que existe hoje é `avenida` (962 m,
+plano) e `boavista` (1310 m, descida). O caminho já está aberto — `mapa.rs`
+declara comprimento, voltas, tempo limite, desnível e pontos de controle, e
+`--mapa <nome>` escolhe; `traco-voltas.mjs --mapa <nome>` mede a linha do tempo
+sem abrir janela.
+
+Duas coisas a lembrar de rodadas anteriores, para não redescobrir:
+
+- **a pista é dado, e o dado tem teste.** `a_pista_tem_o_que_o_jogo_promete`
+  mede comprimento, reta mais longa, praça de drift, túnel e raio da curva
+  fechada. Um ajuste de ponto de controle apaga qualquer um deles em silêncio, e
+  o sintoma é o jogador procurando uma curva que não existe.
+- **obstáculo nasce longe de qualquer trecho da pista** (`Pista::folga_em`).
+  Num laço fechado, o cenário do fim da volta cai sobre o começo — e com o
+  descarte de faces desligado isso vira uma parede cinza em vez de um erro.
+
+E o teto de 75 fps não muda com o mapa: o que muda é contagem de malha nova.
+**Cenário novo não pode criar malha nova** sem motivo — arco, passarela,
+outdoor e faixa de torre saem das malhas que já existem.
