@@ -4801,6 +4801,12 @@ O que faltava não era olhar a tela: era uma asserção. `CaixaTexto` tem
 **640×480, 800×600, 1280×720 e 720×1280** com `kmh` de 0 a 223. Reintroduzir o
 deslocamento fixo reprova **3 testes**.
 
+O antes e o depois, no mesmo comando (`--tela corrida --quadros 200 --teclas up
+--tamanho 640x480`, rodapé ampliado 4×): acima o "3" da marcha encosta no
+velocímetro e a barra vem logo abaixo; abaixo os três estão separados.
+
+![HUD do Neon Drift antes e depois](docs/imagens/neon-drift-hud-antes-depois.png)
+
 ### 2. A volta creditada na largada tinha duas causas
 
 **Avenida.** O carro nascia em `s = 0`, ambíguo num circuito fechado: o último
