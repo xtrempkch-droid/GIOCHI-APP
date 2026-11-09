@@ -4699,9 +4699,31 @@ boavista 600 quadros        fps=36.8  ms_cpu=9.57  desenhos=53
 boavista --so asfalto       fps=49.2  ms_cpu=1.32  desenhos=1     ← o piso
 avenida  600 quadros        fps=37.9  ms_cpu=8.96  desenhos=51
 avenida --sem-vsync         fps=37.4                            ← vsync não é o limite
-avenida GIOCHI_GLES=0       fps=36.9                            ← software dá o mesmo
 cobrinha, no mesmo instante fps=49.3                            ← o teto do conjunto
 ```
+
+> **Correção de 09/11/2026 (revisão de documentação).** Esta tabela tinha uma
+> linha `avenida GIOCHI_GLES=0 → 36.9 ← software dá o mesmo`, e ela **não mede o
+> que diz**. O jogo **não lê `GIOCHI_GLES`** — essa variável é do launcher
+> (`Painter::new`). As duas execuções rodaram com a mesma GPU e a diferença de
+> 1 fps era ruído; a conclusão "o backend gráfico não muda nada" saiu de uma
+> comparação entre duas coisas iguais.
+>
+> O que existe no jogo é `GIOCHI_GL_VERSION=2` (pede GLES 2.0 em vez de 3.0,
+> ainda GPU), e **não há caminho por software**: o neon-drift desenha por GL
+> direto, não pelo renderer do SDL. Quem quiser separar GPU de custo de cena
+> aqui precisa de outro método, e ele ainda não existe.
+>
+> Confirmado com duas execuções lado a lado, no PC:
+>
+> ```text
+> GIOCHI_GLES=0        → GLES 3   (ignorada; é variável do launcher)
+> GIOCHI_GL_VERSION=2  → GLES 2   (a que este jogo lê)
+> ```
+>
+> A lição é a desta casa, e é a segunda vez no mesmo dia: **uma variável que o
+> código não lê produz duas execuções idênticas, e "idêntico" vira conclusão.**
+> `grep` no binário antes de medir teria custado dez segundos.
 
 Três leituras que saem daí:
 
@@ -4712,10 +4734,10 @@ Três leituras que saem daí:
    texturas e do atlas, ele media 39,5 fps contra o mesmo piso de 49,2: a
    diferença é **~1,8 ms**, o preço de amostrar textura em todo pixel do mundo e
    em cada partícula.
-3. **`--sem-vsync` não muda nada e o backend gráfico também não** (36,9 com
-   software contra 36,8 com GLES). Neste tamanho o neon-drift não é limitado
-   nem por vsync nem por GPU: é o custo fixo de apresentação somado a ~7 ms de
-   cena.
+3. **`--sem-vsync` não muda nada** (37,4 contra 37,9). Neste tamanho o
+   neon-drift não é limitado por vsync: é o custo fixo de apresentação somado a
+   ~7 ms de cena. Sobre GPU, ver a correção acima — a medição anterior não
+   separava os dois.
 
 Quadro do jogo no aparelho contra o PC: **99,56 %** dentro de 6 níveis (66,46 %
 byte a byte). O que difere é a chuva, que avança por quadro renderizado — dois

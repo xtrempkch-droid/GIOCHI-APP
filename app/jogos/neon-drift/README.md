@@ -71,8 +71,16 @@ no X35H e no R35S sem uma linha de código por aparelho.
 O número do X35H não é "o jogo é pesado": com **uma** malha só o jogo marca 49,2
 e o `cobrinha` — outro jogo — marca 49,3 no mesmo minuto. O piso de apresentação
 daquele painel naquele momento era ~49 fps, e o neon-drift fica ~5 ms acima dele.
-`--sem-vsync` (37,4) e `GIOCHI_GLES=0` (36,9) não mudam nada, o que descarta vsync
-e GPU como causa.
+`--sem-vsync` (37,4 contra 37,9) não muda nada, o que tira o vsync da conta.
+
+**Correção de uma medição anterior:** a rodada de 09/11 registrou
+"`GIOCHI_GLES=0` → 36,9, o mesmo número, logo não é GPU". A conclusão não vale,
+porque **este jogo não lê `GIOCHI_GLES`** — essa variável é do launcher. As duas
+execuções rodaram com a mesma GPU e a diferença de 1 fps era ruído. O que existe
+aqui é `GIOCHI_GL_VERSION=2`, que pede GLES 2.0 em vez de 3.0 (ainda GPU, e o
+jogo **não** tem caminho por software: ele desenha por GL direto, não pelo
+renderer do SDL). Alguém que "desligue a GPU" com `GIOCHI_GLES=0` vai medir duas
+vezes a mesma coisa.
 
 ## Dois mapas: avenida e a descida
 
@@ -306,9 +314,12 @@ recusa `--fps-teto` fora de 1..75.
 | `--mapa boavista` | escolhe o mapa (`avenida` ou `boavista`) |
 | `--so asfalto` | desenha **uma** malha só |
 | `--so mundo` | desenha toda a geometria estática e mais nada |
-| `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine) |
-| `--sem-vsync` | não espera o vblank — mede o custo real do quadro |
 | `--teclas w,a,space` | teclas seguradas |
+| `--quadros N` | desenha N quadros e sai (mede fps quando há relógio) |
+| `--fps-teto 75` | baixa o limite de quadros (1 a 75; 75 é o padrão e o máximo) |
+| `--sem-som` | não abre o dispositivo de áudio |
+| `--sem-vsync` | pede troca de buffer sem espera (`GIOCHI_VSYNC=0`). No KMSDRM do aparelho **não tem efeito**: o `drmModePageFlip` continua esperando o campo, e é por isso que se mede comparando configurações, não buscando o "custo puro" |
+| `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso` e a contagem de cada tipo de partícula |
 
@@ -383,6 +394,38 @@ tipo; um arco custa **zero**.
 
 Medido no X55, com o jogo completo: **39 fps**, 45 desenhos, 770 partículas
 vivas, 26,7 MB de pico de RAM. No X35H/R35S o painel tem 1/3 dos pixels.
+
+## Som sintetizado, sem um `.wav` no repositório
+
+Três sons, gerados em runtime a 22 050 Hz (`crates/ui-sdl/src/audio.rs`):
+
+| Som | Como é feito |
+| --- | --- |
+| motor | dente-de-serra com frequência ligada ao RPM da marcha, mais ruído filtrado — a aspereza do dente-de-serra é o que o ouvido lê como motor |
+| derrapagem | ruído com passa-banda ressonante, ligado ao deslize lateral; **contínuo** enquanto derrapa |
+| nitro | varredura ascendente com ruído, somada ao motor |
+
+Nenhum arquivo de áudio, e os três motivos já custaram caro neste projeto:
+
+1. **Empacotamento** — um `.wav` é mais um caminho que pode faltar, e o sintoma
+   seria silêncio, indistinguível de "o mixer não abriu".
+2. **Licença** — som de motor baixado da internet é exatamente o conteúdo
+   protegido que o projeto não usa. Sintetizar é original por construção.
+3. **Memória** — 2 s de motor em 22 kHz são 88 KB; três sons disso num aparelho
+   de 964 MB que divide RAM com o sistema.
+
+Custa ~300 amostras por quadro a 75 Hz: nada. E os pesos vêm de `EstadoSom`, um
+struct de sete campos — o áudio **não conhece o jogo**, então dá para testar a
+síntese sem abrir dispositivo.
+
+Sem `libasound` na imagem o SDL2 não abre a saída e o jogo **avisa** em vez de
+morrer:
+
+```text
+som: não abri o dispositivo (...) — o jogo segue mudo
+```
+
+`--sem-som` faz o mesmo por escolha, e é o que o CI usa.
 
 ## As duas armadilhas de matriz de quad
 
