@@ -4402,11 +4402,11 @@ uma gaussiana centrada errada gera bytes válidos e desenha a nuvem fora do quad
 ### Números
 
 ```text
-cargo test --workspace   108 core + 113 SDL = 221   (eram 209; +12)
+cargo test --workspace   110 core + 113 SDL = 223   (eram 209; +14)
 tests/run-all.mjs        199/199 JS
 validate-app.mjs --all   8 apps válidos (1 em scaffold)
 verificar-jogos.mjs      ok nos 3 tamanhos
-aarch64                  647 224 bytes, sha256 af8aafe9…, NEEDED = SDL2 +
+aarch64                  647 432 bytes, sha256 2b7a4545…, NEEDED = SDL2 +
                          libgcc_s + libm + libc (o atlas não pede biblioteca nova)
 ```
 
@@ -4419,6 +4419,52 @@ aarch64                  647 224 bytes, sha256 af8aafe9…, NEEDED = SDL2 +
 | `alfa_da_forma` com degrau (`if r<0.5 {1} else {0}`) | `o_puff_desbota_em_muitos_texels_e_nao_em_degrau` |
 | célula com RGB 0 em vez de branco | `o_rgb_e_branco_e_so_o_alfa_desenha` |
 | `quad_celula` usa o UV inteiro (`quad()` no lugar) | `o_retangulo_de_cada_celula_cabe_no_atlas_e_nao_se_sobrepoe` |
+
+### O bug de física que apareceu ao testar: o carro andava de ré sozinho
+
+Medido depois do atlas, olhando `--json` num carro **parado** com `Entrada::PARADA`:
+
+```text
+passos=250  s=961.90  v=-0.50
+passos=300  s=961.10  v=-1.70
+passos=340  s=960.00  v=-2.60
+passos=400  s=957.20  v=-4.10     → e o clamp é -8,0, onde ele ficava
+```
+
+Não era falta de entrada: era `forca -= arrasto`. O arrasto (rolagem 1,6, mais
+`4,5` de atrito fora do asfalto) era somado como **força assinada**, e como ele
+cresce com `|v|` nunca chega a zero — então um carro parado tinha aceleração
+constante de `-1,6 m/s²` para trás. O comentário ao lado já prometia o
+contrário ("solta, o carro **desacelera**"), e nenhum teste olhava o repouso.
+
+Agora as forças estão separadas em dois grupos, que é a distinção que faltava:
+
+| Grupo | Quem | Pode tirar o carro do repouso? |
+| --- | --- | --- |
+| **mótricas** | motor, nitro, gravidade na ladeira, freio/ré | **sim** |
+| **resistivas** | rolagem, arrasto, atrito de fora | **não** — consomem velocidade existente, limitadas a ela |
+
+```rust
+let mut nova = vel + forca * dt;                 // só as mótricas
+let consumo = (resistencias * dt).min(nova.abs());
+nova -= consumo * nova.signum();                 // freia até zero, nunca inverte
+```
+
+Dois testes novos, e a mutação que os prova: voltar `nova -= resistencias * dt`
+faz **os dois** falharem — `parado_e_sem_entrada_o_carro_nao_anda_de_re` e
+`a_resistencia_freia_ate_zero_e_nao_inverte_o_sentido`.
+
+O que não mudou: uma corrida completa continua fechando nos dois mapas
+(`fase=Resultado`, `volta=3`, 41,4 s na avenida e 49,2 s na serra, piloto
+artificial), e o topo de velocidade não foi tocado — o arrasto enquanto se
+acelera continua em 0,55.
+
+**Uma observação que não reproduziu:** numa execução isolada o carro acelerou
+com `bits=0` e `teclas` zeradas (`acel=1.00` no diagnóstico). Três tentativas
+depois, com o mesmo comando, não repetiram, e a máscara lida no quadro esteve
+zerada em todas as amostras — o palpite é evento de teclado/controle real da
+máquina entrando pela janela do SDL, não estado do jogo. Fica registrado como
+não explicado, em vez de virar conclusão.
 
 ### O que continua sendo afirmação
 

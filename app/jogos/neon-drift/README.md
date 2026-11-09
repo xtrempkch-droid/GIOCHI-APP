@@ -145,7 +145,7 @@ emenda apareceria como uma faixa correndo ao lado do carro.
 | Peça | Como está |
 | --- | --- |
 | Pista | **dois mapas**: a avenida de **962 m** (reta de 170 m, praça de drift de 19 m de meia-largura, **túnel de 157 m**, curva de raio 20 m) e a descida de **1 309 m** com 74 m de desnível |
-| Carro | física arcade: 62 m/s no asfalto, **82 m/s com nitro**, derrapagem que só existe com o freio de mão |
+| Carro | física arcade: 62 m/s no asfalto, **82 m/s com nitro**, derrapagem que só existe com o freio de mão; rolagem e arrasto **freiam até zero e nunca empurram o carro para trás** |
 | Drift | combo até ×5, pontos por segundo de derrapagem; bater zera o combo e mantém o que já foi somado |
 | Adversários | três, com linha própria e freando na curva; ~9 s atrás de um piloto competente em duas voltas |
 | Câmera | terceira pessoa com atraso exponencial, inclinação na derrapagem, tremor na batida e **FOV que abre no nitro** |
@@ -266,7 +266,7 @@ Um quad é uma matriz de modelo de 4×4, e dois campos dela enganam:
 
 ```text
 crates/core/     regras puras: mapa, pista, carro, drift, IA, corrida, fonte,
-                 HUD, relógio e o piloto artificial. Sem SDL: 108 testes.
+                 HUD, relógio e o piloto artificial. Sem SDL: 110 testes.
 crates/ui-sdl/   cena 3D, efeitos, malhas, texturas e atlas de sprites
                  procedurais, áudio, evdev, entrada e o laço. É a única parte que
                  precisa de tela: 113 testes.

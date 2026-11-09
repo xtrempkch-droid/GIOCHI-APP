@@ -652,7 +652,11 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             break;
         }
 
-        let (entrada, acoes) = entrada_jogo::combinar(botoes.bits(), &teclas, corrida.fase);
+        // A máscara é lida **uma** vez. Lendo duas (uma para decidir, outra
+        // para qualquer uso posterior), uma borda de pressão pode cair entre as
+        // duas leituras e o quadro age sobre um estado que já mudou.
+        let bits_agora = botoes.bits();
+        let (entrada, acoes) = entrada_jogo::combinar(bits_agora, &teclas, corrida.fase);
         // Troca de mapa na tela de título: o mapa é **construtivo** (define
         // pista, relevo, voltas, cenário e até as malhas), então trocar é
         // reconstruir a corrida e a cena. `release_all` antes libera as malhas

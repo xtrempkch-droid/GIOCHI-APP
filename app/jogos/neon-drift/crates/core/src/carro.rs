@@ -305,7 +305,10 @@ impl Carro {
         let gravidade =
             -GRAVIDADE * inclinacao * if self.velocidade >= 0.0 { 1.0 } else { -1.0 };
 
-        let mut forca = motor + extra_nitro - arrasto - atrito_extra + gravidade;
+        // Forças **mótricas**: empurram o carro e podem, sozinhas, tirá-lo do
+        // repouso (motor, nitro, gravidade na ladeira e o pé no freio, que nesta
+        // física também é a ré).
+        let mut forca = motor + extra_nitro + gravidade;
 
         // Freio e ré são a mesma tecla com significados diferentes, e **não se
         // somam**: somados, o carro parava e entrava em ré no mesmo instante a
@@ -318,7 +321,20 @@ impl Carro {
             }
         }
 
-        self.velocidade = (vel + forca * dt).clamp(-8.0, VEL_NITRO_MAX);
+        let mut nova = vel + forca * dt;
+
+        // Rolagem, arrasto e atrito de fora **opõem o movimento**, e é isso que
+        // eles têm de fazer — aplicados como força assinada (era
+        // `forca -= arrasto`), eles empurravam um carro parado para trás:
+        // medido, o carro solto na linha de largada chegava a **-8 m/s** e
+        // ficava lá, porque `arrasto` cresce com `|v|` e nunca chega a zero.
+        // Aqui a resistência só consome velocidade existente, limitada a ela:
+        // freia até parar e nunca inverte o sentido.
+        let resistencias = arrasto + atrito_extra;
+        let consumo = (resistencias * dt).min(nova.abs());
+        nova -= consumo * nova.signum();
+
+        self.velocidade = nova.clamp(-8.0, VEL_NITRO_MAX);
 
         // ── direção ───────────────────────────────────────────────
         // Aderência: 1 no asfalto com o carro assentado, ~0,3 com o freio de mão.
@@ -940,6 +956,49 @@ mod testes {
             maior = maior.max(c.impacto);
         }
         assert!(maior > 0.6, "batida de frente marcou impacto só {maior:.2}");
+    }
+
+    #[test]
+    fn parado_e_sem_entrada_o_carro_nao_anda_de_re() {
+        // Medido antes da correção: o carro solto na linha de largada chegava a
+        // **-8 m/s** e ficava lá. `arrasto` era somado como força assinada
+        // (`forca -= arrasto`), e como ele cresce com `|v|` nunca chegava a
+        // zero — o carro parado tinha uma aceleração constante para trás de
+        // -1,6 m/s², do mesmo tipo de "anda de graça" que o freio-motor existe
+        // para evitar, só que ao contrário.
+        let pista = crate::pista::pista_de_teste();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, 0.0, 0.0);
+
+        let mut menor = 0.0f32;
+        for _ in 0..300 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+            menor = menor.min(c.velocidade);
+        }
+        assert!(
+            menor > -1e-3,
+            "o carro parado andou de ré até {menor:.2} m/s"
+        );
+    }
+
+    #[test]
+    fn a_resistencia_freia_ate_zero_e_nao_inverte_o_sentido() {
+        // A outra metade da mesma regra: com velocidade, a resistência tem de
+        // consumir o movimento até parar — e parar, não passar para o outro
+        // lado. Antes ela atravessava o zero e o carro terminava em ré.
+        let pista = crate::pista::pista_de_teste();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, 100.0, 0.0);
+        c.velocidade = 3.0;
+
+        for _ in 0..600 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+        }
+        assert!(
+            c.velocidade.abs() < 1e-3,
+            "soltando a 3 m/s o carro terminou em {:.2} m/s",
+            c.velocidade
+        );
     }
 
     #[test]
