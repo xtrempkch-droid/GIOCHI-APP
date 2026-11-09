@@ -5394,6 +5394,57 @@ que era a anomalia, não o relevo.
 Revertendo a correção (`0.0 * excesso`), o primeiro reprova com *"4 s depois de o
 nitro acabar o carro ainda estava a 79.8 m/s (topo sem nitro = 62)"*. Verificado.
 
+### 10. Validado no X35H — e o FPS que faltava desde §31
+
+As rodadas de §31 e §32 fecharam com "**nenhum número de FPS no aparelho**": o
+X35H tinha saído da rede nas três tentativas. Nesta ele apareceu em
+`10.55.0.2`, com **imagem nova** (host key trocada — o aviso fala de ataque MITM
+e é imagem regravada, `ssh-keygen -R 10.55.0.2`).
+
+Binário aarch64 instalado em `/user/apps/neon-drift/bin/` com sha256 conferido
+nas duas pontas (`b35c0b2f…`).
+
+```text
+mapa       fps    ms_cpu  desenhos  partículas
+avenida   37,0     9,70       51        663
+boavista  36,7     9,86       52          —
+circuito  37,1     9,45       53        682
+porto     36,6     9,96       51          —
+salar     35,6     9,77       53        671
+```
+
+**Os três mapas novos custam o mesmo que o antigo.** É o que a regra "cenário
+novo não cria malha nova" compra: barreiras, torres de luz e arquibancada do
+circuito deram **2 desenhos**, não 20.
+
+Quadros analisados dos BMPs do aparelho: boavista 1882 cores / média 39,8 /
+0,45 % quase preto · circuito 915 / 30,3 / 0,04 % · porto 1158 / 35,0 / 0,44 % ·
+salar 749 / 35,4 / 0,04 %.
+
+#### O salto no aparelho dá os mesmos números que no PC
+
+```text
+passos  60:  no_ar=True  v_vertical= 8,43  s=1279,9
+passos  90:  no_ar=True  v_vertical= 2,43  s=1301,4
+passos 120:  no_ar=True  v_vertical=-3,57  s=1323,6
+```
+
+Idênticos aos do PC, byte a byte nos valores: a física roda em **passo fixo** e
+não lê relógio, então o mesmo comando dá a mesma trajetória em qualquer máquina.
+É o que permite tratar um diagnóstico de PC como diagnóstico de aparelho — e é
+por isso que `--passos` é determinístico de propósito.
+
+#### O que o aparelho revelou de ambiente
+
+- o `inittab` ressuscita o launcher em ~1 s e o KMSDRM é exclusivo: a captura
+  precisa da flag `/run/giochi/dev-free-console` **e** do `mkdir -p /run/giochi`
+  (a pasta não existe nesta imagem e o `touch` falha em silêncio);
+- `kill -9` no launcher, e não `SIGTERM`: o SDL transforma SIGTERM em
+  `SDL_QUIT` na fila e o processo segue segurando o DRM (§33);
+- achar quem segura o DRM por `readlink -f /proc/PID/exe`, nunca por `cmdline`:
+  o `sh -c` que executa a busca carrega o padrão no próprio `argv` e casa
+  consigo mesmo (§23, §33).
+
 ### Números desta rodada
 
 ```text
@@ -5402,6 +5453,8 @@ cargo build --release                 zero erro, zero aviso
 tests/run-all.mjs                     199/199 JS
 validate-app.mjs --all                8 apps válidos (1 em scaffold)
 verificar-jogos.mjs                   ok nos 3 tamanhos
+X35H (aarch64, KMSDRM)                5 mapas rodam · salto idêntico ao PC ·
+                                      fps 35,6–37,1 · sha256 conferido
 ```
 
 E a correção de §35 fecha uma pendência aberta desde 09/11 sem código novo na

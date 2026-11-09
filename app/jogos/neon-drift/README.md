@@ -65,9 +65,27 @@ no X35H e no R35S sem uma linha de código por aparelho.
 
 | Aparelho | Painel | fps | O que limita |
 | --- | --- | --- | --- |
-| X35H (RK3566, Mali-G52) | 640×480 | **36,8** (boavista) / 37,9 (avenida) | o conjunto: o `cobrinha` mede 49,3 no mesmo instante e `--so asfalto` 49,2 |
+| X35H (RK3566, Mali-G52) | 640×480 | **36,6 a 37,1 nos cinco mapas** | o conjunto: o `cobrinha` mede 49,3 no mesmo instante e `--so asfalto` 49,2 |
 | X55 (RK3566, painel 720×1280) | 720×1280 | **39,5** | pixel: o dobro de área do X35H, e o piso de apresentação é 16,7 ms |
 | R35S (RK3326, Mali-G31) | 640×480 | **não medido** | — (a rodada de 09/11 só mediu quadro e HUD) |
+
+Medido no X35H em 10/11/2026, `--quadros 600`, sem o launcher segurando o DRM:
+
+| Mapa | fps | ms de CPU | desenhos | partículas |
+| --- | --- | --- | --- | --- |
+| avenida | 37,0 | 9,70 | 51 | 663 |
+| boavista | 36,7 | 9,86 | 52 | — |
+| circuito | **37,1** | 9,45 | 53 | 682 |
+| porto | 36,6 | 9,96 | 51 | — |
+| salar | 35,6 | 9,77 | 53 | 671 |
+
+**Os três mapas novos custam o mesmo que o antigo.** É o que a regra "cenário
+novo não cria malha nova" compra: o circuito tem barreiras, torres de luz e
+arquibancada a mais, e isso deu **2 desenhos**, não 20.
+
+Os quadros do aparelho, medidos nos BMPs: boavista 1882 cores/39,8 de média/0,45 %
+quase preto · circuito 915/30,3/0,04 % · porto 1158/35,0/0,44 % · salar
+749/35,4/0,04 %. Nenhum tem chapa chapada.
 
 O número do X35H não é "o jogo é pesado": com **uma** malha só o jogo marca 49,2
 e o `cobrinha` — outro jogo — marca 49,3 no mesmo minuto. O piso de apresentação
