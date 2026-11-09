@@ -236,7 +236,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--sem-vsync` | não espera o vblank — mede o custo real do quadro |
 | `--teclas w,a,space` | teclas seguradas |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
-| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos` e a contagem de cada tipo de partícula |
+| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso` e a contagem de cada tipo de partícula |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não
@@ -251,6 +251,38 @@ capturado mostrava a linha de largada como se a corrida não tivesse começado.
 errada. Foi ele que mostrou o asfalto ausente com a malha tendo 2 560 vértices:
 o quadrilátero do chão estava com a ordem dos cantos invertida e o descarte de
 faces o removia em silêncio.
+
+## `scripts/traco-voltas.mjs`: a linha do tempo das voltas
+
+```bash
+node scripts/traco-voltas.mjs --teclas up --ate 400 --passo 10
+node scripts/traco-voltas.mjs --mapa boavista --teclas up
+```
+
+Varre `--passos` crescentes e imprime **só as transições** de volta, fase e
+largada:
+
+```text
+  passos   tempo       s   volta  fase       o que mudou
+      270     0.6     0.3      1  Correndo   largou false → true
+```
+
+Existe porque "registrou uma volta na partida" é um defeito de **linha do
+tempo**, e um quadro parado não o mostra. Três decisões fazem dela uma medida e
+não um palpite:
+
+- **`--passos` é determinístico** — o passo é fixo em 1/75 s, sem relógio,
+  então a varredura dá a mesma linha do tempo em qualquer máquina;
+- **`--teclas up` e não `--piloto`** — o piloto acelera no mesmo passo em que a
+  contagem acaba e **esconde** o defeito. O percurso tem de reproduzir o
+  jogador;
+- **sai com 1** se achar volta creditada antes de 5 s.
+
+Foi ela que mostrou que a avenida e a Boavista tinham causas diferentes: a
+avenida creditava a volta no primeiro metro, a Boavista em **1,1 s** com o carro
+a 14 km/h. A regra de contagem hoje é **progresso acumulado com correção de
+volta** — `s` sozinho oscila entre ~0 e ~comprimento quando o carro está perto
+da linha, porque o último trecho passa geometricamente ao lado do primeiro.
 
 ## Efeitos: o que custa o quê, medido no X55
 
