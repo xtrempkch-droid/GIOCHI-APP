@@ -12,6 +12,7 @@
 - [Jogos no cartão SD](cartao-sd.md) — o X55 roda o sistema do próprio cartão, 116 GB sem partição, e o que funciona hoje.
 - [Apps de PC](pc.md) — a loja e o forge nos três sistemas: um `.pyz` determinístico, matriz Windows/Linux/macOS e o que ainda não foi executado.
 - [Diário de 06/11/2026](diario/2026-11-06.md) — o jogo que não existia, a listagem que não era confiável, a navegação que não seguia a tela e o app de PC que não tinha como ser distribuído.
+- [Diário de 07/11/2026](diario/2026-11-07.md) — a rodada da engine no R35S: o que compilou, o que rodou e o PNG que a imagem não decodificava.
 - [Loja e multi-lojas](loja.md) — o que funciona, o que não existe e as decisões que faltam antes de escrever a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
@@ -24,7 +25,8 @@
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.
-- [R35S](r35s.md) — o que o app já garante nesse aparelho, o que falta do sistema e por que a imagem ainda não existe.
+- [R35S](r35s.md) — o que o app já garante nesse aparelho, o que **ainda** falta do sistema, e o estado real do build (a imagem existe desde 07/11).
+- [Testar no X35H](teste-x35h.md) — roteiro escrito em 04/11 quando o aparelho ainda estava fora da rede; hoje ele já foi medido (ver §27 do `AGENTS.md`), e o roteiro continua servindo para uma imagem nova.
 - [Rede: Wi-Fi e Bluetooth](rede.md) — a aba de configurações navegável, a lista de redes, o teclado de senha e o que foi medido no aparelho.
 
 ## Princípio

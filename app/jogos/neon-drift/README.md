@@ -1,15 +1,78 @@
 # Neon Drift
 
 Corrida arcade 3D noturna, em Rust, sobre a **GIOCHI-ENGINE-3D** e o KMSDRM do
-aparelho. Um jogador, três adversários, duas voltas e um teto rígido de **75 fps**
-— que é o que o painel do console entrega.
+aparelho. Um jogador, três adversários, duas voltas e um teto rígido de **75 fps**.
+
+O teto é de **simulação**, não de desenho: a física roda em passo fixo de 75 Hz e
+o laço só desenha o que couber. Quanto cada aparelho entrega está na tabela de
+[desempenho](#desempenho-medido-nos-três-aparelhos) — e o que sobra até 75 é do
+painel, não do jogo: no R35S, cujo display é de 60 Hz, **uma malha só** já marca
+59,7 fps, então nenhum jogo passa disso ali.
 
 ```bash
-bash scripts/compilar-jogo-arm64.sh --jogo neon-drift      # aarch64 para o aparelho
-cd app/jogos/neon-drift && cargo test --workspace          # 107 + 100 testes
-SDL_VIDEODRIVER=offscreen ./target/debug/giochi-neon-drift --quadro /tmp/q.bmp
+cargo test --workspace                        # 121 (ui-sdl) + 119 (core)
+cargo build --release
+SDL_VIDEODRIVER=offscreen ./target/release/giochi-neon-drift --quadro /tmp/q.bmp
 ./target/release/giochi-neon-drift --mapa boavista --tela corrida --passos 800 --piloto
 ```
+
+## Rodar no aparelho
+
+Quatro passos, e cada um responde uma pergunta diferente:
+
+```bash
+bash scripts/compilar-jogo-arm64.sh --jogo neon-drift        # 1. compila aarch64
+node scripts/empacotar.mjs app/jogos/neon-drift              # 2. assina o .giochi
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/neon-drift.giochi  # 3. instala
+bash scripts/aparelho.sh verificar-jogo neon-drift           # 4. prova que desenha
+```
+
+1. **Compila** e deixa em `bin/giochi-neon-drift` (656 216 bytes, `NEEDED` = SDL2 +
+   `libgcc_s` + `libm` + `libc`). O script pergunta ao aparelho se ele tem
+   `SDL2_ttf`, mas este jogo **não usa** — o texto é a fonte 5×7 em dados.
+2. **Assina** (Ed25519) e recusa pacote sem `.sig` ou com `.sig` de tamanho
+   errado. O empacotamento é reprodutível: dois do mesmo conteúdo dão o mesmo
+   SHA-256.
+3. **Instala** em `/user/apps/neon-drift` — e não em `/opt`, porque
+   `distribution: store` significa "não faz parte da imagem assinada". É o que
+   permite vender app GPL sem entregar chave. O `aparelho.sh` verifica a
+   assinatura com a **chave do próprio aparelho**, não com uma do PC: verificar
+   contra a chave errada produz um veredito, e veredito errado é pior que nenhum.
+4. **Verifica** rodando com `--quadro`, trazendo o BMP e contando cores, preto
+   puro e tamanho. "O processo subiu" e "desenhou" são afirmações diferentes, e
+   só a segunda interessa.
+
+`aparelho.sh catalogo` republica o índice depois da instalação, senão o jogo fica
+**invisível sem erro**: o launcher lê `/opt/giochi/apps/index.json`, e um app
+instalado fora dele não vira cartão.
+
+### O que o aparelho precisa ter
+
+| Item | Obrigatório? | Por quê |
+| --- | --- | --- |
+| `libSDL2-2.0.so.0` | **sim** | é a única biblioteca que o binário pede, além de `libgcc_s`, `libm` e `libc` |
+| GLES 2.0 | **sim**, com fallback | tenta GLES 3 e cai para 2.0; sem GPU, o backend `software` do SDL2 também desenha |
+| `/dev/dri` com KMSDRM | **sim** no aparelho | é por ali que o quadro chega ao painel, sem X11 e sem Wayland |
+| `libasound.so.2` | **não** | sem ela o SDL2 não abre o dispositivo e o jogo **avisa** (`som: não abri o dispositivo … o jogo segue mudo`) em vez de morrer |
+| `SDL2_ttf` e fonte TTF | **não** | o texto é a fonte 5×7 em dados (`crates/core/src/fonte.rs`) |
+| `SDL2_image` e `libpng` | **não** | o leitor de BMP é escrito à mão e nenhuma textura vem de arquivo |
+
+Seis linhas, e cinco delas são "não" — é o que faz o mesmo binário abrir no X55,
+no X35H e no R35S sem uma linha de código por aparelho.
+
+### Desempenho medido nos três aparelhos
+
+| Aparelho | Painel | fps | O que limita |
+| --- | --- | --- | --- |
+| X35H (RK3566, Mali-G52) | 640×480 | **36,8** (boavista) / 37,9 (avenida) | o conjunto: o `cobrinha` mede 49,3 no mesmo instante e `--so asfalto` 49,2 |
+| X55 (RK3566, painel 720×1280) | 720×1280 | **39,5** | pixel: o dobro de área do X35H, e o piso de apresentação é 16,7 ms |
+| R35S (RK3326, Mali-G31) | 640×480 | **não medido** | — (a rodada de 09/11 só mediu quadro e HUD) |
+
+O número do X35H não é "o jogo é pesado": com **uma** malha só o jogo marca 49,2
+e o `cobrinha` — outro jogo — marca 49,3 no mesmo minuto. O piso de apresentação
+daquele painel naquele momento era ~49 fps, e o neon-drift fica ~5 ms acima dele.
+`--sem-vsync` (37,4) e `GIOCHI_GLES=0` (36,9) não mudam nada, o que descarta vsync
+e GPU como causa.
 
 ## Dois mapas: avenida e a descida
 
@@ -36,10 +99,18 @@ Sete materiais, todos **gerados em código** (`crates/ui-sdl/src/texturas.rs`):
 asfalto, concreto, rocha, mata, guarda-corpo, painel de neon e o xadrez da
 largada. Nenhum arquivo de imagem.
 
-Gerar em vez de carregar PNG não é preferência: **o aparelho não decodifica
-PNG**. Medido no R35S, o `libSDL2_image` da imagem foi compilado sem
-`--enable-png` e `IMG_Load` responde *"PNG images are not supported"*. Um jogo
-que dependesse de PNG simplesmente não abriria lá.
+Gerar em vez de carregar PNG não é preferência estética, é reduzir superfície de
+falha. A primeira motivação era medida: na imagem de 07/11 do R35S o
+`libSDL2_image` foi compilado sem `--enable-png` e `IMG_Load` respondia *"PNG
+images are not supported"*. **A imagem de 09/11 corrigiu isso** (`libpng16`
+presente, a mensagem não existe mais), mas o jogo mantém a decisão por um motivo
+que não depende de imagem nenhuma: **ele não linka `SDL2_image`**. O `NEEDED` do
+binário é SDL2 + `libgcc_s` + `libm` + `libc`, e nada mais.
+
+Os outros motivos, que também não mudaram: uma textura é uma fórmula (asfalto é
+ruído com pedrisco, concreto são blocos com junta, mata é ruído em duas escalas
+— vinte linhas cada), não há arquivo para empacotar nem caminho para faltar no
+aparelho, e o `tint` continua valendo sem uma textura por cor.
 
 As texturas nascem **neutras e claras**, e a cor vem do `tint` do material
 (`amostra × tint`). É o que permite a mesma textura de concreto ser o muro
@@ -112,8 +183,11 @@ O RGB da sua folha é descartado (a cor vem do `tint`) e o que vale é o **alfa*
 Num BMP de 24 bits, que perdeu o alfa, a **luminância** vira máscara: branco
 opaco, preto transparente — a convenção das folhas de efeito.
 
-PNG **não** funciona, e não é limitação deste jogo: o `libSDL2_image` da imagem
-do aparelho foi compilado sem `--enable-png`. Converta para BMP.
+PNG **não** é aceito, e o motivo é do jogo, não da imagem do aparelho: o
+`giochi-neon-drift` **não linka `SDL2_image`** (`NEEDED` = SDL2 + `libgcc_s` +
+`libm` + `libc`), e o leitor de BMP é escrito à mão em `atlas.rs`. Aceitar PNG
+seria uma dependência nova, num binário que hoje abre em qualquer imagem que
+tenha SDL2. Converta para BMP — sai de qualquer editor.
 
 Se o arquivo não abrir, não for BMP ou não couber no número de colunas, o jogo
 **avisa** e cai no atlas procedural:
@@ -189,7 +263,7 @@ emenda apareceria como uma faixa correndo ao lado do carro.
 | Adversários | três, com linha própria e freando na curva; ~9 s atrás de um piloto competente em duas voltas |
 | Câmera | terceira pessoa com atraso exponencial, inclinação na derrapagem, tremor na batida e **FOV que abre no nitro** |
 | HUD | volta, posição, tempo, velocímetro, marcha, barra de nitro, pontos e combo de drift |
-| Efeitos | **7 tipos de partícula**, cada um com a sua forma no atlas de sprites (fumaça, respingo, faísca, nitro, chuva, poeira de neon, marca de pneu), raios de velocidade, clarão de nitro, aura de neon sob os carros, feixe de farol no asfalto e áudio sintetizado (motor, derrapagem, nitro, vento) |
+| Efeitos | **7 tipos de partícula**, cada um com a sua forma no atlas de sprites (fumaça, respingo, faísca, nitro, chuva, poeira de neon, marca de pneu), raios de velocidade, clarão de nitro, aura de neon sob os carros, feixe de farol no asfalto e **áudio sintetizado em runtime** (motor, derrapagem contínua e nitro) |
 | Cenário | avenida: cidade noturna com **arcos de neon a cada 26 m**, três passarelas, outdoors luminosos, refletores na mureta, faixas de neon nas torres distantes e **pulos de luz em duas fases** no túnel |
 | Telas | título com instruções, corrida e resultado com "reiniciar" |
 
@@ -353,7 +427,8 @@ possíveis e o teste que decide qual delas: comparar o centro dos faróis com
 
 ```text
 crates/core/     regras puras: mapa, pista, carro, drift, IA, corrida, fonte,
-                 HUD, relógio e o piloto artificial. Sem SDL: 110 testes.
+                 HUD, relógio e o piloto artificial. Sem SDL, sem janela e sem
+                 arquivo: 119 testes.
 crates/ui-sdl/   cena 3D, efeitos, malhas, texturas e atlas de sprites
                  procedurais (ou folha externa em BMP), áudio, evdev, entrada e o
                  laço. É a única parte que precisa de tela: 121 testes.

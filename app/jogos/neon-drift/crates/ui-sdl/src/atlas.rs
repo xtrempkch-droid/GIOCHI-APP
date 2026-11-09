@@ -186,9 +186,13 @@ pub struct Imagem {
 ///
 /// ## Por que BMP e não PNG
 ///
-/// Pelo mesmo motivo que as texturas são geradas: **o aparelho não decodifica
-/// PNG** (§24 do AGENTS.md). BMP é o único formato que o `libSDL2_image` da
-/// imagem entrega em todos os aparelhos, e é o que sai de qualquer conversor.
+/// Pelo mesmo motivo que as texturas são geradas: **o jogo não linka
+/// `SDL2_image`** — o `NEEDED` do binário é SDL2, `libgcc_s`, `libm` e `libc`.
+/// BMP é o único formato que este leitor entrega sem dependência nova, e é o
+/// que sai de qualquer conversor.
+///
+/// (A imagem de 07/11 do R35S também não decodificava PNG; a de 09/11 decodifica.
+/// Isso não reabre a decisão, porque o bloqueio é a dependência, não a imagem.)
 ///
 /// ## O que é aceito
 ///

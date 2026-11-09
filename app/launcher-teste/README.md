@@ -97,6 +97,52 @@ diferentes.
 `--demo` continua existindo e **não** lê o catálogo: é o caminho das capturas
 de tela, e uma captura no PC tem de medir o mesmo que no aparelho.
 
+## Opções
+
+```bash
+giochi-launcher-teste --ajuda
+```
+
+| Opção | Para quê |
+| --- | --- |
+| `--tamanho LxA` | painel simulado (padrão: o do sistema) |
+| `--dump-frame <arq>` | grava um quadro em BMP e sai |
+| `--teclas a,b,right` | aplica comandos antes de desenhar (vírgula) |
+| `--tela <nome>` | `boot \| home \| biblioteca \| apps \| ajustes` |
+| `--demo` | catálogo de demonstração em vez do do aparelho |
+| `--lancar <id\|slug>` | pede o lançamento **já na abertura** |
+| `--efeitos` | liga a camada de efeitos (equivale a `GIOCHI_EFEITOS=1`) |
+| `--efeitos-quadros N` | quadros adiantados antes do `--dump-frame` |
+| `--bench N` | mede N quadros sem dormir e imprime ms por quadro |
+| `--rotacao 0\|90\|270` | sobrepõe a rotação do sistema |
+| `--fonte <caminho>` | caminho do `.ttf` |
+
+### `--lancar`: testar o ciclo launcher → jogo → launcher por SSH
+
+```bash
+/opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste --lancar neon-drift
+```
+
+Ele preenche `state.lancar`, que é **o mesmo campo** que o `A` no cartão
+preenche — não existe um segundo caminho só para teste. Sem essa opção, abrir
+um jogo no aparelho exigiria apertar um botão, e verificação que depende de dedo
+não entra em rodada automatizada: foi por isso que o ciclo ficou tanto tempo sem
+prova.
+
+Medido no R35S em 09/11/2026:
+
+```text
+1002  giochi-launcher-teste --efeitos --lancar neon-drift
+1009  /user/apps/neon-drift/bin/giochi-neon-drift        ppid=1002  dri=6
+```
+
+O `ppid` é a prova de que o launcher abriu o jogo — e o `dri=6` no **filho**, com
+`dri=0` no pai, é a prova de que o `drop(painter)` soltou o KMSDRM. Depois de
+fechar o jogo, o launcher volta com `dri=6` e `opengles2`.
+
+Se o id não existir, a mensagem nomeia o que foi pedido
+(`--lancar: app desconhecido: <pedido>`) em vez de dizer "inválido".
+
 ### No aparelho, ele é o launcher
 
 `/opt/giochi/apps/launcher/bin/giochi-launcher` é um **wrapper** de 30 linhas

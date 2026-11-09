@@ -4,9 +4,12 @@
 //!
 //! Duas razões, e a segunda é a que decide:
 //!
-//! 1. **O aparelho não decodifica PNG.** Medido no R35S: o `libSDL2_image` da
-//!    imagem foi compilado sem `--enable-png`, e `IMG_Load` responde "PNG images
-//!    are not supported". Um jogo que dependesse de PNG não abriria lá.
+//! 1. **O jogo não linka `SDL2_image`.** O `NEEDED` do binário é SDL2 +
+//!    `libgcc_s` + `libm` + `libc`, e nada mais. Ler PNG exigiria essa
+//!    biblioteca ou `libpng` — dependência nova para um recurso usado uma vez.
+//!    (Já houve um motivo mais forte: a imagem de 07/11 do R35S foi compilada
+//!    sem `--enable-png` e `IMG_Load` respondia "PNG images are not supported".
+//!    A imagem de 09/11 corrigiu isso; a decisão não dependia dela e não muda.)
 //! 2. **Uma textura é uma fórmula.** Asfalto é ruído escuro com pedrisco;
 //!    concreto são blocos com junta; mata é ruído verde em duas escalas. Isso são
 //!    vinte linhas cada, e gerar custa microssegundos no boot — sem arquivo para
