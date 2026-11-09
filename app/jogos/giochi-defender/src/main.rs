@@ -21,15 +21,20 @@ use anyhow::{bail, Result};
 use giochi_engine::audio::AudioSystem;
 use giochi_engine::core::game_loop::GameLoop;
 use giochi_engine::core::time::FrameClock;
-use giochi_engine::input::gamepad::{AXIS_RIGHT_X, AXIS_RIGHT_Y};
+use giochi_engine::input::gamepad::{
+    AXIS_RIGHT_X, AXIS_RIGHT_Y, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH,
+};
 use giochi_engine::input::keyboard::{
     KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_UP, KEY_W,
 };
+use giochi_engine::input::mouse::MOUSE_LEFT;
 use giochi_engine::input::Input;
 use giochi_engine::platform::window::{Window, WindowConfig};
 use giochi_engine::platform::{quit_signal, Platform, QuitSignal};
-use giochi_engine_3d::context::{self, GlesVersion};
-use giochi_engine_3d::math3d::Camera3D;
+use giochi_engine_3d::context::{self, GlState, GlesVersion};
+use giochi_engine_3d::math3d::{Camera3D, Color3D, Transform3D, Vec3};
+use giochi_engine_3d::render3d::{MeshHandle, ShaderHandle};
+use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::RenderContext3D;
 
 use giochi_defender::bench::Benchmark;
@@ -37,7 +42,9 @@ use giochi_defender::diag::{self, Diag};
 use giochi_defender::gameplay::arena::{self, Arena};
 use giochi_defender::gameplay::camera::OrbitalCamera;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
+use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
 use giochi_defender::state::{GameState, WAVES_TOTAIS};
+use giochi_defender::ui::reticle::{self, Mira};
 use giochi_defender::utils::math::{graus_para_radianos, radianos_para_graus};
 
 /// Tamanho pedido da janela. No aparelho o painel manda (ADR-035).
@@ -96,7 +103,11 @@ fn executar(diag: Diag) -> Result<()> {
     // configurá-los depois de abrir a janela deixa uma janela sem a flag OpenGL.
     context::configure_attributes(&plataforma, requisitada)?;
 
-    let janela = Window::new_opengl(&plataforma, configuracao_janela(&plataforma), TITULO)?;
+    let janela = Window::new_opengl(
+        &plataforma,
+        configuracao_janela(&plataforma, diag.tela),
+        TITULO,
+    )?;
     let mut render = RenderContext3D::new(context::create(&janela)?);
     render.set_clear_color(arena::COR_ESPACO);
 
@@ -122,12 +133,58 @@ fn executar(diag: Diag) -> Result<()> {
         prender_cursor(&plataforma);
     }
 
+    // Blend ligado no quadro inteiro: a mira usa alfa para o antialiasing e para
+    // a cor de repouso. Todo o resto da cena desenha com alfa 1,0, então ligar o
+    // blend não muda um pixel do mundo — e `set_state` só é aplicado dentro de
+    // `begin_frame`, por isso ele vem antes do laço e não dentro dele.
+    render.set_state(GlState {
+        blend: true,
+        ..GlState::default()
+    });
+
     let arena = Arena::new(&mut render)?;
     let inimigos = Inimigos::new(&mut render)?;
+    // A mira nasce com o tamanho **pedido**, e o primeiro quadro a reconstrói com
+    // o drawable real. Não é desperdício: no console o painel tem 640×480 e o
+    // pedido é 1280×720, então é exatamente esta diferença que a reconstrução
+    // existe para tratar — construí-la já com o tamanho certo deixaria o caminho
+    // de redimensionamento sem nunca rodar em produção.
+    let (largura_inicial, altura_inicial) = diag.tela.unwrap_or((LARGURA, ALTURA));
+    let mut mira = MiraGl::new(&mut render, (largura_inicial, altura_inicial))?;
     let mut camera = OrbitalCamera::new();
     aplicar_preset(&mut camera, &diag);
     let mut estado = GameState::new();
     let mut partida = Partida::new(diag.semente);
+
+    // `--alvo N`: cubos parados no eixo da câmera. É a bancada de tiro — sem
+    // ela, provar que o tiro mata dependeria de o sorteio cair na linha de mira.
+    if let Some(quantos) = diag.alvo {
+        let (largura, altura) = janela.size();
+        let camera3d = camera.camera(largura, altura);
+        let frente = direcao_da_camera(&camera3d);
+        let mut plantados = 0;
+        let distancia_camera = (camera3d.position.x * camera3d.position.x
+            + camera3d.position.y * camera3d.position.y
+            + camera3d.position.z * camera3d.position.z)
+            .sqrt();
+        for (indice, distancia) in diag::distancias_de_alvo(distancia_camera, quantos)
+            .into_iter()
+            .enumerate()
+        {
+            let posicao = Vec3::new(
+                camera3d.position.x + frente.x * distancia,
+                camera3d.position.y + frente.y * distancia,
+                camera3d.position.z + frente.z * distancia,
+            );
+            if partida
+                .plantar(posicao, indice as f32 / quantos.max(1) as f32)
+                .is_some()
+            {
+                plantados += 1;
+            }
+        }
+        log::info!("alvos plantados no eixo da câmera: {plantados} de {quantos}");
+    }
 
     // `--inimigos N`: mede "15 cubos" sem esperar 30 s de spawn a 2 s. Vem antes
     // do `--simular` para que a simulação, se pedida, mova esses mesmos cubos.
@@ -181,12 +238,14 @@ fn executar(diag: Diag) -> Result<()> {
         &mut entrada,
         &arena,
         &inimigos,
+        &mut mira,
         &mut camera,
         &mut partida,
         &mut estado,
         &diag,
     );
 
+    mira.destruir(&mut render);
     inimigos.destruir(&mut render);
     arena.destruir(&mut render);
     log::info!(
@@ -207,8 +266,9 @@ fn executar(diag: Diag) -> Result<()> {
 /// O KMSDRM não tem gerenciador de janelas: pedir uma janela lá é pedir para
 /// desenhar num canto da tela. Detectar pelo driver evita um `--fullscreen` que
 /// alguém esquece de passar no aparelho.
-fn configuracao_janela(plataforma: &Platform) -> WindowConfig {
-    let config = WindowConfig::new(LARGURA, ALTURA);
+fn configuracao_janela(plataforma: &Platform, tela: Option<(u32, u32)>) -> WindowConfig {
+    let (largura, altura) = tela.unwrap_or((LARGURA, ALTURA));
+    let config = WindowConfig::new(largura.max(1), altura.max(1));
     if plataforma
         .video_driver_name()
         .eq_ignore_ascii_case("kmsdrm")
@@ -310,6 +370,95 @@ fn com_zona_morta(x: f32, y: f32) -> (f32, f32) {
     (aplicar(x), aplicar(y))
 }
 
+/// A mira na GPU: uma malha e um shader, um desenho por quadro.
+///
+/// A malha é reconstruída quando o tamanho do drawable muda — o que acontece uma
+/// vez no PC e uma vez no console, quando o painel real substitui o tamanho
+/// pedido (ADR-035).
+struct MiraGl {
+    malha: MeshHandle,
+    shader: ShaderHandle,
+    tela: (u32, u32),
+}
+
+impl MiraGl {
+    fn new(render: &mut RenderContext3D, tela: (u32, u32)) -> Result<Self> {
+        let dados = reticle::construir(tela);
+        let malha = render.create_mesh(&dados.vertices, &dados.indices)?;
+        // `phong` e **não** `flat`. O `flat` tem um termo de Lambert fixo dentro
+        // do fragment shader (`0.35 + 0.65 * lambert`) e não lê `u_light_*`; com
+        // ele a mira saía a **54 %** do brilho declarado. Medido na captura: os
+        // pixels da mira chegavam a (119,126,137) contra os (219,232,255)
+        // pedidos, e sobre a rocha a diferença era de 1 nível — invisível.
+        // O `phong` com luz emissiva entrega a cor exatamente como está na
+        // constante, que é o que uma camada de HUD precisa.
+        let shader = render.create_builtin_shader(BuiltinShader::Phong)?;
+        Ok(Self {
+            malha,
+            shader,
+            tela,
+        })
+    }
+
+    /// Reconstrói a malha se a tela mudou de tamanho.
+    fn ajustar(&mut self, render: &mut RenderContext3D, tela: (u32, u32)) {
+        if tela == self.tela || tela.0 == 0 || tela.1 == 0 {
+            return;
+        }
+        let dados = reticle::construir(tela);
+        render.destroy_mesh(self.malha);
+        match render.create_mesh(&dados.vertices, &dados.indices) {
+            Ok(malha) => {
+                self.malha = malha;
+                self.tela = tela;
+                log::info!("mira reconstruída para {tela:?}");
+            }
+            Err(erro) => log::warn!("não consegui reconstruir a mira: {erro}"),
+        }
+    }
+
+    /// Desenha a mira no centro, com a cor e a escala do estado.
+    fn desenhar(&self, render: &mut RenderContext3D, estado: Mira, tela: (u32, u32)) -> Result<()> {
+        let camera = giochi_defender::ui::camera(tela);
+        let cor = estado.cor();
+        let escala = estado.escala();
+        // Uma luz emissiva para a mira: ela não é um objeto do mundo e não pode
+        // escurecer conforme a orientação da câmera.
+        render.set_light(arena::luz_do_hud());
+        let modelo = Transform3D::from_scale(escala);
+        render.draw_mesh_colored(
+            self.malha,
+            self.shader,
+            &modelo,
+            &camera,
+            Color3D::new(cor[0], cor[1], cor[2], cor[3]),
+        )?;
+        Ok(())
+    }
+
+    fn destruir(self, render: &mut RenderContext3D) {
+        render.destroy_mesh(self.malha);
+        render.destroy_shader(self.shader);
+    }
+}
+
+/// Direção "para frente" da câmera, a partir da posição e do alvo.
+///
+/// É a linha do raio: o centro da tela corresponde exatamente a esta direção,
+/// então não há matriz para inverter por tiro.
+fn direcao_da_camera(camera: &Camera3D) -> Vec3 {
+    let frente = Vec3::new(
+        camera.target.x - camera.position.x,
+        camera.target.y - camera.position.y,
+        camera.target.z - camera.position.z,
+    );
+    let tamanho = frente.length();
+    if !tamanho.is_finite() || tamanho <= 1e-6 {
+        return Vec3::new(0.0, 0.0, -1.0);
+    }
+    Vec3::new(frente.x / tamanho, frente.y / tamanho, frente.z / tamanho)
+}
+
 /// O laço principal.
 #[allow(clippy::too_many_arguments)]
 fn laco(
@@ -319,6 +468,7 @@ fn laco(
     entrada: &mut Input,
     arena: &Arena,
     inimigos: &Inimigos,
+    mira: &mut MiraGl,
     camera: &mut OrbitalCamera,
     partida: &mut Partida,
     estado: &mut GameState,
@@ -327,6 +477,9 @@ fn laco(
     let mut relogio = FrameClock::new();
     let mut laco = GameLoop::new();
     let mut quadros: u64 = 0;
+    let mut arma = Weapon::new();
+    let mut mira_estado = Mira::new();
+    let mut abates: u32 = 0;
     let mut benchmark = Benchmark::new();
     // `--benchmark N` implica rodar N quadros, sem o teto de 60 Hz: medir o
     // intervalo com uma espera artificial dentro dele mediria a espera.
@@ -367,18 +520,48 @@ fn laco(
             relogio.tick()
         };
 
+        let (largura, altura) = janela.drawable_size();
+        let camera3d: Camera3D = camera.camera(largura, altura);
+
+        // O tiro é resolvido **antes** de a simulação andar este quadro: assim o
+        // raio usa a câmera que o jogador está vendo, e não a de 16 ms atrás.
+        let atirar = entrada.mouse_down(MOUSE_LEFT)
+            || entrada.gamepad().is_down(BUTTON_RIGHT_SHOULDER)
+            || entrada.gamepad().is_down(BUTTON_SOUTH)
+            // `--atirar` mantém o gatilho apertado pelo mesmo caminho da tecla:
+            // não há um segundo laço de tiro só para o diagnóstico.
+            || diag.atirar;
+        if atirar && !estado.acabou() {
+            let origem = camera3d.position;
+            let direcao = direcao_da_camera(&camera3d);
+            if let Some(atingido) = partida.atirar(&mut arma, origem, direcao) {
+                abates += 1;
+                estado.pontuar(PONTOS_POR_ABATE);
+                mira_estado.acertou();
+                log::info!(
+                    "abate {}: +{PONTOS_POR_ABATE} (score {}), {:.1} m",
+                    abates,
+                    estado.score,
+                    atingido.distancia
+                );
+            }
+        }
+
         let passos = laco.advance(delta);
         for _ in 0..passos {
             atualizar_camera(camera, entrada, laco.fixed_timestep());
+            arma.atualizar(laco.fixed_timestep());
+            mira_estado.atualizar(laco.fixed_timestep());
             partida.atualizar(laco.fixed_timestep(), estado);
         }
-
-        let (largura, altura) = janela.drawable_size();
-        let camera3d: Camera3D = camera.camera(largura, altura);
 
         render.begin_frame(janela);
         arena.desenhar(render, &camera3d)?;
         inimigos.desenhar(render, partida, &camera3d)?;
+        if diag.mira {
+            mira.ajustar(render, (largura, altura));
+            mira.desenhar(render, mira_estado, (largura, altura))?;
+        }
 
         // A captura tem de acontecer ANTES da troca de buffers: depois do
         // `end_frame` o buffer de trás já tem o quadro seguinte (ou lixo).

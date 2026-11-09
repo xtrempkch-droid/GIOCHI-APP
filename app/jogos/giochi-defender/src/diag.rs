@@ -41,6 +41,13 @@ OPÇÕES:
     --benchmark N         Roda N quadros sem limite de 60 Hz e mede o tempo de
                           cada um (imprime fps, p50/p95/p99 e o pior quadro).
     --sem-mouse-relativo  Não prende o cursor.
+    --sem-mira            Não desenha a mira (para isolar o que ela muda).
+    --atirar              Mantém o gatilho apertado (o cooldown faz a cadência).
+    --alvo N              Planta N cubos parados no eixo da câmera, para o tiro
+                          do centro da tela ter alvo certo.
+    --tela LxA            Tamanho pedido da janela (padrão 1280x720). No aparelho
+                          o painel manda, então pedir outro tamanho é como se
+                          testa a reconstrução da mira.
     -h, --ajuda           Esta mensagem.
 ";
 
@@ -67,6 +74,14 @@ pub struct Diag {
     pub inimigos: Option<u32>,
     /// Quadros a medir sem o limite de 60 Hz.
     pub benchmark: Option<u64>,
+    /// Desenhar a mira.
+    pub mira: bool,
+    /// Manter o gatilho apertado.
+    pub atirar: bool,
+    /// Quantos cubos plantar no eixo da câmera.
+    pub alvo: Option<u32>,
+    /// Tamanho pedido da janela.
+    pub tela: Option<(u32, u32)>,
     /// Pediu a ajuda.
     pub ajuda: bool,
 }
@@ -92,6 +107,10 @@ impl Default for Diag {
             semente: SEMENTE_PADRAO,
             inimigos: None,
             benchmark: None,
+            mira: true,
+            atirar: false,
+            alvo: None,
+            tela: None,
             ajuda: false,
         }
     }
@@ -116,6 +135,15 @@ impl Diag {
             match nome.as_str() {
                 "-h" | "--ajuda" | "--help" => diag.ajuda = true,
                 "--sem-mouse-relativo" => diag.mouse_relativo = false,
+                "--sem-mira" => diag.mira = false,
+                "--atirar" => diag.atirar = true,
+                "--alvo" => diag.alvo = Some(inteiro(&mut argumentos, embutido, &nome)? as u32),
+                "--tela" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.tela = Some(parse_tela(&valor).ok_or_else(|| {
+                        anyhow::anyhow!("--tela espera LARGURAxALTURA, veio '{valor}'")
+                    })?);
+                }
                 // `--quadros` é o nome que o `aparelho.sh verificar-jogo` usa para
                 // todo jogo (`cobrinha`, `volley`); `--frames` é o dos exemplos da
                 // engine. Aceitar os dois custa uma linha e evita um "argumento
@@ -141,6 +169,20 @@ impl Diag {
 
         Ok(diag)
     }
+}
+
+/// Interpreta `1280x720` (ou `1280X720`).
+///
+/// Devolve `None` para qualquer coisa que não seja dois inteiros positivos: uma
+/// janela de 0 px não abre, e o erro tem de nomear o formato.
+pub fn parse_tela(valor: &str) -> Option<(u32, u32)> {
+    let (largura, altura) = valor.split_once(['x', 'X'])?;
+    let largura: u32 = largura.trim().parse().ok()?;
+    let altura: u32 = altura.trim().parse().ok()?;
+    if largura == 0 || altura == 0 || largura > 8192 || altura > 8192 {
+        return None;
+    }
+    Some((largura, altura))
 }
 
 fn texto(
@@ -178,6 +220,34 @@ fn real(
     }
     Ok(numero)
 }
+
+/// Distâncias, a partir da câmera, onde o `--alvo` planta os cubos.
+///
+/// ## A regra que a primeira versão não tinha
+///
+/// Plantar em 7, 10 e 13 unidades da câmera parecia razoável e estava errado: a
+/// câmera fica a ~9 do asteroide, então o cubo de 10 caía a **1 unidade do
+/// centro** — dentro da esfera de colisão de 2,5. Ele era despawnado como dano no
+/// primeiro passo e o terceiro tiro ia para o alvo seguinte. O log mostrou dois
+/// abates em vez de três, e o culpado parecia a arma.
+///
+/// Agora os alvos começam **depois** do asteroide, com folga explícita:
+/// `distância da câmera + raio de colisão + meia aresta do cubo + 1`.
+pub fn distancias_de_alvo(distancia_camera: f32, quantos: u32) -> Vec<f32> {
+    let inicio = distancia_camera
+        + crate::gameplay::partida::RAIO_COLISAO_ASTEROIDE
+        + crate::gameplay::enemy::LADO_PADRAO * 0.5
+        + 1.0;
+    (0..quantos)
+        .map(|indice| inicio + indice as f32 * ESPACO_ENTRE_ALVOS)
+        .collect()
+}
+
+/// Espaço entre dois alvos, em unidades de mundo.
+///
+/// 2,5 é folgado o bastante para os cubos não se sobreporem na tela (aresta 0,8)
+/// e próximo o bastante para os três caberem no campo de visão de 60°.
+pub const ESPACO_ENTRE_ALVOS: f32 = 2.5;
 
 /// Escreve pixels RGBA8 como BMP de 32 bits, de baixo para cima.
 ///
@@ -330,8 +400,83 @@ mod tests {
     }
 
     #[test]
+    fn a_tela_e_lida_nas_duas_formas() {
+        assert_eq!(parse_tela("800x600"), Some((800, 600)));
+        assert_eq!(parse_tela("1280X720"), Some((1280, 720)));
+        assert_eq!(
+            parse(&["--tela", "640x480"]).unwrap().tela,
+            Some((640, 480))
+        );
+    }
+
+    #[test]
+    fn tela_invalida_reprova() {
+        // Uma janela de 0 px não abre, e 9000 px não cabe em painel nenhum:
+        // aceitar os dois faria o erro aparecer na criação da janela, longe do
+        // argumento que o causou.
+        for ruim in [
+            "800", "800x", "x600", "0x600", "800x0", "9000x600", "axb", "",
+        ] {
+            assert!(parse_tela(ruim).is_none(), "'{ruim}' devia ser recusado");
+        }
+        assert!(parse(&["--tela", "800"]).is_err());
+    }
+
+    #[test]
+    fn os_flags_de_tiro_sao_lidos() {
+        let diag = parse(&["--atirar", "--alvo", "3"]).unwrap();
+        assert!(diag.atirar);
+        assert_eq!(diag.alvo, Some(3));
+        assert!(!parse(&[]).unwrap().atirar, "o padrão não atira sozinho");
+        assert_eq!(parse(&[]).unwrap().alvo, None);
+    }
+
+    #[test]
+    fn desligar_a_mira_e_uma_flag_so() {
+        assert!(parse(&[]).unwrap().mira);
+        assert!(!parse(&["--sem-mira"]).unwrap().mira);
+    }
+
+    #[test]
     fn desligar_o_mouse_relativo_e_uma_flag_so() {
         assert!(!parse(&["--sem-mouse-relativo"]).unwrap().mouse_relativo);
+    }
+
+    #[test]
+    fn os_alvos_ficam_fora_da_esfera_do_asteroide() {
+        // A regra que a primeira versão violou: um alvo dentro da esfera de
+        // colisão é despawnado como dano antes de poder ser atingido.
+        for distancia_camera in [5.0, 9.0, 15.0] {
+            let distancias = distancias_de_alvo(distancia_camera, 5);
+            assert_eq!(distancias.len(), 5);
+            for d in &distancias {
+                let do_centro = (distancia_camera - d).abs();
+                assert!(
+                    do_centro
+                        > crate::gameplay::partida::RAIO_COLISAO_ASTEROIDE
+                            + crate::gameplay::enemy::LADO_PADRAO * 0.5,
+                    "alvo a {d} da câmera fica a {do_centro} do centro — dentro da \
+                     esfera de colisão"
+                );
+                assert!(*d > distancia_camera, "o alvo tem de estar à frente");
+            }
+        }
+    }
+
+    #[test]
+    fn os_alvos_ficam_em_ordem_e_espacados() {
+        let distancias = distancias_de_alvo(9.0, 3);
+        for par in distancias.windows(2) {
+            let passo = par[1] - par[0];
+            assert!(
+                (passo - ESPACO_ENTRE_ALVOS).abs() < 1e-4,
+                "espaçamento {passo}"
+            );
+            assert!(
+                passo > crate::gameplay::enemy::LADO_PADRAO,
+                "cubos sobrepostos na tela"
+            );
+        }
     }
 
     #[test]

@@ -13,6 +13,7 @@
 
 use crate::gameplay::collision::sphere_aabb_intersect;
 use crate::gameplay::enemy_pool::{EnemyPool, CAPACIDADE};
+use crate::gameplay::weapon::{Atingido, Weapon};
 use crate::state::GameState;
 use crate::utils::procedural_mesh::generate_cube;
 use crate::utils::rng::Sorteio;
@@ -55,6 +56,7 @@ pub struct Partida {
     sorteio: Sorteio,
     desde_ultimo_spawn: f32,
     game_over_avisado: bool,
+    game_over: bool,
     derrotas: u32,
 }
 
@@ -66,6 +68,7 @@ impl Partida {
             sorteio: Sorteio::new(semente),
             desde_ultimo_spawn: 0.0,
             game_over_avisado: false,
+            game_over: false,
             derrotas: 0,
         }
     }
@@ -157,6 +160,7 @@ impl Partida {
                     // derrota é do 3a.
                     log::info!("GAME OVER");
                     self.game_over_avisado = true;
+                    self.game_over = true;
                 }
             }
         }
@@ -187,6 +191,19 @@ impl Partida {
         criados
     }
 
+    /// Planta um cubo parado numa posição exata.
+    ///
+    /// É ferramenta de diagnóstico, não de jogo: serve ao `--alvo`, que põe
+    /// cubos **no eixo da câmera** para que o tiro do centro da tela tenha alvo
+    /// certo. Sem isso, provar "atirar no cubo o mata" exigiria que o sorteio
+    /// caísse na linha de mira, e um teste que depende do sorteio não prova.
+    ///
+    /// Velocidade zero de propósito: um cubo em movimento sairia da mira entre o
+    /// primeiro e o terceiro tiro, e o que se quer medir é a arma, não a mira.
+    pub fn plantar(&mut self, posicao: Vec3, variacao: f32) -> Option<usize> {
+        self.pool.spawn(posicao, 0.0, variacao)
+    }
+
     /// Quantos cubos estão no ar.
     pub fn inimigos(&self) -> usize {
         self.pool.active_count()
@@ -207,11 +224,25 @@ impl Partida {
         &self.pool
     }
 
+    /// Resolve um tiro: delega à arma e devolve o que ela acertou.
+    ///
+    /// O pool fica **privado** e é esta função que o empresta à arma. Expor
+    /// `&mut EnemyPool` faria qualquer chamador poder matar um cubo sem passar
+    /// pela arma — e o abate do jogador e a chegada ao asteroide deixariam de ser
+    /// distinguíveis, que é justamente o que [`Partida::derrotas`] mede.
+    pub fn atirar(&mut self, arma: &mut Weapon, origem: Vec3, direcao: Vec3) -> Option<Atingido> {
+        if self.game_over {
+            return None;
+        }
+        arma.atirar(origem, direcao, &mut self.pool)
+    }
+
     /// Reinício de partida.
     pub fn limpar(&mut self) {
         self.pool.limpar();
         self.desde_ultimo_spawn = 0.0;
         self.game_over_avisado = false;
+        self.game_over = false;
         self.derrotas = 0;
     }
 }
@@ -453,6 +484,70 @@ mod tests {
         // deixa de valer em silêncio.
         assert_eq!(CAPACIDADE, 15);
         assert_eq!(Partida::new(0).capacidade(), 15);
+    }
+
+    #[test]
+    fn o_tiro_mata_e_nao_conta_como_derrota() {
+        // A distinção que o jogo inteiro depende: cubo que chega ao asteroide é
+        // dano; cubo abatido é ponto. Se `atirar` mexesse em `derrotas`, o HUD do
+        // 2b mostraria "inimigos perdidos" crescendo quando o jogador acerta.
+        let (mut partida, estado) = partida();
+        partida.povoar(1);
+        assert_eq!(partida.inimigos(), 1);
+
+        let mut arma = Weapon::new();
+        // Mira no cubo 0: nasce entre 15 e 20 unidades, então o tiro do centro
+        // na direção dele acerta.
+        let (_, alvo) = partida.pool().iter_alive().next().expect("um cubo");
+        let direcao = alvo.direcao_ao_alvo(Vec3::ZERO);
+        let origem = alvo.position;
+        let tiro = partida.atirar(&mut arma, origem, direcao);
+        assert!(tiro.is_some(), "o tiro devia acertar o cubo");
+        assert_eq!(partida.inimigos(), 0, "o cubo abatido sai do pool");
+        assert_eq!(partida.derrotas(), 0, "abate não é derrota");
+        assert_eq!(estado.lives, VIDAS_INICIAIS, "abate não tira vida");
+    }
+
+    #[test]
+    fn o_cubo_plantado_fica_parado() {
+        // O `--alvo` depende disto: se ele se movesse, o terceiro tiro erraria e
+        // o diagnóstico culparia a arma.
+        let (mut partida, mut estado) = partida();
+        let posicao = Vec3::new(0.0, 0.0, 9.0);
+        assert!(partida.plantar(posicao, 0.5).is_some());
+        partida.atualizar(1.0, &mut estado);
+        let (_, cubo) = partida.pool().iter_alive().next().expect("um cubo");
+        assert_eq!(cubo.position, posicao, "o cubo plantado se moveu");
+    }
+
+    #[test]
+    fn nao_se_atira_depois_do_fim() {
+        // `game_over` só é marcado pelo caminho real (cubo chegando ao
+        // asteroide). Escrever `estado.lives = 0` de fora **não** marca — e é por
+        // isso que este teste deixa a partida perder sozinha: um teste que
+        // forjasse o estado provaria só que o campo existe.
+        let (mut partida, mut estado) = partida();
+        // Cinco cubos nascendo a cada 2 s e levando 5 a 6,7 s para chegar: a
+        // última vida cai perto dos 15 s. 40 s é folga, e o laço sai antes.
+        let mut segundos = 0.0;
+        while segundos < 40.0 && !estado.acabou() {
+            partida.atualizar(PASSO_MAX, &mut estado);
+            segundos += PASSO_MAX;
+        }
+        assert!(estado.acabou(), "a partida devia ter acabado em 40 s");
+
+        partida.povoar(1);
+        let antes = partida.inimigos();
+        assert!(antes > 0);
+        let mut arma = Weapon::new();
+        let (_, alvo) = partida.pool().iter_alive().next().expect("um cubo");
+        let tiro = partida.atirar(&mut arma, alvo.position, alvo.direcao_ao_alvo(Vec3::ZERO));
+        assert!(tiro.is_none(), "depois do GAME OVER o tiro não pode matar");
+        assert_eq!(
+            partida.inimigos(),
+            antes,
+            "nenhum cubo pode ter morrido depois do GAME OVER"
+        );
     }
 
     #[test]

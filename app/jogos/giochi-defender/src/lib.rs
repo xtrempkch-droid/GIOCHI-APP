@@ -11,6 +11,7 @@ pub mod bench;
 pub mod diag;
 pub mod gameplay;
 pub mod state;
+pub mod ui;
 pub mod utils;
 
 /// Versão do jogo, como declarada no `Cargo.toml`.

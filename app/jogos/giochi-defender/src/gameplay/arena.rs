@@ -215,6 +215,14 @@ pub fn luz_dos_inimigos() -> DirectionalLight {
     luz
 }
 
+/// Luz do HUD: emissiva pura, sem direção nenhuma.
+///
+/// O HUD não é um objeto do mundo — a mira não pode escurecer conforme a câmera
+/// orbita. `ambient = 1.0` com luz preta devolve a cor exatamente como pedida.
+pub fn luz_do_hud() -> DirectionalLight {
+    luz_emissiva()
+}
+
 /// Luz que faz a cor do objeto chegar à tela sem atenuação.
 ///
 /// `ambient = 1.0` e cor de luz preta: no `phong.frag` o resultado é
