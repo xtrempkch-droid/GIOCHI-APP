@@ -35,9 +35,22 @@ mod icons;
 #[path = "../../launcher/crates/ui-sdl/src/views.rs"]
 mod views;
 
+// O catálogo, o leitor de `/dev/input` e o lançador de jogo são **os mesmos
+// arquivos** do launcher de produção, pelo mesmo motivo das telas: uma segunda
+// leitura do `index.json` (ou um segundo mapa de botões) começaria igual e
+// divergiria na primeira correção. O que este app troca é a **engine de
+// desenho**, não o contrato com o sistema.
+#[path = "../../launcher/crates/ui-sdl/src/catalogo.rs"]
+mod catalogo;
+#[path = "../../launcher/crates/ui-sdl/src/input_evdev.rs"]
+mod input_evdev;
+#[path = "../../launcher/crates/ui-sdl/src/system.rs"]
+mod system;
+
 mod draw;
 mod efeitos;
 
+use std::path::Path;
 use std::time::Instant;
 
 
@@ -46,6 +59,9 @@ use giochi_launcher_core::state::{
     App as AppEntry, Game, Screen, State, Tab, SETTINGS_CATEGORIES,
 };
 use giochi_launcher_core::{update, Cmd, Dir};
+use giochi_launcher_core::gamepad::Mapper;
+
+use input_evdev::{ButtonsMap, EvdevInput};
 
 use draw::{CANDIDATOS_FONTE, Painter};
 use efeitos::Efeitos;
@@ -82,6 +98,11 @@ fn argumentos() -> Opcoes {
             "--teclas" => o.teclas = proximo(),
             "--tela" => o.tela = proximo(),
             "--demo" => o.demo = true,
+            // Pedido de lançamento na abertura. É o mesmo campo que o `A` no
+            // cartão preenche (`state.lancar`), então exercita o caminho de
+            // verdade — e é o que permite testar o ciclo launcher → jogo →
+            // launcher por SSH, sem depender de apertar um botão.
+            "--lancar" => o.lancar = proximo(),
             "--efeitos" => o.efeitos = true,
             "--bench" => {
                 if let Some(v) = proximo() {
@@ -116,6 +137,7 @@ struct Opcoes {
     teclas: Option<String>,
     tela: Option<String>,
     demo: bool,
+    lancar: Option<String>,
     rotacao: Option<String>,
     efeitos: bool,
     efeitos_quadros: u32,
@@ -131,6 +153,7 @@ impl Default for Opcoes {
             teclas: None,
             tela: None,
             demo: false,
+            lancar: None,
             rotacao: None,
             // `GIOCHI_EFEITOS=1` é o caminho do aparelho: quem instala a versão
             // de teste não quer digitar flag por SSH, e a variável de ambiente
@@ -155,6 +178,7 @@ opções:
   --teclas a,b,right   aplica comandos antes de desenhar (vírgula)
   --tela <nome>        boot | home | biblioteca | apps | ajustes
   --demo               usa o catálogo de demonstração
+  --lancar <id|slug>   pede o lançamento já na abertura
   --efeitos            liga a camada de efeitos (GIOCHI_EFEITOS=1)
   --efeitos-quadros N  quadros adiantados antes do --dump-frame (padrão 90)
   --bench N            mede N quadros sem dormir e imprime ms por quadro
@@ -199,10 +223,6 @@ fn principal() -> Result<(), String> {
     // A `Platform` inicializa o SDL e cria a janela; o `RenderContext` consome a
     // janela, porque o SDL amarra o renderer a ela.
     let platform = Platform::new().map_err(|e| format!("SDL: {e}"))?;
-    let janela = platform
-        .create_window(WindowConfig::new(largura, altura), "Giochi (engine 3D)")
-        .map_err(|e| format!("janela: {e}"))?;
-    let render = RenderContext::new(janela).map_err(|e| format!("renderer: {e}"))?;
 
     let fonte = opcoes
         .fonte
@@ -210,11 +230,32 @@ fn principal() -> Result<(), String> {
         .or_else(|| CANDIDATOS_FONTE.iter().find(|c| std::path::Path::new(c).exists()).map(|s| s.to_string()))
         .ok_or_else(|| format!("nenhuma fonte encontrada em: {}", CANDIDATOS_FONTE.join(", ")))?;
 
-    let mut painter = Painter::new(render, &fonte)?;
-    let mut state = estado_inicial(opcoes.demo);
+    let mut painter = criar_painter(&platform, largura, altura, &fonte)?;
+    let (catalogo, aviso_catalogo) = catalogo_do_aparelho();
+    let mut state = estado_inicial(opcoes.demo, &catalogo);
 
     if let Some(tela) = &opcoes.tela {
         state = aplicar_tela(state, tela);
+    }
+
+    // Resolução do `--lancar`: por índice ou por slug, como no launcher de
+    // produção. O `slug` está em `alvos`, na mesma ordem dos `games`, então a
+    // posição serve de id — e o erro nomeia o pedido em vez de dizer "inválido".
+    if let Some(pedido) = &opcoes.lancar {
+        let id = pedido
+            .parse::<u32>()
+            .ok()
+            .filter(|id| (*id as usize) < state.games.len())
+            .or_else(|| {
+                catalogo
+                    .alvos
+                    .iter()
+                    .position(|a| &a.slug == pedido)
+                    .map(|p| p as u32)
+            })
+            .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))?;
+        state.lancar = Some(id);
+        eprintln!("--lancar: pedido de lançamento para o app {id} ({pedido})");
     }
 
     // ── camada de efeitos (opcional) ─────────────────────────
@@ -327,16 +368,102 @@ fn principal() -> Result<(), String> {
         return Ok(());
     }
 
-    // Sem `--dump-frame`, o laço normal. Serve para olhar a tela no PC.
+    // ── laço de uso ──────────────────────────────────────────
     //
-    // Para o teste de desenho o que importa é o quadro; encerrar é Ctrl-C. Quem
-    // cuida de evento no uso completo é o `Engine` da engine, não o `Painter`.
-    let _ = &platform;
+    // Este é o modo que faz deste app **um launcher** e não só um banco de
+    // prova de desenho: lê o controle por evdev, passa os comandos pelo
+    // reducer do núcleo (o mesmo da produção) e, quando o núcleo pede para
+    // lançar, fecha a janela, roda o jogo e reabre.
+    //
+    // Entrada por **evdev** e não por `SDL_GameController`, pela mesma razão do
+    // launcher de produção: os botões dos handhelds vêm de `gpio-keys`, e a API
+    // de gamepad do SDL devolve `nullptr` para eles — o app abriria, desenharia
+    // e nenhum botão responderia, sem erro nenhum no log.
+    let mapa = ButtonsMap::load(Path::new(input_evdev::DEFAULT_MAP_PATH));
+    if !mapa.is_complete() {
+        eprintln!("launcher-teste: aviso — o mapa de botões não está completo");
+    }
+    let mut evdev = EvdevInput::open(Path::new("/dev/input"), mapa);
+    eprintln!(
+        "launcher-teste: {} dispositivo(s) de entrada",
+        evdev.device_count()
+    );
+    let mut mapper = Mapper::new();
+    if let Some(aviso) = &aviso_catalogo {
+        eprintln!("launcher-teste: {aviso}");
+        state.toast = giochi_launcher_core::Toast::show(aviso);
+    }
+
     loop {
+        // `poll()` move o estado atual dos dispositivos; `frame()` fotografa.
+        // Os dois são necessários **por quadro**, e é o `mapper` que transforma
+        // o quadro em comandos com borda e repetição — a mesma máquina de
+        // estados do launcher de produção.
+        evdev.poll();
+        for cmd in mapper.update(evdev.frame()) {
+            state = update(state, cmd);
+        }
+
+        // Pedido de lançamento: o núcleo decidiu *o que* abrir, e aqui é o
+        // único lugar que sabe *como*.
+        if let Some(id) = state.lancar.take() {
+            let alvo = catalogo.alvo(id).cloned();
+            let mut recado: Option<String> = None;
+
+            // Destruir o pintor **antes** do filho é o que libera o DRM master.
+            // Sem isto o jogo responde `kmsdrm not available` e o launcher
+            // aparece "funcionando" enquanto nada abre.
+            drop(painter);
+            match alvo {
+                Some(alvo) => {
+                    if let Err(e) = system::lancar(&alvo) {
+                        recado = Some(e);
+                    }
+                }
+                None => {
+                    recado = Some(
+                        "este app não está no catálogo: sem caminho para executar".to_string(),
+                    );
+                }
+            }
+            painter = criar_painter(&platform, largura, altura, &fonte)?;
+            if let Some(msg) = recado {
+                eprintln!("launcher-teste: {msg}");
+                state.toast = giochi_launcher_core::Toast::show(&msg);
+            }
+            // A camada de efeitos tem tamanho de tela dentro dela; a janela nova
+            // pode ter outro tamanho (o jogo muda o modo do conector).
+            let (l, a) = painter.logical_size();
+            camada = Efeitos::novo(camada.ativo());
+            if camada.ativo() {
+                camada.semear(l as i32, a as i32);
+            }
+        }
+
         state = update(state, Cmd::TickHud);
         desenhar_com(&mut painter, &mut state, Some(&mut camada));
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
+}
+
+/// Abre janela, renderer e pintor.
+///
+/// Em função porque **é chamada de novo** depois de cada jogo: o `Painter`
+/// segura o DRM master, e ele tem de morrer antes de o filho abrir o KMSDRM.
+/// Medido no X35H: um segundo processo com o launcher vivo recebe
+/// `kmsdrm not available`. Reabrir a janela é o que o launcher de produção
+/// também faz, e pelo mesmo motivo.
+fn criar_painter(
+    platform: &Platform,
+    largura: u32,
+    altura: u32,
+    fonte: &str,
+) -> Result<Painter, String> {
+    let janela = platform
+        .create_window(WindowConfig::new(largura, altura), "Giochi (engine 3D)")
+        .map_err(|e| format!("janela: {e}"))?;
+    let render = RenderContext::new(janela).map_err(|e| format!("renderer: {e}"))?;
+    Painter::new(render, fonte)
 }
 
 /// A mesma sequência, com a camada de efeitos opcional por cima.
@@ -394,7 +521,28 @@ fn desenhar_com(painter: &mut Painter, state: &mut State, mut efeitos: Option<&m
     painter.present();
 }
 
-fn estado_inicial(demo: bool) -> State {
+/// Catálogo lido do aparelho, ou vazio quando não há.
+///
+/// `GIOCHI_CATALOGO` aponta outro arquivo, como no launcher de produção — no PC
+/// não existe `/opt/giochi/apps/` e testar exigiria root.
+///
+/// Devolve o catálogo **e** o aviso da falha, para o chamador poder dizer na
+/// tela: um catálogo vazio por arquivo ausente é indistinguível de "nenhum jogo
+/// instalado", e foram dois diagnósticos errados seguidos nesse mesmo caminho.
+fn catalogo_do_aparelho() -> (catalogo::Catalogo, Option<String>) {
+    let caminho = std::env::var_os("GIOCHI_CATALOGO")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(catalogo::caminho);
+    match catalogo::Catalogo::carregar(&caminho) {
+        Ok(c) => (c, None),
+        Err(e) => (
+            catalogo::Catalogo::default(),
+            Some(format!("catálogo: {e}")),
+        ),
+    }
+}
+
+fn estado_inicial(demo: bool, catalogo: &catalogo::Catalogo) -> State {
     let games = if demo {
         vec![
             Game::new(0, "Arcade Volleyball", "Esporte", 0.0, "nunca", true).com_ano(1988),
@@ -403,7 +551,12 @@ fn estado_inicial(demo: bool) -> State {
             Game::new(3, "Shattered Pixel Dungeon", "Roguelike", 0.0, "nunca", false).com_ano(2014),
         ]
     } else {
-        Vec::new()
+        // Uma leitura só: o mesmo `catalogo` que monta os cartões resolve o
+        // `alvo` no lançamento. Ler de novo no laço criaria duas listas que
+        // podem discordar — o cartão na tela e o executável aberto sairiam de
+        // fontes diferentes.
+        eprintln!("launcher-teste: catálogo com {} jogo(s)", catalogo.games.len());
+        catalogo.games.clone()
     };
     let apps = vec![
         AppEntry::new("music", "Música", "music", "Mídia"),
@@ -502,4 +655,58 @@ fn tamanho_do_painel() -> (u32, u32) {
         }
     }
     (640, 480)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    fn catalogo_com(slugs: &[&str]) -> catalogo::Catalogo {
+        let mut c = catalogo::Catalogo::default();
+        for (i, slug) in slugs.iter().enumerate() {
+            c.games
+                .push(Game::new(i as u32, slug, "Teste", 0.0, "nunca", false));
+            c.alvos.push(catalogo::Alvo {
+                slug: (*slug).to_string(),
+                dir: format!("/tmp/{slug}"),
+                entrypoint: "bin/x".to_string(),
+            });
+        }
+        c
+    }
+
+    #[test]
+    fn sem_demo_a_home_mostra_o_catalogo_do_aparelho() {
+        // A regressão que este teste existe para pegar é o laço antigo, que
+        // abria com `Estado::new(Vec::new(), apps)` — a tela desenhada é
+        // idêntica, e a única diferença é que **nenhum jogo aparece**. Foi
+        // assim que o launcher-teste passou a ser um banco de prova bonito e
+        // inútil para ser o launcher.
+        let cat = catalogo_com(&["neon-drift", "cobrinha"]);
+        let s = estado_inicial(false, &cat);
+        assert_eq!(s.games.len(), 2);
+        assert_eq!(s.games[0].title, "neon-drift");
+        assert_eq!(s.games[1].title, "cobrinha");
+    }
+
+    #[test]
+    fn demo_nao_usa_o_catalogo() {
+        // `--demo` é o caminho dos quatro jogos de demonstração; se ele
+        // passasse a ler o catálogo, uma captura de tela no PC com um aparelho
+        // na rede mediria coisas diferentes em cada máquina.
+        let cat = catalogo_com(&["neon-drift"]);
+        let s = estado_inicial(true, &cat);
+        assert_eq!(s.games.len(), 4);
+        assert_ne!(s.games[0].title, "neon-drift");
+    }
+
+    #[test]
+    fn catalogo_vazio_nao_e_erro_de_tela() {
+        // Aparelho sem `index.json` é o caso normal de uma imagem recém-gravada.
+        // A Home desenha "Nenhum jogo instalado"; o que não pode acontecer é o
+        // app entrar em pânico ou mostrar quatro jogos que não existem.
+        let s = estado_inicial(false, &catalogo::Catalogo::default());
+        assert!(s.games.is_empty());
+        assert_eq!(s.screen, Screen::Running);
+    }
 }

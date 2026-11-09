@@ -4582,3 +4582,328 @@ tentativas (`aparelho.sh procurar` → nenhum aparelho), e o R35S não respondeu
 O que existe é: o binário aarch64 compila, linka, tem `PT_INTERP` e **não pediu
 biblioteca nova** — o custo do atlas numa Mali-G31/Mali-G52 continua medido só
 no PC (AMD RX 580). É a mesma pendência do §31 e do §29.
+
+## 33. O launcher-teste virou o launcher do X35H (09/11/2026)
+
+Pedido do dono: **"pronto x35h pronto via ssh. troque o jogo e o launcher. o
+launcher tem q ser o launcher-teste"**.
+
+A troca do jogo foi uma instalação. A do launcher **não podia ser só uma
+instalação**, e é o que este capítulo registra.
+
+### O launcher-teste não podia ser o launcher, e o motivo era medido
+
+Ele era um banco de prova de desenho: `estado_inicial` montava a Home com
+`Vec::new()` (nenhum jogo) e o laço era `update(TickHud)` + desenhar + dormir,
+sem ler `/dev/input`. Posto na tela do aparelho, daria uma Home vazia que não
+responde a botão nenhum — a interface parece pronta e o aparelho fica inerte.
+
+Duas coisas faltavam, e as duas **já existiam** no launcher de produção. Foram
+reusadas por `#[path]`, que é a mesma decisão que dá sentido ao teste de
+fidelidade (telas iguais, engine diferente):
+
+| Peça | Arquivo reusado |
+| --- | --- |
+| catálogo do aparelho | `launcher/crates/ui-sdl/src/catalogo.rs` |
+| leitura de `/dev/input` | `launcher/crates/ui-sdl/src/input_evdev.rs` |
+| lançar o jogo | `launcher/crates/ui-sdl/src/system.rs` |
+
+Mais o `gamepad::Mapper` do núcleo, que é quem dá borda e repetição aos botões.
+Nada de segunda implementação: uma segunda leitura do `index.json` começaria
+igual e divergiria na primeira correção — e é ela que decide **o que aparece no
+cartão e o que o `A` abre**.
+
+### O `drop(painter)` é o que faz o jogo abrir
+
+O KMSDRM é exclusivo. Com o launcher vivo segurando o master, o filho responde
+`kmsdrm not available` e o launcher continua desenhando como se nada tivesse
+acontecido. Medido no X35H com o laço novo:
+
+```text
+pid=2103 giochi-launcher-teste  drm=0    ← soltou o dispositivo
+pid=2112 giochi-neon-drift      drm=3    ppid=2103
+```
+
+E o catálogo é lido **uma vez**: o mesmo objeto que monta os cartões resolve o
+`alvo` do lançamento. Duas leituras dariam duas listas que podem discordar.
+
+### Fidelidade de desenho: 100,0 % continua valendo
+
+`comparar-launcher-teste.sh` depois da mudança:
+
+```text
+640x480                        100,0%  (linhas 1,00)
+720x1280 (retrato, Ccw90)      100,0%  (linhas 1,00)
+```
+
+O que mudou foi de onde vêm os dados, não como se desenha — e é por isso que a
+medida antiga continua servindo.
+
+### No aparelho ele é o launcher, e a escolha é legível
+
+`/opt/giochi/apps/launcher/bin/giochi-launcher` passou a ser um **wrapper**:
+
+```sh
+exec /opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste --efeitos "$@"
+```
+
+O binário de produção fica ao lado, em `giochi-launcher.producao`, e volta com
+`touch /run/giochi/launcher-producao && kill <pid>` (o wrapper consulta o
+arquivo). **Wrapper e não symlink** porque a escolha tem de ser legível no
+aparelho — symlink exige `readlink`, e `--efeitos` é argumento, que symlink não
+carrega.
+
+Estado final medido, com o supervisor no comando:
+
+```text
+giochi-init 3247
+  └─ giochi-launcher-teste 3255  drm=3   cpu 718 → 1018 ticks em 5 s
+catálogo: 3 app(s)   ·   launcher-teste sha256 0ba94c2a…
+neon-drift  sha256 d6c178b5…  (idêntico nas duas pontas)
+```
+
+### As telas no aparelho: 100,00 % contra o PC, com o catálogo real
+
+Captura com `GIOCHI_GLES=0` (obrigatório: com o backend acelerado o
+`--dump-frame` grava **preto**, o swap esvazia o buffer) e as três variáveis
+congeladas (`GIOCHI_HORA_FIXA`, `GIOCHI_BATERIA_FIXA`,
+`GIOCHI_TEMPERATURA_FIXA`) dos dois lados:
+
+```text
+home 640x480 PC × aparelho:  100.00% de pixels idênticos (307 200 px)
+```
+
+As seis telas no aparelho, com o catálogo de verdade (3 jogos):
+
+| tela | cores | média | quase preto |
+| --- | --- | --- | --- |
+| home | 1404 | 22,0 | 0,00 % |
+| home + efeitos | 2116 | 23,9 | 3,84 % |
+| biblioteca | 1803 | 18,8 | 0,00 % |
+| apps | 1091 | 28,3 | 0,00 % |
+| ajustes | 1317 | 14,8 | 5,63 % |
+| busca | 791 | 13,3 | 59,93 % |
+| detalhe | 1592 | 10,8 | 76,69 % |
+
+Quadros em [`docs/imagens/`](docs/imagens/): `launcher-teste-home-x35h.png` e
+`launcher-teste-home-x35h-efeitos.png`.
+
+A camada de efeitos muda **59,7 %** dos pixels da Home — é presença visível, não
+sutil. Busca e detalhe serem escuras é do desenho (fundo escurecido atrás do
+overlay), não defeito: 791 e 1592 cores provam que há conteúdo.
+
+### Neon Drift no X35H: 36,8 fps, e o teto é a máquina
+
+```text
+boavista 600 quadros        fps=36.8  ms_cpu=9.57  desenhos=53
+boavista --so asfalto       fps=49.2  ms_cpu=1.32  desenhos=1     ← o piso
+avenida  600 quadros        fps=37.9  ms_cpu=8.96  desenhos=51
+avenida --sem-vsync         fps=37.4                            ← vsync não é o limite
+avenida GIOCHI_GLES=0       fps=36.9                            ← software dá o mesmo
+cobrinha, no mesmo instante fps=49.3                            ← o teto do conjunto
+```
+
+Três leituras que saem daí:
+
+1. **O piso de apresentação desta imagem, agora, é 49,2 fps** — e é o mesmo
+   número do `cobrinha` (49,3) e do `--so asfalto`. O painel não está entregando
+   60 Hz neste instante; nenhum dos jogos é o culpado.
+2. **O jogo custa ~7 ms por quadro** acima do piso (27,2 − 20,3). Antes das
+   texturas e do atlas, ele media 39,5 fps contra o mesmo piso de 49,2: a
+   diferença é **~1,8 ms**, o preço de amostrar textura em todo pixel do mundo e
+   em cada partícula.
+3. **`--sem-vsync` não muda nada e o backend gráfico também não** (36,9 com
+   software contra 36,8 com GLES). Neste tamanho o neon-drift não é limitado
+   nem por vsync nem por GPU: é o custo fixo de apresentação somado a ~7 ms de
+   cena.
+
+Quadro do jogo no aparelho contra o PC: **99,56 %** dentro de 6 níveis (66,46 %
+byte a byte). O que difere é a chuva, que avança por quadro renderizado — dois
+processos com FPS diferente nunca param no mesmo instante. É a mesma conclusão
+do §29, agora com número.
+
+### O ciclo completo, do launcher ao jogo
+
+```text
+launcher-teste: catálogo com 3 jogo(s)
+sistema: iniciando neon-drift (/user/apps/neon-drift/bin/giochi-neon-drift)
+  pid=2103 giochi-launcher-teste  drm=0
+  pid=2112 giochi-neon-drift      drm=3  ppid=2103
+```
+
+`--teclas right,right,enter` percorre o **mesmo** caminho do controle: o pedido
+vai para `state.lancar` e o laço resolve. Sem dedo no aparelho, e sem uma cópia
+do caminho só para testar.
+
+### Três armadilhas, todas já documentadas, todas repetidas
+
+1. **`case "$c" in *giochi-launcher-teste*)` casa com o meu próprio `sh -c`.** A
+   primeira tentativa matou a sessão SSH em vez do launcher, e o launcher
+   seguiu com o DRM: a captura saiu com `kmsdrm not available` engolido e sete
+   BMPs **pretos com 1 cor**. É a mesma armadilha do §23, agora com nome e
+   sobrenome. A correção é comparar `readlink -f /proc/PID/exe`, nunca o
+   `cmdline`.
+2. **SIGTERM não mata o laço deste app** (o SDL só posta `SDL_QUIT`, e o laço
+   não bombeia eventos). Cada `kill` seguido de `kill -9` custou **duas** quedas
+   na cota do supervisor — que desistiu, gravou `/run/giochi/launcher-parado` e
+   dormiu. Recuperado matando o `giochi-init` (o `inittab` o respawna com a
+   cota zerada), como o §23 já mandava.
+3. **`--dump-frame` com backend acelerado grava preto.** Terceira vez. O
+   `GIOCHI_GLES=0` é obrigatório na captura e não muda o que o app desenha.
+
+### O que continua afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| botão físico navegando o launcher-teste | **não exercitado** — não há `/dev/uinput` nesta imagem e eu não apertei o controle |
+| dormir, brilho, volume, energia, Wi-Fi/BT no launcher-teste | **não existem** — é o que mantém o app em `scaffold` |
+| `verificar-teste` como comparação | **virou tautologia** — os dois lados rodam o mesmo binário; a medida válida agora é `comparar-launcher-teste.sh` no PC × captura no aparelho |
+
+### Mutações que provam os testes novos
+
+| Mutação | Reprova |
+| --- | --- |
+| `estado_inicial` volta a `Vec::new()` | `sem_demo_a_home_mostra_o_catalogo_do_aparelho` |
+| `--demo` passa a ler o catálogo | `demo_nao_usa_o_catalogo` |
+| catálogo vazio vira erro | `catalogo_vazio_nao_e_erro_de_tela` |
+
+72 testes no crate (eram 69; +3), e os 100,0 % de fidelidade continuam
+passando.
+
+## 34. Dois bugs do Neon Drift, e o percurso que os provou (09/11/2026)
+
+Relato do dono depois de jogar no X35H:
+
+> "o contador de velocidade que fica muito próximo ao contador de nitro e acaba
+> sobrepondo" e "a marcação do início da corrida está muito próximo e acaba
+> registrando uma volta logo na partida, assim ficando 1 volta como sendo 2"
+
+Duas causas diferentes, as duas invisíveis para a suíte que existia.
+
+### 1. O rodapé do HUD era uma pilha de três elementos
+
+`texto()` recebe o **topo** da linha, e a fonte é 5×7 — uma linha a escala `e`
+tem `7e` de altura. O código somava deslocamentos fixos (`base_y - 2·escala`)
+para um glifo de `7·escala`, e em 640×480 as três caixas caíram na mesma faixa
+de 40 px:
+
+```text
+velocidade  y 424..457     marcha  y 439..464     barra  y 452..461
+```
+
+A geometria saiu para `hud::rodape` no núcleo. A pilha é montada **de baixo para
+cima** a partir da barra (o elemento mais perto do bisel), e cada degrau subtrai
+a altura **real** da linha seguinte. O desenho consome a mesma função, então
+não há duas verdades.
+
+O que faltava não era olhar a tela: era uma asserção. `CaixaTexto` tem
+`sobreposicao()`, e `os_elementos_do_rodape_nao_se_sobrepoem` percorre
+**640×480, 800×600, 1280×720 e 720×1280** com `kmh` de 0 a 223. Reintroduzir o
+deslocamento fixo reprova **3 testes**.
+
+### 2. A volta creditada na largada tinha duas causas
+
+**Avenida.** O carro nascia em `s = 0`, ambíguo num circuito fechado: o último
+trecho passa geometricamente ao lado do primeiro, então o `localizar` do
+primeiro passo devolvia o **fim** da pista (962,00) com o carro parado.
+
+**Boavista.** Mesmo com a largada em `comprimento - 3`, o `localizar` **oscila**
+entre ~0 e ~L a cada passo enquanto o carro está perto da linha. Medido com
+`--teclas up`: `volta 1 → 2` em **1,1 s**, com o carro a 14 km/h e 4 m andados.
+Essa segunda causa só apareceu porque o percurso foi rodado nos **dois** mapas;
+a correção da avenida parecia bastar.
+
+A detecção por limiar no `s` (`s_anterior > 0,6L && s < 0,4L`) foi trocada por
+**progresso acumulado com correção de volta**: `ds` vira deslocamento pequeno
+quando o `s` salta, então a oscilação fica +3/−3 alternados, que não acumulam.
+A volta sai de `progresso / comprimento`, e `largou()` é `progresso >= 0`.
+
+Medido depois, com o piloto fechando a corrida:
+
+```text
+avenida    41,4 s   progresso final 1924 = 2 × 962
+boavista   49,8 s   progresso final 2619 = 2 × 1310
+```
+
+Os dois números batem com o comprimento **vezes dois**, que é a definição de
+"duas voltas". Antes, a avenida fechava com uma volta de progresso.
+
+### `scripts/traco-voltas.mjs` — o percurso que o dono pediu
+
+Foi o pedido literal ("faca um percurso para emtemder o erro"), e virou
+ferramenta: varre `--passos` crescentes e imprime **só as transições**.
+
+```text
+  passos   tempo       s   volta  fase       o que mudou
+      270     0.6     0.3      1  Correndo   largou false → true
+```
+
+Três decisões que fazem a ferramenta medir o que promete:
+
+- **`--passos` é determinístico** (passo fixo de 1/75 s, sem relógio), então a
+  mesma varredura dá a mesma linha do tempo em qualquer máquina;
+- **`--teclas up` e não `--piloto`**: o piloto acelera no mesmo passo em que a
+  contagem acaba e **esconde** o defeito. O percurso tem de reproduzir o
+  jogador, não o ajudante de teste;
+- **sai com 1** se achar volta creditada antes de 5 s.
+
+O `--json` do jogo ganhou `largou` e `progresso`, que é o que a ferramenta lê.
+
+### As duas mutações
+
+| Mutação | O que reprova |
+| --- | --- |
+| deslocamento fixo no rodapé | `os_elementos_do_rodape_nao_se_sobrepoem`, `o_velocimetro_fica_acima_e_a_barra_embaixo`, `a_escada_do_rodape_e_medida_pela_altura_da_fonte` |
+| detecção por limiar no `s` | `o_localizador_oscilar_perto_da_linha_nao_credita_volta` |
+
+O segundo é o teste que faltava: ele **força** a oscilação (posiciona o carro
+alternando entre `L-0,7` e `0,2`, como o aparelho fazia) e exige que o
+progresso não ande mais de 20 m por par de quadros e que a volta continue 1.
+
+### Medido no X35H
+
+```text
+launcher-teste   6 telas a 100,0 % contra o launcher de produção
+catálogo         3 apps: cobrinha, equilibrio, neon-drift
+neon-drift       640x480, GLES 3 Mali-G52, 616 cores, 0,00 % de preto
+voltas           avenida  volta=1 largou=True progresso=43
+                 boavista volta=1 largou=True progresso=3   (era volta=2)
+HUD              velocidade, marcha e barra separadas — medido no BMP do aparelho
+ciclo            launcher --lancar neon-drift → jogo ppid=launcher, drm=6
+```
+
+### Instalado no PC do dono, fora do repositório
+
+```text
+~/.local/opt/giochi-neon-drift/giochi-neon-drift   binário (cópia, não symlink)
+~/.local/bin/giochi-neon-drift                     atalho de linha de comando
+~/.local/share/applications/giochi-neon-drift.desktop
+~/Área de trabalho/giochi-neon-drift.desktop       atalho com duplo clique
+~/.local/share/icons/hicolor/320x320/apps/giochi-neon-drift.png
+```
+
+Cópia e não symlink para dentro do repositório: um `cargo clean` não pode
+desinstalar o jogo do usuário. Medido no PC: **74,5 fps com teto 75** numa
+Radeon RX 580, GLES 3.
+
+### Três defeitos de ferramenta que apareceram no caminho
+
+1. **`verificar-jogo` matava o launcher com `kill`.** O launcher-teste não
+   bombeia eventos: o SDL transforma SIGTERM em `SDL_QUIT` na fila e o processo
+   segue segurando o KMSDRM. A captura então falhava com "não gerou frame" — que
+   manda procurar defeito no jogo. Agora há `matar_launcher` (SIGKILL + espera o
+   descritor liberar).
+2. **`pidof` não é confiável para o launcher.** O `comm` é truncado em 15
+   caracteres, então produção e teste colidem; e num momento `pidof
+   giochi-launcher` devolvia vazio com o processo vivo. A varredura passou a ser
+   por `/proc/<pid>/exe`.
+3. **`no_aparelho` colava o fim de um trecho no começo do outro.** `$(cat
+   <<'X' ... X)` come as quebras de linha finais, e `"$TRECHO"'pids_launcher'`
+   virava `}pids_launcher` → `syntax error: unexpected end of file (expecting
+   "}")`. Agora o trecho devolve a quebra de linha e a função une argumentos com
+   `\n`, não com espaço.
+
+E a flag `/run/giochi/dev-free-console` entrou no ciclo de captura: sem ela o
+supervisor ressuscita o launcher em ~1 s, o DRM nunca libera e o app errado leva
+a culpa. `iniciar_launcher` a remove antes de subir, senão o aparelho fica sem
+interface depois da primeira captura.

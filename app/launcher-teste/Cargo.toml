@@ -1,6 +1,6 @@
 [package]
 name = "giochi-launcher-teste"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Proprietary"
 description = "Launcher do Giochi portado para a GIOCHI-ENGINE — versão de teste"
@@ -25,3 +25,9 @@ giochi-engine = { path = "../../../GIOCHI-ENGINE-3D/giochi-engine", default-feat
 
 # Usado só para TTF (glifos) e para o tipo de cor, que as telas já usam.
 sdl2 = { version = "0.38", default-features = false, features = ["ttf"] }
+
+# O `catalogo.rs` é o **mesmo arquivo** do launcher de produção (via `#[path]`),
+# e ele lê `index.json` com `serde_json`. Uma segunda leitura de catálogo
+# envelheceria diferente da primeira — que é a que decide o que aparece na tela
+# e o que o `A` abre.
+serde_json = "1"

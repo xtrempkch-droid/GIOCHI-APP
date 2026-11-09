@@ -93,13 +93,18 @@ pub fn largura_em_pixels(texto: &str, escala: f32) -> f32 {
 /// Uma caixa de texto do HUD: canto superior esquerdo e altura de linha.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaixaTexto {
+    /// Borda esquerda, em pixels de projeto.
     pub x: f32,
+    /// Topo da linha (o `y` que o desenho recebe), em pixels de projeto.
     pub y: f32,
+    /// Largura do texto, em pixels de projeto.
     pub largura: f32,
+    /// Altura da linha: `fonte::ALTURA × escala`.
     pub altura: f32,
 }
 
 impl CaixaTexto {
+    /// Borda de baixo da linha, que é onde o texto assenta.
     pub fn base(&self) -> f32 {
         self.y + self.altura
     }
@@ -119,9 +124,13 @@ impl CaixaTexto {
 /// Um retângulo do HUD (a barra de nitro e o fundo dela).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Caixa {
+    /// Borda esquerda, em pixels de projeto.
     pub x: f32,
+    /// Topo, em pixels de projeto.
     pub y: f32,
+    /// Largura, em pixels de projeto.
     pub largura: f32,
+    /// Altura, em pixels de projeto.
     pub altura: f32,
 }
 
@@ -132,15 +141,23 @@ pub struct Caixa {
 /// seguinte (`fonte::ALTURA × escala`), não um deslocamento escolhido a olho.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rodape {
+    /// O número grande do velocímetro.
     pub velocidade: CaixaTexto,
+    /// `KM/H`, encostado à direita do número.
     pub unidade: CaixaTexto,
+    /// A marcha, abaixo do número.
     pub marcha: CaixaTexto,
+    /// A barra de nitro (fundo e preenchimento compartilham a caixa).
     pub barra: Caixa,
+    /// `NITRO`, à direita da barra.
     pub rotulo: CaixaTexto,
-    /// Escala da fonte de cada linha, para o desenho não recalcular.
+    /// Escala da fonte do velocímetro, para o desenho não recalcular.
     pub escala_velocidade: f32,
+    /// Escala da fonte da marcha.
     pub escala_marcha: f32,
+    /// Escala da fonte de `KM/H`.
     pub escala_unidade: f32,
+    /// Escala da fonte de `NITRO`.
     pub escala_rotulo: f32,
 }
 

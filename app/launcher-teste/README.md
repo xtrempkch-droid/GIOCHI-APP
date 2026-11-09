@@ -20,8 +20,9 @@ bash scripts/aparelho.sh verificar-teste           # compara NO APARELHO
 
 | Peça | Origem |
 | --- | --- |
-| estado, foco, reducer, grade | `giochi-launcher-core` — **o mesmo crate**, sem cópia |
+| estado, foco, reducer, grade, mapper de botões | `giochi-launcher-core` — **o mesmo crate**, sem cópia |
 | telas, tema, ícones, dicas do rodapé | `launcher/crates/ui-sdl/src/*` — **os mesmos arquivos**, por `#[path]` |
+| catálogo (`index.json`), leitura de `/dev/input`, lançamento de jogo | `launcher/crates/ui-sdl/src/{catalogo,input_evdev,system}.rs` — **os mesmos arquivos**, por `#[path]` |
 | janela, texturas, apresentação, blend | **GIOCHI-ENGINE-3D** (`giochi-engine`) |
 | `Painter` | `src/draw.rs`, novo |
 
@@ -63,6 +64,53 @@ Quatro primitivas que não existiam, todas com teste de pixel:
 A última foi encontrada pelo próprio porte: o quadro saía com 97 cores em vez de
 321, e a leitura de um pixel depois do desenho mostrou a cor do texto opaca onde
 deveria haver transparência.
+
+## Ele é um launcher, não só um banco de prova de desenho
+
+Até 09/11/2026 este app desenhava as telas e mais nada: o laço era
+`update(TickHud)` + desenhar + dormir, sem ler `/dev/input` e sem catálogo. Um
+binário assim **não pode ser a interface do aparelho** — a Home sai vazia e
+nenhum botão responde.
+
+Hoje ele lê o catálogo do sistema, lê o controle e abre jogos:
+
+| Peça | Como |
+| --- | --- |
+| catálogo | `catalogo::Catalogo::carregar` de `/opt/giochi/apps/index.json` (`GIOCHI_CATALOGO` sobrepõe) |
+| entrada | `input_evdev::EvdevInput` + `gamepad::Mapper` do núcleo — borda e repetição iguais às da produção |
+| lançamento | `system::lancar` — **destrói o `Painter` antes**, porque o KMSDRM é exclusivo |
+
+O `drop(painter)` não é detalhe: com o launcher vivo segurando o DRM master, o
+filho responde `kmsdrm not available`. Medido no X35H em 09/11/2026, com o
+laço novo:
+
+```text
+pid=2103 giochi-launcher-teste  drm=0    ← soltou o dispositivo
+pid=2112 giochi-neon-drift      drm=3    ppid=2103
+```
+
+E o `estado_inicial` passou a usar **o mesmo** catálogo que resolve o `alvo` no
+lançamento: uma leitura só. Ler duas vezes criaria dois lugares que podem
+discordar — o cartão na tela e o executável aberto sairiam de fontes
+diferentes.
+
+`--demo` continua existindo e **não** lê o catálogo: é o caminho das capturas
+de tela, e uma captura no PC tem de medir o mesmo que no aparelho.
+
+### No aparelho, ele é o launcher
+
+`/opt/giochi/apps/launcher/bin/giochi-launcher` é um **wrapper** de 30 linhas
+que faz `exec` no launcher-teste com `--efeitos`. O binário de produção fica ao
+lado (`giochi-launcher.producao`) e volta com um comando:
+
+```sh
+touch /run/giochi/launcher-producao && kill <pid do launcher>
+rm /run/giochi/launcher-producao        # volta ao launcher-teste no respawn
+```
+
+Wrapper e não symlink porque a escolha tem de ser **legível no aparelho** — um
+symlink exige `readlink` para dizer o que está rodando, e `--efeitos` é
+argumento, que symlink não carrega.
 
 ## Camada de efeitos (`--efeitos`)
 
@@ -137,10 +185,16 @@ de morder, e é isso que ele existe para impedir.
 
 - **Os efeitos não são o produto.** São uma camada de demonstração da engine:
   ficam desligados por padrão e não entram em nenhuma medida de fidelidade.
-- **Entrada por evdev não foi portada.** Só `--teclas` (comandos diretos no
-  núcleo). O launcher de produção lê `/dev/input` com thread por dispositivo;
-  mover isso para a engine é o próximo passo.
-- **Sem bomba de eventos**: o `Sdl` da engine não expõe a do SDL. Quem cuida de
-  evento no uso "completo" é `Engine`; aqui o laço desenha e dorme.
-- **Depende do repositório irmão** `../GIOCHI-ENGINE` (clone ao lado deste).
-- Sem `capa.png` e sem binário versionado: o app está em `scaffold`.
+- **Entrada é por evdev, e o que falta é o resto.** Botões, d-pad e analógico
+  digital chegam; o que este app **não** tem, comparado ao de produção, é:
+  dormir/acordar, brilho, volume/mixer, menu de energia, leitura de bateria e
+  temperatura, e as telas de Wi-Fi/Bluetooth. Por isso ele continua em
+  `scaffold` — "roda na tela" e "substitui o launcher" não são a mesma
+  afirmação.
+- **SIGTERM não o encerra.** O laço não bombeia eventos do SDL, então o sinal
+  só posta `SDL_QUIT` na fila e o processo segue vivo. Para encerrar é `kill -9`
+  (ou o `giochi-teste`, que já escala). Custou uma sessão de diagnóstico no
+  §25 do `AGENTS.md` e voltou a morder em 09/11, agora com o supervisor
+  desistindo por `RESTART_MAX`.
+- **Depende do repositório irmão** `../GIOCHI-ENGINE-3D` (clone ao lado deste).
+- Sem `capa.png`: o app está em `scaffold`.

@@ -190,9 +190,64 @@ resolver_host() {
 }
 
 # Executa no aparelho. Aborta com mensagem clara se a rede não responder.
+#
+# Os argumentos são unidos com **quebra de linha**, não com espaço. O `ssh` já
+# junta argumentos com espaço, e isso colava o fim de um trecho no começo do
+# seguinte: `"$TRECHO"'pids_launcher'` virava `}pids_launcher` e o shell remoto
+# respondia `syntax error: unexpected end of file (expecting "}")`. Um script
+# remoto é uma sequência de linhas; quem chama não deveria precisar lembrar de
+# pôr o `\n` na concatenação.
 no_aparelho() {
-  "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" "$@" 2>&1 | sem_ruido
+  local remoto="" parte
+  for parte in "$@"; do
+    remoto="$remoto$parte"$'\n'
+  done
+  "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" "$remoto" 2>&1 | sem_ruido
 }
+
+# Trecho remoto que define `matar_launcher`: derruba a interface e **espera o
+# descritor de DRM** liberar.
+#
+# `kill` sozinho não serve para o launcher-teste, e isso já custou uma rodada:
+# o SDL transforma SIGTERM em `SDL_QUIT` na fila de eventos, e o launcher-teste
+# não bombeia eventos (a entrada por evdev não foi portada). O processo ficava
+# vivo segurando o KMSDRM, que é exclusivo, e o app seguinte morria com
+# `kmsdrm not available` — mensagem que manda procurar defeito no app.
+#
+# A varredura é por `/proc/<pid>/exe` e não por `pidof`: o `comm` do
+# launcher-teste é truncado em 15 caracteres (`giochi-launcher`), então os dois
+# nomes colidem — e o que interessa é qual binário está rodando.
+#
+# Quem decide se liberou é `card0`/`renderD` em `/proc/<pid>/fd`, não um
+# `sleep` fixo: foi assim que o R35S revelou um launcher vivo **sem** os
+# descritores, que nenhum `sleep` detectaria.
+TRECHO_MATAR_LAUNCHER=$(cat <<'REMOTO'
+pids_launcher() {
+  for d in /proc/[0-9]*; do
+    e=$(readlink -f "$d/exe" 2>/dev/null) || continue
+    case "$e" in
+      */giochi-launcher|*/giochi-launcher-teste) printf '%s ' "${d#/proc/}" ;;
+    esac
+  done
+}
+
+matar_launcher() {
+  for p in $(pids_launcher); do kill -9 "$p" 2>/dev/null; done
+  i=0
+  while [ "$i" -lt 20 ]; do
+    n=$(for d in /proc/[0-9]*; do ls -l "$d/fd" 2>/dev/null | grep -c 'card0\|renderD'; done | awk '{s+=$1} END {print s+0}')
+    [ "$n" -eq 0 ] && return 0
+    i=$((i + 1)); sleep 0.5
+  done
+  return 1
+}
+REMOTO
+)
+# `$(...)` come as quebras de linha finais, então o trecho terminaria em `}` e
+# quem concatenasse `"$TRECHO"'comando'` produziria `}comando` — que o shell
+# remoto recusa com "unexpected end of file (expecting \"}")". Devolver a
+# quebra de linha aqui é o que permite concatenar sem pensar nisso.
+TRECHO_MATAR_LAUNCHER+=$'\n'
 
 exigir_aparelho() {
   HOST=$(resolver_host) || verdadeiro
@@ -461,10 +516,10 @@ pid_do_giochi_init() {
 # ou `MORREU` se ele não vier.
 esperar_launcher_supervisionado() {
   local tentativas="${1:-60}"
-  no_aparelho "
+  no_aparelho "$TRECHO_MATAR_LAUNCHER""
     i=0
     while [ \$i -lt $tentativas ]; do
-      pid=\$(pidof giochi-launcher 2>/dev/null)
+      pid=\$(pids_launcher)
       [ -n \"\$pid\" ] && break
       i=\$((i+1)); sleep 0.5
     done
@@ -487,6 +542,10 @@ esperar_launcher_supervisionado() {
 
 iniciar_launcher() {
   local init_pid saida
+  # A flag de console livre de uma captura anterior impediria o supervisor de
+  # subir o launcher para sempre. Limpar aqui é o que fecha o ciclo
+  # capturar → retomar, em vez de deixar o aparelho sem interface.
+  no_aparelho 'rm -f /run/giochi/dev-free-console' || true
   init_pid=$(pid_do_giochi_init)
   if [ -n "$init_pid" ]; then
     saida=$(esperar_launcher_supervisionado 60)
@@ -522,12 +581,12 @@ iniciar_launcher() {
     return 0
   fi
 
-  no_aparelho "
+  no_aparelho "$TRECHO_MATAR_LAUNCHER""
     rm -f $LOG
     setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
       $DESTINO_BIN > $LOG 2>&1 < /dev/null &
     sleep 5
-    pid=\$(pidof giochi-launcher 2>/dev/null)
+    pid=\$(pids_launcher)
     if [ -z \"\$pid\" ]; then
       echo \"MORREU\"
       tail -20 $LOG
@@ -633,8 +692,8 @@ cmd_diagnostico() {
   '
 
   titulo "processo do launcher"
-  no_aparelho '
-    p=$(pidof giochi-launcher 2>/dev/null)
+  no_aparelho "$TRECHO_MATAR_LAUNCHER"'
+    p=$(pids_launcher)
     if [ -z "$p" ]; then
       echo "  rodando:   NÃO"
     else
@@ -678,7 +737,7 @@ cmd_subir() {
   local init_pid
   init_pid=$(pid_do_giochi_init)
   if [ -z "$init_pid" ]; then
-    no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null; sleep 1; true'
+    no_aparelho "$TRECHO_MATAR_LAUNCHER"'p=$(pids_launcher); [ -n "$p" ] && kill $p 2>/dev/null; sleep 1; true'
   fi
 
   # `[ -x ]` não imprime nada nem quando dá certo, então é preciso um eco
@@ -702,7 +761,7 @@ cmd_parar() {
   exigir_aparelho
   local saida init_pid
   init_pid=$(pid_do_giochi_init)
-  saida=$(no_aparelho 'p=$(pidof giochi-launcher 2>/dev/null); if [ -z "$p" ]; then echo NADA; else kill $p 2>/dev/null; sleep 2; echo "PARADO $p"; fi')
+  saida=$(no_aparelho "$TRECHO_MATAR_LAUNCHER"'p=$(pids_launcher); if [ -z "$p" ]; then echo NADA; else kill $p 2>/dev/null; sleep 2; echo "PARADO $p"; fi')
   case "$saida" in
     NADA)    aviso "já não estava rodando" ;;
     PARADO*) ok "parado (${saida#PARADO })" ;;
@@ -714,7 +773,7 @@ cmd_parar() {
   # processo zumbi que na verdade é um respawn funcionando.
   if [ -n "$init_pid" ]; then
     local agora
-    agora=$(no_aparelho 'pidof giochi-launcher 2>/dev/null' | tr -d '\r')
+    agora=$(no_aparelho "$TRECHO_MATAR_LAUNCHER"'pids_launcher' | tr -d '\r')
     if [ -n "$agora" ]; then
       aviso "o launcher voltou como $agora — giochi-init (pid $init_pid) o reinicia"
       printf '  para parar de verdade: mate o giochi-init, ou desligue o aparelho\n'
@@ -1223,7 +1282,7 @@ cmd_verificar() {
 
   titulo "processo"
   local pid
-  pid=$(no_aparelho 'pidof giochi-launcher 2>/dev/null')
+  pid=$(no_aparelho "$TRECHO_MATAR_LAUNCHER"'pids_launcher' | tr -d ' ')
   if [ -z "$pid" ]; then
     falha "não está rodando"
     printf '  suba com: bash scripts/aparelho.sh subir\n'
@@ -1257,11 +1316,18 @@ cmd_verificar() {
   # evidência para olhar agora, não artefato para versionar.
   tmp_captura="$RAIZ/dist/testes/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$tmp_captura"
-  estava_rodando=$(no_aparelho 'pidof giochi-launcher 2>/dev/null')
+  estava_rodando=$(no_aparelho "$TRECHO_MATAR_LAUNCHER"'pids_launcher')
 
-  if no_aparelho "
-      p=\$(pidof giochi-launcher 2>/dev/null); [ -n \"\$p\" ] && kill \$p 2>/dev/null
-      sleep 1
+  if no_aparelho "$TRECHO_MATAR_LAUNCHER""
+      # matar_launcher e nao kill: o launcher-teste nao bombeia eventos, o SDL
+      # transforma SIGTERM em SDL_QUIT na fila e o processo continua segurando o
+      # KMSDRM. Medido: com kill a captura falhava dizendo que nao gerou frame,
+      # com o launcher vivo e 6 descritores abertos.
+      #
+      # E a flag e o que impede o supervisor de ressuscitar o launcher durante a
+      # captura: sem ela o DRM nunca fica livre.
+      mkdir -p /run/giochi; touch /run/giochi/dev-free-console
+      matar_launcher || true
       rm -f /tmp/verif.bmp
       env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 $DESTINO_BIN --dump-frame /tmp/verif.bmp >/dev/null 2>&1
       [ -s /tmp/verif.bmp ] && echo GERADO
@@ -1382,9 +1448,12 @@ cmd_verificar_jogo() {
   # vez não basta. As duas mortes e a execução vão na MESMA sessão ssh, senão o
   # respawn ganha a corrida e o jogo recebe "kmsdrm not available".
   local saida
-  saida=$(no_aparelho "
-    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 1.5
-    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 0.5
+  saida=$(no_aparelho "$TRECHO_MATAR_LAUNCHER""
+    # A flag diz ao giochi-init para NAO subir o launcher. Sem ela o supervisor
+    # o ressuscita em ~1 s: o DRM nunca libera e a captura morre com
+    # 'kmsdrm not available' apontando para o app errado.
+    mkdir -p /run/giochi; touch /run/giochi/dev-free-console
+    matar_launcher || echo \"AVISO o DRM continuou ocupado\"
     cd \$(dirname $remoto)/.. 2>/dev/null || cd /;
     # Software porque com GLES o swap esvazia o buffer e o BMP sai preto —
     # medido. Sem isto a função reprovaria um jogo que desenha.
@@ -1459,9 +1528,8 @@ cmd_verificar_efeitos() {
   # `ssh`, e o `$5` do `awk` virou string vazia — o script disse "não gravou"
   # com o arquivo lá. É a mesma armadilha que já custou o extrator do `.giochi`.
   titulo "capturando no aparelho"
-  no_aparelho '
-    kill $(pidof giochi-launcher) 2>/dev/null; sleep 1.5
-    kill $(pidof giochi-launcher) 2>/dev/null; sleep 0.5
+  no_aparelho "$TRECHO_MATAR_LAUNCHER"'
+    matar_launcher || echo "AVISO o DRM continuou ocupado"
     cd /opt/giochi/apps/launcher-teste || exit 1
     SDL_VIDEODRIVER=kmsdrm GIOCHI_GLES=0 ./bin/giochi-launcher-teste --demo       --dump-frame /tmp/efeitos_sem.bmp >/dev/null 2>&1
     echo "sem: $?"
@@ -1564,7 +1632,7 @@ cmd_verificar_teste() {
   mkdir -p "$tmp_captura"
   local libs="${GIOCHI_SDL2_PREFIX:-$HOME/.cache/giochi-sdl2/root}/usr/lib/x86_64-linux-gnu"
   local estava_rodando
-  estava_rodando=$(no_aparelho 'pidof giochi-launcher 2>/dev/null')
+  estava_rodando=$(no_aparelho "$TRECHO_MATAR_LAUNCHER"'pids_launcher')
 
   # ## Um app aberto é o dono do DRM, não o launcher
   #
@@ -1589,14 +1657,13 @@ cmd_verificar_teste() {
   titulo "desenhando no aparelho"
   local lista="" tela saida_telas
   for tela in "${telas[@]}"; do lista="$lista $tela"; done
-  saida_telas=$(no_aparelho "
+  saida_telas=$(no_aparelho "$TRECHO_MATAR_LAUNCHER""
     mkdir -p /run/giochi; touch /run/giochi/dev-free-console
     # SIGTERM e depois SIGKILL. O SDL transforma SIGTERM em SDL_QUIT na fila de
     # eventos, e o teardown do EGL/Panfrost já foi visto travando um launcher
     # **sem** os descritores de DRM (pid 30803, 09/11/2026) — vivo para sempre,
     # nunca respawnado. Matar de vez é o que libera o dispositivo.
-    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 0.5
-    kill -9 \$(pidof giochi-launcher) 2>/dev/null
+    matar_launcher
     # Esperar o DRM ficar livre, em vez de confiar num sleep fixo: é o descritor
     # que decide, não o relógio.
     i=0; n=1
