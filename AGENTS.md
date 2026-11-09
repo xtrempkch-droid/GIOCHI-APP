@@ -5460,3 +5460,188 @@ X35H (aarch64, KMSDRM)                5 mapas rodam · salto idêntico ao PC ·
 E a correção de §35 fecha uma pendência aberta desde 09/11 sem código novo na
 rodada seguinte: o teste que ele pedia **foi escrito antes da correção**, como
 ele mandou.
+
+## 38. Revisão da GIOCHI-ENGINE-3D (phase-18) e o contador que estava errado (10/11/2026)
+
+Pedido do dono: **"reveja o projeto GIOCHI-ENGINE-3D e atualize o jogo com as
+novidades; no fim salve no dispositivo que está disponível via ssh"**.
+
+### O que a revisão encontrou: quase nada muda, e isso é o achado
+
+Upstream `HEAD` = `3785a33` (`perf(phase-18): compile for the console CPU, gate
+the frame budget, C ABI v3`). O snapshot vendorizado é o phase-17 (`50f6857`).
+
+```text
+$ git diff --stat 50f6857 3785a33 -- giochi-engine-3d/
+(saída vazia)
+```
+
+**O crate 3D não mudou uma linha entre os dois commits.** O phase-18 mexeu em
+`giochi-engine/` (o de 2D: `batch.rs`, `renderer.rs`, `perf_regression.rs`), no
+`giochi-engine-capi/`, em docs, scripts e CI. A conclusão prática é que "atualizar
+o vendor" não copia código nenhum — e o trabalho virou revisar **o que das
+novidades se aplica**.
+
+| Novidade | Aplica ao Neon Drift? |
+| --- | --- |
+| crate 3D | não mudou — nada a sincronizar |
+| C ABI v3 (`giochi_engine_frame_stats`) | não: o jogo não usa a C API |
+| `lto = "fat"` + `strip = "symbols"` | já era: `lto = true` **é** fat, e `strip = true`, `codegen-units = 1`, `opt-level = 3` já estavam no `Cargo.toml` |
+| `-C target-cpu` para o console | mecanismo adotado, **padrão desligado** — medido abaixo |
+| `frame_counters()` da engine | **adotado, e corrigiu um bug** |
+
+### 1. O contador de desenhos do jogo estava errado por um
+
+O `--json` do jogo reportava `desenhos` a partir de um contador próprio,
+incrementado à mão em cada um dos doze pontos de desenho. A engine já conta as
+chamadas **no ponto em que o backend as emite**, atrás da feature `profiling`.
+
+Ligando a feature e pondo os dois números lado a lado no mesmo quadro:
+
+```text
+avenida    jogo=55  engine=56   malhas=1410  verts=165636
+circuito   jogo=56  engine=57   malhas=1423  verts=249760
+porto      jogo=59  engine=60   malhas=1432  verts=143304
+```
+
+Sempre **exatamente um** a menos. O culpado, achado cruzando os `render.draw_*`
+com os `self.desenhos += 1`:
+
+```rust
+// ui-sdl/src/cena3d.rs, hud_linhas_de_velocidade (era a linha 1613 no HEAD)
+render.draw_instanced(self.quad, inst, &self.instancias, camera, cor)?;
+Ok(())          // ← nenhum `self.desenhos += 1`
+```
+
+E o comentário da função logo abaixo dizia, literalmente, *"custa **uma** chamada
+de desenho"*. O autor sabia o custo e esqueceu o contador — que é a definição de
+um contador de intenção.
+
+**É a terceira vez que este projeto tropeça na mesma classe.** §30 registrou o
+contador de efeitos que media "quantas vezes eu pedi um lote" e imprimia 25 com
+182 chamadas saindo; §32 registrou chave duplicada no `--json` (duas fontes do
+mesmo número). O que faltava aqui era a única coisa que resolve de vez: **não ter
+um segundo contador.**
+
+O contador do jogo foi **removido** — campo, método `desenhos()`, o `= 0` do
+início de quadro e os doze `+= 1` — e o `--json` passou a ler a engine:
+
+```rust
+let contadores = render.frame_counters();
+contadores.draw_calls      // "desenhos"
+contadores.meshes_drawn    // "malhas"    (novo no --json)
+contadores.vertices_uploaded // "vertices" (novo no --json)
+```
+
+#### O custo da feature `profiling`, medido
+
+Cinco corridas intercaladas de 400 quadros no X35H, mesmo comando:
+
+```text
+antes (sem profiling)  36,8  37,2  36,8  37,4  37,6   → mediana 37,2
+com profiling          37,0  36,7  36,8  37,4  37,5   → mediana 37,0
+```
+
+Ruído, como se espera de alguns incrementos de `u32` por chamada. Em troca o
+`--json` ganhou `malhas` e `vertices`, que o jogo **não sabia contar de jeito
+nenhum** (1 211–1 432 malhas e 141–249 mil vértices por quadro nos cinco mapas).
+
+Um aviso de `dead_code` apareceu no vendor ao ligar a feature:
+`frame_stats::percentile` só é alcançável por `Profiler::summary`, que vive num
+`profiler.rs` **que o recorte vendorizado não trouxe**. Os testes continuam a
+exercitá-la, e uso em `#[cfg(test)]` não conta como vivo — daí `#[allow(dead_code)]`
+com o motivo escrito no próprio vendor, e a instrução de reavaliar ao sincronizar.
+
+### 2. Codegen para a CPU do console: adotado como opção, desligado por medição
+
+O phase-18 compila para o core do console em vez de ARMv8-A genérico, e registra
+duas lições que valem aqui:
+
+1. **`-C target-cpu=native` não funciona num cross-compile** — o compilador roda
+   no host, então "native" descreve o host.
+2. **`RUSTFLAGS` faz o cargo ignorar `rustflags` do `.cargo/config.toml`.** O
+   build da engine parecia configurado e compilava para ARMv8-A genérico sem nada
+   falhar, porque o script exportava `RUSTFLAGS` para o sysroot e escondia o
+   config. Aqui não existe `.cargo/config.toml`; a flag entra em
+   `scripts/compilar-jogo-arm64.sh` e foi conferida com um `RUSTC_WRAPPER` que
+   registra a linha de comando real:
+
+```text
+$ grep -o "target-cpu=[a-z0-9-]*" /tmp/rustc-args.log | sort -u
+target-cpu=cortex-a35
+$ grep -o "target-feature=[^ ]*" /tmp/rustc-args.log | sort -u
+target-feature=+crc,+aes,+sha2
+```
+
+**E aí a medição disse não.** Cinco corridas intercaladas de 400 quadros no X35H:
+
+| | mediana | binário |
+| --- | --- | --- |
+| sem `target-cpu` | **37,0 fps** | 675 584 B |
+| `cortex-a35` + `+crc,+aes,+sha2` | 36,8 fps | 701 712 B (**+3,9 %**) |
+
+Empatado dentro do ruído e **maior de verdade**. O engine teve o mesmo resultado
+de velocidade ("unchanged"), mas lá o phase-18 também trazia `strip` e LTO, que
+eram 24–32 % de tamanho — aqui esses já estavam no `Cargo.toml` desde o começo, o
+que sobrava era só o `target-cpu`, e ele não paga.
+
+**Padrão: desligado.** `GIOCHI_TARGET_CPU=cortex-a35` liga. O mecanismo fica
+porque o número pode mudar com outro rustc, e porque build de aparelho único pode
+querer o core exato; o motivo do padrão está escrito ao lado do flag, não numa
+mensagem de commit.
+
+#### `cortex-a55` seria errado, mesmo sendo o core do X35H
+
+Medido com `rustc --print cfg --target aarch64-unknown-linux-gnu`:
+
+```text
+-C target-cpu=cortex-a35  → aes, crc, neon, sha2
+-C target-cpu=cortex-a55  → aes, crc, neon, sha2, **lse**
+```
+
+`lse` são as atômicas ARMv8.1 (`ldadd`/`swpal`). O mesmo `bin/giochi-neon-drift` é
+instalado no R35S (Cortex-A35, ARMv8.0-A) — e lá o binário morreria com `SIGILL`
+na primeira atômica, que num jogo é um `Arc::clone` do primeiro quadro. O
+`/proc/cpuinfo` dos dois aparelhos mostra a diferença:
+
+```text
+X35H  ... crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+R35S  ... crc32 cpuid
+```
+
+O script **recusa** `+lse` com erro em vez de aceitar e produzir um binário que só
+falha no aparelho mais antigo. Foi exatamente a armadilha que a engine registrou
+(plano pedia `+lse`, hardware era ARMv8.0-A).
+
+### 3. Validado no X35H, com o binário instalado
+
+sha256 `2ecac141…` igual nas duas pontas, em
+`/user/apps/neon-drift/bin/giochi-neon-drift`.
+
+```text
+mapa       painel    gles  desenhos  malhas  vértices   v final
+avenida    640x480   3     54        1211    164 840    42,0
+boavista   640x480   3     54        1245    232 132    69,9
+circuito   640x480   3     55        1271    248 492    69,7
+porto      640x480   3     56        1215    141 316    25,0
+salar      640x480   3     55        1281    200 284    71,6
+```
+
+Os números de desenho são **um a mais** que os das rodadas anteriores (53 → 54,
+54 → 55, 55 → 56): é o desenho dos riscos de velocidade que passou a ser contado.
+
+FPS depois da mudança: avenida **36,7** e circuito **36,8** (medianas de 3
+corridas de 400 quadros) — o mesmo patamar de 35,6–37,1 medido antes.
+
+E o salto continua idêntico ao PC, byte a byte nos valores:
+`no_ar=True, v_vertical=8.43` no passo 60 e `-3.57` no 120.
+
+### Números desta rodada
+
+```text
+cargo test --workspace (neon-drift)   123 ui-sdl + 130 core = 253
+cargo build --release                 zero erro, zero aviso (o do vendor foi anotado)
+engine upstream                       3785a33 (phase-18) · crate 3D idêntico ao snapshot
+X35H (aarch64, KMSDRM)                5 mapas · salto idêntico ao PC ·
+                                      desenhos = contador da engine · fps 36,7–36,8
+```

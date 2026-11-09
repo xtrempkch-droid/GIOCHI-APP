@@ -83,6 +83,11 @@ Medido no X35H em 10/11/2026, `--quadros 600`, sem o launcher segurando o DRM:
 novo não cria malha nova" compra: o circuito tem barreiras, torres de luz e
 arquibancada a mais, e isso deu **2 desenhos**, não 20.
 
+> A coluna `desenhos` desta tabela saiu do contador **antigo**, que perdia a
+> chamada dos riscos de velocidade ([abaixo](#o-contador-de-desenhos-do-jogo-estava-errado-por-um)).
+> Pelo contador da engine os mesmos quadros dão **um a mais** — e é esse que o
+> `--json` reporta hoje.
+
 Os quadros do aparelho, medidos nos BMPs: boavista 1882 cores/39,8 de média/0,45 %
 quase preto · circuito 915/30,3/0,04 % · porto 1158/35,0/0,44 % · salar
 749/35,4/0,04 %. Nenhum tem chapa chapada.
@@ -445,7 +450,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--texturas t.bmp` | grava as 7 texturas lado a lado, **sem abrir janela** — o molde para pintar |
-| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando` e a contagem de cada tipo de partícula |
+| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `malhas`, `vertices`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando` e a contagem de cada tipo de partícula. `desenhos`, `malhas` e `vertices` vêm do `frame_counters()` da engine |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não
@@ -614,6 +619,104 @@ depois    lanternas 149 px  ·  faróis 54 px    ← de frente
 ```
 
 ![Carro antes e depois](../../../docs/imagens/neon-drift-carro-antes-depois.png)
+
+## A engine vendorizada, e o que o phase-18 trouxe
+
+O crate `vendor/giochi-engine-3d` é um **recorte** do
+[GIOCHI-ENGINE-3D](https://github.com/xtrempkch-droid/GIOCHI-ENGINE-3D), copiado e
+não referenciado por caminho. Atualizar é copiar de novo — e é de propósito: a
+engine é outro repositório, com outra equipe e outro ritmo.
+
+Revisão de 10/11/2026, comparando o snapshot com o `HEAD` do upstream
+(`3785a33`, phase-18):
+
+| Novidade do phase-18 | Aplica a este jogo? |
+| --- | --- |
+| `giochi-engine-3d` — o crate 3D | **não mudou uma linha** entre o phase-17 (`50f6857`, que é o snapshot) e o phase-18. Nada a sincronizar |
+| C ABI v3 (`giochi_engine_frame_stats`) | **não**: o jogo não usa a C API |
+| `[profile.release]` = `lto = "fat"` + `strip = "symbols"` | **já era**: `lto = true` é fat, e `strip = true`, `codegen-units = 1` e `opt-level = 3` já estavam lá |
+| Codegen para a CPU do console (`-C target-cpu`) | **adotado como opção, desligado por padrão** — medido abaixo |
+| Contadores de quadro da engine (`frame_counters`) | **adotado**, e corrigiu um bug: ver abaixo |
+
+### O contador de desenhos do jogo estava errado por um
+
+O `--json` reportava `desenhos` a partir de um contador próprio, incrementado à
+mão em cada ponto de desenho. A engine já conta as chamadas **no ponto em que o
+backend as emite**, atrás da feature `profiling`.
+
+Os dois números, lado a lado no mesmo quadro:
+
+```text
+avenida    jogo=55  engine=56
+circuito   jogo=56  engine=57
+porto      jogo=59  engine=60
+```
+
+Sempre **um** a menos. O culpado: `hud_linhas_de_velocidade` emite um `draw_instanced` para
+os riscos de velocidade e **nunca incrementava** — e o comentário logo abaixo da
+chamada dizia "custa **uma** chamada de desenho". É a terceira vez que este
+projeto tropeça na mesma classe (§30 registrou um contador que media a si mesmo):
+**um contador que o autor precisa lembrar de atualizar mede intenção, não
+realidade.**
+
+O contador do jogo foi removido (campo, método, reset e doze `+= 1`), e `--json`
+passou a ler `render.frame_counters()`:
+
+```rust
+let contadores = render.frame_counters();
+// draw_calls, meshes_drawn, vertices_uploaded
+```
+
+Custo da feature `profiling`, medido no X35H em 5 corridas intercaladas de 400
+quadros: mediana **37,2 fps sem** contra **37,0 com** — ruído, como se espera de
+alguns incrementos de `u32` por chamada. Em troca, `--json` ganhou `malhas` e
+`vertices`, que o jogo não sabia contar.
+
+### O codegen para a CPU do console: medido, e o padrão é desligado
+
+A engine passou a compilar para o core do console (`cortex-a35` + `+crc,+aes,+sha2`),
+e a lição que ela registra é boa: `RUSTFLAGS` no ambiente faz o cargo **ignorar**
+`rustflags` do `.cargo/config.toml` — e o script dela define `RUSTFLAGS` para o
+sysroot. O build parecia configurado e compilava para ARMv8-A genérico sem nada
+falhar. Aqui não há `.cargo/config.toml`; a flag entra em
+`scripts/compilar-jogo-arm64.sh`, e foi verificada com um `RUSTC_WRAPPER` que
+registra a linha de comando real do compilador.
+
+O que a medição disse no X35H:
+
+| | mediana de 5 corridas | binário |
+| --- | --- | --- |
+| sem `target-cpu` | **37,0 fps** | 675 584 B |
+| `cortex-a35` + features | 36,8 fps | 701 712 B (**+3,9 %**) |
+
+Mais lento **dentro do ruído**, maior de verdade, e sem ganho nenhum. O padrão
+ficou sem `target-cpu`; `GIOCHI_TARGET_CPU=cortex-a35` liga o alvo conservador
+para quem quiser. O mecanismo existe porque o número pode mudar com outra versão
+de rustc, e o motivo de o padrão ser desligado está escrito ao lado dele no
+script — não numa mensagem de commit.
+
+#### Por que `cortex-a55` seria errado, mesmo sendo o core do X35H
+
+O `bin/giochi-neon-drift` é o **mesmo arquivo** no R35S, no X35H e no X55 — é a
+premissa do projeto desde o primeiro aparelho. Medido com `rustc --print cfg`:
+
+```text
+-C target-cpu=cortex-a35  → aes, crc, neon, sha2
+-C target-cpu=cortex-a55  → aes, crc, neon, sha2, lse
+```
+
+`lse` são as atômicas ARMv8.1 (`ldadd`/`swpal`). O Cortex-A35 do R35S é
+ARMv8.0-A e **não decodifica nenhuma delas**: o binário morreria com `SIGILL` na
+primeira atômica, que num jogo é um `Arc::clone` do primeiro quadro. O
+`/proc/cpuinfo` confirma a diferença entre os aparelhos:
+
+```text
+X35H (RK3566, Cortex-A55)  ... crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+R35S (RK3326, Cortex-A35)  ... crc32 cpuid
+```
+
+Por isso o script **recusa** `+lse` com erro, em vez de aceitar e produzir um
+binário que só falha no aparelho mais antigo.
 
 ## O que este jogo **não** faz
 
