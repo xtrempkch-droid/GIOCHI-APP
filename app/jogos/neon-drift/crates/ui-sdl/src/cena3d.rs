@@ -920,14 +920,7 @@ impl Cena3D {
     }
 
     fn matriz_do_carro(&self, pos: Ponto, angulo: f32, altura: f32) -> Mat4 {
-        let (x, z) = girar_ponto(self.rotacao, pos);
-        let angulo = girar_angulo(self.rotacao, angulo);
-        Transform3D::new(
-            Vec3::new(x, altura, z),
-            Quat::from_axis_angle(Vec3::UP, angulo),
-            Vec3::new(1.0, 1.0, 1.0),
-        )
-        .matrix()
+        matriz_de_carro(self.rotacao, pos, angulo, altura)
     }
 
     // ────────────────────────────────────────────────────────
@@ -1791,6 +1784,41 @@ fn girar_ponto(rot: Rotacao, p: Ponto) -> (f32, f32) {
         // O giro da câmera já resolve a tela; o mundo fica como está.
         Rotacao::Cw90 | Rotacao::Ccw90 => (p.x, p.z),
     }
+}
+
+/// Matriz de modelo do carro, com a **frente apontando para onde ele anda**.
+///
+/// ## O `+ PI` não é decoração
+///
+/// Duas convenções coexistem neste jogo e discordavam em 180°:
+///
+/// | Onde | Diz |
+/// | --- | --- |
+/// | `core/carro.rs` — `direcao()` | `(sin θ, cos θ)` — com `θ = 0` o carro **anda para +Z** |
+/// | `ui-sdl/malha.rs` — `carro()` | faróis em `z = -2,14` — a **frente desenhada é -Z** |
+///
+/// Girar o modelo por `θ` leva o vetor `(0,0,-1)` para `(-sin θ, -cos θ)`, que é
+/// **menos** a `direcao()`. O carro desenhado olhava para o lado oposto ao que
+/// andava, e como a câmera fica atrás do movimento o jogador via os faróis na
+/// cara — o "os carros estão correndo de ré" relatado em 09/11/2026.
+///
+/// Girar por `θ + π` leva `(0,0,-1)` para `(sin θ, cos θ)`, exatamente a
+/// `direcao()`. Foi a correção cirúrgica: uma constante, sem tocar na física nem
+/// em nenhum dos `z` da malha.
+///
+/// `o_carro_desenhado_aponta_para_onde_ele_anda` afirma a regra comparando o
+/// centro dos faróis com `direcao()`. Quem inverter a malha no futuro quebra
+/// esse teste, e é assim que se sabe — antes desta rodada nenhuma das duas
+/// convenções estava afirmada, e o defeito passou por três sessões.
+fn matriz_de_carro(rot: Rotacao, pos: Ponto, angulo: f32, altura: f32) -> Mat4 {
+    let (x, z) = girar_ponto(rot, pos);
+    let angulo = girar_angulo(rot, angulo) + std::f32::consts::PI;
+    Transform3D::new(
+        Vec3::new(x, altura, z),
+        Quat::from_axis_angle(Vec3::UP, angulo),
+        Vec3::new(1.0, 1.0, 1.0),
+    )
+    .matrix()
 }
 
 fn girar_direcao(rot: Rotacao, p: Ponto) -> (f32, f32) {
@@ -2740,6 +2768,74 @@ mod testes {
                 assert!(n.y > 0.99, "ângulo {angulo}: normal {n:?}");
             }
         }
+    }
+
+    #[test]
+    fn o_carro_desenhado_aponta_para_onde_ele_anda() {
+        // O defeito relatado em 09/11/2026: "os carros parecem correr de ré".
+        //
+        // Duas convenções existem no jogo e discordavam em 180°: a física usa
+        // `direcao() = (sin, cos)` (θ=0 anda para +Z) e a malha põe os faróis em
+        // `z = -2,14` (frente desenhada em -Z). Girar o modelo por θ levava a
+        // frente para o lado oposto do movimento.
+        //
+        // A verificação é a que faltava: pegar o **centro dos faróis** — os
+        // vértices da malha, não uma constante — passar pela matriz de desenho e
+        // exigir que ele caia à frente do carro, no sentido de `direcao()`.
+        //
+        // Comparar com a malha em vez de com um comentário é o que faz este
+        // teste valer: inverter os `z` de `malha::carro()` reprova aqui.
+        use giochi_neon_drift_core::{Carro, Ponto as PontoCore};
+
+        let formas = malha::carro();
+        // Centro dos faróis em espaço local (média dos vértices).
+        let farois = &formas.farois.0;
+        let n = farois.len() as f32;
+        let local = Vec3::new(
+            farois.iter().map(|v| v.position[0]).sum::<f32>() / n,
+            farois.iter().map(|v| v.position[1]).sum::<f32>() / n,
+            farois.iter().map(|v| v.position[2]).sum::<f32>() / n,
+        );
+        assert!(local.z < 0.0, "a malha põe os faróis em z = {:.2}", local.z);
+
+        for angulo in [0.0f32, 0.6, 1.2, -0.9, 2.5, 3.0] {
+            let carro = Carro::novo(PontoCore::ZERO, angulo);
+            let d = carro.direcao();
+            let m = matriz_de_carro(Rotacao::Nenhuma, PontoCore::ZERO, angulo, 0.0);
+
+            // Aplica a matriz ao centro dos faróis (só rotação e translação).
+            let world = Vec3::new(
+                m.data[0] * local.x + m.data[4] * local.y + m.data[8] * local.z + m.data[12],
+                m.data[1] * local.x + m.data[5] * local.y + m.data[9] * local.z + m.data[13],
+                m.data[2] * local.x + m.data[6] * local.y + m.data[10] * local.z + m.data[14],
+            );
+            let frente = Vec3::new(world.x, 0.0, world.z).normalized();
+            let esperado = Vec3::new(d.x, 0.0, d.z).normalized();
+            let alinhamento = frente.x * esperado.x + frente.z * esperado.z;
+            assert!(
+                alinhamento > 0.99,
+                "com ângulo {angulo:.2} os faróis apontam para {frente:?} e o carro \
+                 anda para {esperado:?} (produto {alinhamento:.3}) — 180° de diferença \
+                 é o 'correndo de ré'"
+            );
+        }
+    }
+
+    #[test]
+    fn as_lanternas_ficam_atras_dos_farois() {
+        // A contraprova do teste acima: se alguém "consertar" invertendo a
+        // malha, o farol e a lanterna trocam de lugar. Aqui as duas caixas são
+        // comparadas entre si, então o teste sabe a diferença mesmo se as duas
+        // forem invertidas juntas.
+        let formas = malha::carro();
+        let z_farol = formas.farois.0.iter().map(|v| v.position[2]).sum::<f32>()
+            / formas.farois.0.len() as f32;
+        let z_lanterna = formas.lanternas.0.iter().map(|v| v.position[2]).sum::<f32>()
+            / formas.lanternas.0.len() as f32;
+        assert!(
+            z_farol < z_lanterna,
+            "faróis em z={z_farol:.2} deviam estar à frente (mais -Z) das lanternas em z={z_lanterna:.2}"
+        );
     }
 
     #[test]
