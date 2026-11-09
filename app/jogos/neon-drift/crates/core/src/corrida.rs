@@ -67,6 +67,10 @@ pub enum Evento {
     IniciouDrift,
     /// Fechou um drift e garantiu os pontos.
     TerminouDrift,
+    /// Decolou de uma rampa.
+    Decolou,
+    /// Voltou ao chão depois de um salto.
+    Aterrissou,
     /// Completou uma volta.
     Volta,
     /// Cruzou a linha final.
@@ -102,8 +106,18 @@ pub struct Corrida {
     pub posicao: usize,
     /// Desfecho, quando a corrida terminou.
     pub desfecho: Option<Desfecho>,
-    /// `s` do quadro anterior, para acumular o progresso com correção de volta.
-    s_anterior: f32,
+    /// Posição do carro no quadro anterior.
+    ///
+    /// O progresso é medido pelo **deslocamento real projetado na pista**, não
+    /// pela diferença de `s`. Duas tentativas anteriores falharam:
+    ///
+    /// 1. limiar no `s` (`s_anterior > 0,6·L && s < 0,4·L`) — oscilava perto da
+    ///    linha e creditava volta com o carro parado;
+    /// 2. acumular `ds` do `s` com correção de volta — funcionava, mas o
+    ///    `localizar` troca de referência quando o carro voa por cima do miolo
+    ///    de uma curva (medido: 96 m num quadro), e projetar o deslocamento
+    ///    real é imune a isso por construção.
+    pos_anterior: Ponto,
     /// Metros percorridos desde a linha de largada.
     ///
     /// **Negativo antes de cruzar a linha**, porque a grade põe o jogador
@@ -182,6 +196,7 @@ impl Corrida {
         ];
 
         let carro_s = carro.s;
+        let carro_pos = carro.pos;
         let comprimento = pista.comprimento();
         let mut corrida = Self {
             mapa,
@@ -197,7 +212,7 @@ impl Corrida {
             contagem: CONTAGEM,
             posicao: 1,
             desfecho: None,
-            s_anterior: carro_s,
+            pos_anterior: carro_pos,
             progresso: -(comprimento - carro_s),
         };
         corrida.reposicionar_adversarios();
@@ -226,7 +241,7 @@ impl Corrida {
         self.contagem = CONTAGEM;
         self.posicao = 1;
         self.desfecho = None;
-        self.s_anterior = self.carro.s;
+        self.pos_anterior = self.carro.pos;
         // O `localizar` pode ter devolvido o *fim* da pista (o último trecho
         // passa ao lado do primeiro); o progresso tem de refletir "3 m atrás
         // da linha", não o valor cru.
@@ -259,6 +274,33 @@ impl Corrida {
     /// quadro — o mesmo erro que já tinha sido corrigido do lado da IA.
     pub fn progresso_jogador(&self) -> f32 {
         self.progresso
+    }
+
+    /// Coloca o carro em `s` **como se tivesse chegado até ali**.
+    ///
+    /// Diferente de `carro.posicionar`, que só move o carro: aqui o progresso e
+    /// o `s` anterior acompanham. Sem isso o primeiro passo depois de um
+    /// reposicionamento calcula um `ds` de quase uma volta e o contador de
+    /// voltas dispara — foi exatamente o que o teste do salto pegou.
+    ///
+    /// A volta atual é preservada: quem está em `s = 100` na volta 2 continua na
+    /// volta 2.
+    pub fn reposicionar_em(&mut self, s: f32) {
+        self.carro.posicionar(&self.pista, s, 0.0);
+        self.pos_anterior = self.carro.pos;
+        let voltas = self.volta.saturating_sub(1) as f32;
+        self.progresso = voltas * self.pista.comprimento() + self.carro.s;
+    }
+
+    /// Declara a largada como cruzada, sem mexer no carro.
+    ///
+    /// Existe para o diagnóstico `--em`, que posiciona o carro no meio da volta:
+    /// sem isto o progresso ficaria negativo e a volta voltaria a 1 no primeiro
+    /// passo, porque a contagem vem do progresso acumulado.
+    pub fn marcar_largou(&mut self) {
+        if self.progresso < 0.0 {
+            self.progresso += self.pista.comprimento();
+        }
     }
 
     /// Posição do jogador na corrida, recalculada.
@@ -301,6 +343,8 @@ impl Corrida {
             }
             EventoCarro::IniciouDrift => Evento::IniciouDrift,
             EventoCarro::TerminouDrift => Evento::TerminouDrift,
+            EventoCarro::Decolou => Evento::Decolou,
+            EventoCarro::Aterrissou => Evento::Aterrissou,
             EventoCarro::Nada => Evento::Nada,
         };
 
@@ -316,17 +360,19 @@ impl Corrida {
         // pequeno: a oscilação vira +3 e −3 alternados, que não acumulam.
         let comprimento = self.pista.comprimento();
         let s = self.carro.s;
-        let bruto = s - self.s_anterior;
-        let meia = comprimento * 0.5;
-        let ds = if bruto > meia {
-            bruto - comprimento
-        } else if bruto < -meia {
-            bruto + comprimento
-        } else {
-            bruto
-        };
+
+        // Progresso = deslocamento real **projetado na direção da pista**.
+        //
+        // Projeção e não módulo: numa curva o carro anda em arco, e o que
+        // interessa é quanto ele avançou ao longo da pista. Projeção e não
+        // diferença de `s`: o `localizar` troca de referência quando o carro
+        // voa por cima do miolo de uma curva, e um salto de 96 m num quadro
+        // somaria 96 m de progresso que ninguém percorreu.
+        let direcao_pista = self.pista.direcao_em(s);
+        let deslocamento = self.carro.pos.menos(self.pos_anterior);
+        let ds = deslocamento.x * direcao_pista.x + deslocamento.z * direcao_pista.z;
+        self.pos_anterior = self.carro.pos;
         self.progresso += ds;
-        self.s_anterior = s;
 
         // A volta vem do progresso: 0 m é a linha, `comprimento` fecha a
         // primeira, e a corrida começa em `volta 1`. Antes da largada o
@@ -515,7 +561,7 @@ mod testes {
     fn cruzar_a_linha(c: &mut Corrida) {
         let antes = c.pista.comprimento() - 3.0;
         c.carro.posicionar(&c.pista, antes, 0.0);
-        c.s_anterior = antes;
+        c.pos_anterior = c.carro.pos;
         c.progresso = -3.0;
         piloto_automatico(c, 1.0);
     }
@@ -655,7 +701,7 @@ mod testes {
         }
         // Meio de corrida: a largada já foi cruzada.
         c.carro.posicionar(&c.pista, 200.0, 0.0);
-        c.s_anterior = c.carro.s;
+        c.pos_anterior = c.carro.pos;
         c.progresso = 200.0;
         c.calcular_posicao();
         assert_eq!(c.posicao, 1);
@@ -667,7 +713,7 @@ mod testes {
         c.comecar();
         c.contagem = 0.0;
         c.carro.posicionar(&c.pista, 100.0, 0.0);
-        c.s_anterior = c.carro.s;
+        c.pos_anterior = c.carro.pos;
         c.progresso = 100.0;
         for (i, a) in c.adversarios.iter_mut().enumerate() {
             a.s = 120.0 + i as f32 * 10.0;
@@ -687,7 +733,7 @@ mod testes {
         c.adversarios[0].s = 1.0;
         // A largada já foi cruzada; esta é a passagem que fecha a volta.
         c.carro.posicionar(&c.pista, c.pista.comprimento() - 2.0, 0.0);
-        c.s_anterior = c.pista.comprimento() - 2.0;
+        c.pos_anterior = c.carro.pos;
         c.progresso = c.pista.comprimento() - 2.0;
         piloto_automatico(&mut c, 2.0);
         assert_eq!(c.fase, Fase::Resultado);

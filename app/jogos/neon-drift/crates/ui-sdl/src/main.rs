@@ -49,11 +49,15 @@ const VERSAO: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 struct Opcoes {
     quadro: Option<String>,
+    /// Grava a folha das texturas em BMP e sai, sem abrir janela.
+    texturas: Option<String>,
     /// Grava o atlas de sprites em BMP e sai, sem abrir janela.
     atlas: Option<String>,
     tamanho: Option<(u32, u32)>,
     quadros: Option<u32>,
     passos: u32,
+    /// `s` onde o carro começa, em metros (`--em`).
+    em: Option<f32>,
     teclas: Teclas,
     tela: Option<Fase>,
     fps: u32,
@@ -76,6 +80,8 @@ impl Default for Opcoes {
             tamanho: None,
             quadros: None,
             passos: 0,
+            em: None,
+            texturas: None,
             teclas: Teclas::default(),
             tela: None,
             fps: ALVO_FPS,
@@ -102,6 +108,13 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
         match argv[i].as_str() {
             "--quadro" => {
                 o.quadro = Some(argv.get(i + 1).ok_or("--quadro sem caminho")?.clone());
+                i += 2;
+            }
+            // Grava a folha das texturas procedurais: é o molde que o artista
+            // usa para pintar a versão dele. Sem isto, "que densidade tem o
+            // asfalto?" só se responde lendo o código.
+            "--texturas" => {
+                o.texturas = Some(argv.get(i + 1).ok_or("--texturas sem caminho")?.clone());
                 i += 2;
             }
             "--atlas" => {
@@ -133,6 +146,18 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
                     return Err("--quadros precisa ser maior que zero".into());
                 }
                 o.quadros = Some(n);
+                i += 2;
+            }
+            // Posiciona o carro em `s` metros da volta, já andando na velocidade
+            // de cruzeiro. Existe para testar rampa: chegar ao salto a 30 s de
+            // volta transforma cada tentativa de ajuste em meio minuto.
+            "--em" => {
+                o.em = Some(
+                    argv.get(i + 1)
+                        .ok_or("--em sem valor")?
+                        .parse()
+                        .map_err(|_| "--em espera metros")?,
+                );
                 i += 2;
             }
             "--passos" => {
@@ -244,7 +269,7 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -267,7 +292,13 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
         // largou ou uma que largou e ainda não fechou a volta. O diagnóstico
         // existe para não ter de adivinhar entre as duas.
         corrida.largou(),
-        corrida.progresso_jogador()
+        corrida.progresso_jogador(),
+        // `no_ar` e `v_vertical` são o salto em números: sem eles, "o carro
+        // pulou" só se prova olhando a tela, e um salto que não acontece é
+        // indistinguível de uma rampa que não existe.
+        corrida.carro.no_ar,
+        corrida.carro.velocidade_vertical,
+        corrida.pista.altura_em(corrida.carro.s)
     )
 }
 
@@ -281,6 +312,7 @@ Uso:
   giochi-neon-drift --tamanho 640x480       painel simulado
   giochi-neon-drift --quadros 300           desenhar N quadros e sair
   giochi-neon-drift --passos 2000           adiantar a simulação
+  giochi-neon-drift --em 1240 --teclas up   começar o carro em 1 240 m da volta
   giochi-neon-drift --piloto                o piloto artificial dirige nos --passos
   giochi-neon-drift --teclas a,right,shift  teclas seguradas
   giochi-neon-drift --tela resultado        forçar uma tela
@@ -288,6 +320,7 @@ Uso:
   giochi-neon-drift --sem-som               sem áudio
   giochi-neon-drift --mapa boavista         escolhe o mapa (avenida, boavista)
   giochi-neon-drift --so asfalto            desenha uma malha só (diagnóstico)
+  giochi-neon-drift --texturas t.bmp        grava a folha das 7 texturas e sai
   giochi-neon-drift --atlas a.bmp           grava o atlas de sprites e sai
   GIOCHI_SPRITES=x.bmp GIOCHI_SPRITES_COLUNAS=8
                                             usa a sua folha de sprites (BMP)
@@ -372,6 +405,57 @@ fn gravar_quadro(
     )?;
     superficie.save_bmp(caminho)?;
     Ok((largura, altura))
+}
+
+/// Grava a folha das texturas procedurais em BMP, sem abrir janela.
+///
+/// Uma tira horizontal com as sete texturas lado a lado, na ordem de
+/// `texturas::todas()`, com uma faixa escura de separação. Serve de **molde**:
+/// quem quiser desenhar a própria textura pinta em cima destas células, com o
+/// mesmo tamanho e a mesma densidade, e o resultado entra no jogo sem ajuste.
+///
+/// Não há carregamento de textura externa hoje — o leitor seria mais código do
+/// que as sete fórmulas juntas. O que existe é a referência para pintar.
+fn gravar_texturas(caminho: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let lista = texturas::todas();
+    let lado = texturas::LADO;
+    let separacao = 4u32;
+    let largura = lista.len() as u32 * (lado + separacao) + separacao;
+    let altura = lado + separacao * 2;
+    let mut pixels = vec![0u8; (largura * altura * 4) as usize];
+    // Fundo: cinza escuro, para a borda de cada célula ser visível.
+    for i in 0..(largura * altura) as usize {
+        pixels[i * 4] = 24;
+        pixels[i * 4 + 1] = 24;
+        pixels[i * 4 + 2] = 32;
+        pixels[i * 4 + 3] = 255;
+    }
+    for (indice, textura) in lista.iter().enumerate() {
+        let x0 = separacao + indice as u32 * (lado + separacao);
+        let y0 = separacao;
+        for y in 0..lado {
+            for x in 0..lado {
+                let origem = ((y * lado + x) * 4) as usize;
+                let destino = (((y + y0) * largura + (x + x0)) * 4) as usize;
+                pixels[destino..destino + 4].copy_from_slice(&textura.pixels[origem..origem + 4]);
+            }
+        }
+    }
+    let superficie = Surface::from_data(
+        &mut pixels,
+        largura,
+        altura,
+        largura * PixelFormatEnum::RGBA32.byte_size_per_pixel() as u32,
+        PixelFormatEnum::RGBA32,
+    )?;
+    superficie.save_bmp(caminho)?;
+    eprintln!(
+        "neon-drift: {largura}x{altura}, {} texturas de {lado}x{lado} ({}): {}",
+        lista.len(),
+        lista.iter().map(|t| t.nome).collect::<Vec<_>>().join(", "),
+        caminho
+    );
+    Ok(())
 }
 
 /// Grava o atlas de sprites em BMP, **sem abrir janela nem contexto GL**.
@@ -461,6 +545,10 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         return Ok(0);
     }
 
+    if let Some(caminho) = &o.texturas {
+        gravar_texturas(caminho)?;
+        return Ok(0);
+    }
     if let Some(caminho) = &o.atlas {
         gravar_atlas(caminho)?;
         return Ok(0);
@@ -521,6 +609,22 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         None => giochi_neon_drift_core::mapa::PADRAO,
     };
     let mut corrida = Corrida::com_mapa(mapa);
+    if let Some(em) = o.em {
+        // `--em` implica corrida em andamento: posicionar na tela de título
+        // mediria a pista errada.
+        if corrida.fase == Fase::Titulo {
+            corrida.comecar();
+            corrida.contagem = 0.0;
+        }
+        let total = corrida.pista.comprimento();
+        let s = em.rem_euclid(total.max(1.0));
+        corrida.carro.posicionar(&corrida.pista, s, 0.0);
+        corrida.carro.velocidade = 48.0;
+        // A largada é dada por cruzada: começar em cima da pista sem marcar
+        // `largou` deixaria a volta e o progresso negativos.
+        corrida.marcar_largou();
+        eprintln!("--em: carro em {s:.0} m de {total:.0} m, a 48 m/s");
+    }
     if let Some(tela) = o.tela {
         match tela {
             Fase::Correndo => corrida.comecar(),

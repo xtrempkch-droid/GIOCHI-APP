@@ -143,6 +143,52 @@ pub struct Obstaculo {
     pub raio: f32,
 }
 
+/// Uma rampa já resolvida em metros de pista.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RampaS {
+    /// Onde o pé da rampa começa, em metros desde a linha.
+    pub inicio: f32,
+    /// Onde o topo termina, em metros. Depois disto o piso cai a pique.
+    pub topo: f32,
+    /// Altura do topo acima do asfalto, em metros.
+    pub altura: f32,
+}
+
+impl RampaS {
+    /// Inclinação da subida (metros de altura por metro de pista).
+    pub fn inclinacao(&self) -> f32 {
+        let comprimento = (self.topo - self.inicio).max(1e-3);
+        self.altura / comprimento
+    }
+
+    /// Altura da rampa em `s`, ou zero fora dela.
+    ///
+    /// **Depois do topo é zero, não rampa descendo**: é esse corte seco que
+    /// faz o carro sair do chão. Uma descida suave seria uma ladeira e o carro
+    /// desceria grudado nela.
+    pub fn altura_em(&self, s: f32) -> f32 {
+        if s < self.inicio || s > self.topo {
+            return 0.0;
+        }
+        let fracao = (s - self.inicio) / (self.topo - self.inicio).max(1e-3);
+        self.altura * fracao
+    }
+}
+
+/// Encaixa `alvo` no `s` da amostra mais próxima e devolve esse `s`.
+fn encaixar_em_amostra(amostras: &[Amostra], alvo: f32) -> f32 {
+    let mut melhor = amostras[0].s;
+    let mut distancia = (melhor - alvo).abs();
+    for a in amostras {
+        let d = (a.s - alvo).abs();
+        if d < distancia {
+            distancia = d;
+            melhor = a.s;
+        }
+    }
+    melhor
+}
+
 /// O circuito completo.
 #[derive(Debug, Clone)]
 pub struct Pista {
@@ -151,6 +197,8 @@ pub struct Pista {
     obstaculos: Vec<Obstaculo>,
     /// Índice (em `amostras`) onde começa a reta de largada.
     largada: usize,
+    /// Rampas de salto, em metros e ordenadas.
+    rampas: Vec<RampaS>,
 }
 
 impl Pista {
@@ -167,9 +215,10 @@ impl Pista {
         Self::com_relevo(controles, larguras, tuneis, &[])
     }
 
-    /// Constrói a partir de um mapa: traçado, larguras, túneis e **relevo**.
+    /// Constrói a partir de um mapa: traçado, larguras, túneis, **relevo** e
+    /// **rampas**.
     pub fn do_mapa(mapa: &crate::mapa::Mapa) -> Self {
-        Self::com_relevo(mapa.controles, mapa.larguras, mapa.tuneis, mapa.relevo)
+        Self::com_relevo_e_rampas(mapa.controles, mapa.larguras, mapa.tuneis, mapa.relevo, mapa.rampas)
     }
 
     /// Constrói a partir de pontos de controle, larguras, túneis e perfil de
@@ -179,6 +228,17 @@ impl Pista {
         larguras: &[f32],
         tuneis: &[usize],
         relevo: &[(f32, f32)],
+    ) -> Self {
+        Self::com_relevo_e_rampas(controles, larguras, tuneis, relevo, &[])
+    }
+
+    /// Igual a [`Self::com_relevo`], e mais as rampas de salto.
+    pub fn com_relevo_e_rampas(
+        controles: &[Ponto],
+        larguras: &[f32],
+        tuneis: &[usize],
+        relevo: &[(f32, f32)],
+        rampas: &[crate::mapa::Rampa],
     ) -> Self {
         let n = controles.len();
         assert!(n >= 4, "um laço fechado precisa de ao menos 4 pontos");
@@ -251,6 +311,36 @@ impl Pista {
             }
         }
 
+        // As rampas entram **depois** do relevo e com o comprimento já fechado,
+        // pelo mesmo motivo: a fração da volta só existe com o total conhecido.
+        //
+        // O topo é encaixado na amostra mais próxima. Isso não é preciosismo:
+        // o asfalto é desenhado ligando `altura` de amostras vizinhas, e se o
+        // topo caísse no meio de um segmento o piso desceria suave em vez de
+        // acabar em corte — o carro nunca sairia do chão, e o defeito seria
+        // visível só na tela.
+        let mut rampas_s: Vec<RampaS> = Vec::with_capacity(rampas.len());
+        if !rampas.is_empty() {
+            let total = acumulado.max(1e-3);
+            for r in rampas {
+                let inicio_bruto = r.fracao * total;
+                let topo_bruto = inicio_bruto + r.comprimento;
+                let inicio = encaixar_em_amostra(&amostras, inicio_bruto);
+                let topo = encaixar_em_amostra(&amostras, topo_bruto).max(inicio + 1.0);
+                rampas_s.push(RampaS {
+                    inicio,
+                    topo,
+                    altura: r.altura.max(0.0),
+                });
+            }
+            rampas_s.sort_by(|a, b| a.inicio.partial_cmp(&b.inicio).unwrap_or(std::cmp::Ordering::Equal));
+            for amostra in amostras.iter_mut() {
+                for rampa in &rampas_s {
+                    amostra.altura += rampa.altura_em(amostra.s);
+                }
+            }
+        }
+
         // A linha de largada fica no primeiro ponto de controle, que é o começo
         // da reta longa.
         let largada = 0;
@@ -261,7 +351,26 @@ impl Pista {
             amostras,
             obstaculos,
             largada,
+            rampas: rampas_s,
         }
+    }
+
+    /// Rampas do circuito, em metros.
+    pub fn rampas(&self) -> &[RampaS] {
+        &self.rampas
+    }
+
+    /// A rampa cujo topo fica em `(de, ate]`, se o carro cruzou a borda.
+    ///
+    /// A janela é **aberta no começo e fechada no fim** de propósito: em dois
+    /// passos seguidos, `de` é o `s` anterior e `ate` o atual, então cada topo
+    /// é cruzado exatamente uma vez.
+    pub fn rampa_cruzada(&self, de: f32, ate: f32) -> Option<RampaS> {
+        self.rampas.iter().copied().find(|r| {
+            // Um carro que deu a volta no mesmo passo (salto entre o fim e o
+            // começo) cruzaria tudo; nesse caso não afirma nada.
+            ate > de && r.topo > de && r.topo <= ate
+        })
     }
 
     /// Comprimento total da volta, em metros.

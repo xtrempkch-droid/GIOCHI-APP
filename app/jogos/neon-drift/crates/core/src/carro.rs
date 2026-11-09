@@ -36,6 +36,36 @@ pub const FREIO: f32 = 42.0;
 /// dirigível (a 11 % de rampa, um carro de verdade sai de 0 a 100 km/h em ~8 s
 /// só pela gravidade).
 pub const GRAVIDADE: f32 = 9.81 * 3.5;
+
+// ── salto ─────────────────────────────────────────────────────
+//
+// Uma rampa de salto é o único lugar do jogo em que o carro **sai do chão**.
+// Até aqui a altura vinha sempre da pista (`altura = pista.altura_em(s)`), que
+// é o que mantém o carro colado no asfalto na serra; enquanto voa, ela passa a
+// ser integrada pela gravidade e o piso é só o chão de aterrissagem.
+
+/// Velocidade mínima para decolar de uma rampa, em m/s.
+///
+/// 14 m/s = 50 km/h. Abaixo disso o carro sobe e desce a rampa sem sair do
+/// chão — quem passa devagar não paga o preço de um voo descontrolado.
+pub const VEL_MIN_SALTO: f32 = 14.0;
+
+/// Multiplicador da velocidade vertical na decolagem.
+///
+/// Fisicamente a componente vertical seria `v · inclinação`, e só. A 62 m/s
+/// numa rampa de 22 % isso dá 13,6 m/s e um voo de 2,8 s — correto e sem graça.
+/// O fator 1,7 é o que faz o salto ser **o** momento do mapa: 23 m/s de subida,
+/// ~9 m de altura e quase 5 s de voo.
+pub const BONUS_SALTO: f32 = 1.7;
+
+/// Gravidade durante o voo, em m/s².
+///
+/// Mais fraca que a `GRAVIDADE` da ladeira de propósito: o voo é a parte
+/// arcade, e com 34 m/s² o carro voltaria ao chão em meio segundo.
+pub const GRAVIDADE_VOO: f32 = 15.0;
+
+/// Queda, em m/s, a partir da qual a aterrissagem conta como impacto forte.
+pub const QUEDA_FORTE: f32 = 9.0;
 /// Rotação máxima do volante, em rad/s.
 pub const GIRO_MAX: f32 = 1.75;
 /// Aceleração extra do nitro, em m/s².
@@ -96,6 +126,10 @@ pub enum Evento {
     IniciouDrift,
     /// Terminou a derrapagem (o drift foi cobrado).
     TerminouDrift,
+    /// Decolou de uma rampa.
+    Decolou,
+    /// Voltou ao chão depois de um salto.
+    Aterrissou,
 }
 
 /// O carro do jogador.
@@ -126,9 +160,20 @@ pub struct Carro {
     pub fora: f32,
     /// Altura do carro sobre o nível do mar, em metros.
     ///
-    /// Derivada da pista a cada passo (o carro está **sobre** o asfalto, não
-    /// voando): é o que faz a câmera subir na serra e a cidade ficar lá embaixo.
+    /// Com as rodas no chão vem da pista; **no ar** é integrada pela gravidade
+    /// e fica acima do asfalto. É o que faz a câmera subir na serra, descer na
+    /// descida e acompanhar o salto.
     pub altura: f32,
+    /// `true` enquanto o carro está no ar, depois de sair de uma rampa.
+    ///
+    /// No ar ele não colide com mureta nem com obstáculo: quem salta passa por
+    /// cima. O desenho usa isto para inclinar o carro e soltar poeira na
+    /// aterrissagem.
+    pub no_ar: bool,
+    /// Velocidade vertical em m/s (positiva subindo). Zero com as rodas no chão.
+    pub velocidade_vertical: f32,
+    /// `s` do passo anterior, para saber se cruzou o topo de uma rampa.
+    s_anterior: f32,
     /// `true` no passo em que o carro tocou a mureta, **mesmo de raspão**.
     ///
     /// Separado de `Evento::Bateu` de propósito: raspar é contínuo e não deve
@@ -163,6 +208,9 @@ impl Carro {
             tempo_drift: 0.0,
             fora: 0.0,
             altura: 0.0,
+            no_ar: false,
+            velocidade_vertical: 0.0,
+            s_anterior: 0.0,
             raspando: false,
             impacto: 0.0,
             indice_pista: None,
@@ -181,7 +229,12 @@ impl Carro {
         self.derrapando = false;
         self.tempo_drift = 0.0;
         self.s = s;
+        self.s_anterior = s;
         self.indice_pista = None;
+        // Reposicionar cancela um salto em curso: teletransportar um carro no
+        // ar para o chão é o que `posicionar` significa.
+        self.no_ar = false;
+        self.velocidade_vertical = 0.0;
         // A altura vem da pista **aqui**, e não só no primeiro `passo`.
         //
         // Faltava, e o efeito era grande: no mapa com 74 m de desnível o carro
@@ -381,13 +434,58 @@ impl Carro {
         self.indice_pista = Some(local.indice);
         self.s = local.s;
         self.fora = local.fora_por();
-        self.altura = pista.altura_em(local.s);
 
-        if let Some(evento_novo) = self.resolver_limites(pista, &local, dt) {
-            evento = evento_novo;
+        let altura_pista = pista.altura_em(local.s);
+        let mut impacto_pouso = 0.0f32;
+
+        // ── salto ─────────────────────────────────────────────────
+        //
+        // Três estados, e a ordem importa:
+        //
+        //   no chão  → pergunta se cruzou o topo de uma rampa rápida o bastante;
+        //   no ar    → integra a gravidade e pergunta se voltou ao asfalto;
+        //   no chão  → segue a pista, como sempre.
+        //
+        // A decolagem é decidida pelo **cruzamento do topo da rampa**, não por
+        // "o piso caiu": o topo é um fato declarado no mapa, com `s` exato,
+        // enquanto o piso é interpolado entre amostras e o cruzamento cairia
+        // num passo imprevisível.
+        if self.no_ar {
+            self.velocidade_vertical -= GRAVIDADE_VOO * dt;
+            self.altura += self.velocidade_vertical * dt;
+            if self.altura <= altura_pista {
+                // Aterrissou. A queda vira impacto: um salto de 9 m não pode
+                // custar o mesmo que um degrau de 20 cm.
+                let queda = -self.velocidade_vertical;
+                self.altura = altura_pista;
+                self.no_ar = false;
+                self.velocidade_vertical = 0.0;
+                evento = Evento::Aterrissou;
+                if queda > QUEDA_FORTE {
+                    impacto_pouso = (queda / 30.0).clamp(0.0, 1.0);
+                }
+            }
+        } else if let Some(rampa) = pista.rampa_cruzada(self.s_anterior, local.s) {
+            if self.velocidade > VEL_MIN_SALTO {
+                self.no_ar = true;
+                self.velocidade_vertical = self.velocidade * rampa.inclinacao() * BONUS_SALTO;
+                self.altura = altura_pista;
+                evento = Evento::Decolou;
+            }
         }
-        if let Some(evento_novo) = self.resolver_obstaculos(pista) {
-            evento = evento_novo;
+        if !self.no_ar {
+            self.altura = altura_pista;
+        }
+
+        // No ar o carro passa por cima de mureta e obstáculo — é o que faz o
+        // salto valer a pena e o que impede um "bateu" no meio do voo.
+        if !self.no_ar {
+            if let Some(evento_novo) = self.resolver_limites(pista, &local, dt) {
+                evento = evento_novo;
+            }
+            if let Some(evento_novo) = self.resolver_obstaculos(pista) {
+                evento = evento_novo;
+            }
         }
 
         // ── nitro ─────────────────────────────────────────────────
@@ -402,7 +500,7 @@ impl Carro {
 
         // ── drift: histerese para não piscar no limite ────────────
         let deslize = self.derrapagem.abs();
-        let rapido = self.velocidade > VEL_MIN_DRIFT;
+        let rapido = self.velocidade > VEL_MIN_DRIFT && !self.no_ar;
         if !self.derrapando && rapido && deslize > DERRAPAGEM_MIN {
             self.derrapando = true;
             self.tempo_drift = 0.0;
@@ -426,8 +524,9 @@ impl Carro {
         // O impacto é um pulso: sem decaimento, o primeiro toque deixaria o
         // carro "em colisão" pelo resto da corrida e cada quadro soltaria
         // destroços.
-        self.impacto = (self.impacto - dt * 6.0).max(0.0);
+        self.impacto = (self.impacto - dt * 6.0).max(impacto_pouso);
 
+        self.s_anterior = self.s;
         evento
     }
 
@@ -1013,4 +1112,182 @@ mod testes {
         }
         assert!(c.impacto < 0.01, "o impacto ficou em {:.2}", c.impacto);
     }
+    // ── salto ─────────────────────────────────────────────────
+    //
+    // A pista real do circuito é usada de propósito: uma pista sintética
+    // provaria a fórmula e não a integração com o mapa. As rampas de lá têm
+    // inclinação declarada, e é ela que define a decolagem.
+
+    fn pista_do_circuito() -> Pista {
+        crate::mapa::por_id("circuito").expect("circuito").pista()
+    }
+
+    fn carro_na_rampa(pista: &Pista, indice: usize, velocidade: f32) -> Carro {
+        let rampa = pista.rampas()[indice];
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        // 70 m antes do pé: dá tempo de o carro se alinhar e chegar ao topo
+        // andando reto.
+        c.posicionar(pista, rampa.inicio - 70.0, 0.0);
+        c.velocidade = velocidade;
+        c
+    }
+
+    #[test]
+    fn o_carro_sai_do_chao_ao_cruzar_o_topo_da_rampa() {
+        let pista = pista_do_circuito();
+        let mut c = carro_na_rampa(&pista, 1, 60.0);
+        let mut decolou = false;
+        for _ in 0..200 {
+            if c.passo(&Entrada::acelerando(), &pista, 1.0 / 75.0) == Evento::Decolou {
+                decolou = true;
+                break;
+            }
+        }
+        assert!(decolou, "não decolou; s={:.0} de {:.0}", c.s, pista.comprimento());
+        assert!(c.no_ar, "marcou Decolou e não está no ar");
+        assert!(
+            c.velocidade_vertical > 5.0,
+            "velocidade vertical {:.1} m/s é fraca para um salto",
+            c.velocidade_vertical
+        );
+    }
+
+    #[test]
+    fn devagar_o_carro_nao_decola() {
+        // Abaixo de `VEL_MIN_SALTO` o carro sobe e desce a rampa sem sair do
+        // chão: quem passa devagar não paga o preço de um voo descontrolado.
+        let pista = pista_do_circuito();
+        let rampa = pista.rampas()[1];
+        // Começa a 6 m do pé já abaixo do mínimo: em 36 m de rampa ele acelera
+        // ~4 m/s e chega ao topo ainda devagar.
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, rampa.inicio - 6.0, 0.0);
+        c.velocidade = VEL_MIN_SALTO - 6.0;
+        let mut chegou = false;
+        for _ in 0..300 {
+            // A velocidade é **forçada** a cada quadro: sem isso o carro acelera
+            // os 36 m de rampa, chega a 31 m/s e decola — o teste mediria a
+            // aceleração, não a regra do salto.
+            c.velocidade = VEL_MIN_SALTO - 4.0;
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+            assert!(!c.no_ar, "decolou a {:.1} m/s (mínimo {VEL_MIN_SALTO})", c.velocidade);
+            if c.s > rampa.topo {
+                chegou = true;
+                break;
+            }
+        }
+        assert!(chegou, "nem chegou ao topo: s={:.0} (topo {:.0})", c.s, rampa.topo);
+    }
+
+    #[test]
+    fn no_ar_a_altura_fica_acima_da_pista_e_volta_ao_chao() {
+        let pista = pista_do_circuito();
+        let mut c = carro_na_rampa(&pista, 1, 62.0);
+        let mut pico = 0.0f32;
+        let mut passos_no_ar = 0u32;
+        let mut aterrissou = false;
+        for _ in 0..400 {
+            let ev = c.passo(&Entrada::acelerando(), &pista, 1.0 / 75.0);
+            if c.no_ar {
+                passos_no_ar += 1;
+                pico = pico.max(c.altura - pista.altura_em(c.s));
+            }
+            if ev == Evento::Aterrissou {
+                aterrissou = true;
+                break;
+            }
+        }
+        assert!(aterrissou, "nunca voltou ao chão");
+        assert!(!c.no_ar, "aterrissou e continua no ar");
+        assert_eq!(c.velocidade_vertical, 0.0, "sobrou velocidade vertical");
+        assert!(
+            (c.altura - pista.altura_em(c.s)).abs() < 0.01,
+            "altura {:.2} não voltou para a pista {:.2}",
+            c.altura,
+            pista.altura_em(c.s)
+        );
+        assert!(pico > 3.0, "o salto só subiu {pico:.1} m — não é um salto");
+        assert!(
+            passos_no_ar > 60,
+            "ficou no ar só {} passos ({:.1} s)",
+            passos_no_ar,
+            passos_no_ar as f32 / 75.0
+        );
+    }
+
+    #[test]
+    fn o_pouso_forte_solta_impacto_e_o_leve_nao() {
+        // O impacto do pouso é o que faz o jogo soltar destroço e tremer a
+        // câmera. Sem ele, um salto de 9 m chega ao chão como um degrau.
+        let pista = pista_do_circuito();
+        let mut c = carro_na_rampa(&pista, 1, 62.0);
+        for _ in 0..400 {
+            if c.passo(&Entrada::acelerando(), &pista, 1.0 / 75.0) == Evento::Aterrissou {
+                break;
+            }
+        }
+        assert!(c.impacto > 0.2, "pouso de um salto alto com impacto {:.2}", c.impacto);
+    }
+
+    #[test]
+    fn no_ar_o_carro_passa_por_cima_da_mureta() {
+        // Quem salta passa por cima: sem isto, o carro bate na borda no meio do
+        // voo e o salto nunca completa.
+        let pista = pista_do_circuito();
+        let mut c = carro_na_rampa(&pista, 1, 62.0);
+        // Chega ao ar.
+        for _ in 0..200 {
+            c.passo(&Entrada::acelerando(), &pista, 1.0 / 75.0);
+            if c.no_ar {
+                break;
+            }
+        }
+        assert!(c.no_ar);
+        // Empurra para fora da pista enquanto está no ar.
+        let lateral = pista.normal_em(c.s);
+        c.pos = c.pos.mais(lateral.vezes(24.0));
+        let ev = c.passo(&Entrada::acelerando(), &pista, 1.0 / 75.0);
+        assert!(
+            c.no_ar && !matches!(ev, Evento::Bateu),
+            "bateu no ar: fora={:.1} evento={ev:?}",
+            c.fora
+        );
+    }
+
+    #[test]
+    fn o_salto_nao_credita_volta_nem_dispara_o_progresso() {
+        // No ar o carro atravessa o miolo de uma curva e o `localizar` passa a
+        // achar mais perto o trecho do outro lado: medido na rampa 2 do
+        // circuito, o `s` saltou **96 m num quadro de 1/75 s**. Isso não é
+        // deslocamento, é o localizador trocando de referência — e somar 96 m
+        // por quadro creditaria voltas que o carro não deu.
+        //
+        // A prova é no **progresso da corrida**, não no `s` do carro: é ele que
+        // decide volta e posição.
+        let mapa = crate::mapa::por_id("circuito").expect("circuito");
+        let mut corrida = crate::corrida::Corrida::com_mapa_e_config(mapa, 3, 300.0);
+        corrida.comecar();
+        corrida.contagem = 0.0;
+        let rampa = corrida.pista.rampas()[1];
+        corrida.reposicionar_em(rampa.inicio - 70.0);
+        corrida.carro.velocidade = 62.0;
+
+        let mut anterior = corrida.progresso_jogador();
+        let mut maior_salto = 0.0f32;
+        let mut voou = false;
+        for _ in 0..400 {
+            corrida.passo(&Entrada::acelerando(), 1.0 / 75.0);
+            voou |= corrida.carro.no_ar;
+            let agora = corrida.progresso_jogador();
+            maior_salto = maior_salto.max((agora - anterior).abs());
+            anterior = agora;
+        }
+        assert!(voou, "não voou — o teste não exercita o salto");
+        assert!(
+            maior_salto < 8.0,
+            "o progresso andou {maior_salto:.1} m num quadro de 1/75 s"
+        );
+        assert_eq!(corrida.volta, 1, "o salto creditou uma volta");
+    }
+
 }

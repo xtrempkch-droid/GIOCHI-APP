@@ -59,6 +59,28 @@ const CEU_SERRA: Color3D = Color3D::new(0.100, 0.095, 0.175, 1.0);
 /// como "céu vazio". Contra a luz, morro é silhueta: escuro por cima de um céu
 /// que ainda tem o brilho da cidade.
 const MORRO: Color3D = Color3D::new(0.042, 0.048, 0.086, 1.0);
+/// Céu do circuito de teste: violeta de pista iluminada por refletores.
+///
+/// Não é noite fechada como a avenida porque num proving ground o assunto é o
+/// asfalto, e um céu preto com torre de luz lia como "a pista está apagada".
+const CEU_CIRCUITO: Color3D = Color3D::new(0.075, 0.062, 0.135, 1.0);
+/// Céu do porto: azul-esverdeado de cidade portuária, com a maré refletindo.
+const CEU_PORTO: Color3D = Color3D::new(0.055, 0.080, 0.115, 1.0);
+/// Céu do salar: azul profundo de altitude, quase sem poluição de luz.
+const CEU_SALAR: Color3D = Color3D::new(0.095, 0.110, 0.180, 1.0);
+// Barreira e contêiner não têm constante de cor própria: eles reusam `muros` e
+// `predios_a/b/c`, e a cor de uma malha é decidida quando ela é montada, não no
+// desenho. Dar cor própria a eles custaria malha nova — e a regra do orçamento
+// é que cenário novo não cria malha nova. Por isso a variedade do porto vem dos
+// **três** grupos de prédio, que já existem, e não de tint por peça.
+// Mar do porto e montanha do salar usam `longe`, e isso é **o oposto** do que o
+// morro da serra faz — de propósito. Na descida a silhueta tem de ser mais
+// escura que o céu, e por isso ela ganhou malha e cor próprias (§31). Aqui o
+// papel é outro: a água reflete as luzes do cais e a rocha do salar recebe luar,
+// então as duas ficam **mais claras** que o céu. Medido: o mar dá 14,1 % do
+// quadro contra 32,9 % de céu, e a montanha sai 18 % mais escura que o céu por
+// causa do ambiente — se um dia ela ficar mais clara, o sintoma é a chapa
+// chapada de §31 e a correção é a mesma: malha e cor próprias.
 const ASFALTO: Color3D = Color3D::new(0.155, 0.160, 0.215, 1.0);
 const ASFALTO_FAIXA: Color3D = Color3D::new(0.90, 0.94, 1.0, 1.0);
 const GUIA_VERMELHA: Color3D = Color3D::new(0.95, 0.16, 0.30, 1.0);
@@ -322,6 +344,9 @@ impl Cena3D {
         let ceu = match cenario {
             Cenario::Avenida => NOITE,
             Cenario::Descida => CEU_SERRA,
+            Cenario::Circuito => CEU_CIRCUITO,
+            Cenario::Porto => CEU_PORTO,
+            Cenario::Salar => CEU_SALAR,
         };
         let texturas = TexturasGpu::criar(render)?;
         let texturizado = render.create_builtin_shader(BuiltinShader::Textured)?;
@@ -430,6 +455,11 @@ impl Cena3D {
         let ambiente = match cenario {
             Cenario::Avenida => 0.62,
             Cenario::Descida => 0.80,
+            // O circuito tem torre de luz; o salar é o mais claro de todos
+            // porque o chão é branco e devolve luz.
+            Cenario::Circuito => 0.74,
+            Cenario::Porto => 0.66,
+            Cenario::Salar => 0.78,
         };
         let luz_mundo = DirectionalLight::sun()
             .with_ambient(ambiente)
@@ -822,11 +852,7 @@ impl Cena3D {
         // jogador continua desenhado por cima dele.
         let mut todos: Vec<Mat4> = Vec::with_capacity(corrida.adversarios.len() + 1);
         let mut corpo_jogador: Vec<Mat4> = Vec::with_capacity(1);
-        corpo_jogador.push(self.matriz_do_carro(
-            corrida.carro.pos,
-            corrida.carro.angulo,
-            corrida.carro.altura,
-        ));
+        corpo_jogador.push(self.matriz_do_jogador(&corrida.carro));
         todos.push(corpo_jogador[0]);
 
         // Lataria dos adversários, agrupada por cor.
@@ -921,6 +947,28 @@ impl Cena3D {
 
     fn matriz_do_carro(&self, pos: Ponto, angulo: f32, altura: f32) -> Mat4 {
         matriz_de_carro(self.rotacao, pos, angulo, altura)
+    }
+
+    /// Matriz do carro do jogador, com o empinamento do salto.
+    ///
+    /// A inclinação vem de `atan2(v_vertical, velocidade)`: subindo a 11 m/s a
+    /// 60, o nariz aponta ~10° para cima; caindo, para baixo. Fora do ar a
+    /// velocidade vertical é zero e o resultado é o de sempre.
+    fn matriz_do_jogador(&self, carro: &giochi_neon_drift_core::Carro) -> Mat4 {
+        let inclinacao = if carro.no_ar {
+            carro
+                .velocidade_vertical
+                .atan2(carro.velocidade.abs().max(6.0))
+        } else {
+            0.0
+        };
+        matriz_de_carro_inclinado(
+            self.rotacao,
+            carro.pos,
+            carro.angulo,
+            carro.altura,
+            inclinacao,
+        )
     }
 
     // ────────────────────────────────────────────────────────
@@ -1811,14 +1859,29 @@ fn girar_ponto(rot: Rotacao, p: Ponto) -> (f32, f32) {
 /// esse teste, e é assim que se sabe — antes desta rodada nenhuma das duas
 /// convenções estava afirmada, e o defeito passou por três sessões.
 fn matriz_de_carro(rot: Rotacao, pos: Ponto, angulo: f32, altura: f32) -> Mat4 {
+    matriz_de_carro_inclinado(rot, pos, angulo, altura, 0.0)
+}
+
+/// A mesma matriz, com o carro **empinado** no ar.
+///
+/// `inclinacao` é o ângulo em torno do eixo lateral, positivo com o nariz para
+/// cima. Em voo o carro tem de acompanhar a própria velocidade vertical: deitado
+/// ele parece flutuar, e num salto de 6 m isso é a diferença entre "pulou" e
+/// "está deslizando no ar".
+fn matriz_de_carro_inclinado(
+    rot: Rotacao,
+    pos: Ponto,
+    angulo: f32,
+    altura: f32,
+    inclinacao: f32,
+) -> Mat4 {
     let (x, z) = girar_ponto(rot, pos);
     let angulo = girar_angulo(rot, angulo) + std::f32::consts::PI;
-    Transform3D::new(
-        Vec3::new(x, altura, z),
-        Quat::from_axis_angle(Vec3::UP, angulo),
-        Vec3::new(1.0, 1.0, 1.0),
-    )
-    .matrix()
+    // Yaw ∘ pitch: o `+ PI` alinha a frente desenhada com `direcao()` (ver
+    // `matriz_de_carro`), e o pitch vem depois, no referencial do carro.
+    let giro = Quat::from_axis_angle(Vec3::UP, angulo)
+        * Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), inclinacao.clamp(-0.5, 0.5));
+    Transform3D::new(Vec3::new(x, altura, z), giro, Vec3::new(1.0, 1.0, 1.0)).matrix()
 }
 
 fn girar_direcao(rot: Rotacao, p: Ponto) -> (f32, f32) {
@@ -1860,7 +1923,26 @@ fn construir_mundo(pista: &Pista, rotacao: Rotacao, cenario: Cenario) -> Mundo {
             construir_morros(&mut m, pista, rotacao);
             construir_cidade_ao_longe(&mut m, pista, rotacao);
         }
+        Cenario::Circuito => {
+            construir_barreiras(&mut m, pista, rotacao);
+            construir_torres_de_luz(&mut m, pista, rotacao);
+            construir_arquibancada(&mut m, pista, rotacao);
+        }
+        Cenario::Porto => {
+            construir_conteineres(&mut m, pista, rotacao);
+            construir_guindastes(&mut m, pista, rotacao);
+            construir_mar(&mut m, pista, rotacao);
+        }
+        Cenario::Salar => {
+            construir_estacas(&mut m, pista, rotacao);
+            construir_montanhas_salar(&mut m, pista, rotacao);
+        }
     }
+
+    // As rampas são comuns a todos os cenários: se um mapa tem salto, o salto
+    // precisa de sinalização na tela, senão o jogador descobre a rampa no ar.
+    construir_rampas(&mut m, pista, rotacao);
+
     m
 }
 
@@ -2426,6 +2508,315 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
 /// Sem ele o horizonte termina no último prédio e o céu fica um retângulo preto
 /// do tamanho da tela. As torres são mais escuras e mais azuis que as da beira
 /// — é o que dá a impressão de profundidade sem nenhum efeito de névoa.
+// ── circuito de teste ────────────────────────────────────────
+//
+// Três construções, nenhuma malha nova: barreira é `muros` + `neon`, torre é
+// `muros` + `neon_b`, arquibancada é `predios_a/b` + `telhados`. É a regra do
+// §29 ("cenário novo não pode criar malha nova") — cada malha a mais custa uma
+// chamada de desenho por quadro, e o orçamento no RK3326 é de ~50.
+
+fn construir_barreiras(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    // A cada duas amostras: a barreira é contínua, não um bloco por amostra.
+    for i in (0..amostras.len().saturating_sub(2)).step_by(2) {
+        let a = amostras[i];
+        let b = amostras[i + 2];
+        let (ax, az) = girar_ponto(rotacao, a.centro);
+        let (bx, bz) = girar_ponto(rotacao, b.centro);
+        let (anx, anz) = girar_ponto(rotacao, a.normal);
+        let (bnx, bnz) = girar_ponto(rotacao, b.normal);
+        for lado in [-1.0f32, 1.0] {
+            let da = a.meia_largura + 3.0;
+            let db = b.meia_largura + 3.0;
+            let al = (ax + anx * da * lado, az + anz * da * lado);
+            let bl = (bx + bnx * db * lado, bz + bnz * db * lado);
+            let y = a.altura;
+            // Parede de 1,1 m: baixa o bastante para a câmera ver por cima e
+            // alta o bastante para ler como limite.
+            m.muros.chao3(
+                [al.0, al.1],
+                [bl.0, bl.1],
+                [bl.0, bl.1],
+                [al.0, al.1],
+                y,
+                y + 1.1,
+                y + 1.1,
+                y,
+                1.0, // UV degenerado: a barreira é cor chapada, não textura de chão
+            );
+            // Fita de advertência no topo: uma tira fina e brilhante por lado.
+            m.neon.chao3(
+                [al.0, al.1],
+                [bl.0, bl.1],
+                [bl.0, bl.1],
+                [al.0, al.1],
+                y + 1.12,
+                y + 1.28,
+                y + 1.28,
+                y + 1.12,
+                1.0,
+            );
+        }
+    }
+}
+
+fn construir_torres_de_luz(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    // Uma torre a cada ~140 m, alternando o lado: o suficiente para justificar
+    // a luz ambiente mais alta do mapa.
+    let passo = (amostras.len() / 14).max(8);
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let lado = if (indice / passo) % 2 == 0 { -1.0 } else { 1.0 };
+        let distancia = a.meia_largura + 14.0;
+        let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+        if pista.folga_em(na_pista) < 8.0 {
+            continue;
+        }
+        let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+        let y = a.altura;
+        // Mastro de 18 m.
+        m.muros.caixa([bx, y + 9.0, bz], [0.7, 18.0, 0.7]);
+        // Painel de refletores no topo, virado para a pista.
+        m.neon_b.caixa([bx, y + 18.4, bz], [3.4, 1.1, 0.5]);
+    }
+}
+
+fn construir_arquibancada(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = (amostras.len() / 6).max(10);
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        let lado = if (indice / passo) % 2 == 0 { 1.0 } else { -1.0 };
+        let distancia = a.meia_largura + 26.0;
+        let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+        if pista.folga_em(na_pista) < 20.0 {
+            continue;
+        }
+        let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+        let y = a.altura;
+        // Três degraus: cada um mais alto e mais recuado que o anterior.
+        for k in 0..3 {
+            let recuo = k as f32 * 4.0;
+            let altura = 2.0 + k as f32 * 1.8;
+            m.predios_a.caixa_girada(
+                [bx + nx * recuo * lado, y + altura * 0.5, bz + nz * recuo * lado],
+                [30.0, altura, 3.4],
+                giro,
+            );
+            // Faixa de público: uma tira clara em cada degrau lê como gente.
+            m.telhados.caixa_girada(
+                [bx + nx * recuo * lado, y + altura + 0.2, bz + nz * recuo * lado],
+                [28.0, 0.32, 3.0],
+                giro,
+            );
+        }
+    }
+}
+
+// ── porto ────────────────────────────────────────────────────
+
+fn construir_conteineres(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = 6;
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let semente = (indice as f32 * 4.771).sin() * 34567.1234;
+        let r = semente - semente.floor();
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        let y = a.altura;
+        for lado in [-1.0f32, 1.0] {
+            let distancia = a.meia_largura + 11.0 + r * 14.0;
+            let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+            if pista.folga_em(na_pista) < 10.0 {
+                continue;
+            }
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            // Pilha de um a três contêineres: 12 × 2,6 × 2,4 m cada.
+            let pilha = 1 + (r * 3.0) as u32;
+            for k in 0..pilha {
+                let malha = match (indice + k as usize) % 3 {
+                    0 => &mut m.predios_a,
+                    1 => &mut m.predios_b,
+                    _ => &mut m.predios_c,
+                };
+                malha.caixa_girada(
+                    [bx, y + 1.3 + k as f32 * 2.6, bz],
+                    [12.0, 2.5, 2.4],
+                    giro + 0.03 * k as f32,
+                );
+            }
+            // Tampa iluminada no topo da pilha: é o que desenha a silhueta.
+            m.telhados.caixa_girada(
+                [bx, y + 1.3 + pilha as f32 * 2.6, bz],
+                [11.4, 0.22, 2.1],
+                giro,
+            );
+        }
+    }
+}
+
+fn construir_guindastes(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = (amostras.len() / 5).max(10);
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        let lado = if (indice / passo) % 2 == 0 { 1.0 } else { -1.0 };
+        let distancia = a.meia_largura + 42.0;
+        let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+        if pista.folga_em(na_pista) < 26.0 {
+            continue;
+        }
+        let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+        let y = a.altura;
+        // Mastro, lança e contrapeso: três caixas, nenhuma malha nova.
+        m.muros.caixa([bx, y + 20.0, bz], [2.2, 40.0, 2.2]);
+        m.muros.caixa_girada([bx + nx * 16.0 * lado, y + 38.0, bz + nz * 16.0 * lado],
+            [58.0, 1.8, 1.8], giro);
+        m.neon_b.caixa_girada([bx + nx * 16.0 * lado, y + 39.2, bz + nz * 16.0 * lado],
+            [6.0, 0.5, 0.6], giro);
+    }
+}
+
+fn construir_mar(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = 20;
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        for lado in [-1.0f32, 1.0] {
+            let distancia = a.meia_largura + 120.0;
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            // Chapa de água de 200 × 200 m, no nível do mar (y = -1,2): o cais
+            // é aterrado e o mar fica abaixo dele.
+            m.longe.caixa_girada([bx, -1.2, bz], [200.0, 0.6, 200.0], giro);
+            // Linha de luzes da outra margem.
+            if (indice / passo) % 2 == 0 {
+                m.neon.chao3(
+                    [bx - nx * 60.0, bz - nz * 60.0],
+                    [bx + nx * 60.0, bz + nz * 60.0],
+                    [bx + nx * 60.0, bz + nz * 60.0],
+                    [bx - nx * 60.0, bz - nz * 60.0],
+                    1.4,
+                    1.6,
+                    1.6,
+                    1.4,
+                    1.0,
+                );
+            }
+        }
+    }
+}
+
+// ── salar ────────────────────────────────────────────────────
+
+fn construir_estacas(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    // De 25 em 25 m: no salar não há referência nenhuma, e sem estaca o jogador
+    // perde a noção de velocidade — o chão branco e liso não dá paralaxe.
+    let passo = (amostras.len() / 60).max(4);
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let y = a.altura;
+        for lado in [-1.0f32, 1.0] {
+            let distancia = a.meia_largura + 6.0;
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            // Estaca de 1,6 m, alternando ciano e magenta.
+            let cor = if (indice / passo) % 2 == 0 { &mut m.neon } else { &mut m.neon_b };
+            cor.caixa([bx, y + 0.8, bz], [0.22, 1.6, 0.22]);
+        }
+    }
+}
+
+fn construir_montanhas_salar(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = 26;
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let semente = (indice as f32 * 9.117).sin() * 51234.789;
+        let r = semente - semente.floor();
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        for lado in [-1.0f32, 1.0] {
+            let distancia = a.meia_largura + 220.0 + r * 120.0;
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            let altura = 40.0 + r * 90.0;
+            let largura = 120.0 + r * 90.0;
+            m.longe.caixa_girada([bx, altura * 0.5, bz], [largura, altura, largura * 0.8], giro);
+        }
+    }
+}
+
+// ── rampas ───────────────────────────────────────────────────
+
+/// Sinaliza cada rampa: chevrons na subida e uma fita no topo.
+///
+/// Sem isto o jogador descobre a rampa **no ar** — e nos mapas escuros a subida
+/// de 3 m some no asfalto. A fita do topo é o que dá o ponto de mira, e custa
+/// duas caixas por rampa.
+fn construir_rampas(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    for rampa in pista.rampas() {
+        let comprimento = (rampa.topo - rampa.inicio).max(1.0);
+        // Dez faixas ao longo da subida.
+        let faixas = 10;
+        for k in 0..faixas {
+            let s = rampa.inicio + comprimento * (k as f32 + 0.5) / faixas as f32;
+            let centro = pista.ponto_em(s);
+            let normal = pista.normal_em(s);
+            let (px, pz) = girar_ponto(rotacao, centro);
+            let (nx, nz) = girar_ponto(rotacao, normal);
+            let y = pista.altura_em(s);
+            // Uma faixa clara atravessada a cada 10 % da rampa.
+            let meia = pista.meia_largura_em(s) * 0.72;
+            let (esq_x, esq_z) = (px - nx * meia, pz - nz * meia);
+            let (dir_x, dir_z) = (px + nx * meia, pz + nz * meia);
+            m.faixas.chao3(
+                [esq_x, esq_z],
+                [dir_x, dir_z],
+                [dir_x, dir_z],
+                [esq_x, esq_z],
+                y + 0.03,
+                y + 0.03,
+                y + 0.03,
+                y + 0.03,
+                1.0,
+            );
+        }
+        // Fita no topo, na cor de advertência: é o ponto de mira do salto.
+        let s_topo = (rampa.topo - 0.2).max(rampa.inicio);
+        let centro = pista.ponto_em(s_topo);
+        let normal = pista.normal_em(s_topo);
+        let (px, pz) = girar_ponto(rotacao, centro);
+        let (nx, nz) = girar_ponto(rotacao, normal);
+        let meia = pista.meia_largura_em(s_topo);
+        let y = pista.altura_em(s_topo) + 0.05;
+        m.neon.chao3(
+            [px - nx * meia, pz - nz * meia],
+            [px + nx * meia, pz + nz * meia],
+            [px + nx * meia, pz + nz * meia],
+            [px - nx * meia, pz - nz * meia],
+            y,
+            y,
+            y,
+            y,
+            1.0,
+        );
+    }
+}
+
 fn construir_longe(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
     let amostras = pista.amostras();
     let passo = 23;
