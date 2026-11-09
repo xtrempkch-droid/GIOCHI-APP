@@ -1,0 +1,4 @@
+/target
+# Capturas e artefatos de diagnóstico não viajam.
+*.bmp
+*.png.tmp

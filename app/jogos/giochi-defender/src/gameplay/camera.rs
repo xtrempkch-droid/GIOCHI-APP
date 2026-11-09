@@ -1,0 +1,274 @@
+//! Câmera orbital em volta da arena.
+//!
+//! O jogador não anda: ele gira em torno do asteroide central, que é o que um
+//! tower defense espacial pede. Três números descrevem tudo — `yaw`, `pitch` e
+//! `distance` — e todos os três têm limite, porque um `pitch` de 90° deixa o
+//! vetor "para cima" paralelo à direção de visão e a matriz de visão deixa de
+//! existir (o `look_at` da engine devolve erro, e o quadro sai preto).
+//!
+//! A conversão para [`Camera3D`] acontece a cada quadro e resolve o aspecto com o
+//! tamanho **real** do drawable: no aparelho o painel não é o 1280×720 pedido
+//! (ADR-035 da engine), e uma câmera que fixasse 16:9 renderizaria uma cena
+//! cortada sem nenhum erro.
+
+use crate::utils::math::{clamp, graus_para_radianos, normalizar_angulo};
+use giochi_engine_3d::math3d::{Camera3D, Vec3};
+
+/// Distância mínima ao alvo, em unidades de mundo.
+pub const DISTANCIA_MINIMA: f32 = 5.0;
+/// Distância máxima ao alvo, em unidades de mundo.
+pub const DISTANCIA_MAXIMA: f32 = 15.0;
+/// Inclinação mínima: 60° abaixo do plano do horizonte.
+pub const PITCH_MINIMO: f32 = -std::f32::consts::FRAC_PI_3;
+/// Inclinação máxima: 80° acima do plano do horizonte.
+///
+/// Não são 90° de propósito: a 90° o vetor `UP` fica paralelo à direção de visão
+/// e o `look_at` não tem solução. 80° já é "quase de cima" e mantém a matriz
+/// válida. O valor é `4 * PI / 9`, que é 80° em radianos.
+pub const PITCH_MAXIMO: f32 = 4.0 * std::f32::consts::PI / 9.0;
+
+/// Radianos de giro por pixel de mouse.
+///
+/// 0.0045 ≈ 0.26° por pixel: uma travessia de 1280 px gira ~330°. Mais que isso
+/// fica impossível de mirar; menos, e o jogador precisa de três gestos para
+/// olhar para trás.
+pub const SENSIBILIDADE: f32 = 0.0045;
+
+/// Fator aplicado a cada "clique" de roda.
+pub const PASSO_ZOOM: f32 = 1.0;
+
+/// Câmera orbital: ângulos e distância em volta de um alvo fixo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrbitalCamera {
+    /// Giro em torno do eixo Y, em radianos.
+    pub yaw: f32,
+    /// Inclinação em relação ao plano horizontal, em radianos.
+    pub pitch: f32,
+    /// Distância até o alvo, em unidades de mundo.
+    pub distance: f32,
+    /// Ponto observado — o centro do asteroide.
+    pub target: Vec3,
+}
+
+impl OrbitalCamera {
+    /// Câmera inicial: um pouco acima do plano, a 9 unidades, olhando de frente.
+    ///
+    /// `yaw = 0` põe a câmera em `+Z` olhando para `-Z`, que é a convenção da
+    /// engine (`Camera3D::new` olha para `-Z`).
+    pub fn new() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: graus_para_radianos(22.0),
+            distance: 9.0,
+            target: Vec3::ZERO,
+        }
+    }
+
+    /// Câmera com um alvo explícito, para quando a arena sair da origem.
+    pub fn com_alvo(alvo: Vec3) -> Self {
+        Self {
+            target: alvo,
+            ..Self::new()
+        }
+    }
+
+    /// Posição do olho, calculada a partir dos três parâmetros.
+    ///
+    /// `pitch` positivo sobe; `yaw` gira no sentido anti-horário visto de cima.
+    pub fn olho(&self) -> Vec3 {
+        let cos_pitch = self.pitch.cos();
+        Vec3::new(
+            self.target.x + self.distance * cos_pitch * self.yaw.sin(),
+            self.target.y + self.distance * self.pitch.sin(),
+            self.target.z + self.distance * cos_pitch * self.yaw.cos(),
+        )
+    }
+
+    /// Gira a câmera por um deslocamento de mouse, em pixels.
+    ///
+    /// `dy` é positivo para baixo, como o SDL entrega. Por isso o sinal é
+    /// subtraído: puxar o mouse para cima sobe a câmera, que é o que a mão espera.
+    pub fn orbitar(&mut self, dx: f32, dy: f32) {
+        self.girar(dx * SENSIBILIDADE, -dy * SENSIBILIDADE);
+    }
+
+    /// Gira por ângulos já em radianos.
+    ///
+    /// É o caminho de quem não tem mouse: teclado e analógico medem a taxa em
+    /// radianos por segundo e multiplicam pelo passo fixo. Uma segunda conversão
+    /// em pixels seria uma segunda constante para manter em sincronia.
+    pub fn girar(&mut self, delta_yaw: f32, delta_pitch: f32) {
+        if !delta_yaw.is_finite() || !delta_pitch.is_finite() {
+            return;
+        }
+        self.yaw = normalizar_angulo(self.yaw + delta_yaw);
+        self.pitch = clamp(self.pitch + delta_pitch, PITCH_MINIMO, PITCH_MAXIMO);
+    }
+
+    /// Aproxima (`passos` positivo) ou afasta, preso entre os dois limites.
+    pub fn zoom(&mut self, passos: f32) {
+        if !passos.is_finite() {
+            return;
+        }
+        self.distance = clamp(
+            self.distance - passos * PASSO_ZOOM,
+            DISTANCIA_MINIMA,
+            DISTANCIA_MAXIMA,
+        );
+    }
+
+    /// Distância já presa ao intervalo válido.
+    ///
+    /// O campo é público — o `--teclas` e os testes escrevem nele direto —, então
+    /// a validação acontece na leitura, não só na escrita.
+    pub fn distancia_segura(&self) -> f32 {
+        clamp(self.distance, DISTANCIA_MINIMA, DISTANCIA_MAXIMA)
+    }
+
+    /// Inclinação já presa ao intervalo válido.
+    pub fn pitch_seguro(&self) -> f32 {
+        clamp(self.pitch, PITCH_MINIMO, PITCH_MAXIMO)
+    }
+
+    /// Monta a [`Camera3D`] da engine para o tamanho real do drawable.
+    ///
+    /// Passar `0, 0` deixa o aspecto em `0.0`, que na engine significa "pergunta
+    /// ao renderer" — é o caminho para uma captura headless, onde não há janela.
+    pub fn camera(&self, largura: u32, altura: u32) -> Camera3D {
+        let distancia = self.distancia_segura();
+        let pitch = self.pitch_seguro();
+        let cos_pitch = pitch.cos();
+        let olho = Vec3::new(
+            self.target.x + distancia * cos_pitch * self.yaw.sin(),
+            self.target.y + distancia * pitch.sin(),
+            self.target.z + distancia * cos_pitch * self.yaw.cos(),
+        );
+
+        let camera = Camera3D::from_parts(olho, self.target, Vec3::UP)
+            // O céu das estrelas fica a ~120 unidades; o padrão de 1000 é folgado
+            // e não custa precisão de profundidade em 16 bits, mas 400 deixa
+            // margem para o asteroide e para os inimigos próximos.
+            .with_clip_planes(0.1, 400.0);
+
+        if largura > 0 && altura > 0 {
+            camera.with_drawable_size(largura, altura)
+        } else {
+            camera
+        }
+    }
+}
+
+impl Default for OrbitalCamera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::math::radianos_para_graus;
+
+    #[test]
+    fn a_camera_inicial_e_valida_e_olha_para_o_centro() {
+        let camera = OrbitalCamera::new();
+        let olho = camera.olho();
+        let distancia = (olho.x * olho.x + olho.y * olho.y + olho.z * olho.z).sqrt();
+        assert!(
+            (distancia - camera.distance).abs() < 1e-4,
+            "olho a {distancia}, distância configurada {}",
+            camera.distance
+        );
+        assert!(camera.camera(1280, 720).view_matrix().is_ok());
+    }
+
+    #[test]
+    fn o_zoom_para_nos_dois_limites() {
+        let mut camera = OrbitalCamera::new();
+        camera.zoom(1000.0);
+        assert_eq!(camera.distance, DISTANCIA_MINIMA);
+        camera.zoom(-1000.0);
+        assert_eq!(camera.distance, DISTANCIA_MAXIMA);
+    }
+
+    #[test]
+    fn o_pitch_nao_chega_a_noventa_graus() {
+        // A 90° o `look_at` não tem solução. Se o limite for afrouxado, este
+        // teste falha antes de a tela ficar preta no aparelho.
+        let mut camera = OrbitalCamera::new();
+        camera.orbitar(0.0, -100_000.0);
+        assert!(camera.pitch <= PITCH_MAXIMO + 1e-6);
+        assert!(radianos_para_graus(camera.pitch) < 90.0);
+        assert!(
+            camera.camera(1280, 720).view_matrix().is_ok(),
+            "a matriz de visão deixou de existir no limite superior de pitch"
+        );
+
+        camera.orbitar(0.0, 100_000.0);
+        assert!(camera.pitch >= PITCH_MINIMO - 1e-6);
+        assert!(radianos_para_graus(camera.pitch) > -90.0);
+        assert!(camera.camera(1280, 720).view_matrix().is_ok());
+    }
+
+    #[test]
+    fn o_yaw_fica_sempre_pequeno() {
+        let mut camera = OrbitalCamera::new();
+        for _ in 0..1000 {
+            camera.orbitar(97.0, 0.0);
+        }
+        assert!(
+            camera.yaw > -std::f32::consts::PI - 1e-4 && camera.yaw <= std::f32::consts::PI + 1e-4,
+            "yaw acumulou {} radianos",
+            camera.yaw
+        );
+    }
+
+    #[test]
+    fn girar_meia_volta_troca_o_lado_do_olho() {
+        let mut camera = OrbitalCamera::new();
+        let antes = camera.olho();
+        camera.orbitar(std::f32::consts::PI / SENSIBILIDADE, 0.0);
+        let depois = camera.olho();
+        assert!(
+            (antes.x + depois.x).abs() < 1e-3 && (antes.z + depois.z).abs() < 1e-3,
+            "meia volta devia espelhar o olho: {antes:?} → {depois:?}"
+        );
+    }
+
+    #[test]
+    fn o_mouse_para_cima_sobe_a_camera() {
+        let mut camera = OrbitalCamera::new();
+        let antes = camera.olho().y;
+        camera.orbitar(0.0, -50.0);
+        assert!(camera.olho().y > antes);
+    }
+
+    #[test]
+    fn a_camera_ignora_entrada_nao_finita() {
+        let mut camera = OrbitalCamera::new();
+        let original = camera;
+        camera.orbitar(f32::NAN, 10.0);
+        camera.orbitar(10.0, f32::INFINITY);
+        camera.zoom(f32::NAN);
+        assert_eq!(camera, original);
+    }
+
+    #[test]
+    fn campo_publico_fora_da_faixa_e_preso_na_leitura() {
+        // O `--teclas` e os testes escrevem nos campos; a leitura é quem garante
+        // o contrato. Sem isto, `distance = 0.0` produziria `position == target`.
+        let camera = OrbitalCamera {
+            distance: 0.0,
+            pitch: 3.0,
+            ..OrbitalCamera::new()
+        };
+        assert_eq!(camera.distancia_segura(), DISTANCIA_MINIMA);
+        assert!(camera.camera(640, 480).view_matrix().is_ok());
+    }
+
+    #[test]
+    fn sem_tamanho_o_aspecto_fica_com_o_renderer() {
+        let camera = OrbitalCamera::new().camera(0, 0);
+        assert_eq!(camera.aspect, 0.0);
+    }
+}

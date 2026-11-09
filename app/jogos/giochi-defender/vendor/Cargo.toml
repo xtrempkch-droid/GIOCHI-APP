@@ -1,0 +1,53 @@
+# Snapshot da engine, copiado do workspace GIOCHI-ENGINE-3D no commit 3785a33.
+#
+# O jogo não compila contra o repositório compartilhado: uma mudança da equipe da
+# engine não pode quebrar este jogo sem alguém atualizar a cópia de propósito.
+# Mesma decisão do `cobrinha` e do `neon-drift` (§25 do AGENTS.md) — e é o que
+# torna a regra R1 ("o jogo consome a engine, não a modifica") verificável: aqui
+# dentro nada é editado, com as duas exceções de manifesto declaradas abaixo.
+#
+# Atualizar = copiar de novo:
+#   git -C ../../../../../GIOCHI-ENGINE-3D archive <commit> giochi-engine giochi-engine-3d \
+#     | tar -x -C vendor
+#
+# ## As duas correções de manifesto que esta cópia carrega
+#
+# 1. `giochi-engine-3d/Cargo.toml` declara `giochi-engine` **sem**
+#    `default-features = false`. O padrão do `giochi-engine` é `sdl2-bundled`, e a
+#    unificação de features é aditiva — então pedir `sdl2-system` no jogo não tira
+#    o `bundled` que o vizinho ligou, e o `sdl2-sys` tenta compilar o SDL2 do
+#    código-fonte (cmake) mesmo num alvo que já tem o SDL2 na imagem. É a mesma
+#    correção de uma linha que os snapshots do `cobrinha` e do `neon-drift` já
+#    carregam; vale reportar à equipe da engine, porque o feature documentado como
+#    caminho de cross-compile não funciona a partir de um consumidor 3D.
+# 2. `[workspace.dependencies]` abaixo é a cópia **fiel** do manifesto real,
+#    incluindo `features = ["image", "mixer", "ttf", "unsafe_textures"]` no
+#    `sdl2`. Sem essas quatro a engine 2D não compila (`unsafe_textures` é o que
+#    dispensa o tempo de vida da `Texture`, ADR-017; `image` é o que traz
+#    `load_texture_bytes`).
+[workspace]
+resolver = "2"
+members = ["giochi-engine", "giochi-engine-3d"]
+
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["GIOCHI-SYSTEM contributors"]
+repository = "https://github.com/xtrempkch-droid/GIOCHI-SYSTEM"
+
+[workspace.dependencies]
+sdl2 = { version = "0.38", default-features = false, features = ["image", "mixer", "ttf", "unsafe_textures"] }
+glam = "0.29"
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
+cbindgen = "0.27"
+criterion = { version = "0.5", features = ["html_reports"] }
+glow = "0.14"
+bytemuck = { version = "1", features = ["derive"] }
+tobj = "4"
