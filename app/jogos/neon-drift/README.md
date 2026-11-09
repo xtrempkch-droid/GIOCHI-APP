@@ -91,9 +91,48 @@ o raio dela (0,72 do meio-quadrado) é menor que o quadrado cheio que ela
 substituiu. Sem isso o respingo encolheria 28 % sem ninguém ter mexido no
 tamanho dele.
 
+### Usar a sua própria folha de sprites
+
+Se você tem uma folha pronta (um `.bmp`), não precisa mexer em código:
+
+```bash
+GIOCHI_SPRITES=minha-folha.bmp GIOCHI_SPRITES_COLUNAS=8 giochi-neon-drift
+```
+
+- **`GIOCHI_SPRITES`** — caminho de um BMP **sem compressão, 24 ou 32 bits**.
+- **`GIOCHI_SPRITES_COLUNAS`** — quantas colunas a folha tem (padrão 4). As
+  linhas saem de `8 ÷ colunas`, então uma faixa 8×1 e uma grade 4×2 desenham
+  igual.
+
+A folha é **normalizada** para o mesmo 128×128 de quatro colunas: a célula *i*
+vai para a posição da forma *i*. Nada do desenho sabe de onde ela veio, então
+não há um segundo caminho de código que possa envelhecer diferente.
+
+O RGB da sua folha é descartado (a cor vem do `tint`) e o que vale é o **alfa**.
+Num BMP de 24 bits, que perdeu o alfa, a **luminância** vira máscara: branco
+opaco, preto transparente — a convenção das folhas de efeito.
+
+PNG **não** funciona, e não é limitação deste jogo: o `libSDL2_image` da imagem
+do aparelho foi compilado sem `--enable-png`. Converta para BMP.
+
+Se o arquivo não abrir, não for BMP ou não couber no número de colunas, o jogo
+**avisa** e cai no atlas procedural:
+
+```text
+neon-drift: folha de sprites ignorada — não consegui abrir /tmp/x.bmp: No such file or directory
+neon-drift: atlas de sprites 128x128 [...] (origem: procedural)
+```
+
+O aviso existe porque a alternativa é pior: cair no procedural **em silêncio**
+faz o usuário concluir que a folha dele não serve, quando o que falhou foi o
+caminho.
+
 ```bash
 giochi-neon-drift --atlas /tmp/atlas.bmp     # o atlas em BMP, fundo magenta
 ```
+
+O `--atlas` respeita as duas variáveis: uma ferramenta que mostra o atlas
+procedural enquanto o jogo desenha a folha do usuário mede outra coisa.
 
 O fundo é magenta de propósito: alfa 0 sobre preto é indistinguível de "não
 desenhou", e o arquivo mentiria sobre ter gerado as formas.
@@ -268,8 +307,8 @@ Um quad é uma matriz de modelo de 4×4, e dois campos dela enganam:
 crates/core/     regras puras: mapa, pista, carro, drift, IA, corrida, fonte,
                  HUD, relógio e o piloto artificial. Sem SDL: 110 testes.
 crates/ui-sdl/   cena 3D, efeitos, malhas, texturas e atlas de sprites
-                 procedurais, áudio, evdev, entrada e o laço. É a única parte que
-                 precisa de tela: 113 testes.
+                 procedurais (ou folha externa em BMP), áudio, evdev, entrada e o
+                 laço. É a única parte que precisa de tela: 121 testes.
 vendor/          cópia isolada da GIOCHI-ENGINE-3D. A engine original é outro
                  repositório e **não** é editada por este app.
 ```

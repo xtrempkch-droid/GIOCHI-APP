@@ -4402,12 +4402,12 @@ uma gaussiana centrada errada gera bytes válidos e desenha a nuvem fora do quad
 ### Números
 
 ```text
-cargo test --workspace   110 core + 113 SDL = 223   (eram 209; +14)
+cargo test --workspace   110 core + 121 SDL = 231   (eram 209; +22)
 vendor, --lib           186 testes da engine, com o novo de instancing
 tests/run-all.mjs        199/199 JS
 validate-app.mjs --all   8 apps válidos (1 em scaffold)
 verificar-jogos.mjs      ok nos 3 tamanhos
-aarch64                  648 200 bytes, sha256 c6f53b35…, NEEDED = SDL2 +
+aarch64                  654 856 bytes, sha256 d6c178b5…, NEEDED = SDL2 +
                          libgcc_s + libm + libc (o atlas não pede biblioteca nova)
 ```
 
@@ -4420,6 +4420,87 @@ aarch64                  648 200 bytes, sha256 c6f53b35…, NEEDED = SDL2 +
 | `alfa_da_forma` com degrau (`if r<0.5 {1} else {0}`) | `o_puff_desbota_em_muitos_texels_e_nao_em_degrau` |
 | célula com RGB 0 em vez de branco | `o_rgb_e_branco_e_so_o_alfa_desenha` |
 | `quad_celula` usa o UV inteiro (`quad()` no lugar) | `o_retangulo_de_cada_celula_cabe_no_atlas_e_nao_se_sobrepoe` |
+
+### A folha de sprites do usuário entra por BMP, e sem segunda verdade
+
+O dono mandou uma folha de sprites de referência. Gerar oito formas em código
+resolve o padrão, mas não o caso "eu já tenho a minha folha" — então entrou um
+caminho de carregamento, e ele é deliberadamente **curto**:
+
+```bash
+GIOCHI_SPRITES=minha-folha.bmp GIOCHI_SPRITES_COLUNAS=8 giochi-neon-drift
+```
+
+A folha é **normalizada** para o mesmo 128×128 de quatro colunas que o atlas
+procedural usa: a célula *i* da folha vai para a posição da forma *i*. Depois
+disso, `retangulo()`, `quad_celula()` e o desenho instanciado não sabem de onde
+os pixels vieram — uma faixa 8×1 entra igual a uma grade 4×2, e não existe um
+segundo caminho de desenho para envelhecer diferente.
+
+Os testes fixam a equivalência comparando **os dois layouts byte a byte**, que
+é a única forma de provar que a normalização é de fato canônica.
+
+#### BMP e não PNG, de novo
+
+Mesmo motivo das texturas (§24): o `libSDL2_image` do aparelho foi compilado sem
+`--enable-png`. O leitor aceita `BITMAPINFOHEADER` sem compressão de 24 ou 32
+bits, e devolve `None` em vez de entrar em pânico — um caminho apontado por
+engano não pode derrubar o jogo.
+
+Três armadilhas de formato, todas com teste:
+
+| Armadilha | Sintoma se ignorada |
+| --- | --- |
+| altura **negativa** = de cima para baixo | folha de cabeça para baixo (invisível num puff, óbvio num risco) |
+| linhas alinhadas em 4 bytes | imagem **cisalhada**, cada linha deslocada um pouco mais |
+| BMP comprimido (BI_RLE8) | aceitar e ler como cru desenha lixo |
+
+#### Folha de 24 bits não tem alfa — e a luminância é o que sobrou
+
+O RGB da folha é descartado (a cor vem do `tint`); o que vale é o alfa. Num BMP
+de 32 bits ele vem junto; num de 24 bits não existe, e a **luminância** vira
+máscara: branco opaco, preto transparente — a convenção das folhas de efeito.
+Sem isso, todo sprite de uma folha 24 bits sairia como retângulo cheio.
+
+#### O bug que só o teste de layout pegou
+
+`linhas` era `CELULAS.div_ceil(colunas)` — e `CELULAS` é **16** (atlas 4×4),
+enquanto as formas são **8**. Com quatro colunas isso dava `linhas = 4` em vez
+de `2`, a altura de célula caía pela metade e cada célula amostrava a **faixa
+errada**: medido no teste, a célula 4 lia o sprite 0 (121 de alfa contra 157).
+
+O nome da constante não dizia "quantas formas existem", e o valor estava certo
+para o atlas e errado para a conta. Agora é `Forma::TODAS.len().div_ceil(colunas)`.
+
+#### Queda para o procedural é **avisada**, não silenciosa
+
+```text
+neon-drift: folha de sprites ignorada — não consegui abrir /tmp/nao-existe.bmp: No such file or directory
+neon-drift: atlas de sprites 128x128 [...] (origem: procedural)
+```
+
+Cair em silêncio faria o usuário concluir que a folha dele não serve, quando o
+que falhou foi o caminho, o formato ou o número de colunas. É a mesma regra do
+`buttons.map` (§12) e do `GIOCHI_GLES` (§16): **o que foi ignorado tem de ser
+dito**.
+
+E `--atlas` respeita as duas variáveis — ferramenta que mostra o procedural
+enquanto o jogo desenha a folha do usuário mede outra coisa.
+
+#### Verificado ponta a ponta
+
+Folha sintética 8×1 (256×32, 24 bits) gerada por script, carregada pelo jogo:
+
+```text
+--atlas com GIOCHI_SPRITES    origem: folha externa (BMP), 8 formas no layout 4×4
+quadro só de partículas       106 níveis de luminância, 83,4 % em rampa
+                              (procedural: 107 níveis, 83,4 %) — o caminho de
+                              desenho é o mesmo, só os pixels mudaram
+```
+
+Cinco mutações provam os testes novos: `linhas` volta a `CELULAS` (2 falham),
+ignorar altura negativa (3), aceitar compressão (1), tratar 24 bits como opaco
+(1), e `carregar_ou_gerar` sem o motivo da queda (o teste do motivo).
 
 ### Trocar de mapa no título matava carros e partículas
 

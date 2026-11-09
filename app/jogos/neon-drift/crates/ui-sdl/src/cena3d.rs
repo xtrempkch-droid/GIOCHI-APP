@@ -369,7 +369,19 @@ impl Cena3D {
         let quad = render.create_mesh(&qv, &qi)?;
 
         // Atlas de sprites: uma textura, uma malha por forma.
-        let atlas_pixels = crate::atlas::gerar();
+        //
+        // `GIOCHI_SPRITES=<arquivo.bmp>` troca as formas procedurais por uma
+        // folha do usuário, e `GIOCHI_SPRITES_COLUNAS` diz quantas colunas ela
+        // tem (padrão: 4, o layout do atlas). A folha é **normalizada** para o
+        // mesmo 128×128 de quatro colunas, então nada abaixo desta linha sabe de
+        // onde ela veio — e uma folha 8×1 entra igual a uma 4×2.
+        let caminho_folha = std::env::var("GIOCHI_SPRITES").ok();
+        let colunas_folha = std::env::var("GIOCHI_SPRITES_COLUNAS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(crate::atlas::COLUNAS);
+        let (atlas_pixels, origem_atlas, problema_folha) =
+            crate::atlas::carregar_ou_gerar(caminho_folha.as_deref(), colunas_folha);
         let atlas_t = render.create_texture_rgba(
             crate::atlas::LADO,
             crate::atlas::LADO,
@@ -392,11 +404,18 @@ impl Cena3D {
         };
         let sprite_shader = render.create_builtin_shader(BuiltinShader::TexturedInstanced)?;
         let nomes: Vec<&str> = crate::atlas::Forma::TODAS.iter().map(|f| f.nome()).collect();
+        // O aviso de folha recusada é **alto**: sem ele o jogo desenha as formas
+        // procedurais e o usuário conclui que a folha dele não serve, quando o
+        // que falhou foi o caminho, o formato ou o número de colunas.
+        if let Some(motivo) = &problema_folha {
+            eprintln!("neon-drift: folha de sprites ignorada — {motivo}");
+        }
         eprintln!(
-            "neon-drift: atlas de sprites {}x{} {nomes:?} {} bytes",
+            "neon-drift: atlas de sprites {}x{} {nomes:?} {} bytes (origem: {})",
             crate::atlas::LADO,
             crate::atlas::LADO,
-            atlas_pixels.len()
+            atlas_pixels.len(),
+            origem_atlas.nome()
         );
 
         // `sun()` puro (ambiente 0,3 + difusa 1,0 + especular 0,25) satura: o

@@ -283,6 +283,8 @@ Uso:
   giochi-neon-drift --mapa boavista         escolhe o mapa (avenida, boavista)
   giochi-neon-drift --so asfalto            desenha uma malha só (diagnóstico)
   giochi-neon-drift --atlas a.bmp           grava o atlas de sprites e sai
+  GIOCHI_SPRITES=x.bmp GIOCHI_SPRITES_COLUNAS=8
+                                            usa a sua folha de sprites (BMP)
   giochi-neon-drift --json                  saída de máquina (stdout é só o JSON)
   giochi-neon-drift --versao
 
@@ -378,7 +380,17 @@ fn gravar_quadro(
 /// desenhado.
 fn gravar_atlas(caminho: &str) -> Result<(), Box<dyn std::error::Error>> {
     let lado = atlas::LADO;
-    let origem = atlas::gerar();
+    // Respeita `GIOCHI_SPRITES` como o jogo: uma ferramenta que mostra o atlas
+    // procedural enquanto o jogo desenha a folha do usuário mede outra coisa.
+    let colunas = std::env::var("GIOCHI_SPRITES_COLUNAS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(atlas::COLUNAS);
+    let caminho_folha = std::env::var("GIOCHI_SPRITES").ok();
+    let (origem, fonte, problema) = atlas::carregar_ou_gerar(caminho_folha.as_deref(), colunas);
+    if let Some(motivo) = problema {
+        eprintln!("neon-drift: folha de sprites ignorada — {motivo}");
+    }
     let mut pixels = vec![0u8; (lado * lado * 4) as usize];
     for i in 0..(lado * lado) as usize {
         let a = f32::from(origem[i * 4 + 3]) / 255.0;
@@ -399,10 +411,11 @@ fn gravar_atlas(caminho: &str) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     superficie.save_bmp(caminho)?;
     eprintln!(
-        "neon-drift: atlas {}x{} com {} formas gravado em {caminho}",
+        "neon-drift: atlas {}x{} com {} formas ({}) gravado em {caminho}",
         lado,
         lado,
-        atlas::Forma::TODAS.len()
+        atlas::Forma::TODAS.len(),
+        fonte.nome()
     );
     Ok(())
 }
