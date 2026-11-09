@@ -33,6 +33,9 @@ OPÇÕES:
     --yaw GRAUS           Yaw inicial da câmera (0 = de frente para a arena).
     --pitch GRAUS         Inclinação inicial (-60 a 80; fora disso é preso).
     --distancia D         Distância inicial (5 a 15; fora disso é preso).
+    --simular SEGUNDOS    Roda a simulação antes de desenhar (para capturar
+                          cubos no ar sem esperar na tela).
+    --semente N           Semente do sorteio de posições (padrão: fixa).
     --sem-mouse-relativo  Não prende o cursor.
     -h, --ajuda           Esta mensagem.
 ";
@@ -52,9 +55,19 @@ pub struct Diag {
     pub pitch_graus: Option<f32>,
     /// Distância inicial.
     pub distancia: Option<f32>,
+    /// Segundos de simulação antes do primeiro quadro.
+    pub simular: Option<f32>,
+    /// Semente do sorteio de posições.
+    pub semente: u64,
     /// Pediu a ajuda.
     pub ajuda: bool,
 }
+
+/// Semente padrão do sorteio.
+///
+/// Fixa de propósito: duas execuções do mesmo comando têm de desenhar a mesma
+/// cena, senão comparar capturas mediria o sorteio em vez do código.
+pub const SEMENTE_PADRAO: u64 = 0x0DEF_E17E_u64;
 
 impl Default for Diag {
     /// Padrão com o mouse relativo **ligado** — `derive` deixaria desligado, e o
@@ -67,6 +80,8 @@ impl Default for Diag {
             yaw_graus: None,
             pitch_graus: None,
             distancia: None,
+            simular: None,
+            semente: SEMENTE_PADRAO,
             ajuda: false,
         }
     }
@@ -96,6 +111,8 @@ impl Diag {
                 "--yaw" => diag.yaw_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--pitch" => diag.pitch_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--distancia" => diag.distancia = Some(real(&mut argumentos, embutido, &nome)?),
+                "--simular" => diag.simular = Some(real(&mut argumentos, embutido, &nome)?),
+                "--semente" => diag.semente = inteiro(&mut argumentos, embutido, &nome)?,
                 outro => bail!("argumento desconhecido: '{outro}' (use --ajuda)"),
             }
         }
@@ -241,6 +258,28 @@ mod tests {
     fn numero_nao_finito_reprova() {
         assert!(parse(&["--yaw", "inf"]).is_err());
         assert!(parse(&["--distancia", "NaN"]).is_err());
+    }
+
+    #[test]
+    fn a_simulacao_e_a_semente_sao_lidas() {
+        let diag = parse(&["--simular", "6.5", "--semente", "99"]).unwrap();
+        assert_eq!(diag.simular, Some(6.5));
+        assert_eq!(diag.semente, 99);
+    }
+
+    #[test]
+    fn a_semente_padrao_e_fixa() {
+        // Fixa para a captura ser reproduzível; ver a doc de `SEMENTE_PADRAO`.
+        assert_eq!(parse(&[]).unwrap().semente, SEMENTE_PADRAO);
+        assert_eq!(parse(&[]).unwrap().semente, parse(&[]).unwrap().semente);
+    }
+
+    #[test]
+    fn simulacao_negativa_nao_reprova_mas_e_lida() {
+        // O sinal é tratado na simulação (dt <= 0 não avança); o parser só
+        // garante que é um número finito.
+        assert_eq!(parse(&["--simular=-1"]).unwrap().simular, Some(-1.0));
+        assert!(parse(&["--simular", "muito"]).is_err());
     }
 
     #[test]

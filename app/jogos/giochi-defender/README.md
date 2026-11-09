@@ -8,8 +8,9 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Bloco 1a concluído** — projeto compilando, arena e câmera orbital. Sem
-inimigos, sem tiro, sem HUD ainda. O plano dos nove blocos está em
+**Blocos 1a e 1b concluídos** — arena, câmera orbital, inimigos voando para o
+centro e dano no asteroide. Ainda **sem tiro e sem HUD**: o cubo não pode ser
+destruído, ele só chega e dói (o tiro é o 2a). O plano dos nove blocos está em
 [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em [`IDEAS.md`](IDEAS.md).
 
 ## Como rodar
@@ -35,7 +36,13 @@ SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --quadro /tmp/defender.bmp
 
 # a mesma cena de outro ângulo (dois quadros têm de DIFERIR)
 SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --yaw 90 --quadro /tmp/y90.bmp
+
+# adianta a partida para capturar cubos no ar (sem esperar na tela)
+SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --simular 6 --quadro /tmp/cubos.bmp
 ```
+
+`--semente N` troca o sorteio das posições; o padrão é fixo para a captura ser
+reproduzível.
 
 O BMP é de 32 bits sem compressão, escrito pelo próprio jogo: o `SDL2_image` da
 imagem do aparelho é compilado sem `libpng` (AGENTS.md §24), e um codificador de

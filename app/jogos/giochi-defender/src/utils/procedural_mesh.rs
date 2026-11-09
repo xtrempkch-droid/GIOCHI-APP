@@ -21,6 +21,7 @@
 //! A solda existe só durante a subdivisão, para que a distorção não abra frestas:
 //! dois triângulos que dividem um vértice recebem exatamente o mesmo deslocamento.
 
+use crate::utils::rng::Sorteio;
 use giochi_engine_3d::mesh::Vertex;
 use std::collections::HashMap;
 
@@ -342,10 +343,7 @@ pub fn generate_starfield(quantidade: u32, raio: f32, tamanho: f32, semente: u64
     for _ in 0..quantidade {
         // Direção uniforme na esfera: `z` uniforme e ângulo uniforme é o método
         // sem rejeição e sem concentrar estrelas nos polos.
-        let z = sorteio.faixa(-1.0, 1.0);
-        let angulo = sorteio.faixa(0.0, std::f32::consts::TAU);
-        let anel = (1.0 - z * z).max(0.0).sqrt();
-        let direcao = [anel * angulo.cos(), z, anel * angulo.sin()];
+        let direcao = sorteio.direcao_unitaria();
 
         // Casca com espessura: sem isto o céu fica uma casca perfeita e o olho
         // percebe o padrão quando a câmera orbita.
@@ -363,45 +361,6 @@ pub fn generate_starfield(quantidade: u32, raio: f32, tamanho: f32, semente: u64
     let indices: Vec<u32> = (0..vertices.len() as u32).collect();
 
     Malha { vertices, indices }
-}
-
-/// Sorteio determinístico (xorshift64*).
-///
-/// `rand` traria uma dependência e uma semente de sistema; aqui o requisito é o
-/// oposto — o mesmo número em qualquer máquina, sempre. O estado é de 64 bits e
-/// o período é grande o bastante para 500 estrelas.
-struct Sorteio {
-    estado: u64,
-}
-
-impl Sorteio {
-    fn new(semente: u64) -> Self {
-        Self {
-            // Zero é o único estado absorvente do xorshift.
-            estado: if semente == 0 {
-                0x9E37_79B9_7F4A_7C15
-            } else {
-                semente
-            },
-        }
-    }
-
-    fn proximo(&mut self) -> u64 {
-        let mut x = self.estado;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.estado = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    /// Número em `[min, max)`.
-    fn faixa(&mut self, min: f32, max: f32) -> f32 {
-        // 24 bits: o suficiente para um `f32` em `[0, 1)` sem perder resolução e
-        // sem o viés que `as f32` sobre 64 bits produziria.
-        let passo = (self.proximo() >> 40) as f32 / (1u32 << 24) as f32;
-        min + (max - min) * passo
-    }
 }
 
 /// Emite cada triângulo com três vértices próprios e a normal da face.

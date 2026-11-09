@@ -35,6 +35,7 @@ use giochi_engine_3d::RenderContext3D;
 use giochi_defender::diag::{self, Diag};
 use giochi_defender::gameplay::arena::{self, Arena};
 use giochi_defender::gameplay::camera::OrbitalCamera;
+use giochi_defender::gameplay::partida::{Inimigos, Partida};
 use giochi_defender::state::{GameState, WAVES_TOTAIS};
 use giochi_defender::utils::math::{graus_para_radianos, radianos_para_graus};
 
@@ -121,9 +122,24 @@ fn executar(diag: Diag) -> Result<()> {
     }
 
     let arena = Arena::new(&mut render)?;
+    let inimigos = Inimigos::new(&mut render)?;
     let mut camera = OrbitalCamera::new();
     aplicar_preset(&mut camera, &diag);
-    let estado = GameState::new();
+    let mut estado = GameState::new();
+    let mut partida = Partida::new(diag.semente);
+
+    // `--simular`: adianta a partida antes do primeiro quadro. Sem isto uma
+    // captura headless só mostraria a arena vazia, e a simulação de inimigos
+    // ficaria sem nenhuma prova que não dependesse de alguém olhar a tela.
+    if let Some(segundos) = diag.simular.filter(|valor| *valor > 0.0) {
+        partida.atualizar(segundos, &mut estado);
+        log::info!(
+            "simulados {segundos:.1}s: {} inimigo(s) no ar, {} vida(s), {} derrota(s)",
+            partida.inimigos(),
+            estado.lives,
+            partida.derrotas()
+        );
+    }
 
     log::info!(
         "arena: asteroide raio {:.2} (externo {:.2}), {} estrelas, {} waves",
@@ -150,10 +166,14 @@ fn executar(diag: Diag) -> Result<()> {
         &mut render,
         &mut entrada,
         &arena,
+        &inimigos,
         &mut camera,
+        &mut partida,
+        &mut estado,
         &diag,
     );
 
+    inimigos.destruir(&mut render);
     arena.destruir(&mut render);
     log::info!(
         "encerrando: {} malhas e {} shaders ainda na engine (devem ser 0)",
@@ -284,7 +304,10 @@ fn laco(
     render: &mut RenderContext3D,
     entrada: &mut Input,
     arena: &Arena,
+    inimigos: &Inimigos,
     camera: &mut OrbitalCamera,
+    partida: &mut Partida,
+    estado: &mut GameState,
     diag: &Diag,
 ) -> Result<()> {
     let mut relogio = FrameClock::new();
@@ -317,8 +340,7 @@ fn laco(
         let passos = laco.advance(delta);
         for _ in 0..passos {
             atualizar_camera(camera, entrada, laco.fixed_timestep());
-            // O bloco 1b pendura aqui a atualização de inimigos e da wave; no 1a
-            // não há nada a simular além da câmera.
+            partida.atualizar(laco.fixed_timestep(), estado);
         }
 
         let (largura, altura) = janela.drawable_size();
@@ -326,6 +348,7 @@ fn laco(
 
         render.begin_frame(janela);
         arena.desenhar(render, &camera3d)?;
+        inimigos.desenhar(render, partida, &camera3d)?;
 
         // A captura tem de acontecer ANTES da troca de buffers: depois do
         // `end_frame` o buffer de trás já tem o quadro seguinte (ou lixo).
@@ -368,6 +391,9 @@ fn laco(
     }
 
     let (largura, altura) = render.drawable_size();
-    log::info!("{quadros} quadros renderizados · drawable {largura}x{altura}");
+    log::info!(
+        "{quadros} quadros renderizados · drawable {largura}x{altura} · {:.1} s simulados",
+        quadros as f32 * laco.fixed_timestep()
+    );
     Ok(())
 }

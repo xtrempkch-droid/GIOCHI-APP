@@ -1,13 +1,15 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 1a — Setup + janela + câmera orbital + arena
+## Último bloco concluído: 1b — Inimigos: spawn, movimento, colisão com núcleo
 Data: 2026-11-09
+
+Blocos fechados: **1a** (arena e câmera) e **1b** (inimigos e colisão).
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **51/51** em x86_64
+- [x] `cargo test` — **102/102** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo check --target aarch64-unknown-linux-gnu` — **pendente**; o
@@ -34,11 +36,67 @@ Nada aqui é "deve funcionar": tudo foi executado.
 | Recursos liberados | `0 malhas e 0 shaders` na engine ao encerrar |
 | A captura é reproduzível | 4 execuções (2 em release, 1 em debug, 1 com 600 quadros) dão o **mesmo md5** `94a838b7…` |
 
+### Bloco 1b
+
+| Verificação | Resultado medido |
+| --- | --- |
+| Nasce um cubo a cada 2 s | `--simular 6` → 2 no ar (o terceiro nasce durante os 3 quadros da captura) |
+| Os cubos aparecem na tela | 6 s: 3 manchas vermelhas com 12.019, 1.098 e 829 px; lado projetado 121/35/35 px ⇒ distâncias ~4, ~14 e ~14 unidades para um cubo de 0,8 (`499/d`) |
+| O cubo que chega dói | 12 s → `player damaged` três vezes, vidas 5 → **2**, 3 no ar |
+| O jogo termina no zero | 40 s → 5 danos, vidas **0**, `GAME OVER` **uma** vez, e o processo segue rodando (não derruba) |
+| A simulação é determinística | mesma semente ⇒ mesmo md5 (`f28d1a27…`) em duas execuções |
+| A semente manda na cena | semente 7 ⇒ md5 diferente (`e426c032…`) — o contrário do teste que passa dos dois lados |
+| Um passo longo vale o mesmo | `atualizar(6,0)` × 360 × `atualizar(1/60)`: mesmas vidas, mesmas derrotas, posições dentro de 1e-3 |
+
 Comando da captura, para repetir:
 
 ```bash
 SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --quadro /tmp/defender.bmp
 ```
+
+## Entregue no bloco 1b
+
+- `src/gameplay/enemy.rs` — cubo hostil: direção ao alvo, movimento que **não
+  atravessa** o alvo em passo grande, AABB exata.
+- `src/gameplay/enemy_pool.rs` — 15 slots fixos reutilizáveis, `spawn` devolve
+  `None` quando lota, `despawn` idempotente (o duplo desconto faria o pool
+  "lotar" com slots livres).
+- `src/gameplay/collision.rs` — esfera × AABB (ponto mais próximo) e raio × AABB
+  (slab), com os casos que quebram na prática: encostar exato, raio paralelo a um
+  eixo, raio nascendo dentro, caixa atrás da origem.
+- `src/gameplay/partida.rs` — a simulação (`Partida`) separada do desenho
+  (`Inimigos`): spawn a cada 2 s numa faixa de ±4 em torno do horizonte, dano ao
+  encostar na esfera de 2,5, `GAME OVER` logado uma vez.
+- `src/utils/rng.rs` — sorteio determinístico extraído do gerador de malha, para
+  o mesmo gerador servir ao céu e às posições de spawn.
+- `--simular SEGUNDOS` e `--semente N` no diagnóstico.
+
+### Desvios do plano, e por quê
+
+1. **`gameplay/gameplay.rs` virou `gameplay/partida.rs`.** O nome do módulo igual
+   ao do pai é `clippy::module_inception` (`-D warnings`), e o tipo é `Partida` e
+   não `GameplayScene` — a cena de verdade chega no 3a. O nome do arquivo passou
+   a dizer o que está dentro.
+2. **`atualizar(dt)` subdivide o passo em 1/60.** Sem isso, um `dt` grande move
+   por inteiro até os cubos que nasceram no meio do intervalo: medido, um passo
+   de 6 s tirava **4 vidas** de uma vez. Com a subdivisão, `--simular 6` mede a
+   mesma partida que o laço produz.
+
+### Três testes que a primeira versão tinha errado
+
+Nenhum era bug do jogo; os três eram a expectativa errada — e é o que os testes
+existem para descobrir.
+
+1. `raio_que_raspa_o_canto_acerta` esperava `2·√2` e recebeu `2`. A direção
+   passada não era unitária, então `t` era o parâmetro da reta, não uma
+   distância. Normalizada, dá `2·√3` — e o teste passou a dizer isso.
+2. `um_passo_longo_e_igual_a_muitos_curtos` comparava `Partida` por igualdade
+   exata. 360 somas de `1/60` em `f32` não dão o mesmo que a subdivisão interna do
+   mesmo total: agora compara vidas, derrotas e posições dentro de 1e-3 — o que
+   se quer provar, não o arredondamento.
+3. `o_cubo_que_chega_tira_uma_vida_e_some` exigia o pool vazio. Falso: outros
+   cubos já nasceram e estão a caminho. A asserção virou "nenhum cubo colidindo
+   ficou vivo", que é a regra de verdade.
 
 ## Entregue no bloco 1a
 
@@ -58,18 +116,20 @@ SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --quadro /tmp/defender.bmp
 - `src/utils/math.rs`, `src/diag.rs` (CLI + BMP).
 - `README.md`, `IDEAS.md`, `Cross.toml`, `.gitignore`.
 
-## Próximo bloco: 1b — Inimigos: spawn, movimento, colisão com núcleo
+## Próximo bloco: 1c — Polimento da cena 3D
 
-Cubos hostis nascem num anel de 15–20 unidades, voam para o centro com direção
-normalizada e tiram uma vida ao encostar no asteroide. Entram `enemy.rs`,
-`enemy_pool.rs` (15 fixos, sem alocação por quadro) e `collision.rs` (esfera ×
-AABB e raio × AABB, ambos com teste unitário). A cena passa a ter algo a
-simular no passo fixo, que hoje só move a câmera.
+Cores agradáveis (asteroide cinza-médio, cubos vermelho-laranja com variação por
+cubo), escala refinada, iluminação direcional vinda do topo e o "game over
+temporário" já logado no 1b virando estado explícito. O bloco também pede a
+primeira medição de FPS com 15 cubos, que é o que falta para o `benches/` —
+e o teto de 15 do R5 já está fixado por teste.
 
 ## Bloqueios / pendências
 
 - **ARM64 não testado.** Sem aparelho nesta rodada. O binário compila para
   x86_64 e o caminho de cross-compile está documentado; a validação é o 3c.
+- **Ainda não há tiro.** O cubo não pode ser destruído: no 1b ele só chega e
+  dói. É a entrega do 2a (raycast + crosshair).
 - **`libSDL2_mixer` é dependência de carga, não de áudio.** O `NEEDED` do
   binário lista `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é
   usado. Isso é diferente de "o áudio falhou" (R6): biblioteca ausente é falha
@@ -90,8 +150,10 @@ simular no passo fixo, que hoje só move a câmera.
 
 ## Métricas de performance
 
-- FPS com 15 cubos em x86_64: **não medido** (não há cubos no 1a; é entrega do
-  1c, que também cria o `benches/frame_time.rs`).
+- FPS com 15 cubos em x86_64: **não medido ainda** — é entrega do 1c, que também
+  cria o `benches/frame_time.rs`.
+- Custo do 1b: até **15 desenhos** de cubo (um por cubo) + 4 da arena. Dentro do
+  envelope de ≤ 15 cubos do R5.
 - FPS com 15 cubos em ARM64: **pendente**.
 - Custo de desenho do 1a: **4 chamadas** por quadro (3 faixas de estrelas +
   asteroide) e 19.800 vértices de céu + 240 do asteroide. Cabe folgado no

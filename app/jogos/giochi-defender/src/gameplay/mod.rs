@@ -1,7 +1,8 @@
-//! A parte de 3D do jogo: a arena e a câmera.
-//!
-//! Os módulos de gameplay do bloco 1b (`enemy`, `enemy_pool`, `collision`) entram
-//! aqui; o `mod` é o único ponto que muda quando eles chegam.
+//! A parte de 3D e de simulação: arena, câmera, inimigos e colisão.
 
 pub mod arena;
 pub mod camera;
+pub mod collision;
+pub mod enemy;
+pub mod enemy_pool;
+pub mod partida;
