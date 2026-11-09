@@ -324,6 +324,22 @@ Um quad é uma matriz de modelo de 4×4, e dois campos dela enganam:
    Há teste para os dois casos (`o_quad_deitado_do_carro_fica_com_a_normal_para_cima`,
    `a_normal_do_quad_deitado_aponta_para_cima`).
 
+## Pendências conhecidas
+
+### O carro é desenhado de ré (180° entre modelo e rumo)
+
+`core/carro.rs` define `direcao() = (sin(angulo), cos(angulo))` — com `angulo = 0`
+o carro **anda para +Z**. `ui-sdl/malha.rs` constrói os faróis em `z = -2,14` e
+as lanternas em `z = +2,14` — a **frente desenhada é -Z**.
+
+A rotação é a mesma nos dois (`Quat::from_axis_angle(UP, angulo)`), então o
+desenho aponta para o lado oposto ao movimento. Como a câmera fica atrás do
+movimento, o jogador vê os faróis apontando para ele.
+
+Registrado em [`AGENTS.md`](../../../AGENTS.md) §35, com as duas correções
+possíveis e o teste que decide qual delas: comparar o centro dos faróis com
+`direcao()` no mesmo ângulo.
+
 ## O que este jogo **não** faz
 
 - Não tem multijogador, não tem save, não tem placar persistente.
