@@ -1,0 +1,27 @@
+[package]
+name = "giochi-launcher-teste"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Launcher do Giochi portado para a GIOCHI-ENGINE — versão de teste"
+
+[[bin]]
+name = "giochi-launcher-teste"
+path = "src/main.rs"
+
+[dependencies]
+# O núcleo é o MESMO do launcher de produção: estado, foco, reducer e grade.
+# Reimplementar isso seria a receita para as duas telas divergirem.
+giochi-launcher-core = { path = "../launcher/crates/core" }
+
+# A engine é o crate 2D do workspace GIOCHI-ENGINE-3D — o que tem 2D, 3D, ABI
+# em C e Lua. O repositório `GIOCHI-ENGINE` separado é a versão 0.1.0 da mesma
+# engine 2D, com API baseada em tempos de vida; este app usa a 0.2.0.
+#
+# `sdl2-system` porque no aparelho o SDL2 vem da imagem (Buildroot); compilar do
+# código-fonte exigiria cmake e uma segunda cópia do SDL2 no rootfs. O padrão do
+# workspace continua sendo `sdl2-bundled`, então quem não pede nada não muda.
+giochi-engine = { path = "../../../GIOCHI-ENGINE-3D/giochi-engine", default-features = false, features = ["sdl2-system"] }
+
+# Usado só para TTF (glifos) e para o tipo de cor, que as telas já usam.
+sdl2 = { version = "0.38", default-features = false, features = ["ttf"] }

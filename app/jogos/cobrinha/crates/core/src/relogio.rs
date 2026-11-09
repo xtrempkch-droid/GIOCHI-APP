@@ -1,4 +1,4 @@
-//! Ritmo do jogo: simulação em passo fixo, desenho limitado a 45 Hz.
+//! Ritmo do jogo: simulação em passo fixo, desenho limitado a no máximo 75 Hz.
 //!
 //! ## Por que dois relógios
 //!
@@ -10,27 +10,26 @@
 //! Então:
 //!
 //! - **simulação** com passo fixo (`1/TIQUE`), para ser determinística;
-//! - **desenho** com teto de `ALVO_FPS`, para gastar o que a tela comporta.
+//! - **desenho** com teto de `ALVO_FPS`, sem ultrapassar `MAX_FPS`.
 //!
 //! E o que liga os dois é o **alpha**: quanto falta para o próximo passo, de 0 a
 //! 1. Com ele a cabeça desenha no meio do caminho entre duas células e o
-//! movimento sai liso a 45 Hz mesmo com a simulação a 8 Hz.
+//! movimento sai liso mesmo com a simulação a 8 Hz.
 //!
-//! ## Por que 45 e não 60
-//!
-//! Pedido do projeto: o RK3326 (Cortex-A35) sustenta 45 sem derrubar quadro, e
-//! 45 é divisor útil de 60/90/120 — em painel que repinta a 60 Hz, 45 dá padrão
-//! estável de 3 quadros por 4. O teto é **de desenho**; a simulação não muda.
+//! O limite de desenho é 75 Hz, pedido do projeto para aproveitar o RK3566 sem
+//! permitir que a renderização exceda esse orçamento. A simulação não muda.
 //!
 //! ## Por que não `sleep` de quadro inteiro
 //!
-//! Dormir `1/45` fixo a cada quadro acumula erro: o trabalho do quadro soma ao
+//! dormir `1/75` fixo a cada quadro acumula erro: o trabalho do quadro soma ao
 //! sono, e o ritmo real cai. Aqui a dormida é calculada contra um **prazo
 //! absoluto**, então o erro não acumula. E ela nunca é maior que o prazo: se o
 //! quadro atrasou, dorme zero — não tenta "recuperar" dormindo negativo.
 
-/// Teto de desenho. Medido como o que o RK3326 sustenta sem perder quadro.
-pub const ALVO_FPS: u32 = 45;
+/// Frequência padrão de desenho.
+pub const ALVO_FPS: u32 = 75;
+/// Limite absoluto de desenho, também aplicado ao relógio do núcleo.
+pub const MAX_FPS: u32 = 75;
 
 /// Passos de simulação por segundo no início.
 pub const TIQUE_BASE: f32 = 7.0;
@@ -42,7 +41,7 @@ pub const TIQUE_MAX: f32 = 16.0;
 /// Quantos passos a simulação deve dar, e onde interpolar o desenho.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Passos {
-    /// Passos a executar neste quadro. 0 é o caso comum (45 Hz de desenho para
+    /// Passos a executar neste quadro. 0 é o caso comum (75 Hz de desenho para
     /// 8 Hz de simulação dá ~1 passo a cada 5 quadros).
     pub ticks: u32,
     /// Fração do próximo passo já transcorrida, em `[0, 1)`.
@@ -74,7 +73,7 @@ impl Relogio {
     pub fn com_ritmo(tiques_por_segundo: f32, fps: u32) -> Self {
         Relogio {
             passo: 1.0 / tiques_por_segundo.max(1.0) as f64,
-            intervalo: 1.0 / fps.max(1) as f64,
+            intervalo: 1.0 / fps.clamp(1, MAX_FPS) as f64,
             acumulado: 0.0,
             prazo: 0.0,
             agora: 0.0,
@@ -190,7 +189,17 @@ mod testes {
                 atrasados += 1;
             }
         }
-        assert_eq!(atrasados, 0, "45 quadros em 1 s não podem ser todos 'atrasados'");
+        assert_eq!(
+            atrasados, 0,
+            "45 quadros em 1 s não podem ser todos 'atrasados'"
+        );
+    }
+
+    #[test]
+    fn frequencia_do_relogio_nunca_ultrapassa_75_hz() {
+        let r = Relogio::com_ritmo(7.0, 120);
+        assert_eq!(r.intervalo(), 1.0 / f64::from(MAX_FPS));
+        assert_eq!(ALVO_FPS, MAX_FPS);
     }
 
     #[test]

@@ -33,6 +33,7 @@ bash scripts/aparelho.sh subir           # inicia o launcher e mostra pid + log
 bash scripts/aparelho.sh parar           # encerra pelo pid
 bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comparado
 bash scripts/aparelho.sh verificar-jogo cobrinha        # roda o jogo e analisa o quadro
+bash scripts/aparelho.sh verificar-teste                # launcher da engine × launcher de produção
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
 bash scripts/aparelho.sh capacidades     # códigos que cada dispositivo declara
@@ -341,6 +342,36 @@ Hoje:
 O caso útil é o `0`: forçar software num aparelho onde o acelerado funciona, para
 comparar os dois backends — que é o que `SDL_RENDER_DRIVER=software` já fazia e a
 variável não.
+
+### `verificar-teste`: a engine desenha igual no aparelho?
+
+```bash
+bash scripts/aparelho.sh verificar-teste                 # 6 telas
+bash scripts/aparelho.sh verificar-teste home busca      # só as pedidas
+```
+
+Responde a pergunta do porte com a única medida que vale: **pixel a pixel**. Gera
+a referência no PC com o *launcher de produção* e compara com o quadro que o
+`launcher-teste` desenhou no aparelho, tela por tela.
+
+```text
+painel 640x480, 6 tela(s)
+  ok   home: 100,0% igual ao launcher de produção
+  ok   busca: 100,0%     ← a única tela que usa recorte
+  ...
+  ok   pid=1077 ppid=881 drm=6
+```
+
+Três decisões que custaram medição:
+
+- **`GIOCHI_GLES=0`.** Com backend acelerado o `--dump-frame` sai preto: o swap
+  esvazia o buffer antes da leitura. Quem mede o backend é o log, não a captura.
+- **Uma sessão ssh e um kill só.** A primeira versão matava o launcher por tela;
+  12 mortes em sequência fizeram o `giochi-init` desistir (`RESTART_MAX`) e o
+  aparelho ficou sem interface até o `subir` reiniciar o supervisor.
+- **`env A=1 B=2 cmd`.** `A=1 "B=2" cmd` não vira ambiente: o binário roda sem
+  `LD_LIBRARY_PATH`, não acha `libSDL2` e não grava BMP — e o sintoma é
+  `comparação ?%`, que manda procurar defeito no aparelho.
 
 ### Pacote: `empacotar.mjs` → `instalar-pacote`
 

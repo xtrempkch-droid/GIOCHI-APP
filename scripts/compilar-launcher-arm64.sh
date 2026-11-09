@@ -213,14 +213,39 @@ SYSROOT="${GIOCHI_ARM64_SYSROOT:-$HOME/.cache/giochi-arm64/sysroot}"
 CRT="$SYSROOT/usr/aarch64-linux-gnu/lib"
 LOADER="${GIOCHI_ARM64_LOADER:-/lib/ld-linux-aarch64.so.1}"
 args=()
+pendente=""
 for a in "$@"; do
+  case "$pendente" in
+    L)
+      pendente=""
+      case "$a" in
+        *x86_64-linux-gnu*) continue ;;
+      esac
+      args+=("-L" "$a"); continue ;;
+  esac
   case "$a" in
-    -Wl,*) IFS=',' read -r -a parts <<< "${a#-Wl,}"; args+=("${parts[@]}") ;;
+    -L)
+      # `-L` de diretório x86-64 faz o `rust-lld` escolher a emulação do
+      # **host**, e o link morre com
+      #   Scrt1.o is incompatible with elf64-x86-64
+      # mensagem que não fala de arquitetura de alvo em lugar nenhum. O rustc
+      # passa esse caminho sozinho, em dois argumentos; num link aarch64 ele
+      # não serve para nada.
+      pendente="L" ;;
+    -L/usr/lib/x86_64-linux-gnu*|-L/lib/x86_64-linux-gnu*) : ;;
+    -Wl,*)
+      IFS=',' read -r -a parts <<< "${a#-Wl,}"
+      for parte in "${parts[@]}"; do
+        case "$parte" in
+          --fix-cortex-a53-843419) : ;;
+          *) args+=("$parte") ;;
+        esac
+      done ;;
     -nodefaultlibs|-nostdlib|-B*) : ;;
     *) args+=("$a") ;;
   esac
 done
-exec rust-lld -flavor gnu --dynamic-linker "$LOADER" \
+exec rust-lld -flavor gnu -m aarch64linux --dynamic-linker "$LOADER" \
   "$CRT/Scrt1.o" "$CRT/crti.o" "${args[@]}" "$CRT/crtn.o"
 WRAP
 chmod +x "$RAIZ_CACHE/cc-aarch64.sh"

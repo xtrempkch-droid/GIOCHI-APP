@@ -1,41 +1,22 @@
-//! Cobrinha — o jogo do console Giochi.
-//!
-//! ## Como roda no aparelho
-//!
-//! SDL2 sobre **KMSDRM**, sem X11, sem Wayland, sem compositor. O launcher já
-//! provou esse caminho em três aparelhos; aqui ele é repetido com as mesmas
-//! regras: orientação lida do sistema, escala 1,0, entrada por evdev.
-//!
-//! ## Uso
-//!
-//! ```text
-//! giochi-cobrinha                        # joga
-//! giochi-cobrinha --versao
-//! giochi-cobrinha --quadro /tmp/q.bmp    # desenha um quadro e sai (CI)
-//! giochi-cobrinha --tamanho 640x480 --quadro q.bmp
-//! giochi-cobrinha --passos 40 --quadro q.bmp   # adianta a simulação e fotografa
-//! giochi-cobrinha --fps-teto 45
-//! ```
-//!
-//! `GIOCHI_ROTATE` sobrepõe a orientação, para testar no PC. Mesma precedência
-//! do launcher, de propósito: um comando que gira um app tem de girar o outro,
-//! senão o teste mente sobre um dos dois.
+//! Cobrinha 3D: regras puras no núcleo, renderização GLES pela GIOCHI-ENGINE 3D.
 
-mod desenho;
+mod cena3d;
 mod evdev;
 mod video;
 
 use std::time::{Duration, Instant};
 
-use giochi_cobrinha_core::{
-    Acao, Direcao, Estado, Evento, Geometria, Jogo, Relogio, ALVO_FPS, COLUNAS,
-};
+use cena3d::Cena3D;
+use giochi_cobrinha_core::{Acao, Direcao, Estado, Evento, Jogo, Relogio, ALVO_FPS, MAX_FPS};
+use giochi_engine::platform::sdl::Platform;
+use giochi_engine::platform::window::{Window, WindowConfig};
+use giochi_engine_3d::context::{self, GlesVersion};
+use giochi_engine_3d::DirectionalLight;
+use giochi_engine_3d::RenderContext3D;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::surface::Surface;
-
-use desenho::{Tela, APAGADO, CABECA, COMIDA, CORPO, TEXTO};
 
 const VERSAO: &str = env!("CARGO_PKG_VERSION");
 
@@ -68,19 +49,24 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
     };
     let mut i = 0;
     while i < argv.len() {
-        let arg = argv[i].as_str();
-        match arg {
+        match argv[i].as_str() {
             "--quadro" => {
                 o.quadro = Some(argv.get(i + 1).ok_or("--quadro sem caminho")?.clone());
                 i += 2;
             }
             "--tamanho" => {
-                let v = argv.get(i + 1).ok_or("--tamanho sem valor")?;
-                let (l, a) = v.split_once('x').ok_or("--tamanho espera LARGURAxALTURA")?;
-                o.tamanho = Some((
-                    l.parse().map_err(|_| "largura inválida")?,
-                    a.parse().map_err(|_| "altura inválida")?,
-                ));
+                let valor = argv.get(i + 1).ok_or("--tamanho sem valor")?;
+                let (largura, altura) = valor
+                    .split_once('x')
+                    .ok_or("--tamanho espera LARGURAxALTURA")?;
+                let tamanho = (
+                    largura.parse().map_err(|_| "largura inválida")?,
+                    altura.parse().map_err(|_| "altura inválida")?,
+                );
+                if tamanho.0 == 0 || tamanho.1 == 0 {
+                    return Err("--tamanho exige dimensões maiores que zero".into());
+                }
+                o.tamanho = Some(tamanho);
                 i += 2;
             }
             "--passos" => {
@@ -92,12 +78,15 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
                 i += 2;
             }
             "--quadros" => {
-                o.quadros = Some(
-                    argv.get(i + 1)
-                        .ok_or("--quadros sem valor")?
-                        .parse()
-                        .map_err(|_| "--quadros espera um número")?,
-                );
+                let quadros: u32 = argv
+                    .get(i + 1)
+                    .ok_or("--quadros sem valor")?
+                    .parse()
+                    .map_err(|_| "--quadros espera um número")?;
+                if quadros == 0 {
+                    return Err("--quadros precisa ser maior que zero".into());
+                }
+                o.quadros = Some(quadros);
                 i += 2;
             }
             "--semente" => {
@@ -109,16 +98,20 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
                 i += 2;
             }
             "--fps-teto" => {
-                o.fps = argv
+                let fps: u32 = argv
                     .get(i + 1)
                     .ok_or("--fps-teto sem valor")?
                     .parse()
                     .map_err(|_| "--fps-teto espera um número")?;
+                if !(1..=MAX_FPS).contains(&fps) {
+                    return Err(format!("--fps-teto precisa ficar entre 1 e {MAX_FPS}"));
+                }
+                o.fps = fps;
                 i += 2;
             }
             "--teclas" => {
-                let v = argv.get(i + 1).ok_or("--teclas sem valor")?;
-                for nome in v.split(',') {
+                let valor = argv.get(i + 1).ok_or("--teclas sem valor")?;
+                for nome in valor.split(',') {
                     o.teclas.push(tecla(nome.trim())?);
                 }
                 i += 2;
@@ -158,23 +151,25 @@ fn ajuda() {
         "giochi-cobrinha {VERSAO}
 
 Uso:
-  giochi-cobrinha                        joga
-  giochi-cobrinha --quadro <bmp>         desenha um quadro e sai
-  giochi-cobrinha --tamanho 640x480      painel simulado (SDL_VIDEODRIVER=dummy)
-  giochi-cobrinha --passos 40            adianta a simulação antes de fotografar
-  giochi-cobrinha --teclas a,down,left   entrada simulada
-  giochi-cobrinha --quadros 90           desenha N quadros e sai
-  giochi-cobrinha --fps-teto 45          teto de desenho (padrão 45)
-  giochi-cobrinha --semente N            semente determinística
-  giochi-cobrinha --json                 saída de máquina (ASCII)
-  giochi-cobrinha --versao"
+  giochi-cobrinha                         jogar
+  giochi-cobrinha --quadro <arquivo.bmp>  desenhar um quadro e sair
+  giochi-cobrinha --tamanho 640x480       painel simulado
+  giochi-cobrinha --passos 40             adiantar a simulação
+  giochi-cobrinha --teclas a,down,left    entrada simulada
+  giochi-cobrinha --quadros 150           desenhar N quadros e sair
+  giochi-cobrinha --fps-teto 75           limite configurável: 1 a 75
+  giochi-cobrinha --semente N             semente determinística
+  giochi-cobrinha --json                  saída de máquina
+  giochi-cobrinha --versao
+
+GIOCHI_GL_VERSION=2 solicita GLES 2.0; o padrão solicita GLES 3.0 com fallback."
     );
 }
 
 fn aplicar(jogo: &mut Jogo, acao: Acao) -> bool {
     match acao {
-        Acao::Dir(d) => {
-            jogo.pedir_direcao(d);
+        Acao::Dir(direcao) => {
+            jogo.pedir_direcao(direcao);
             false
         }
         Acao::Confirmar => {
@@ -185,28 +180,19 @@ fn aplicar(jogo: &mut Jogo, acao: Acao) -> bool {
     }
 }
 
-/// Adianta a simulação com um **bot** que persegue a comida.
-///
-/// Serve para o quadro de verificação mostrar o jogo em movimento — cobra longa,
-/// curva e placar com mais de um dígito — em vez da posição inicial. Um bot
-/// guloso também exercita o que o quadro precisa provar: que a colisão funciona
-/// (ele desvia da parede e do corpo) e que comer cresce.
-///
-/// É determinístico: mesma semente, mesmo quadro.
 fn adiantar(jogo: &mut Jogo, passos: u32) {
     jogo.comecar();
     for _ in 0..passos {
         if jogo.estado != Estado::Jogando {
             jogo.comecar();
         }
-        if let Some(d) = direcao_gulosa(jogo) {
-            jogo.pedir_direcao(d);
+        if let Some(direcao) = direcao_gulosa(jogo) {
+            jogo.pedir_direcao(direcao);
         }
         jogo.passo();
     }
 }
 
-/// Escolhe a direção que reduz a distância até a comida sem morrer.
 fn direcao_gulosa(jogo: &Jogo) -> Option<Direcao> {
     use giochi_cobrinha_core::{COLUNAS, LINHAS};
     let cabeca = jogo.cabeca_pos();
@@ -226,199 +212,105 @@ fn direcao_gulosa(jogo: &Jogo) -> Option<Direcao> {
             Direcao::Cima
         });
     }
-    for d in candidatos {
-        let (dx, dy) = d.delta();
-        let (nx, ny) = (cabeca.x + dx, cabeca.y + dy);
-        if nx < 0 || nx >= COLUNAS || ny < 0 || ny >= LINHAS {
+    for direcao in candidatos {
+        let (dx, dy) = direcao.delta();
+        let (x, y) = (cabeca.x + dx, cabeca.y + dy);
+        if x < 0 || x >= COLUNAS || y < 0 || y >= LINHAS {
             continue;
         }
-        let ocupada = (1..jogo.tamanho())
-            .any(|k| jogo.segmento(k).x == nx && jogo.segmento(k).y == ny);
+        let ocupada =
+            (1..jogo.tamanho()).any(|k| jogo.segmento(k).x == x && jogo.segmento(k).y == y);
         if !ocupada {
-            return Some(d);
+            return Some(direcao);
         }
     }
-    // Sem saída segura: devolve qualquer direção válida e deixa o passo
-    // decidir. Não chama `pedir_direcao` porque o bot só lê o estado.
-    [Direcao::Cima, Direcao::Baixo, Direcao::Esquerda, Direcao::Direita]
-        .into_iter()
-        .find(|d| *d != jogo.direcao.oposta())
+    [
+        Direcao::Cima,
+        Direcao::Baixo,
+        Direcao::Esquerda,
+        Direcao::Direita,
+    ]
+    .into_iter()
+    .find(|direcao| *direcao != jogo.direcao.oposta())
 }
 
-fn desenhar(tela: &mut Tela, jogo: &Jogo, alpha: f32, recorde: u32) {
-    tela.comecar_quadro();
-    let geom = tela.geom;
-
-    // Comida
-    let (fx, fy) = geom.celula_em(jogo.comida.x, jogo.comida.y);
-    let margem = (geom.celula / 4).max(1);
-    tela.preencher(
-        fx + margem,
-        fy + margem,
-        geom.celula - 2 * margem,
-        geom.celula - 2 * margem,
-        COMIDA,
-    );
-
-    // Corpo: do rabo para a cabeça, para a cabeça ficar por cima.
-    for k in (0..jogo.tamanho()).rev() {
-        let p = jogo.segmento(k);
-        let (x, y) = geom.celula_em(p.x, p.y);
-        let vao = (geom.celula / 8).max(1);
-        let cor = if k == 0 { CABECA } else { CORPO };
-        tela.preencher(
-            x + vao,
-            y + vao,
-            geom.celula - 2 * vao,
-            geom.celula - 2 * vao,
-            cor,
-        );
+fn gravar_quadro(
+    render: &RenderContext3D,
+    caminho: &str,
+) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let (largura, altura) = render.drawable_size();
+    let mut pixels = render.read_pixels(largura, altura)?;
+    let pitch = largura as usize * 4;
+    for y in 0..altura as usize / 2 {
+        let outro = altura as usize - 1 - y;
+        let (inicio, fim) = pixels.split_at_mut(outro * pitch);
+        inicio[y * pitch..(y + 1) * pitch].swap_with_slice(&mut fim[..pitch]);
     }
-
-    // Cabeça interpolada: um retângulo pequeno entre as duas células. É o que
-    // faz 8 passos/s parecerem 45 quadros/s.
-    if jogo.estado == Estado::Jogando && alpha > 0.02 {
-        let (gx, gy) = jogo.cabeca_interpolada(alpha);
-        let x = geom.campo_x + (gx * geom.celula as f32) as i32;
-        let y = geom.campo_y + (gy * geom.celula as f32) as i32;
-        let tam = (geom.celula * 2 / 3).max(3);
-        let desloc = (geom.celula - tam) / 2;
-        tela.preencher(x + desloc, y + desloc, tam, tam, CABECA);
-    }
-
-    // HUD
-    let alt = (geom.hud * 45 / 100).max(6);
-    let topo = (geom.campo_y - geom.hud / 2 - alt / 2).max(2);
-    tela.numero(jogo.pontos, geom.campo_x + geom.campo_w(), topo, alt, TEXTO);
-    let rec = recorde.max(jogo.pontos);
-    tela.numero(rec, geom.campo_x, topo, alt, APAGADO);
-
-    match jogo.estado {
-        Estado::Pronto => {
-            triangulo(tela, geom.campo_x + geom.campo_w() / 2, geom.campo_y + geom.campo_h() / 2, geom.celula * 3, TEXTO);
-        }
-        Estado::Perdido => {
-            let (x, y) = (geom.campo_x, geom.campo_y);
-            tela.preencher(x, y, geom.campo_w(), geom.campo_h(), desenho::FUNDO);
-            let alt = (geom.celula * 2).max(10);
-            tela.numero(
-                jogo.pontos,
-                geom.campo_x + geom.campo_w() / 2 + desenho::largura_do_numero(jogo.pontos, alt) / 2,
-                geom.campo_y + geom.campo_h() / 2 - alt,
-                alt,
-                TEXTO,
-            );
-            triangulo(
-                tela,
-                geom.campo_x + geom.campo_w() / 2,
-                geom.campo_y + geom.campo_h() / 2 + alt,
-                geom.celula * 2,
-                CORPO,
-            );
-        }
-        Estado::Jogando => {}
-    }
-}
-
-/// Triângulo "play" feito de retângulos — o ícone sem fonte.
-fn triangulo(tela: &mut Tela, cx: i32, cy: i32, tamanho: i32, cor: sdl2::pixels::Color) {
-    let passos = (tamanho / 2).max(4);
-    let largura_max = tamanho * 3 / 4;
-    for i in 0..passos {
-        let t = i as f32 / passos as f32;
-        let w = ((1.0 - (2.0 * t - 1.0).abs()) * largura_max as f32) as i32;
-        if w <= 0 {
-            continue;
-        }
-        let y = cy - tamanho / 2 + i * (tamanho / passos).max(1);
-        tela.preencher(cx - largura_max / 2 + (largura_max - w) / 2, y, w, (tamanho / passos).max(1), cor);
-    }
-}
-
-fn gravar_quadro(tela: &mut Tela, caminho: &str) -> Result<(u32, u32), String> {
-    let (w, h) = tela.canvas.output_size()?;
-    let formato = PixelFormatEnum::ABGR8888;
-    let mut pixels = tela.canvas.read_pixels(None, formato)?;
-    let pitch = w * formato.byte_size_per_pixel() as u32;
-
-    // Com GLES o `SwapWindow` esvazia o buffer antes da leitura e o BMP sai
-    // **preto**. Isto não é hipótese: foi medido no X35H, no R35S e aqui.
-    // Avisar na hora evita o diagnóstico errado de "o jogo não desenha", que
-    // custou uma sessão inteira quando aconteceu com o `--dump-frame`.
-    let preto = pixels
-        .chunks_exact(4)
-        .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0);
-    if preto && tela.renderer_acelerado {
-        eprintln!(
-            "aviso: o quadro saiu todo preto — com GLES o swap esvazia o buffer \n\
-             antes da leitura. Para capturar, force software:\n\
-             \x20 SDL_RENDER_DRIVER=software (ou GIOCHI_GLES=0)"
-        );
-    }
-
-    let superficie = Surface::from_data(&mut pixels, w, h, pitch, formato)?;
+    let superficie = Surface::from_data(
+        &mut pixels,
+        largura,
+        altura,
+        largura * PixelFormatEnum::RGBA32.byte_size_per_pixel() as u32,
+        PixelFormatEnum::RGBA32,
+    )?;
     superficie.save_bmp(caminho)?;
-    Ok((w, h))
+    Ok((largura, altura))
 }
 
-/// Restaura o comportamento padrão do `SIGPIPE`.
-///
-/// O Rust ignora `SIGPIPE` no início do processo, então escrever num pipe
-/// fechado vira `Err` — e `println!` entra em pânico. Com `panic = "abort"`
-/// (o perfil de release deste app), o processo aborta e imprime **`Aborted`**.
-///
-/// Isso já custou um diagnóstico errado: `giochi-cobrinha --quadro x | head -3`
-/// imprimiu `Aborted`, e por um momento pareceu que o jogo quebrava no
-/// aparelho. Era o pipe. Restaurar o padrão faz o processo morrer em silêncio
-/// por `SIGPIPE`, como qualquer programa Unix — e o log para de mentir.
 fn restaurar_sigpipe() {
-    // `SIG_DFL` é o valor 0 em todas as plataformas que este app suporta.
     unsafe {
         libc::signal(libc::SIGPIPE, 0);
     }
 }
 
-/// Traduz `GIOCHI_GLES` no driver a pedir.
-///
-/// Os três estados fazem coisas diferentes, como no launcher — mesma variável,
-/// mesmo significado, senão um comando que muda o backend de um app não muda o
-/// do outro e o teste mente sobre um dos dois:
-///
-/// | valor | efeito |
-/// | --- | --- |
-/// | ausente | deixa o SDL escolher (no aparelho: `opengles2`) |
-/// | `1` / outro | pede `opengles2` |
-/// | `0` / `false` | pede `software` |
-///
-/// A armadilha que já apareceu no launcher: `env::var(..).is_ok()` testa
-/// **presença**, não valor, e assim `GIOCHI_GLES=0` *ligava* o GLES. O oposto
-/// do nome. Por isso a decisão é uma função pura com teste.
-pub fn driver_de_gles(valor: Option<&str>) -> Option<&'static str> {
-    let v = valor?;
-    let v = v.trim().to_ascii_lowercase();
-    Some(match v.as_str() {
-        "0" | "false" | "nao" | "off" => "software",
-        _ => "opengles2",
-    })
+fn painel(platform: &Platform, opcoes: &Opcoes) -> Result<(u32, u32), String> {
+    if let Some(tamanho) = opcoes.tamanho {
+        return Ok(tamanho);
+    }
+    platform
+        .video_subsystem()
+        .desktop_display_mode(0)
+        .map(|modo| (modo.w as u32, modo.h as u32))
+        .map_err(|erro| format!("não consegui consultar o painel: {erro}"))
 }
 
-fn aplicar_backend() -> Option<&'static str> {
-    let valor = std::env::var("GIOCHI_GLES").ok();
-    let driver = driver_de_gles(valor.as_deref())?;
-    let _ = sdl2::hint::set("SDL_RENDER_DRIVER", driver);
-    Some(driver)
+fn criar_render(
+    plataforma: &Platform,
+    tamanho: (u32, u32),
+    fullscreen: bool,
+    versao: GlesVersion,
+) -> Result<(Window, RenderContext3D), Box<dyn std::error::Error>> {
+    context::configure_attributes(plataforma, versao)?;
+    let config = WindowConfig::new(tamanho.0, tamanho.1).fullscreen(fullscreen);
+    let janela = Window::new_opengl(plataforma, config, "Giochi Cobrinha 3D")?;
+    let render = RenderContext3D::new(context::create(&janela)?);
+    Ok((janela, render))
 }
 
-fn principal() -> Result<i32, String> {
+fn desenhar_quadro(
+    render: &mut RenderContext3D,
+    janela: &Window,
+    cena: &mut Cena3D,
+    jogo: &Jogo,
+    alpha: f32,
+    tempo: f32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    cena.preparar_quadro(render);
+    render.begin_frame(janela);
+    cena.desenhar(render, jogo, alpha, tempo)?;
+    Ok(())
+}
+
+fn principal() -> Result<i32, Box<dyn std::error::Error>> {
     restaurar_sigpipe();
-    let _backend = aplicar_backend();
-    let o = opcoes(std::env::args().skip(1).collect())?;
-    if o.ajuda {
+    let opcoes = opcoes(std::env::args().skip(1).collect())
+        .map_err(|erro| std::io::Error::new(std::io::ErrorKind::InvalidInput, erro))?;
+    if opcoes.ajuda {
         ajuda();
         return Ok(0);
     }
-    if o.versao {
-        if o.json {
+    if opcoes.versao {
+        if opcoes.json {
             println!("{{\"nome\":\"giochi-cobrinha\",\"versao\":\"{VERSAO}\"}}");
         } else {
             println!("giochi-cobrinha {VERSAO}");
@@ -426,53 +318,60 @@ fn principal() -> Result<i32, String> {
         return Ok(0);
     }
 
-    // A mensagem crua do SDL/Mesa é `kmsdrm not available` — ou "usado por um X
-    // server", que aqui manda parar um servidor que não existe. Trocar por uma
-    // que nomeia quem segura o DRM é o que transforma erro em instrução.
-    let sdl = sdl2::init().map_err(|e| video::erro_de_video(&e))?;
-    let video = sdl.video().map_err(|e| video::erro_de_video(&e))?;
-    let _ttf = (); // sem SDL2_ttf: três `NEEDED`, nada de fonte.
+    if std::env::var_os("GIOCHI_GL_VERSION").is_none() {
+        std::env::set_var("GIOCHI_GL_VERSION", "3");
+    }
 
-    let painel = match o.tamanho {
-        Some(t) => t,
-        None => video
-            .desktop_display_mode(0)
-            .map(|m| (m.w as u32, m.h as u32))
-            .unwrap_or((640, 480)),
-    };
+    let plataforma = Platform::new()?;
+    let tamanho_painel =
+        painel(&plataforma, &opcoes).map_err(|erro| std::io::Error::other(erro))?;
+    let (rotacao, fonte_rotacao) =
+        video::resolver(tamanho_painel.0, tamanho_painel.1, opcoes.tamanho.is_none());
 
-    // Painel explícito é painel simulado: o `fbcon` da máquina de teste não
-    // descreve o painel pedido.
-    let (rot, fonte) = video::resolver(painel.0, painel.1, o.tamanho.is_none());
-    let design = video::projetar(rot, painel);
+    let versao_solicitada = GlesVersion::from_env();
+    let fullscreen = opcoes.tamanho.is_none();
+    let (janela, mut render) =
+        match criar_render(&plataforma, tamanho_painel, fullscreen, versao_solicitada) {
+            Ok(par) => par,
+            Err(erro) if versao_solicitada == GlesVersion::Gles3 => {
+                let mensagem = video::erro_de_video(&erro.to_string());
+                eprintln!("aviso: GLES 3.0 indisponível ({mensagem}); tentando GLES 2.0");
+                std::env::set_var("GIOCHI_GL_VERSION", "2");
+                criar_render(&plataforma, tamanho_painel, fullscreen, GlesVersion::Gles2)?
+            }
+            Err(erro) => {
+                return Err(std::io::Error::other(video::erro_de_video(&erro.to_string())).into())
+            }
+        };
+    render.set_light(DirectionalLight::sun());
+    let (largura, altura) = janela.drawable_size();
+    render.resize(largura, altura);
+    let mut cena = Cena3D::nova(&mut render, rotacao)?;
 
-    let janela = video
-        .window("Giochi Cobrinha", painel.0, painel.1)
-        .position_centered()
-        .build()
-        .map_err(|e| format!("janela: {e}"))?;
-    let canvas = janela
-        .into_canvas()
-        .build()
-        .map_err(|e| format!("renderer: {e}"))?;
-
-    let geom = Geometria::calcular(design.0 as i32, design.1 as i32, 0.10);
-    let mut tela = Tela::nova(canvas, geom, rot, (design.0 as i32, design.1 as i32), painel);
-
-    let (rw, rh) = tela.canvas.output_size().unwrap_or(painel);
-    let nome_renderer = tela.canvas.info().name;
-
-    if !o.json {
+    if !opcoes.json {
+        let projeto = video::projetar(rotacao, (largura, altura));
         println!(
-            "cobrinha: painel {}x{}, projeto {}x{} ({}), celula {} px, escala 1.00, renderer {}",
-            painel.0, painel.1, design.0, design.1, rot.nome(), geom.celula, nome_renderer
+            "cobrinha: painel {largura}x{altura}, projeto {}x{}, rotação {} ({fonte_rotacao}), GLES {} em {}",
+            projeto.0,
+            projeto.1,
+            rotacao.nome(),
+            render.gles_version().major(),
+            render.adapter()
         );
-        println!("cobrinha: rotacao de {fonte}; campo {}x{} em ({},{}), sobra {}x{}",
-            geom.campo_w(), geom.campo_h(), geom.campo_x, geom.campo_y, geom.sobra_x, geom.sobra_y);
+        println!(
+            "cobrinha: instancing {}, GLES solicitado {}, limite {} fps",
+            if cena.usa_instancing() {
+                "ativo"
+            } else {
+                "indisponível"
+            },
+            versao_solicitada.major(),
+            opcoes.fps
+        );
     }
 
     let entrada = evdev::Entrada::iniciar();
-    if !o.json {
+    if !opcoes.json {
         println!(
             "cobrinha: {} dispositivo(s) de entrada{}",
             entrada.abertos(),
@@ -484,75 +383,82 @@ fn principal() -> Result<i32, String> {
                 " (abertos, ainda sem evento)"
             }
         );
-        println!("cobrinha: teto {} fps, simulacao {} passos/s", o.fps, giochi_cobrinha_core::TIQUE_BASE);
     }
 
-    let mut jogo = Jogo::novo(o.semente);
-    let mut relogio = Relogio::com_ritmo(giochi_cobrinha_core::TIQUE_BASE, o.fps);
+    let mut jogo = Jogo::novo(opcoes.semente);
+    let mut relogio = Relogio::com_ritmo(giochi_cobrinha_core::TIQUE_BASE, opcoes.fps);
     let mut recorde = 0u32;
-
-    if o.passos > 0 {
-        adiantar(&mut jogo, o.passos);
+    if opcoes.passos > 0 {
+        adiantar(&mut jogo, opcoes.passos);
     }
-    for acao in &o.teclas {
-        aplicar(&mut jogo, *acao);
+    let mut sair = false;
+    for acao in &opcoes.teclas {
+        sair |= aplicar(&mut jogo, *acao);
     }
 
-    if let Some(caminho) = &o.quadro {
-        desenhar(&mut tela, &jogo, 0.5, recorde);
-        tela.terminar_quadro();
-        let (w, h) = gravar_quadro(&mut tela, caminho)?;
-        if o.json {
+    if let Some(caminho) = &opcoes.quadro {
+        desenhar_quadro(&mut render, &janela, &mut cena, &jogo, 0.5, 0.4)?;
+        let (w, h) = gravar_quadro(&render, caminho)?;
+        render.end_frame(&janela);
+        let erro_gl = render.take_gl_error();
+        if erro_gl != 0 {
+            return Err(format!("erro GLES 0x{erro_gl:04x} ao desenhar o quadro").into());
+        }
+        if opcoes.json {
             println!(
-                "{{\"quadro\":\"{}\",\"largura\":{},\"altura\":{},\"pontos\":{},\"celula\":{}}}",
-                caminho, w, h, jogo.pontos, geom.celula
+                "{{\"quadro\":\"gravado\",\"largura\":{w},\"altura\":{h},\"pontos\":{},\"gles\":{},\"fps_teto\":{}}}",
+                jogo.pontos,
+                render.gles_version().major(),
+                opcoes.fps
             );
         } else {
-            println!("cobrinha: quadro {w}x{h} gravado em {caminho} ({} pontos)", jogo.pontos);
+            println!("cobrinha: quadro 3D {w}x{h} gravado em {caminho}");
         }
+        render.release_all();
         return Ok(0);
     }
 
-    // ── laço principal ────────────────────────────────────────
-    let mut eventos = sdl.event_pump()?;
+    let intervalo = Duration::from_secs_f64(1.0 / f64::from(opcoes.fps));
     let inicio = Instant::now();
     let mut quadros = 0u32;
     let mut total_passos = 0u32;
-    let mut sair = false;
 
     while !sair {
-        for evento in eventos.poll_iter() {
-            match evento {
-                Event::Quit { .. } => sair = true,
-                Event::KeyDown { keycode, repeat: false, .. } => {
-                    let acao = match keycode {
-                        Some(Keycode::Up) => Some(Acao::Dir(Direcao::Cima)),
-                        Some(Keycode::Down) => Some(Acao::Dir(Direcao::Baixo)),
-                        Some(Keycode::Left) => Some(Acao::Dir(Direcao::Esquerda)),
-                        Some(Keycode::Right) => Some(Acao::Dir(Direcao::Direita)),
-                        Some(Keycode::Space) | Some(Keycode::Return) => Some(Acao::Confirmar),
-                        Some(Keycode::Escape) | Some(Keycode::Q) => Some(Acao::Sair),
-                        _ => None,
-                    };
-                    if let Some(a) = acao {
-                        if aplicar(&mut jogo, a) {
-                            sair = true;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        while let Some(acao) = entrada.fila().puxar() {
-            if aplicar(&mut jogo, acao) {
+        let inicio_quadro = Instant::now();
+        for evento in plataforma.poll_events() {
+            if let Event::Quit { .. } = evento {
                 sair = true;
+                continue;
+            }
+            if let Event::KeyDown {
+                keycode,
+                repeat: false,
+                ..
+            } = evento
+            {
+                let acao = match keycode {
+                    Some(Keycode::Up) => Some(Acao::Dir(Direcao::Cima)),
+                    Some(Keycode::Down) => Some(Acao::Dir(Direcao::Baixo)),
+                    Some(Keycode::Left) => Some(Acao::Dir(Direcao::Esquerda)),
+                    Some(Keycode::Right) => Some(Acao::Dir(Direcao::Direita)),
+                    Some(Keycode::Space) | Some(Keycode::Return) => Some(Acao::Confirmar),
+                    Some(Keycode::Escape) | Some(Keycode::Q) => Some(Acao::Sair),
+                    _ => None,
+                };
+                if let Some(acao) = acao {
+                    sair |= aplicar(&mut jogo, acao);
+                }
             }
         }
+        while let Some(acao) = entrada.fila().puxar() {
+            sair |= aplicar(&mut jogo, acao);
+        }
+        if sair {
+            break;
+        }
 
-        let agora = inicio.elapsed().as_secs_f64();
-        let passos = relogio.avancar(agora);
-
+        let tempo = inicio.elapsed().as_secs_f64();
+        let passos = relogio.avancar(tempo);
         for _ in 0..passos.ticks {
             match jogo.passo() {
                 Evento::Comeu => {
@@ -560,62 +466,66 @@ fn principal() -> Result<i32, String> {
                         + giochi_cobrinha_core::ACELERACAO * jogo.pontos as f32;
                     relogio.definir_tiques(novo.min(giochi_cobrinha_core::TIQUE_MAX));
                 }
-                Evento::Morreu(_) => {
-                    recorde = recorde.max(jogo.pontos);
-                }
+                Evento::Morreu(_) => recorde = recorde.max(jogo.pontos),
                 _ => {}
             }
             total_passos += 1;
         }
 
-        desenhar(&mut tela, &jogo, passos.alpha, recorde);
-        tela.terminar_quadro();
+        desenhar_quadro(
+            &mut render,
+            &janela,
+            &mut cena,
+            &jogo,
+            passos.alpha,
+            tempo as f32,
+        )?;
+        render.end_frame(&janela);
         quadros += 1;
 
-        if let Some(limite) = o.quadros {
+        if let Some(limite) = opcoes.quadros {
             if quadros >= limite {
                 break;
             }
         }
 
-        if passos.dormir > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(passos.dormir));
-        }
+        std::thread::sleep(intervalo.saturating_sub(inicio_quadro.elapsed()));
     }
 
     let decorrido = inicio.elapsed().as_secs_f64();
-    if o.json {
+    let fps_medio = if decorrido > 0.0 {
+        quadros.saturating_sub(1) as f64 / decorrido
+    } else {
+        0.0
+    };
+    if opcoes.json {
         println!(
-            "{{\"quadros\":{},\"passos\":{},\"segundos\":{:.3},\"fps\":{:.1},\"pontos\":{},\"atrasados\":{},\"renderer\":\"{}\",\"painel\":\"{}x{}\",\"celula\":{}}}",
-            quadros,
-            total_passos,
-            decorrido,
-            if decorrido > 0.0 { quadros as f64 / decorrido } else { 0.0 },
+            "{{\"quadros\":{quadros},\"passos\":{total_passos},\"segundos\":{decorrido:.3},\"fps\":{fps_medio:.1},\"fps_teto\":{},\"pontos\":{},\"atrasados\":{},\"gles\":{},\"instancing\":{}}}",
+            opcoes.fps,
             jogo.pontos.max(recorde),
             relogio.atrasados(),
-            nome_renderer,
-            rw,
-            rh,
-            geom.celula
+            render.gles_version().major(),
+            cena.usa_instancing()
         );
     } else {
         println!(
-            "cobrinha: fim — {} pontos, {} quadros em {:.2} s ({:.0} fps)",
+            "cobrinha: fim — {} pontos, {} quadros em {:.2} s ({:.1} fps; teto {})",
             jogo.pontos.max(recorde),
             quadros,
             decorrido,
-            if decorrido > 0.0 { quadros as f64 / decorrido } else { 0.0 }
+            fps_medio,
+            opcoes.fps
         );
     }
-    let _ = COLUNAS;
+    render.release_all();
     Ok(0)
 }
 
 fn main() {
     match principal() {
         Ok(codigo) => std::process::exit(codigo),
-        Err(e) => {
-            eprintln!("erro: {e}");
+        Err(erro) => {
+            eprintln!("erro: {erro}");
             std::process::exit(2);
         }
     }
@@ -626,57 +536,51 @@ mod testes {
     use super::*;
 
     #[test]
-    fn gles_ausente_deixa_o_sdl_escolher() {
-        assert_eq!(driver_de_gles(None), None);
-    }
-
-    #[test]
-    fn gles_zero_pede_software() {
-        // O bug que já aconteceu no launcher: `is_ok()` testa presença, então
-        // `GIOCHI_GLES=0` ligava o GLES — o oposto do que o nome promete.
-        assert_eq!(driver_de_gles(Some("0")), Some("software"));
-        assert_eq!(driver_de_gles(Some("false")), Some("software"));
-        assert_eq!(driver_de_gles(Some(" off ")), Some("software"));
-    }
-
-    #[test]
-    fn gles_um_pede_acelerado() {
-        assert_eq!(driver_de_gles(Some("1")), Some("opengles2"));
-        assert_eq!(driver_de_gles(Some("qualquer")), Some("opengles2"));
-    }
-
-    #[test]
     fn teclas_de_cli_mapeiam_para_acoes() {
         assert_eq!(tecla("up").unwrap(), Acao::Dir(Direcao::Cima));
         assert_eq!(tecla("a").unwrap(), Acao::Confirmar);
         assert_eq!(tecla("b").unwrap(), Acao::Sair);
-        assert!(tecla("l2").is_err(), "tecla inexistente tem de ser erro");
+        assert!(tecla("l2").is_err());
+    }
+
+    #[test]
+    fn cli_rejeita_teto_acima_de_75_fps() {
+        let resultado = opcoes(vec!["--fps-teto".into(), "76".into()]);
+        assert!(resultado.unwrap_err().contains("1 e 75"));
+    }
+
+    #[test]
+    fn cli_aceita_o_teto_de_75_fps() {
+        let opcoes = opcoes(vec!["--fps-teto".into(), "75".into()]).unwrap();
+        assert_eq!(opcoes.fps, 75);
+    }
+
+    #[test]
+    fn teto_padrao_e_75_e_teto_zero_e_recusado() {
+        assert_eq!(opcoes(vec![]).unwrap().fps, 75);
+        assert!(opcoes(vec!["--fps-teto".into(), "0".into()]).is_err());
     }
 
     #[test]
     fn tamanho_de_painel_invalido_e_erro_com_mensagem() {
         assert!(opcoes(vec!["--tamanho".into(), "640".into()]).is_err());
         assert!(opcoes(vec!["--tamanho".into(), "axb".into()]).is_err());
-        let o = opcoes(vec!["--tamanho".into(), "800x600".into()]).unwrap();
-        assert_eq!(o.tamanho, Some((800, 600)));
+        assert!(opcoes(vec!["--tamanho".into(), "0x480".into()]).is_err());
+        let opcoes = opcoes(vec!["--tamanho".into(), "800x600".into()]).unwrap();
+        assert_eq!(opcoes.tamanho, Some((800, 600)));
     }
 
     #[test]
     fn argumento_desconhecido_nao_e_ignorado() {
-        // Ignorar argumento errado faz o usuário achar que a opção funcionou.
-        let r = opcoes(vec!["--nao-existe".into()]);
-        assert!(r.is_err());
-        assert!(r.unwrap_err().contains("--nao-existe"));
+        let resultado = opcoes(vec!["--nao-existe".into()]);
+        assert!(resultado.unwrap_err().contains("--nao-existe"));
     }
 
     #[test]
-    fn o_bot_avanca_a_simulacao_sem_morrer() {
-        // `adiantar` é o que produz o quadro de verificação. Se o bot morresse
-        // logo, o quadro mostraria sempre a posição inicial e o teste de
-        // desenho não provaria movimento.
-        let mut j = Jogo::novo(7);
-        adiantar(&mut j, 120);
-        assert!(j.pontos >= 1, "em 120 passos o bot tem de comer algo");
-        assert!(j.tamanho() > 3, "e a cobra tem de ter crescido");
+    fn bot_avanca_a_simulacao_sem_morrer() {
+        let mut jogo = Jogo::novo(7);
+        adiantar(&mut jogo, 120);
+        assert!(jogo.pontos >= 1);
+        assert!(jogo.tamanho() > 3);
     }
 }

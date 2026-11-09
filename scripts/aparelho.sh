@@ -29,6 +29,8 @@
 #                                       (verifica, extrai e republica o índice)
 #   bash scripts/aparelho.sh instalar-do-cartao
 #                                       (instala os .giochi da partição do cartão)
+#   bash scripts/aparelho.sh verificar-teste [tela...]
+#                                       (launcher da engine × launcher de produção)
 #
 # Variáveis:
 #   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
@@ -92,7 +94,20 @@ morrer() { falha "$*"; exit 1; }
 
 # Remove o ruído de aviso de criptografia do dropbear/openssh antigo.
 sem_ruido() {
-  grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true
+  # ## Por que o aviso de host key precisa sair daqui
+  #
+  # `no_aparelho` junta stderr com stdout (`2>&1`), então o aviso de chave
+  # diferente entra no MESMO fluxo que os dados do aparelho. Medido em
+  # 09/11/2026: a imagem nova do R35S trocou a host key, e `resolucao_do_aparelho`
+  # passou a devolver 12 linhas de aviso + `640x480`. O `case` do começo da
+  # string deixava de casar e o sintoma era "não descobri a resolução do painel"
+  # — com o painel respondendo certo. Qualquer função que faça parse sofre igual.
+  #
+  # O aviso em si continua útil no terminal: ele é do ssh, não deste script.
+  # Quem quiser vê-lo fala com o aparelho direto (`ssh root@<ip>`), e o comando
+  # certo para resolvê-lo é `ssh-keygen -R <ip>`.
+  grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" \
+    | grep -vE "^@{10,}$|IT IS POSSIBLE THAT SOMEONE|Someone could be eavesdropping|^The fingerprint for the|^Please contact your system administrator|^Add correct host key|^ *remove with: ssh-keygen|^Offending .* key in|^Password authentication is disabled|^Keyboard-interactive authentication is disabled|^UpdateHostkeys is disabled|^It is also possible that a host key" || true
 }
 
 # ── descoberta ──────────────────────────────────────────────
@@ -230,6 +245,23 @@ cmd_opcoes() {
 rotacao_do_aparelho() {
   local n
   n=$(no_aparelho 'cat /sys/class/graphics/fbcon/rotate 2>/dev/null' | tr -dc '0-9')
+
+  # Quando o sysfs diz 0, o `cmdline` é consultado — a **mesma** regra que o
+  # launcher aplica (`display::rotacao_do_sistema_com_fonte`).
+  #
+  # Medido no X55 em 07/11/2026 (imagem `60e326f`): o sysfs respondia `0` e o
+  # `cmdline` pedia `fbcon=rotate:3`. A ferramenta lia o sysfs, o app passou a
+  # ler o cmdline, e os dois lados da comparação discordariam da orientação —
+  # reprovando um desenho correto com "dimensões incompatíveis".
+  if [ -z "$n" ] || [ "$n" = "0" ]; then
+    local do_cmdline
+    do_cmdline=$(no_aparelho "grep -o 'fbcon=rotate:[0-9]' /proc/cmdline 2>/dev/null | head -1 | cut -d: -f2" | tr -dc '0-9')
+    if [ -n "$do_cmdline" ] && [ "$do_cmdline" != "0" ]; then
+      printf '  aviso: fbcon/rotate diz 0 mas o cmdline pede fbcon=rotate:%s\n' "$do_cmdline" >&2
+      n="$do_cmdline"
+    fi
+  fi
+
   case "${n:-0}" in
     0) echo none ;;
     1) echo cw ;;    # 90° horário
@@ -301,6 +333,40 @@ gerar_referencia() {
     "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q \
       "root@$HOST:/opt/giochi/apps/index.json" "$catalogo_pc" 2>/dev/null || catalogo_pc=""
   fi
+  # O `dir` do catálogo é caminho do APARELHO, e no PC ele não existe.
+  #
+  # O launcher poda em execução o app cujo `entrypoint` não está no disco
+  # (`podar_sem_binario`, feita para cartão removido) — então a referência
+  # desenhava uma grade VAZIA enquanto o aparelho desenhava o cartão. Medido no
+  # R35S em 07/11/2026: 99,6% sem catálogo e **36,5%** logo depois de publicar
+  # um único app. A queda era da entrada, não do desenho — exatamente o que
+  # esta função existe para evitar.
+  #
+  # A correção é dar ao PC o **mesmo conteúdo** com caminhos que ele resolve:
+  # cada `dir` vira um diretório temporário com o `entrypoint` presente. O
+  # cartão só usa os campos do catálogo, então o conteúdo do arquivo é
+  # irrelevante — o que importa é ele existir.
+  if [ -n "$catalogo_pc" ] && [ -s "$catalogo_pc" ]; then
+    local catalogo_local="$destino.catalogo-pc.json"
+    if node -e '
+      const fs = require("fs"), path = require("path");
+      const [src, dst, base] = process.argv.slice(1);
+      const j = JSON.parse(fs.readFileSync(src, "utf8"));
+      for (const a of j.apps) {
+        const dir = path.join(base, a.id);
+        const ep = path.join(dir, a.entrypoint || "bin/app");
+        fs.mkdirSync(path.dirname(ep), { recursive: true });
+        fs.writeFileSync(ep, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        a.dir = dir;
+      }
+      fs.writeFileSync(dst, JSON.stringify(j, null, 2));
+    ' "$catalogo_pc" "$catalogo_local" "$destino.jogos" 2>/dev/null; then
+      catalogo_pc="$catalogo_local"
+    else
+      falha "não consegui preparar o catálogo para o PC — a comparação usaria caminhos do aparelho"
+      return 1
+    fi
+  fi
   # `env` explícito em vez de `VAR=... VAR=... comando`.
   #
   # A forma anterior usava `${env_catalogo[@]+"${env_catalogo[@]}"}` no meio da
@@ -312,12 +378,37 @@ gerar_referencia() {
   local ambiente=(
     env
     SDL_VIDEODRIVER=dummy
+    # Relógio congelado nos DOIS lados. Sem isto, o aparelho (sem NTP) e o PC
+    # divergem nos quatro dígitos da barra superior e a comparação acusa 99,9 %
+    # em todas as telas — medido no X35H em 09/11/2026, com 205 px diferentes
+    # exatamente em x 482..517, y 26..34. Ver `current_clock` em views.rs.
+    GIOCHI_HORA_FIXA=12:00
+    GIOCHI_BATERIA_FIXA=50
+    GIOCHI_TEMPERATURA_FIXA=40
     "LD_LIBRARY_PATH=${libs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   )
   if [ -n "$catalogo_pc" ] && [ -s "$catalogo_pc" ]; then
     ambiente+=("GIOCHI_CATALOGO=$catalogo_pc")
   fi
-  timeout 60 "${ambiente[@]}" "$bin" "${args[@]}" >/dev/null 2>&1
+  # A referência tem de ter o **mesmo texto** que o aparelho desenha.
+  #
+  # O `--dump-frame` aceita qualquer build, inclusive um compilado com
+  # `--no-default-features` (sem a feature `texto`). Esse build desenha a tela
+  # inteira e nenhum glifo: a referência sai sem texto, e a comparação cai de
+  # ~99% para ~96% sem nenhuma regressão de desenho. Medido em 07/11/2026 — e o
+  # único sinal era um aviso em stderr que este `>/dev/null` engolia.
+  #
+  # Deixar o aviso virar erro aqui é o que impede a próxima sessão de caçar um
+  # bug de layout que não existe.
+  local saida_erro
+  saida_erro=$(timeout 60 "${ambiente[@]}" "$bin" "${args[@]}" 2>&1 >/dev/null)
+  case "$saida_erro" in
+    *"sem a feature"*)
+      falha "o binário do PC foi compilado SEM texto — a referência ficaria sem glifos"
+      printf '  rebuilde com: bash scripts/compilar-launcher.sh\n' >&2
+      return 1
+      ;;
+  esac
   # O catálogo baixado é temporário: fica ao lado do BMP, para quem for
   # investigar, e não é reutilizado na próxima rodada (o aparelho pode ter
   # mudado).
@@ -791,7 +882,35 @@ cmd_instalar_pacote() {
   fi
 
   titulo "verificando $(basename "$arquivo")"
-  if ! node "$RAIZ/scripts/verificar-pacote.mjs" "$arquivo" | sed 's/^/  /'; then
+
+  # A chave de verificação é a **do aparelho**, não uma do PC.
+  #
+  # Quem decide se um pacote é aceito é o aparelho, e ele verifica com
+  # `/etc/giochi/loja-publica.pem` (o caminho que o `Giochi System` versiona). O
+  # PC tem a sua própria chave, de outra geração, e usá-la aqui recusa todo
+  # pacote assinado com a chave da loja: medido em 07/11/2026 no R35S —
+  # `FALHA: assinatura Ed25519 não confere` num pacote que o próprio aparelho
+  # aprovava (`OK assinatura confere`). Divergência silenciosa entre os dois
+  # lados, e o sintoma aparecia como "pacote corrompido".
+  #
+  # Sem chave no aparelho, o script diz que não conseguiu verificar em vez de
+  # usar uma chave qualquer — verificar contra a chave errada é pior que não
+  # verificar, porque produz um veredito.
+  local chave_aparelho
+  chave_aparelho="$(mktemp -d)/loja-publica.pem"
+  local chave_para_verificar=()
+  if no_aparelho 'test -f /etc/giochi/loja-publica.pem && echo SIM' | grep -q SIM; then
+    if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "root@$HOST:/etc/giochi/loja-publica.pem" "$chave_aparelho" 2>/dev/null; then
+      ok "chave de verificação: a do aparelho (/etc/giochi/loja-publica.pem)"
+      chave_para_verificar=(--chave-publica "$chave_aparelho")
+    fi
+  fi
+  if [ "${#chave_para_verificar[@]}" -eq 0 ]; then
+    aviso "o aparelho não tem /etc/giochi/loja-publica.pem"
+    aviso "verificando com a chave do PC — o aparelho NÃO vai conferir a assinatura"
+  fi
+
+  if ! node "$RAIZ/scripts/verificar-pacote.mjs" "$arquivo" "${chave_para_verificar[@]}" | sed 's/^/  /'; then
     falha "pacote recusado — não foi enviado"
     return 1
   fi
@@ -1142,7 +1261,7 @@ cmd_verificar() {
       p=\$(pidof giochi-launcher 2>/dev/null); [ -n \"\$p\" ] && kill \$p 2>/dev/null
       sleep 1
       rm -f /tmp/verif.bmp
-      env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software $DESTINO_BIN --dump-frame /tmp/verif.bmp >/dev/null 2>&1
+      env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 $DESTINO_BIN --dump-frame /tmp/verif.bmp >/dev/null 2>&1
       [ -s /tmp/verif.bmp ] && echo GERADO
     " | grep -q GERADO; then
     if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "root@$HOST:/tmp/verif.bmp" "$tmp_captura/frame.bmp" 2>/dev/null; then
@@ -1297,6 +1416,201 @@ cmd_verificar_jogo() {
   rm -rf "$tmp"
 }
 
+
+# ── verificar o launcher sobre a GIOCHI-ENGINE ───────────────
+#
+# O `launcher-teste` desenha as MESMAS telas que o launcher de produção, então a
+# pergunta "funciona no aparelho?" tem uma resposta forte e barata: gerar a
+# referência no PC com o launcher de produção e comparar pixel a pixel.
+#
+# ## Por que não reusa `cmd_verificar`
+#
+# Porque aquele compara a Home do catálogo do aparelho, e este precisa de várias
+# telas — inclusive a de busca, que é a única que usa **recorte** (`push_clip`).
+# Recorte é justamente o que o porte reimplementou em software (a engine não
+# expõe `set_clip_rect`), então é o caso que mais precisa de prova.
+#
+# ## Por que `GIOCHI_GLES=0`
+#
+# Com backend acelerado o `--dump-frame` sai **preto**: o swap esvazia o buffer
+# antes da leitura. Medido nos três aparelhos. O teste é do desenho, não do
+# backend; quem mede o backend é `renderer_info` no log.
+cmd_verificar_teste() {
+  local telas=("$@")
+  [ "${#telas[@]}" -gt 0 ] || telas=(home biblioteca apps ajustes busca detalhe)
+
+  exigir_aparelho
+  local remoto="/opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste"
+  local referencia="$RAIZ/app/launcher/target/debug/giochi-launcher"
+
+  [ -x "$referencia" ] || morrer "sem launcher de produção compilado no PC — rode scripts/compilar-launcher.sh"
+  if ! no_aparelho "[ -x $remoto ] && echo PRESENTE" | grep -q PRESENTE; then
+    morrer "$remoto não existe — rode scripts/compilar-launcher-teste-arm64.sh --instalar root@$HOST"
+  fi
+
+  local painel larg alt
+  painel=$(resolucao_do_aparelho) || morrer "não descobri a resolução do painel"
+  larg="${painel%x*}"; alt="${painel#*x}"
+  # O launcher de produção desenha em paisagem; num painel retrato o projeto é o
+  # painel com as medidas trocadas. Sem isto a referência sai no tamanho errado
+  # e a comparação reprova por dimensão, não por desenho.
+  if [ "$alt" -gt "$larg" ] 2>/dev/null; then
+    painel="${alt}x${larg}"
+  fi
+  ok "painel $painel, ${#telas[@]} tela(s)"
+
+  local tmp_captura
+  tmp_captura="$RAIZ/dist/testes/$(date +%Y%m%d-%H%M%S)-teste"
+  mkdir -p "$tmp_captura"
+  local libs="${GIOCHI_SDL2_PREFIX:-$HOME/.cache/giochi-sdl2/root}/usr/lib/x86_64-linux-gnu"
+  local estava_rodando
+  estava_rodando=$(no_aparelho 'pidof giochi-launcher 2>/dev/null')
+
+  # ## Um app aberto é o dono do DRM, não o launcher
+  #
+  # Medido em 09/11/2026: o launcher abriu o `Equilibrio` pelo cartão e ficou em
+  # `fork`+`wait` — vivo e **sem** DRM. Matar o launcher ali deixou o jogo órfão
+  # segurando o dispositivo; o launcher-teste então saía com
+  # `kmsdrm not available`, e o `giochi-init` gastava a cota tentando subir o
+  # launcher de produção contra um DRM ocupado, até desistir. Recusar cedo é
+  # melhor que produzir cinco telas pretas e um aparelho sem interface.
+  local apps_drm
+  apps_drm=$(no_aparelho 'for p in /proc/[0-9]*; do d=$(ls -l $p/fd 2>/dev/null | grep -c "card0\|renderD"); [ "$d" -gt 0 ] || continue; c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in */giochi-launcher*) ;; *) echo "${p#/proc/} $c" ;; esac; done')
+  if [ -n "$apps_drm" ]; then
+    morrer "há app aberto com o DRM — feche no aparelho antes: $(printf '%s' "$apps_drm" | tr '\n' ' ')"
+  fi
+
+  # UMA sessão ssh para tudo, e **um** kill.
+  #
+  # A primeira versão matava o launcher por tela, em sessões separadas: 12 mortes
+  # em sequência. O `giochi-init` desistiu de reiniciar (RESTART_MAX) e o
+  # aparelho ficou sem interface até o `subir` reiniciar o supervisor — medido em
+  # 07/11/2026. Com a flag de console livre e um único kill, a cota nem é tocada.
+  titulo "desenhando no aparelho"
+  local lista="" tela saida_telas
+  for tela in "${telas[@]}"; do lista="$lista $tela"; done
+  saida_telas=$(no_aparelho "
+    mkdir -p /run/giochi; touch /run/giochi/dev-free-console
+    # SIGTERM e depois SIGKILL. O SDL transforma SIGTERM em SDL_QUIT na fila de
+    # eventos, e o teardown do EGL/Panfrost já foi visto travando um launcher
+    # **sem** os descritores de DRM (pid 30803, 09/11/2026) — vivo para sempre,
+    # nunca respawnado. Matar de vez é o que libera o dispositivo.
+    kill \$(pidof giochi-launcher) 2>/dev/null; sleep 0.5
+    kill -9 \$(pidof giochi-launcher) 2>/dev/null
+    # Esperar o DRM ficar livre, em vez de confiar num sleep fixo: é o descritor
+    # que decide, não o relógio.
+    i=0; n=1
+    while [ \$i -lt 20 ]; do
+      n=\$(for p in /proc/[0-9]*; do ls -l \$p/fd 2>/dev/null | grep -c 'card0\|renderD'; done | awk '{s+=\$1} END {print s+0}')
+      [ \"\$n\" -eq 0 ] && break
+      i=\$((i+1)); sleep 0.5
+    done
+    if [ \"\$n\" -ne 0 ]; then
+      echo \"DRM_OCUPADO \$n descritor(es)\"
+      rm -f /run/giochi/dev-free-console
+      exit 0
+    fi
+    for t in$lista; do
+      GIOCHI_GLES=0 GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 SDL_VIDEODRIVER=kmsdrm $remoto --demo --tela \$t \
+        --dump-frame /tmp/teste-\$t.bmp >/tmp/teste-\$t.log 2>&1
+      echo \"\$t: status=\$? \$(grep -c . /tmp/teste-\$t.bmp 2>/dev/null; ls -l /tmp/teste-\$t.bmp 2>/dev/null | awk '{print \$5\" bytes\"}')\"
+    done
+    rm -f /run/giochi/dev-free-console
+    grep -hE 'renderer' /tmp/teste-home.log 2>/dev/null | head -1
+  ")
+  printf '%s\n' "$saida_telas" | sed 's/^/  /'
+
+  # Se o aparelho recusou porque outra coisa segura o DRM, não há quadro para
+  # comparar — dizer isso é diferente de "o launcher-teste não desenhou".
+  if printf '%s\n' "$saida_telas" | grep -q DRM_OCUPADO; then
+    falha "o DRM continuou ocupado no aparelho — feche o app aberto e repita"
+    printf '%s\n' "$saida_telas" | sed 's/^/  /'
+    return 1
+  fi
+
+  # Uma transferência para todos os BMPs: `scp` por arquivo abriria N sessões.
+  local caminhos=()
+  for tela in "${telas[@]}"; do caminhos+=("root@$HOST:/tmp/teste-$tela.bmp"); done
+  if ! "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "${caminhos[@]}" "$tmp_captura/" 2>/dev/null; then
+    aviso "nem todos os quadros vieram do aparelho"
+  fi
+  no_aparelho 'rm -f /tmp/teste-*.bmp /tmp/teste-*.log' >/dev/null 2>&1
+
+  titulo "comparação com o launcher de produção"
+  local falhas=0
+  for tela in "${telas[@]}"; do
+    local captura="$tmp_captura/teste-$tela.bmp"
+    local ref="$tmp_captura/ref-$tela.bmp"
+    if [ ! -s "$captura" ]; then
+      falha "$tela: o aparelho não gravou o quadro"
+      falhas=$((falhas + 1))
+      continue
+    fi
+    # A comparação é refeita **uma vez** se o resultado ficar entre 99,5 % e
+    # 100 %.
+    #
+    # Motivo medido em 07/11/2026: a barra superior desenha o relógio. Se o
+    # minuto vira entre a captura do aparelho e o render do PC, 125 pixels
+    # diferem (x 490..517, y 26..34) e o acerto cai para 99,9 % — sem nenhuma
+    # regressão de desenho. Reprovar isso ensina a ignorar o portão.
+    #
+    # O piso de 99,5 % é o que impede o retry de mascarar defeito real: uma
+    # regressão de layout ou de fonte derruba o número muito abaixo disso. A
+    # segunda tentativa só repete quando a primeira passou raspando.
+    local tentativa pct="" saida=""
+    for tentativa in 1 2; do
+      # `env` explícito: `A=1 "B=2" cmd` não vira ambiente, e o binário roda sem
+      # `LD_LIBRARY_PATH`, não acha `libSDL2` e não grava BMP. O sintoma era
+      # "comparação ?%", que manda procurar defeito no aparelho.
+      env SDL_VIDEODRIVER=dummy GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 LD_LIBRARY_PATH="$libs" "$referencia" \
+        --tamanho "$painel" --demo --tela "$tela" \
+        --dump-frame "$ref" >/dev/null 2>&1
+      if [ ! -s "$ref" ]; then
+        falha "$tela: não gerei a referência no PC (binário sem texto?)"
+        falhas=$((falhas + 1))
+        pct=""
+        break
+      fi
+      saida=$(node "$RAIZ/scripts/verificar-frame.mjs" \
+        --captura "$captura" --referencia "$ref" --rotacao none 2>&1)
+      pct=$(printf '%s\n' "$saida" | sed -n 's/.*comparação: \([0-9.]*\)%.*/\1/p')
+      [ "$pct" = "100.0" ] && break
+      # `break` quando está ABAIXO do piso: aí é regressão de verdade e repetir
+      # só gasta tempo. Entre 99,5 % e 100 % (exclusive) vale repetir — é o caso
+      # do relógio virando o minuto entre a captura e a referência.
+      #
+      # A condição já esteve invertida (`exit !(p < 99.5)`), e o efeito era
+      # exatamente o oposto do documentado: 99,9 % quebrava o laço **sem** a
+      # segunda tentativa, reprovando as seis telas. Medido em 09/11/2026 no
+      # X35H, com a diferença em x 482..517, y 26..34 — a caixa do relógio.
+      awk -v p="${pct:-0}" 'BEGIN { exit !(p >= 99.5) }' && break
+    done
+
+    if [ "${pct:-0}" = "100.0" ]; then
+      ok "$tela: 100,0% igual ao launcher de produção"
+    elif [ -z "$pct" ]; then
+      falhas=$((falhas + 1))
+    else
+      falha "$tela: ${pct}% — BMP em $tmp_captura"
+      falhas=$((falhas + 1))
+    fi
+  done
+
+  if [ -n "$estava_rodando" ]; then
+    titulo "retomando o launcher"
+    iniciar_launcher | while IFS= read -r linha; do printf '  %s\n' "$linha"; done
+  fi
+
+  echo
+  if [ "$falhas" -eq 0 ]; then
+    ok "todas as telas idênticas no aparelho"
+  else
+    falha "$falhas tela(s) divergente(s)"
+  fi
+  printf '  capturas em %s\n' "$tmp_captura"
+  return "$falhas"
+}
+
 # ── entrada ─────────────────────────────────────────────────
 
 case "${1:-ajuda}" in
@@ -1319,6 +1633,9 @@ case "${1:-ajuda}" in
   verificar-jogo)
     shift
     cmd_verificar_jogo "${1:-}" "${2:-}" "${3:-}" ;;
+  verificar-teste|teste)
+    shift
+    cmd_verificar_teste "$@" ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.

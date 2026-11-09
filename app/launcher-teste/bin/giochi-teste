@@ -1,0 +1,317 @@
+#!/bin/sh
+# giochi-teste — troca a interface do aparelho entre o launcher de produção e o
+# launcher-teste (o mesmo launcher desenhado sobre a GIOCHI-ENGINE).
+#
+# ## Por que existe
+#
+# O DRM do aparelho é **exclusivo**: um segundo processo recebe
+# `kmsdrm not available`. E o `giochi-init` ressuscita o launcher de produção em
+# ~1 s depois de uma queda. Sem um utilitário, testar o launcher-teste na tela
+# exigia decorar a ordem `touch /run/giochi/dev-free-console` → `kill` →
+# `setsid nohup …`, e esquecer o `rm` da flag deixava o aparelho sem interface
+# nenhuma depois do reboot.
+#
+# Aqui a ordem está escrita uma vez, e `fechar` desfaz tudo (inclusive a flag).
+#
+# Uso:
+#   giochi-teste abrir [forcar]  troca para o launcher-teste (fica na tela)
+#   giochi-teste fechar          devolve o launcher de produção
+#   giochi-teste tela <nome> [forcar]
+#                                grava um BMP de uma tela e o caminho
+#   giochi-teste estado          quem está no DRM agora
+#   giochi-teste ajuda
+#
+# `tela` aceita: boot home biblioteca apps ajustes busca detalhe
+#
+# `forcar` encerra quem estiver segurando o DRM (um jogo aberto pelo launcher de
+# produção). Sem ele o utilitário **recusa** e diz qual processo é: encerrar o
+# jogo de alguém sem avisar não pode ser o padrão.
+set -u
+
+LAUNCHER_PROD="/opt/giochi/apps/launcher/bin/giochi-launcher"
+LAUNCHER_TESTE="/opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste"
+FLAG_DIR="/run/giochi"
+FLAG="$FLAG_DIR/dev-free-console"
+LOG="/tmp/launcher-teste.log"
+CAPTURA="/tmp/giochi-teste.bmp"
+
+# `/proc` em vez de `ps`: nesta imagem o `ps` lista só a própria TTY (94
+# processos em /proc contra 2 linhas no ps, medido no R35S). E `pidof` casa pelo
+# `comm`, que não serve para script `sh`.
+pid_de() {
+  _alvo="$1"
+  for _p in /proc/[0-9]*; do
+    # O `2>/dev/null` fica no grupo: redirecionar só o `tr` não cala o erro do
+    # **shell** quando o processo some entre o glob e a leitura
+    # (`can't open /proc/26616/cmdline: no such file`). Com a mensagem na saída,
+    # um script que lê o pid por pipe recebia lixo.
+    _c=$( { tr '\0' ' ' <"$_p/cmdline"; } 2>/dev/null ) || continue
+    case "$_c" in
+      "$_alvo "*) echo "${_p#/proc/}"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+liberar_console() {
+  mkdir -p "$FLAG_DIR" 2>/dev/null
+  : >"$FLAG"
+}
+
+devolver_console() {
+  rm -f "$FLAG"
+}
+
+# ## Por que `kill` simples não basta
+#
+# O SDL instala handler de SIGTERM que **posta SDL_QUIT na fila de eventos** em
+# vez de terminar. O launcher de produção bombeia eventos e sai; o
+# launcher-teste não bombeia (a entrada por evdev não foi portada), então o
+# SIGTERM é engolido e o processo continua segurando o DRM. Medido em
+# 09/11/2026: `fechar` dizia ter parado e o `estado` mostrava o pid vivo.
+#
+# Enquanto ele ficava vivo, o `giochi-init` tentava subir o launcher de produção,
+# recebia `kmsdrm not available` e gastava a cota até `RESTART_MAX` — aparelho sem
+# interface. Daí a escalada: TERM (limpo quando funciona), depois KILL.
+parar_processo() {
+  _alvo="$1"
+  _p=$(pid_de "$_alvo") || return 0
+  kill "$_p" 2>/dev/null
+  _i=0
+  while [ "$_i" -lt 6 ]; do
+    pid_de "$_alvo" >/dev/null || return 0
+    sleep 0.5
+    _i=$((_i + 1))
+  done
+  _p=$(pid_de "$_alvo") && kill -9 "$_p" 2>/dev/null
+  _i=0
+  while [ "$_i" -lt 6 ]; do
+    pid_de "$_alvo" >/dev/null || return 0
+    sleep 0.5
+    _i=$((_i + 1))
+  done
+  return 0
+}
+
+parar_prod() { parar_processo "$LAUNCHER_PROD"; }
+
+parar_teste() { parar_processo "$LAUNCHER_TESTE"; }
+
+# O `giochi-init` grava `/run/giochi/launcher-parado` ao desistir e **nunca o
+# apaga**. Deixá-lo para trás faria o próximo diagnóstico ler uma parada que já
+# não existe.
+limpar_marcador() { rm -f "$FLAG_DIR/launcher-parado"; }
+
+# Reinicia o supervisor pelo inittab, que devolve a cota (`restarts=0`).
+reiniciar_supervisor() {
+  for _p in /proc/[0-9]*; do
+    _c=$( { tr '\0' ' ' <"$_p/cmdline"; } 2>/dev/null ) || continue
+    case "$_c" in
+      "/bin/sh /usr/bin/giochi-init "|"/bin/sh /usr/bin/giochi-init"|"sh /usr/bin/giochi-init "|"sh /usr/bin/giochi-init")
+        kill "${_p#/proc/}" 2>/dev/null
+        sleep 2
+        limpar_marcador
+        return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Espera o processo abrir o DRM. "Está vivo" não é "está desenhando": o
+# descritor de `card0`/`renderD` é a única prova barata por SSH.
+esperar_drm() {
+  _alvo="$1"
+  _i=0
+  while [ "$_i" -lt 20 ]; do
+    _p=$(pid_de "$_alvo") || { _i=$((_i + 1)); sleep 0.5; continue; }
+    _d=$(ls -l "/proc/$_p/fd" 2>/dev/null | grep -c 'card0\|renderD')
+    if [ "${_d:-0}" -gt 0 ]; then
+      echo "pid=$_p drm=$_d"
+      return 0
+    fi
+    _i=$((_i + 1))
+    sleep 0.5
+  done
+  _p=$(pid_de "$_alvo") && echo "pid=$_p drm=0"
+  return 1
+}
+
+# ## A pergunta certa é "quem segura o DRM", não "o processo sumiu"
+#
+# Medido em 09/11/2026: o launcher de produção abriu o `Equilibrio` pelo cartão,
+# ficou em `fork`+`wait` (vivo, **sem** DRM) e o jogo é que era o dono do
+# dispositivo. Matar o launcher deixa o jogo **órfão e com o DRM** — e aí o
+# launcher-teste morre com `kmsdrm not available` e o `giochi-init` gasta a cota
+# tentando subir o launcher de produção. Um utilitário que só olha PIDs não vê
+# nada disso.
+donos_do_drm() {
+  for _p in /proc/[0-9]*; do
+    _d=$(ls -l "$_p/fd" 2>/dev/null | grep -c 'card0\|renderD')
+    [ "${_d:-0}" -gt 0 ] || continue
+    case "$(tr '\0' ' ' <"$_p/cmdline" 2>/dev/null)" in
+      "$LAUNCHER_PROD "*|"$LAUNCHER_TESTE "*) ;;
+      *) echo "${_p#/proc/} $(tr '\0' ' ' <"$_p/cmdline" 2>/dev/null | cut -c1-48)" ;;
+    esac
+  done
+}
+
+# `--forcar` derruba quem estiver com o DRM. Sem ele, o utilitário **recusa**
+# citando o processo: encerrar o jogo de alguém sem avisar é pior que falhar.
+exigir_drm_livre() {
+  _forcar="${1:-}"
+  _donos=$(donos_do_drm)
+  [ -z "$_donos" ] && return 0
+  if [ "$_forcar" = "forcar" ]; then
+    echo "aviso encerrando quem segura o DRM:"
+    printf '%s\n' "$_donos" | while read -r _pid _cmd; do
+      echo "  $_pid $_cmd"
+      kill -9 "$_pid" 2>/dev/null
+    done
+    _i=0
+    while [ "$_i" -lt 20 ]; do
+      [ -z "$(donos_do_drm)" ] && return 0
+      sleep 0.5
+      _i=$((_i + 1))
+    done
+    return 1
+  fi
+  echo "ERRO o DRM está ocupado por:" >&2
+  printf '  %s\n' "$_donos" >&2
+  echo "  feche o app no aparelho, ou use 'giochi-teste abrir forcar' para encerrá-lo" >&2
+  return 1
+}
+
+cmd_abrir() {
+  [ -x "$LAUNCHER_TESTE" ] || { echo "ERRO $LAUNCHER_TESTE não existe" >&2; return 1; }
+  liberar_console
+  parar_prod
+  parar_teste
+  exigir_drm_livre "${1:-}" || { devolver_console; echo "  console devolvido ao giochi-init" >&2; return 1; }
+  rm -f "$LOG"
+  # `setsid nohup` para sobreviver ao fim da sessão SSH: sem isto, fechar o
+  # terminal mataria a interface que o usuário está olhando.
+  setsid nohup env SDL_VIDEODRIVER=kmsdrm GIOCHI_GLES=1 \
+    "$LAUNCHER_TESTE" >"$LOG" 2>&1 &
+  sleep 2
+  if saida=$(esperar_drm "$LAUNCHER_TESTE"); then
+    echo "ok launcher-teste na tela ($saida)"
+    echo "   log: $LOG"
+    return 0
+  fi
+  echo "ERRO o launcher-teste não abriu o DRM — veja $LOG" >&2
+  tail -5 "$LOG" 2>/dev/null
+  return 1
+}
+
+cmd_fechar() {
+  parar_teste
+  # A ordem importa: a flag só sai DEPOIS de o DRM estar livre. Invertida, o
+  # `giochi-init` sobe o launcher contra um DRM ainda ocupado, ele morre com
+  # `kmsdrm not available` e a cota de quedas é consumida — foi assim que o
+  # aparelho ficou sem interface em 09/11/2026.
+  #
+  # E "livre" é medido: um jogo órfão do launcher de produção continua dono do
+  # DRM mesmo depois de o launcher sumir.
+  if _donos=$(donos_do_drm) && [ -n "$_donos" ]; then
+    echo "ERRO ainda há app com o DRM — não devolvo o console para não gastar a cota do giochi-init:" >&2
+    printf '  %s\n' "$_donos" >&2
+    echo "  o console continua livre (flag presente). Depois de fechar o app, rode de novo." >&2
+    return 1
+  fi
+  devolver_console
+  echo "ok launcher-teste parado e console devolvido ao giochi-init"
+  esperar_prod 20 && { echo "ok launcher de produção de volta (pid=$(pid_de "$LAUNCHER_PROD"))"; return 0; }
+
+  # Segunda chance, sempre: matar o `giochi-init` faz o `::respawn:` do inittab
+  # trazê-lo de volta com a cota zerada. Cobre tanto a desistência por
+  # `RESTART_MAX` quanto um supervisor travado — e `kill` nele é barato comparado
+  # a um aparelho sem interface.
+  echo "aviso o launcher de produção não voltou — reiniciando o supervisor"
+  if reiniciar_supervisor; then
+    esperar_prod 60 && { echo "ok launcher de produção de volta (pid=$(pid_de "$LAUNCHER_PROD"))"; return 0; }
+  fi
+  echo "ERRO o launcher de produção não voltou — veja o console do aparelho" >&2
+  return 1
+}
+
+esperar_prod() {
+  _i=0
+  while [ "$_i" -lt "$1" ]; do
+    pid_de "$LAUNCHER_PROD" >/dev/null && return 0
+    sleep 1
+    _i=$((_i + 1))
+  done
+  return 1
+}
+
+cmd_tela() {
+  _nome="${1:-home}"
+  [ -x "$LAUNCHER_TESTE" ] || { echo "ERRO $LAUNCHER_TESTE não existe" >&2; return 1; }
+  liberar_console
+  parar_prod
+  parar_teste
+  exigir_drm_livre "${2:-}" || { devolver_console; return 1; }
+  # `GIOCHI_GLES=0` porque com backend acelerado o `--dump-frame` sai **preto**:
+  # o swap esvazia o buffer antes da leitura. Medido nos três aparelhos.
+  GIOCHI_GLES=0 SDL_VIDEODRIVER=kmsdrm "$LAUNCHER_TESTE" --demo --tela "$_nome" \
+    --dump-frame "$CAPTURA" >/tmp/giochi-teste.log 2>&1
+  _st=$?
+  if [ "$_st" -ne 0 ] || [ ! -s "$CAPTURA" ]; then
+    echo "ERRO a tela $_nome não foi gravada (status=$_st)" >&2
+    tail -5 /tmp/giochi-teste.log 2>/dev/null
+    return 1
+  fi
+  echo "ok tela $_nome — $(ls -l "$CAPTURA" | awk '{print $5" bytes"}') em $CAPTURA"
+  echo "   console continua livre: use 'giochi-teste abrir' ou 'giochi-teste fechar'"
+  return 0
+}
+
+cmd_estado() {
+  _prod=$(pid_de "$LAUNCHER_PROD") || _prod=""
+  _teste=$(pid_de "$LAUNCHER_TESTE") || _teste=""
+  printf 'produção:     %s\n' "${_prod:-(parado)}"
+  printf 'launcher-teste: %s\n' "${_teste:-(parado)}"
+  if [ -n "$_teste" ]; then
+    printf 'DRM do teste: %s descritor(es)\n' "$(ls -l "/proc/$_teste/fd" 2>/dev/null | grep -c 'card0\|renderD')"
+  fi
+  if [ -e "$FLAG" ]; then
+    echo "console:      livre (a flag $FLAG existe — o giochi-init não sobe o launcher)"
+  else
+    echo "console:      do giochi-init (a flag não existe)"
+  fi
+  if [ -e "$FLAG_DIR/launcher-parado" ]; then
+    echo "supervisor:   DESISTIU — $(sed -n 's/^motivo=//p' "$FLAG_DIR/launcher-parado" 2>/dev/null)"
+  else
+    echo "supervisor:   ativo"
+  fi
+  # Nomear o dono evita a leitura errada de "livre": o launcher de produção
+  # segurando o DRM é o caso normal, e o que impede o teste não é ele — é um
+  # **app** aberto por ele.
+  if [ -n "$_prod" ]; then
+    echo "DRM:          $(ls -l "/proc/$_prod/fd" 2>/dev/null | grep -c 'card0\|renderD') descritor(es) com o launcher de produção"
+  fi
+  _donos=$(donos_do_drm)
+  if [ -n "$_donos" ]; then
+    echo "app no DRM:   (o launcher de produção está apenas esperando por ele)"
+    printf '  %s\n' "$_donos"
+  else
+    echo "app no DRM:   nenhum"
+  fi
+}
+
+cmd_ajuda() {
+  # Do cabeçalho até `set -u`, e não um número fixo de linhas: a primeira versão
+  # parava em 30 e a ajuda ficou cortada quando o cabeçalho cresceu.
+  sed -n '2,/^set -u$/{/^set -u$/d;p;}' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-ajuda}" in
+  abrir)  cmd_abrir "${2:-}" ;;
+  fechar) cmd_fechar ;;
+  tela)   shift; cmd_tela "${1:-home}" "${2:-}" ;;
+  estado) cmd_estado ;;
+  -h|--ajuda|ajuda) cmd_ajuda ;;
+  *)
+    echo "uso: giochi-teste {abrir [forcar]|fechar|tela <nome> [forcar]|estado|ajuda}" >&2
+    exit 2 ;;
+esac

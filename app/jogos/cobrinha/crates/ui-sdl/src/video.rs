@@ -61,6 +61,22 @@ pub fn do_numero(valor: i32) -> Result<Option<Rotacao>, String> {
 
 pub const CAMINHO_FBCON: &str = "/sys/class/graphics/fbcon/rotate";
 pub const CAMINHO_USUARIO: &str = "/user/.config/giochi/rotation";
+pub const CAMINHO_CMDLINE: &str = "/proc/cmdline";
+
+/// Extrai `fbcon=rotate:N` de um `cmdline`.
+///
+/// `None` quer dizer "o cmdline não pede rotação" — diferente de "pede zero".
+pub fn do_cmdline(texto: &str) -> Option<i32> {
+    texto
+        .split_whitespace()
+        .find_map(|arg| arg.strip_prefix("fbcon=rotate:"))
+        .and_then(|v| v.parse::<i32>().ok())
+}
+
+/// O `fbcon=rotate:N` do boot, se houver.
+fn pedido_no_cmdline() -> Option<i32> {
+    do_cmdline(&std::fs::read_to_string(CAMINHO_CMDLINE).ok()?)
+}
 
 /// Lê a rotação de um arquivo com o inteiro. `None` se o arquivo não existe.
 pub fn do_arquivo(caminho: &str) -> Option<Result<Option<Rotacao>, String>> {
@@ -93,7 +109,28 @@ pub fn resolver(largura: u32, altura: u32, confiar_no_sistema: bool) -> (Rotacao
         return (r, "config do usuario");
     }
     if confiar_no_sistema {
-        if let Some(Ok(Some(r))) = do_arquivo(CAMINHO_FBCON) {
+        let do_sysfs = do_arquivo(CAMINHO_FBCON);
+
+        // O sysfs é o estado em tempo de execução e vence quando diz algo. Só
+        // quando ele diz **zero** o `cmdline` é consultado.
+        //
+        // Medido no X55 em 07/11/2026 (imagem `60e326f`): o `cmdline` pedia
+        // `fbcon=rotate:3` e o sysfs respondia `0`. O jogo desenhava em projeto
+        // 720×1280 num painel retrato — sobra de 612 px de altura, medido no
+        // quadro. A regra é a mesma do launcher, de propósito: um comando que
+        // gira um app tem de girar o outro, senão o teste mente sobre um deles.
+        let sysfs_sem_rotacao = matches!(do_sysfs, Some(Ok(Some(Rotacao::Nenhuma))) | None);
+        if sysfs_sem_rotacao {
+            if let Some(pedido) = pedido_no_cmdline() {
+                if pedido != 0 {
+                    if let Ok(Some(r)) = do_numero(pedido) {
+                        return (r, "sistema (cmdline)");
+                    }
+                }
+            }
+        }
+
+        if let Some(Ok(Some(r))) = do_sysfs {
             return (r, "sistema (fbcon/rotate)");
         }
     }
@@ -130,6 +167,7 @@ pub fn girar_ponto(rot: Rotacao, design: (i32, i32), x: i32, y: i32) -> (i32, i3
 ///
 /// Retângulo alinhado aos eixos continua retângulo sob múltiplo de 90°, então
 /// largura e altura trocam e o canto é reposicionado.
+#[allow(dead_code)]
 pub fn girar_rect(
     rot: Rotacao,
     design: (i32, i32),
@@ -370,6 +408,21 @@ mod testes_erro {
         assert!(
             !proprio.contains("giochi-launcher"),
             "o binário de teste não pode se identificar como launcher"
+        );
+    }
+
+    #[test]
+    fn le_a_rotacao_do_cmdline_sem_confundir_ausencia_com_zero() {
+        // O caso medido no X55 (imagem 60e326f): sysfs dizia 0 e o cmdline pedia
+        // 3. Aqui o parser é puro; o cruzamento é exercitado no aparelho.
+        assert_eq!(do_cmdline("root=/dev/mmcblk1p2 fbcon=rotate:3 quiet"), Some(3));
+        assert_eq!(do_cmdline("fbcon=rotate:1"), Some(1));
+        assert_eq!(do_cmdline("console=ttyS2,1500000n8"), None);
+        assert_eq!(do_cmdline("fbcon=rotate:lixo"), None, "lixo não vira zero");
+        assert_eq!(
+            do_numero(3),
+            Ok(Some(Rotacao::Ccw90)),
+            "o valor do cmdline tem de virar a rotação certa"
         );
     }
 

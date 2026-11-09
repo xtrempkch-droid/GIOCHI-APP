@@ -1,0 +1,10 @@
+{
+  "title": "Giochi Launcher (engine)",
+  "slug": "launcher-teste",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-launcher-teste",
+  "license": "Proprietary"
+}

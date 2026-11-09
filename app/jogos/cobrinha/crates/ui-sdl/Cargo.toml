@@ -1,6 +1,6 @@
 [package]
 name = "giochi-cobrinha"
-description = "Cobrinha — SDL2 sobre KMSDRM, escala 1,0, sem upscaling"
+description = "Cobrinha 3D — GIOCHI-ENGINE 3D sobre GLES/EGL"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,9 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 giochi-cobrinha-core = { path = "../core" }
-# Só SDL2: sem ttf, sem asound, sem image. O R35S não tem libasound e um
-# binário que a exige não sobe — três `NEEDED`, nada mais.
-sdl2 = "0.37"
+giochi-engine = { path = "../../vendor/giochi-engine", default-features = false, features = ["sdl2-system"] }
+giochi-engine-3d = { path = "../../vendor/giochi-engine-3d", default-features = false, features = ["sdl2-system"] }
+sdl2 = { version = "0.38", default-features = false }
 # `libc` já vinha transitivamente pelo `sdl2`, então declarar não baixa nada.
 # Serve para uma linha só: restaurar o `SIGPIPE` padrão (ver `main.rs`).
 libc = "0.2"

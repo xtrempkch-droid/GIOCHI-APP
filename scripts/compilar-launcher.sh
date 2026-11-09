@@ -108,6 +108,35 @@ else
   log "SDL2 de desenvolvimento encontrado no sistema"
 fi
 
+# ## Symlink quebrado no prefixo é pior que prefixo nenhum
+#
+# O `-L` abaixo aponta para o prefixo ANTES do sistema. Se `libSDL2.so` estiver
+# quebrado lá, o linker não erra na hora: ele **cai no `libSDL2.a`** e falha
+# depois com dezenas de símbolos do PulseAudio/libsamplerate (`src_new`,
+# `src_process`, …) — mensagem que manda procurar defeito no código.
+#
+# Medido em 09/11/2026: `libSDL2-2.0.so.0.3200.10 -> libSDL2-2.0.so.0.3200.10`
+# (laço em si mesmo, de uma extração antiga) deixava `libSDL2.so` sem alvo.
+# A verificação abaixo segue o symlink de verdade e conserta só o que não
+# resolve, dizendo o que fez. Roda mesmo quando o SDL2 vem do sistema — é
+# justamente esse o caso em que o bloco de extração não roda e o laço sobrava.
+LIBDIR_PREFIXO="$PREFIXO/usr/lib/x86_64-linux-gnu"
+if [ -d "$LIBDIR_PREFIXO" ]; then
+  for alvo in libSDL2 libSDL2_ttf; do
+    [ -e "$LIBDIR_PREFIXO/$alvo.so" ] && continue
+    # `$1` é o nome na saída do `ldconfig`; comparar com espaço à direita no
+    # padrão nunca casava, e a reparação virava silenciosa — o mesmo defeito que
+    # ela existe para evitar.
+    real="$(ldconfig -p 2>/dev/null | awk -v n="$alvo-2.0.so.0" '$1 == n {print $NF; exit}')"
+    if [ -n "$real" ]; then
+      ln -sfn "$real" "$LIBDIR_PREFIXO/$alvo.so"
+      log "  symlink consertado: $alvo.so → $real"
+    else
+      echo "aviso: $LIBDIR_PREFIXO/$alvo.so não resolve e não achei a .so.0 no sistema" >&2
+    fi
+  done
+fi
+
 cd "$LAUNCHER"
 
 # `rust-lld` ignora `LIBRARY_PATH`; só `-L` conta. Sem isto o build passa e o

@@ -1,0 +1,13 @@
+{
+  "title": "Neon Drift",
+  "developer": "Giochi",
+  "version": "1.0.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "graphics_api": "gles2",
+  "entrypoint": "bin/giochi-neon-drift",
+  "slug": "neon-drift",
+  "license": "Proprietary",
+  "category": "Corrida",
+  "releaseYear": 2026
+}

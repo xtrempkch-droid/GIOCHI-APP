@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["giochi-engine", "giochi-engine-3d"]
+
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["GIOCHI-SYSTEM contributors"]
+repository = "https://github.com/xtrempkch-droid/GIOCHI-SYSTEM"
+
+[workspace.dependencies]
+sdl2 = { version = "0.38", default-features = false }
+glam = "0.29"
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
+cbindgen = "0.27"
+criterion = { version = "0.5", features = ["html_reports"] }
+glow = "0.14"
+bytemuck = { version = "1", features = ["derive"] }
+tobj = "4"

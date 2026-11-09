@@ -13,7 +13,7 @@ pub mod geometria;
 pub mod jogo;
 pub mod relogio;
 
-pub use entrada::{Acao, de_evdev};
-pub use geometria::{COLUNAS, Geometria, LINHAS};
+pub use entrada::{de_evdev, Acao};
+pub use geometria::{Geometria, COLUNAS, LINHAS};
 pub use jogo::{Direcao, Estado, Evento, Jogo, Motivo, Posicao};
-pub use relogio::{ACELERACAO, ALVO_FPS, Passos, Relogio, TIQUE_BASE, TIQUE_MAX};
+pub use relogio::{Passos, Relogio, ACELERACAO, ALVO_FPS, MAX_FPS, TIQUE_BASE, TIQUE_MAX};

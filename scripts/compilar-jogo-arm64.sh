@@ -89,6 +89,13 @@ export RUSTFLAGS="-C linker=$CACHE/cc-aarch64.sh \
 -C link-arg=-L$SYSROOT/lib \
 -C link-arg=-L$SYSROOT/usr/lib"
 
+# Sem isto o crate `pkg-config` recusa trabalhar cross e o erro fala de
+# "cross-compilation", não de SDL — exatamente o erro que a `neon-drift`
+# produziu na primeira tentativa. Os `include`s vêm do `sdl2.pc` do host
+# (cabeçalho não tem arquitetura); quem precisa ser aarch64 é a biblioteca, e
+# `-L$LIBDIR` vem primeiro na linha de link.
+export PKG_CONFIG_ALLOW_CROSS=1
+
 # O `sdl2-sys` precisa de um `sdl2.pc` só para os `include`s. Se o host não tem,
 # o erro é `SDL2 headers not found`, que não diz que o problema é de host.
 if [ -n "${GIOCHI_SDL2_PREFIX:-}" ] || [ -d "$HOME/.cache/giochi-sdl2/root" ]; then

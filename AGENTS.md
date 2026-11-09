@@ -17,8 +17,8 @@ O que existe hoje, verificado:
 | Item | Estado |
 | --- | --- |
 | apps em `apps.json` | **6**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) + `cobrinha` (image) |
-| jogos | **1**: `cobrinha` — Rust+SDL2, 45 fps, escala 1,0, sem upscaling |
-| `validate-app.mjs --all` | 5 apps válidos |
+| jogos | **2**: `cobrinha` e `neon-drift` — Rust + GIOCHI-ENGINE-3D/SDL2, passo fixo com teto de 75 fps |
+| `validate-app.mjs --all` | 8 apps válidos (1 em scaffold) |
 | `tests/run-all.mjs` | 189/189 JS |
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
 | `compilar-launcher.sh --testes` | 223/223 Rust |
@@ -1823,6 +1823,15 @@ Precedência (`crates/ui-sdl/src/display.rs`): `GIOCHI_ROTATE` →
 `/user/.config/giochi/rotation` → **`fbcon/rotate`** → dedução pelo formato do
 output. O log na abertura diz a fonte:
 
+> **Quando o `fbcon/rotate` diz `0`, o `cmdline` é consultado.** Medido no X55
+> em 07/11/2026 (imagem `60e326f`): o `cmdline` pedia `fbcon=rotate:3` e o sysfs
+> respondia `0` — o launcher desenhava em projeto 720×1280 num painel retrato e
+> o jogo deixava 612 px de sobra. O sysfs continua vencendo quando diz algo
+> diferente de zero (é o estado de execução); só o `0` é desempatado pelo
+> `cmdline`, e a fonte no log passa a ser `sistema (cmdline; fbcon/rotate dizia 0)`.
+> A mesma regra está no `cobrinha` e em `aparelho.sh` — um comando que gira um
+> app tem de girar o outro, senão o teste mente sobre um deles.
+
 ```text
 rotação: Ccw90 (fonte: sistema (fbcon/rotate)) [output 720x1280]
 ```
@@ -3445,3 +3454,546 @@ falha de PNG é da imagem, e a de 320×240 é do teste — que assume desktop.
 imprimindo um estado que não tinha mudado. O que o pegou foi olhar o número
 esperado de uma medição anterior (`LibraryGrid`) e ver outro (`HomeCarousel`).
 MEDIR.md não basta: o valor tem de ser confrontado com o que já se sabia.
+
+## 25. Cobrinha 3D no aparelho, e o dono do DRM (09/11/2026)
+
+O jogo foi reescrito sobre a **GIOCHI-ENGINE-3D**, que agora vive numa cópia
+isolada em `app/jogos/cobrinha/vendor/` (commit
+`50f6857dedb8eab00f15dee5e759e530f9bf518a`). O repositório compartilhado
+`GIOCHI-ENGINE-3D` **não foi alterado** — conferido por `git status` antes e
+depois (0 mudanças, mesmo HEAD). Atualizar a engine do jogo é copiar de novo,
+de propósito.
+
+### Medido no R35S (RK3326, Mali-G31, 640×480, imagem de 07/11)
+
+```text
+GLES 3 (Panfrost) com instancing ativo · 371 cores · 0,00% de preto
+600 quadros em 10,005 s → 59,9 FPS   (teto configurado: 75)
+vblank_mode=0 → 59,7 · renderer software → 59,2
+```
+
+**O teto de 75 não é atingido nem ultrapassado neste aparelho** — e não é o jogo:
+o painel entrega 60 Hz e o `gl_swap_window` do KMSDRM espera o vblank. Desligar
+vsync por `vblank_mode` não muda nada, o que descarta o driver Mesa como
+suspeito. A primeira execução depois de matar a interface mede ~59,4 (shaders
+frios). No **X55/RK3566 o port não foi medido** — continua afirmação.
+
+O contador `atrasados` marcando ~100 % dos quadros é **esperado** aqui: ele mede
+contra o orçamento de 75 Hz (13,33 ms) e o quadro real leva 16,7 ms de vblank.
+Não é aperto de CPU/GPU.
+
+### Instalar para testar no aparelho
+
+```bash
+bash scripts/compilar-launcher-teste-arm64.sh --host 10.55.0.2 --instalar root@10.55.0.2
+bash scripts/compilar-jogo-arm64.sh --jogo cobrinha    # cuidado: copia para bin/ do repo
+```
+
+No aparelho, o jogo instalado é o que o cartão da Home abre, e o caminho do
+catálogo é `/user/apps/cobrinha` (o `/opt/giochi/apps/cobrinha` existe e foi
+mantido igual, para os dois não divergirem).
+
+### `giochi-teste`: trocar a interface sem gastar a cota do supervisor
+
+```bash
+/opt/giochi/apps/launcher-teste/giochi-teste abrir [forcar]
+/opt/giochi/apps/launcher-teste/giochi-teste fechar
+/opt/giochi/apps/launcher-teste/giochi-teste tela home
+/opt/giochi/apps/launcher-teste/giochi-teste estado
+```
+
+Três armadilhas medidas, todas tratadas nele e no `aparelho.sh`:
+
+1. **SIGTERM não mata o launcher-teste.** O SDL só posta `SDL_QUIT` na fila e
+   esse binário **não bombeia eventos** (a entrada por evdev não foi portada).
+   O processo ficava vivo segurando o DRM. Escalada para `kill -9`.
+2. **O teardown do EGL/Panfrost pode travar** e deixar um launcher vivo **sem**
+   os descritores de DRM (`pid 30803`): nunca respawnado, nunca desenhando. Por
+   isso a pergunta é "quem segura `card0`/`renderD`", não "o PID existe".
+3. **O dono do DRM pode ser um jogo.** O launcher abre o app, fica em
+   `fork`+`wait` sem DRM, e o jogo é o dono. Matar o launcher ali deixa o jogo
+   **órfão com o dispositivo** (medido com o `Equilibrio`), o launcher-teste
+   morre com `kmsdrm not available` e o `giochi-init` gasta as cinco tentativas
+   até desistir (`/run/giochi/launcher-parado`). Agora as ferramentas **recusam**
+   citando o processo, e `forcar` é explícito.
+
+`verificar-teste` também passou a checar isso antes de tocar em qualquer coisa e
+a esperar o descritor liberar em vez de `sleep 2`: 6 telas a **100,0 %** contra o
+launcher de produção, medido nesta rodada.
+
+### Os dois avisos de SSH que quebravam o toolkit
+
+`sem_ruido` não filtrava o bloco de **host key alterada** do OpenSSH, e como o
+`no_aparelho` junta stderr com stdout, `resolucao_do_aparelho` devolvia 12 linhas
+de aviso + `640x480`. O sintoma era `não descobri a resolução do painel` com o
+painel respondendo certo — qualquer função que faça parse sofre igual. O filtro
+foi ampliado, e a entrada obsoleta saiu com `ssh-keygen -R 10.55.0.2` (imagem
+regravada troca a chave de propósito).
+
+### `verificar-jogos.mjs` media a caixa do tabuleiro 2D — que não existe mais
+
+O script aceitava o quadro com "a caixa da cor BORDA menos 4 px, dividida por
+24". Com o tabuleiro em perspectiva a mesma conta devolveu **2,0 px** enquanto o
+tabuleiro ocupava 415..501 px de largura na tela: reprovava um quadro perfeito.
+
+Em perspectiva a célula **não tem um tamanho** — a da fileira do fundo é menor
+que a da frente. Agora a medida é a **largura do tabuleiro na sua fileira mais
+estreita ÷ 24 colunas**, que é o caso pessimista e é o que decide legibilidade:
+
+```text
+640x480 → 17,2 px   800x600 → 21,5 px   1280x720 → 24,9 px   (piso 14)
+320x240 →  8,6 px   APERTADO   ← o teste ainda sabe reprovar
+```
+
+E o driver de vídeo passou a ser `offscreen` antes de `dummy`: `dummy` **não tem
+OpenGL** e o jogo 3D falhava com `OpenGL support is either not configured in
+SDL`, mensagem que de fora parece defeito do jogo. Sem BMP, o script agora diz
+"não gravou quadro" em vez de afirmar que o painel não serve.
+
+`bin/giochi-cobrinha` foi sincronizado com o artefato medido
+(`e4e5b782…`): repositório, `/opt/giochi/apps/cobrinha` e `/user/apps/cobrinha`
+têm o mesmo sha256.
+
+## 26. Imagem nova do R35S (09/11/2026): o que ela não traz
+
+Imagem `commit 5e81871`, `built_at_utc=2026-11-09T02:07:46Z`, kernel
+`6.12.0 #1 SMP PREEMPT Mon Nov 9 02:09:27 UTC 2026`. Painel 640×480,
+`fbcon/rotate=0`, 964 MB, 766 MB livres em `/`.
+
+**A imagem não tem a interface.** `/opt/giochi/apps/` vem só com `bin/` (o
+`verificador-ed25519`); não existe `launcher`. O `inittab` tem
+`::respawn:/usr/bin/giochi-init` e o supervisor espera
+`/opt/giochi/apps/launcher/bin/giochi-launcher` — então até alguém instalar o
+launcher, o aparelho fica sem desenho por mais correto que esteja o resto.
+
+Acesso: a imagem troca a host key **e** não tem a nossa chave, então `BatchMode`
+dá `Permission denied (publickey,password)`. O `sshpass` não existe nesta
+máquina; o caminho é `SSH_ASKPASS` + `setsid -w` (ver §26.1). Depois de instalar
+a chave, o toolkit todo volta a funcionar sem senha.
+
+### O que foi instalado, com sha256 conferido nas duas pontas
+
+| Item | Caminho | sha256 |
+| --- | --- | --- |
+| launcher | `/opt/giochi/apps/launcher/bin/giochi-launcher` | `86c4de00…` |
+| cobrinha 3D | `/opt/giochi/apps/cobrinha/bin/giochi-cobrinha` | `e4e5b782…` |
+| launcher-teste | `/opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste` | `d94d9601…` |
+| `giochi-teste` | `/opt/giochi/apps/launcher-teste/giochi-teste` | `bd91110d…` |
+| equilibrio | `/user/apps/equilibrio/bin/ball_balance` | `71b1ef79…` |
+
+O `equilibrio` **não** é um app deste repositório: é o exemplo `ball_balance` da
+engine, e o binário veio do `target/aarch64-…` de `GIOCHI-ENGINE-3D` (cópia, sem
+escrever lá — 0 mudanças e mesmo HEAD `3785a33` antes e depois). Fica em
+`/user/apps` justamente por isso: é pacote, não parte da imagem.
+
+### Medido nesta imagem
+
+```text
+launcher    quadro 640x480, 303 cores, 0,00% de preto, 99,6% vs referência do PC, texto linhas 1,00
+catálogo    2 app(s): cobrinha (/opt/giochi/apps/cobrinha) e equilibrio (/user/apps/equilibrio)
+cobrinha    --lancar pelo catálogo: GLES 3 Mali-G31, instancing ativo, 59,9 fps em 4237 quadros
+equilibrio  --lancar pelo catálogo: jogo com ppid do launcher e drm=6
+teste       6 telas a 100,0% contra o launcher de produção
+troca       giochi-teste abrir → pid=2988 drm=6 · fechar → produção pid=4869
+```
+
+### Dois defeitos do catálogo que só apareceram com a imagem limpa
+
+1. **O launcher voltou como cartão.** O `role: shell` era respeitado só para as
+   entradas do `apps.json`. Instalar o launcher **com `metadata.json`** (o certo)
+   fazia a colheita de instalados recolocá-lo no catálogo, junto com o
+   `launcher-teste`: `A` no primeiro abriria um segundo launcher, que perde o
+   DRM exclusivo e morre com `kmsdrm not available`. O papel **não** pode vir do
+   catálogo já filtrado (o launcher está fora dele por definição) — agora
+   `mesclarInstalados` recebe `papeis` lido do `apps.json`. Medido: sem `papeis`
+   o catálogo fica `['launcher']`; com, fica vazio e o motivo é
+   `role shell (declarado no apps.json)`.
+2. **App da loja saía sem licença.** `license` existe no `metadata.json` (campo
+   do schema) e a mesclagem só herdava do `apps.json`. O `equilibrio` aparecia
+   sem licença na ficha. Agora o `metadata.json` preenche, e o `apps.json`
+   continua vencendo quando existe — é ele que o validador confere.
+
+Dois testes novos em `tests/catalogo.test.mjs` fixam as duas regras; a suíte
+passou de 195 para **199**.
+
+### §26.1 Acesso com `SSH_ASKPASS` (não há `sshpass`)
+
+```bash
+printf '#!/bin/sh\nprintf "%%s\\n" "$GIOCHI_SENHA_ASK"\n' > /tmp/askpass.sh && chmod 700 /tmp/askpass.sh
+GIOCHI_SENHA_ASK='<senha>' SSH_ASKPASS=/tmp/askpass.sh SSH_ASKPASS_REQUIRE=force \
+  setsid -w ssh -o StrictHostKeyChecking=accept-new \
+    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+    root@10.55.0.2 'comando'
+```
+
+O `setsid -w` é o que faz o ssh **não** ter tty — sem isso ele ignora o
+`SSH_ASKPASS` e tenta pedir pelo terminal. Instalar a chave depois disso é o que
+devolve o toolkit inteiro.
+
+### `timeout` não limita o launcher (e isso custou duas rodadas)
+
+`timeout 14 giochi-launcher --lancar X` **não termina**: o SDL instala handler de
+SIGTERM que só posta `SDL_QUIT`, e o launcher está em `fork`+`wait`, então segue
+esperando o jogo. O `timeout` fica pendurado, a sessão SSH fica pendurada, e
+quando o SSH morre o jogo continua **órfão dono do DRM** — o `giochi-init` então
+desiste (`RESTART_MAX`) e o aparelho fica sem interface. Medido duas vezes nesta
+rodada com o `equilibrio`.
+
+Receita que funciona:
+
+```sh
+setsid nohup env SDL_VIDEODRIVER=kmsdrm giochi-launcher --lancar <id> >/tmp/e.log 2>&1 &
+sleep 8
+# conferir a árvore: o jogo tem de ter ppid do launcher e drm>0
+kill -9 <pid-do-jogo>       # libera o DRM
+kill <pid-do-launcher>      # aí sim o launcher sai
+rm -f /run/giochi/dev-free-console
+```
+
+E `timeout` na ponta do **host** também não mata o processo remoto: matar o ssh
+deixa o comando rodando no aparelho. O `timeout` tem de estar dentro do comando
+remoto, ou não se usa.
+
+## 27. Imagem nova do **X35H** (09/11/2026): 100 % de novo, e por quê
+
+Mesmo commit `5e81871`, `built_at_utc=2026-11-09T02:10:53Z`, `device=powkiddy-x35h`.
+Painel 640×480, `fbcon/rotate=0`, 964 MB, 756 MB livres. Como no R35S, a imagem
+**não traz launcher**: `/opt/giochi/apps/` só tem `bin/verificador-ed25519`, e o
+`giochi-init` espera `/opt/giochi/apps/launcher/bin/giochi-launcher`.
+
+Acesso: host key nova e sem a nossa chave. `sshpass` não existe nesta máquina —
+`SSH_ASKPASS` + `setsid -w` (receita em §26.1), depois instalar a chave.
+
+### Instalado, sha256 conferido nas duas pontas
+
+| Item | sha256 (novo) |
+| --- | --- |
+| launcher | `b27802a3…` (recompilado nesta rodada) |
+| cobrinha 3D | `e4e5b782…` |
+| launcher-teste | `4a4e249b…` (recompilado) |
+| `giochi-teste` | `bd91110d…` |
+| equilibrio (`/user/apps`) | `71b1ef79…` |
+
+```text
+launcher  640x480, 100,0% vs referência do PC (era 99,5%), 0,00% de preto, texto linhas 1,00
+catálogo  2 apps: cobrinha (/opt/giochi/apps) e equilibrio (/user/apps)
+cobrinha  GLES 3 Mali-G52 r1, instancing ativo, **74,2 fps** em 600 quadros (teto 75)
+launcher-teste  6 telas a 100,0%
+```
+
+### O que fazia a comparação reprovar: hardware, não desenho
+
+Três coisas vinham do **hardware da máquina** e eram diferentes por definição:
+o relógio (aparelho sem NTP, 1 h 46 atrás do PC), a bateria (`94% Charging` no
+X35H, `—` no PC) e a temperatura. Cada uma derrubava a comparação para 99,5–99,9 %
+e nenhuma era regressão de desenho.
+
+A correção é a mesma que já existia para `GIOCHI_GLES`/`GIOCHI_ROTATE`: congelar
+nos **dois lados**.
+
+| Variável | Onde | Efeito |
+| --- | --- | --- |
+| `GIOCHI_HORA_FIXA` | `views::current_clock` | desenha o texto dado em vez de `SystemTime` |
+| `GIOCHI_BATERIA_FIXA` | `app::tick_energia` e `launcher-teste` | nível fixo |
+| `GIOCHI_TEMPERATURA_FIXA` | idem | °C fixo |
+
+`aparelho.sh` exporta as três para a captura no aparelho **e** para a referência
+do PC em `verificar` e `verificar-teste`. Medido depois: **100,0 %** nos dois.
+
+O `retry` de 99,5 % também estava **invertido**: `awk 'exit !(p < 99.5)' && break`
+quebrava o laço quando o resultado era **bom** (≥ 99,5 %), então a segunda
+tentativa nunca acontecia justamente no caso que ela existe para cobrir (o minuto
+virando entre as duas capturas). Corrigido para `exit !(p >= 99.5)`.
+
+### Dois defeitos de ferramenta que custaram tempo
+
+1. **`libSDL2.so` quebrado no cache de cross/PC.** `libSDL2-2.0.so.0.3200.10`
+   apontava para **si mesmo** (laço), então `libSDL2.so` não resolvia e o
+   `rust-lld` caía no `libSDL2.a` — falhando com símbolos do PulseAudio
+   (`src_new`, `src_process`). O erro manda procurar defeito no código.
+   `compilar-launcher.sh` agora **verifica se cada `.so` do prefixo resolve** e
+   conserta só o que está quebrado, mesmo quando o SDL2 vem do sistema (era
+   exatamente esse o caso em que o bloco de extração não rodava). A primeira
+   versão do conserto casava `$1 == "libX-2.0.so.0 "` (com espaço) e nunca
+   casava — falha silenciosa; corrigida.
+2. **`local` fora de função** em `compilar-launcher-teste-arm64.sh` (introduzido
+   ao instalar o `giochi-teste`): `local: somente pode ser usado em uma função`,
+   e o utilitário deixava de ser copiado. O `bash -n` **não pega** isso.
+
+### Medido no X35H, e o que isso muda
+
+**74,2 FPS com teto de 75** — o teto é real e alcançável. No R35S o painel é
+60 Hz e o mesmo jogo mede ~60: o limite era o display, não o laço. Ou seja, o
+número depende do aparelho, e agora há **dois** pontos medidos em vez de um.
+
+## 28. Neon Drift: um segundo jogo 3D, e o que a engine cobrou (09/11/2026)
+
+Pedido do dono: **corrida arcade 3D noturna**, inspirada em NFS e sem marca
+real, usando a GIOCHI-ENGINE-3D e o RK3566, com **teto de 75 fps**, e **sem
+escrever em `GIOCHI-ENGINE-3D`**. A engine foi copiada para
+`app/jogos/neon-drift/vendor/` — 1,3 MB, mesmo commit `50f6857`.
+
+O jogo existe: `app/jogos/neon-drift`, 93 testes no núcleo + 63 na camada SDL,
+**99,9 % idêntico ao PC** no quadro renderizado pelo aparelho.
+
+### A pista é dado, e o dado tem teste
+
+| Medido | Valor | Por que importa |
+| --- | --- | --- |
+| comprimento | **962 m** | duas voltas = 1 924 m |
+| reta mais longa | **170 m** | é onde o nitro serve |
+| praça de drift | **19 m** de meia-largura | contra 9,5 m na reta |
+| túnel | **157 m**, de 547 a 704 m | começa longe da largada |
+| curva fechada | **2,28 rad em 45 m** → raio **20 m** | exige frear de verdade |
+
+Esses cinco números são o *desenho* da pista e um ajuste de ponto de controle
+pode apagar qualquer um sem quebrar mais nada — o sintoma seria o jogador
+procurando uma curva que não existe. Por isso
+`a_pista_tem_o_que_o_jogo_promete` mede os cinco e reprova.
+
+A pista anterior tinha curvatura máxima de **0,998 rad**: não havia curva
+fechada, `para` o drift nunca disparava e a corrida era um oval. Medir o que o
+jogo promete é o que transformou "acho que tem curva" em número.
+
+### O piloto artificial virou ferramenta de produção
+
+Ele nasceu como ajudante de teste ("a corrida é ganhável?") e promoveu-se a
+`crates/core/src/piloto.rs`, usado pelo `--piloto` da CLI. Sem ele, `--passos`
+media outra coisa: o acelerador preso levava o carro ao primeiro muro e o quadro
+capturado mostrava a linha de largada a 2,6 m/s, como se a corrida não tivesse
+começado.
+
+Agora `--piloto --passos 1500` coloca o jogo no meio da pista, no túnel, na
+curva ou derrapando — sem dedo no aparelho.
+
+### Quatro defeitos que só apareceram porque havia ferramenta
+
+1. **O chão não era desenhado.** A malha do asfalto tinha 2 560 vértices e o
+   quadro saía 100 % vazio. Causa: a ordem dos cantos do quadrilátero dava normal
+   para baixo e o `cull_face` o removia **em silêncio**. `--so asfalto` foi o que
+   mostrou; hoje `Construtor::quad` deduz o sentido pela normal declarada, então
+   a ordem dos cantos não importa mais.
+2. **O estado de quadro não muda no meio do quadro.** `set_state` só é aplicado
+   dentro de `begin_frame`; chamá-lo entre dois desenhos não faz nada. Era assim
+   que o `blend` do neon e o `clear_color` da noite "não pegavam". Hoje há **um**
+   estado por quadro (blend ligado, descarte de faces desligado) e a separação
+   entre opaco e emissivo é feita por `set_light`, que **é** aplicado por desenho.
+3. **O HUD ficava atrás do mundo.** A câmera do HUD usava planos 0,5..60, o que
+   dava profundidade normalizada ~0,96 — atrás de qualquer prédio a 30 m. Com
+   planos 9..4000 a profundidade do HUD fica ~0,10 e ele está sempre na frente.
+4. **Um prédio em cima da reta de largada.** A cidade é gerada em laço fechado, e
+   no novo traçado os prédios do fim da volta caíam sobre o começo. Com descarte
+   de faces ligado o erro era invisível (via-se *através* da parede); desligado,
+   o quadro virou uma parede cinza. A correção é `Pista::folga_em`: nenhum
+   objeto de cenário nasce a menos de X metros de **qualquer** trecho da pista.
+
+### Dois defeitos de jogabilidade que o piloto expôs
+
+- **O carro ficava preso na mureta.** A perda de velocidade na parede era
+  `0,30 + 0,55·|dir·n|` — 30 % por segundo **mesmo paralelo**, e somada ao atrito
+  do ombro prendia o carro a 1,3 m/s. Medido: 40 s parado na linha de largada.
+  Agora a perda é `0,05 + 0,90·|dir·n|` e a parede **endireita** o carro.
+- **Cruzar a linha travava a localização.** A janela do `localizar` era ±25
+  amostras **linear**; ao cruzar a linha a dica ficava no fim do vetor, a janela
+  não alcançava o começo e o carro era localizado 2 m depois da linha com 12 m de
+  desvio lateral. Agora a janela é circular (`rem_euclid`).
+
+### A grade de largada creditava uma volta inteira
+
+Os adversários nasciam em `comprimento - 8` (antes da linha) com `volta = 1`.
+Como `progresso = (volta-1)·comprimento + s`, quem andasse 8 m ganhava **962 m**
+de progresso. Medido: a IA aparecia 400 m à frente com a mesma velocidade, e o
+piloto — que fecha a volta em 20,8 s — perdia sempre. Corrigido: eles nascem
+depois da linha, de 4 a 18 m. `a_vitoria_nao_e_facil_demais_nem_impossivel`
+exige folga entre 1 e 25 s.
+
+### A paleta teve de subir uma rodada
+
+A primeira versão era "noite realista": asfalto a 0,058. Medido no quadro:
+**luminância média 39 de 255, 25 % do quadro quase preto e 4 % de pixels
+coloridos**. Num painel de 3,5" isso não é atmosfera, é tela apagada. Subiu para
+média ~40-55 com 0 % de estouro, e o neon ganhou luz própria (`EMISSIVO`:
+ambiente 1,0 e difusa 0), senão o ciano saía a 45 % do brilho.
+
+`--so <malha>` continua sendo o instrumento que responde "qual malha é aquela".
+
+### Números do aparelho (X35H, 640×480, Mali-G52 r1)
+
+```text
+neon-drift: painel 640x480, rotação Nenhuma, GLES 3 em Mali-G52 r1 (Panfrost)
+neon-drift: instancing ativo, pista 962 m, 2 voltas, limite 75 fps
+neon-drift: 5 dispositivo(s) de entrada
+quadro 640x480, 86 cores, 0,00% de preto
+comparação com o PC: 99,9% idêntico (diferença média 0,1 por pixel)
+launcher --lancar neon-drift: catálogo 3 apps → inicia /user/apps/neon-drift
+```
+
+**FPS: 39,5.** O teto de 75 não é alcançável *nesta imagem e neste aparelho*: o
+**próprio `cobrinha`, que já mediu 74,2 fps aqui, mede 49,2 no mesmo instante** —
+é o teto do conjunto painel/imagem, não do jogo. Com uma malha só (`--so
+asfalto`) o neon-drift faz 49,1, ou seja, ele está a ~5 ms do teto; o resto é
+custo fixo de apresentação que nenhum dos dois jogos evita.
+
+### Build ARM64: o toolchain mudou e o wrapper precisou mudar junto
+
+Três coisas quebraram o `compilar-jogo-arm64.sh` nesta rodada, e nenhuma era do
+jogo:
+
+1. **`pkg-config` recusa cross** sem `PKG_CONFIG_ALLOW_CROSS=1` — o erro fala de
+   "cross-compilation", não de SDL.
+2. **`rust-lld` passou a recusar `--fix-cortex-a53-843419`** (bandeira que o
+   rustc passa sozinho para aarch64) mesmo com `-m aarch64linux`. Ela insere o
+   desvio do erratum 843419 do **Cortex-A53**; RK3326 é A35 e RK3566 é A55, então
+   o wrapper a descarta. Sem isso, nenhum jogo compila.
+3. **`-L /usr/lib/x86_64-linux-gnu` fazia o `lld` escolher a emulação do host**:
+   o link morria com "Scrt1.o is incompatible with elf64-x86-64", que não fala de
+   arquitetura de alvo. O wrapper descarta esse caminho — o rustc o passa sozinho
+   e ele não serve para nada num link aarch64.
+
+O wrapper é gerado por `compilar-launcher-arm64.sh`, então a correção está lá; a
+cópia em `~/.cache/giochi-arm64/` foi atualizada à mão nesta sessão.
+
+## 29. Neon Drift: encher de efeito, e o que cada efeito custa (09/11/2026)
+
+Pedido do dono: **"enche de efeitos, o jogo ainda está leve — usa tudo que a
+engine pode entregar"**, e no fim **desligar o PC**. O alvo de 75 fps continua
+sendo teto, não promessa.
+
+O resultado medido no **X55** (painel 720×1280, o dobro de pixels do X35H):
+**39,5 fps**, 45 chamadas de desenho, 770 partículas vivas, **26,7 MB** de pico
+de RAM. Antes desta rodada, com dois tipos de partícula e nenhum cenário novo,
+o mesmo aparelho fazia **29,8 fps**.
+
+### O maior ganho veio de ligar o descarte de faces
+
+| Configuração | fps (X55) |
+| --- | --- |
+| `cull_face: false` (como era) | 29,8 |
+| `cull_face: true` | **39,5** |
+
++33 % sem desenhar nada de diferente. A causa é uma armadilha de driver: o
+quadro inteiro roda com `blend` ligado (é assim que o neon e o vidro funcionam),
+e **com blending o Mali não rejeita a face de trás por profundidade** — metade
+da cidade era sombreada para ser descartada depois. O comentário que justificava
+o descarte desligado ("o teste de profundidade descarta") estava errado, e
+custou ~10 ms por quadro em todo quadro desde o primeiro dia.
+
+Ligar o descarte obrigou a acertar o sentido de **quatro** quads. Um deles era
+invisível havia três rodadas: a aura do carro.
+
+### Identidade de `Mat4` não é ponto de partida
+
+`Mat4::IDENTITY` deixa `m[1]` e `m[5]` em **1,0**. Esses dois campos são a
+componente Y dos eixos X e Y do quad, então quem monta a matriz campo a campo
+(aura, feixe de farol, marca de pneu) e não os zera **cisalha o quad para
+cima**. A aura do carro era um painel vertical de 5 m em vez de uma poça no
+chão, e o sintoma que chegou até aqui foi "o efeito está feio" — nunca um erro.
+Hoje as três funções começam de um array zerado, e há teste para o sentido da
+normal (`o_quad_deitado_do_carro_fica_com_a_normal_para_cima`).
+
+### Cada chamada de desenho custa ~0,15 ms de CPU
+
+Medido separando as partes no aparelho (`GIOCHI_SEM=carros,particulas,hud`):
+
+| Parte | Custo no quadro | Chamadas |
+| --- | --- | --- |
+| piso do aparelho (swap + vblank) | 16,7 ms | — |
+| mundo estático | 3,5 ms | 22 |
+| carros | 2,3 ms | 10 (eram 22) |
+| partículas | 2,8 ms | 8 |
+| HUD | ~0 | 15 |
+
+Três decisões saíram daí:
+
+1. **O carro deixou de ser 5 desenhos por carro.** As malhas são as mesmas para
+   todos, então vidro, roda, farol e lanterna saem em **uma** `draw_instanced`
+   cada; só a lataria precisa de uma chamada por cor. 22 → 10 desenhos.
+2. **O cenário novo não pode criar malha nova.** Um arco é uma caixa em `muros` e
+   uma tira em `neon`; uma passarela usa `muros` + `telhados`. Arcos a cada 26 m,
+   três passarelas, outdoors a cada 62 m e faixas nas torres distantes custaram
+   **zero chamada**. A única exceção foi o túnel, que ganhou **uma** malha extra
+   (`tunel_luzes_b`) para as lâmpadas pulsarem em duas fases — a engine só tem
+   cor uniforme por desenho, então animação em sequência exige geometria
+   separada.
+3. **O pulso do neon é de graça.** A cor já é uniforme por desenho: modular o
+   brilho com o tempo não custa nem uma chamada nem um vértice.
+
+### O `Upscaler` da engine foi medido e **não** compensa aqui
+
+`--escala 0.75` piorou o quadro (38,2 contra 39,5): o passe de esticar desenha
+um quad de tela cheia **na resolução nativa**, e num painel de 921 mil pixels
+isso custa mais do que economiza. A opção fica na CLI, desligada por padrão,
+porque em 640×480 a conta pode inverter.
+
+### `--sem-vsync` não desliga o vsync neste KMSDRM
+
+`SDL_GL_SetSwapInterval(0)` responde OK e não muda nada: o `drmModePageFlip`
+continua esperando o campo. Consequência prática para medir: com uma malha só o
+jogo marca **59,7 fps** e não dá para saber se sobrou folga. O que funciona é
+comparar configurações entre si, não buscar o "custo puro".
+
+### O quad translúcido no chão custa mais que a cidade inteira
+
+O achado mais caro da rodada, e o mais silencioso. Ao corrigir a matriz da aura
+do carro (ver acima) ela passou a ser o que devia: uma poça de 5,6×9,6 m no
+asfalto. O quadro caiu de **39 para 30 fps** sem mais nada mudar.
+
+Um quadrilátero deitado visto a 3 m de altura, de raspão, cobre **um terço do
+quadro**; e translúcido ele paga cada pixel, ao contrário dos opacos que o teste
+de profundidade descarta. Com 4,2 m a aura ilumina embaixo do carro e o quadro
+volta aos 39. O feixe do farol tinha o mesmo problema pela mesma razão (15 m
+custavam ~8 fps) e ficou com 7,5 m.
+
+O contraste que fecha o diagnóstico: tirar `poco_luz`, `reflexos` e `janelas` do
+quadro **não muda nada** (39,0 → 39,6). Não é o número de quads translúcidos que
+importa, é a **área em tela** de cada um.
+
+### Os sete tipos de partícula, e por que a lista é uma só
+
+A primeira versão tinha duas listas (fumaça e nitro) e um teto de 220. Encher a
+cena com esse desenho exigiria uma lista e um laço de integração por efeito —
+sete cópias da mesma regra. Hoje há **uma** lista, um integrador de 15 linhas e
+um campo `tipo` que decide cor, gravidade, arrasto e forma de desenho.
+
+O desenho continua barato porque a cor é por desenho: sete tipos são sete
+chamadas, e a fumaça — a única que **desbota** — é dividida em dois baldes de
+vida, desenhados com alfa diferente. Dois baldes leem como desbotamento; sete
+custariam sete chamadas por um ganho que ninguém vê a 640×480.
+
+Teto por tipo (`fumaca` 300, `chuva` 700, `marca` 240…) porque memória e
+previsibilidade do quadro: uma derrapagem longa não pode custar o dobro de um
+quadro parado.
+
+### A chuva e o resto do que nasce perto da câmera
+
+`Particulas::atualizar` recebe a **câmera**, não a pista. Chuva e poeira nascem
+numa caixa de 3 a 74 m à frente do olho: emitir na volta inteira de 962 m daria
+99 % de partícula que ninguém vê e o dobro de trabalho. A velocidade da gota é a
+**relativa** (`-frente × 0,85·v` + queda), e o quad se estica ao longo dela —
+é o mesmo `matriz_esticada` que faz o rastro de nitro e a faísca.
+
+### Três armadilhas de teste que esta rodada pagou
+
+1. **Asserção de regime permanente em vez de efeito.** `respingo > 5` media a
+   taxa de emissão (taxa × vida média), não se o efeito existe. Mudar a vida
+   mudava o número e o teste virava mágico. Agora o limiar vem da conta escrita
+   ao lado e o laço roda 1,2 s.
+2. **Teste que nunca foi compilado.** Metade dos testes de `efeitos.rs` usava
+   `Vec3::X` e `.dot()`, que **não existem** na engine. Eles "existiam" havia
+   uma sessão e nunca tinham rodado — o módulo é novo e o `cargo test` só foi
+   rodado depois. Um teste que não compila não prova nada, e o sinal é o mesmo de
+   um teste que passa dos dois lados.
+3. **`--so mundo`.** `--so <malha>` sempre desligou carro, partícula e HUD junto
+   (é o que faz `--so asfalto` medir 59,7 fps). Faltava o caso "todo o mundo e
+   nada mais" — foi ele que separou 22 chamadas de mundo (3,5 ms) de 19 de
+   carro/partícula/HUD (5,1 ms).
+
+### O que continua afirmação
+
+- **75 fps não é alcançável no X55**: o piso de apresentação sozinho custa
+  16,7 ms (59,7 fps com uma malha só). Em 640×480 (X35H/R35S) a proporção é
+  melhor e não foi remedida nesta rodada.
+- **A comparação PC × aparelho não é pixel a pixel com partículas**: a chuva
+  anima com o tempo, então dois processos em instantes diferentes diferem 5,5 %
+  — todo em partículas e no pulso do HUD. A estrutura (média 66,7 contra 66,9,
+  mesmo 6,58 % de quase preto, mesmas 28 % de pixels coloridos) bate.

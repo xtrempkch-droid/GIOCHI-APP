@@ -1,0 +1,764 @@
+//! Neon Drift: laço principal, GLES e diagnóstico.
+//!
+//! ## O que este arquivo **não** faz
+//!
+//! Regra de corrida, física, pontuação e formatação vivem no núcleo
+//! (`giochi-neon-drift-core`). Aqui ficam só as três coisas que precisam do
+//! aparelho: janela/GLES, entrada e o laço com teto de quadros. É o que permite
+//! testar "duas voltas terminam em vitória" sem abrir tela.
+//!
+//! ## Diagnóstico sem dedo no aparelho
+//!
+//! `--quadro`, `--quadros`, `--tamanho`, `--teclas`, `--passos` e `--json`
+//! existem porque este projeto já pagou caro por ferramenta que só funcionava
+//! com alguém olhando a tela: o `--teclas` do launcher passou 223 testes verdes
+//! imprimindo um estado que não tinha mudado.
+
+mod audio;
+mod cena3d;
+mod efeitos;
+mod entrada_jogo;
+mod evdev;
+mod malha;
+mod vetor;
+mod video;
+
+use std::time::Instant;
+
+use audio::{EstadoSom, Som};
+use cena3d::Cena3D;
+use entrada_jogo::{Acoes, Teclas};
+use giochi_engine::platform::sdl::Platform;
+use giochi_engine::platform::window::{Window, WindowConfig};
+use giochi_engine_3d::context::{self, GlesVersion};
+use giochi_engine_3d::RenderContext3D;
+use giochi_neon_drift_core::carro::Entrada;
+use giochi_neon_drift_core::corrida::{Corrida, Evento, Fase};
+use giochi_neon_drift_core::relogio::{ALVO_FPS, MAX_FPS, TIQUE};
+use giochi_neon_drift_core::{hud, Relogio};
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::surface::Surface;
+
+const VERSAO: &str = env!("CARGO_PKG_VERSION");
+
+/// Opções de linha de comando.
+#[derive(Debug)]
+struct Opcoes {
+    quadro: Option<String>,
+    tamanho: Option<(u32, u32)>,
+    quadros: Option<u32>,
+    passos: u32,
+    teclas: Teclas,
+    tela: Option<Fase>,
+    fps: u32,
+    json: bool,
+    sem_som: bool,
+    piloto: bool,
+    so: Option<String>,
+    sem_vsync: bool,
+    escala: f32,
+    ajuda: bool,
+    versao: bool,
+}
+
+impl Default for Opcoes {
+    fn default() -> Self {
+        Self {
+            quadro: None,
+            tamanho: None,
+            quadros: None,
+            passos: 0,
+            teclas: Teclas::default(),
+            tela: None,
+            fps: ALVO_FPS,
+            json: false,
+            sem_som: false,
+            piloto: false,
+            so: None,
+            sem_vsync: std::env::var_os("GIOCHI_VSYNC").is_some_and(|v| v == "0"),
+            escala: std::env::var("GIOCHI_ESCALA")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0),
+            ajuda: false,
+            versao: false,
+        }
+    }
+}
+
+fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
+    let mut o = Opcoes::default();
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--quadro" => {
+                o.quadro = Some(argv.get(i + 1).ok_or("--quadro sem caminho")?.clone());
+                i += 2;
+            }
+            "--tamanho" => {
+                let valor = argv.get(i + 1).ok_or("--tamanho sem valor")?;
+                let (l, a) = valor
+                    .split_once('x')
+                    .ok_or("--tamanho espera LARGURAxALTURA")?;
+                let tamanho = (
+                    l.parse().map_err(|_| "largura inválida")?,
+                    a.parse().map_err(|_| "altura inválida")?,
+                );
+                if tamanho.0 == 0 || tamanho.1 == 0 {
+                    return Err("--tamanho exige dimensões maiores que zero".into());
+                }
+                o.tamanho = Some(tamanho);
+                i += 2;
+            }
+            "--quadros" => {
+                let n: u32 = argv
+                    .get(i + 1)
+                    .ok_or("--quadros sem valor")?
+                    .parse()
+                    .map_err(|_| "--quadros espera um número")?;
+                if n == 0 {
+                    return Err("--quadros precisa ser maior que zero".into());
+                }
+                o.quadros = Some(n);
+                i += 2;
+            }
+            "--passos" => {
+                o.passos = argv
+                    .get(i + 1)
+                    .ok_or("--passos sem valor")?
+                    .parse()
+                    .map_err(|_| "--passos espera um número")?;
+                i += 2;
+            }
+            "--teclas" => {
+                let valor = argv.get(i + 1).ok_or("--teclas sem valor")?;
+                o.teclas = teclas(valor)?;
+                i += 2;
+            }
+            "--tela" => {
+                let valor = argv.get(i + 1).ok_or("--tela sem valor")?;
+                o.tela = Some(match valor.as_str() {
+                    "titulo" | "title" => Fase::Titulo,
+                    "corrida" | "race" => Fase::Correndo,
+                    "resultado" | "result" => Fase::Resultado,
+                    outro => return Err(format!("--tela desconhecida: {outro}")),
+                });
+                i += 2;
+            }
+            "--fps-teto" => {
+                let fps: u32 = argv
+                    .get(i + 1)
+                    .ok_or("--fps-teto sem valor")?
+                    .parse()
+                    .map_err(|_| "--fps-teto espera um número")?;
+                if !(1..=MAX_FPS).contains(&fps) {
+                    return Err(format!("--fps-teto precisa ficar entre 1 e {MAX_FPS}"));
+                }
+                o.fps = fps;
+                i += 2;
+            }
+            "--json" => {
+                o.json = true;
+                i += 1;
+            }
+            "--piloto" => {
+                o.piloto = true;
+                i += 1;
+            }
+            "--so" => {
+                o.so = Some(argv.get(i + 1).ok_or("--so sem nome de malha")?.clone());
+                i += 1;
+                i += 1;
+            }
+            "--sem-som" => {
+                o.sem_som = true;
+                i += 1;
+            }
+            "--sem-vsync" => {
+                o.sem_vsync = true;
+                i += 1;
+            }
+            "--escala" => {
+                let v = argv.get(i + 1).ok_or("--escala sem valor")?;
+                o.escala = v
+                    .parse::<f32>()
+                    .map_err(|_| format!("--escala precisa de um número, veio {v}"))?;
+                i += 2;
+            }
+            "-h" | "--ajuda" => {
+                o.ajuda = true;
+                i += 1;
+            }
+            "--versao" => {
+                o.versao = true;
+                i += 1;
+            }
+            outro => return Err(format!("argumento desconhecido: {outro}")),
+        }
+    }
+    Ok(o)
+}
+
+/// Converte `a,right,space` em teclas mantidas apertadas.
+fn teclas(valor: &str) -> Result<Teclas, String> {
+    let mut t = Teclas::default();
+    for nome in valor.split(',') {
+        match nome.trim() {
+            "" => {}
+            "a" | "acelerar" | "up" => t.cima = true,
+            "b" | "frear" | "down" => t.baixo = true,
+            "left" | "esquerda" => t.esquerda = true,
+            "right" | "direita" => t.direita = true,
+            "space" | "espaco" | "drift" => t.espaco = true,
+            "shift" | "nitro" => t.shift = true,
+            "enter" | "start" => t.enter = true,
+            "esc" | "escape" => t.escape = true,
+            outro => return Err(format!("tecla desconhecida: {outro}")),
+        }
+    }
+    Ok(t)
+}
+
+/// Estado da corrida em uma linha, para o `--json`.
+///
+/// Existe porque `--passos` sem número de retorno é fé: rodar 900 passos e
+/// receber `"fase":"Correndo"` não diz se o carro andou 4 m ou 500 m.
+fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
+    let s = corrida.carro.pos;
+    let (cx, cy, cz, fov) = cena.camera();
+    format!(
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2}",
+        corrida.carro.velocidade,
+        corrida.volta,
+        corrida.posicao,
+        corrida.tempo,
+        corrida.drift.pontos,
+        corrida.carro.s,
+        s.x,
+        s.z,
+        cx,
+        cy,
+        cz,
+        fov
+    )
+}
+
+fn ajuda() {
+    println!(
+        "giochi-neon-drift {VERSAO}
+
+Uso:
+  giochi-neon-drift                        jogar
+  giochi-neon-drift --quadro <arq.bmp>      desenhar um quadro e sair
+  giochi-neon-drift --tamanho 640x480       painel simulado
+  giochi-neon-drift --quadros 300           desenhar N quadros e sair
+  giochi-neon-drift --passos 2000           adiantar a simulação
+  giochi-neon-drift --piloto                o piloto artificial dirige nos --passos
+  giochi-neon-drift --teclas a,right,shift  teclas seguradas
+  giochi-neon-drift --tela resultado        forçar uma tela
+  giochi-neon-drift --fps-teto 75           limite: 1 a 75 (é também o padrão)
+  giochi-neon-drift --sem-som               sem áudio
+  giochi-neon-drift --so asfalto            desenha uma malha só (diagnóstico)
+  giochi-neon-drift --json                  saída de máquina
+  giochi-neon-drift --versao
+
+Controles: WASD/setas, ESPACO freio de mao, SHIFT nitro, ENTER, ESC.
+GIOCHI_GL_VERSION=2 solicita GLES 2.0; o padrão pede 3.0 com queda para 2.0."
+    );
+}
+
+fn restaurar_sigpipe() {
+    // Escrever num pipe fechado (`--json | head`) não pode matar o processo no
+    // meio do desenho: o Rust ignora SIGPIPE por padrão, mas o SDL instala o
+    // handler de C, que encerra.
+    unsafe {
+        libc::signal(libc::SIGPIPE, 0);
+    }
+}
+
+fn painel(plataforma: &Platform, o: &Opcoes) -> Result<(u32, u32), String> {
+    if let Some(t) = o.tamanho {
+        return Ok(t);
+    }
+    plataforma
+        .video_subsystem()
+        .desktop_display_mode(0)
+        .map(|m| (m.w as u32, m.h as u32))
+        .map_err(|e| format!("não consegui consultar o painel: {e}"))
+}
+
+fn criar_render(
+    plataforma: &Platform,
+    tamanho: (u32, u32),
+    tela_cheia: bool,
+    versao: GlesVersion,
+    sem_vsync: bool,
+) -> Result<(Window, RenderContext3D), Box<dyn std::error::Error>> {
+    context::configure_attributes(plataforma, versao)?;
+    let config = WindowConfig::new(tamanho.0, tamanho.1).fullscreen(tela_cheia);
+    let janela = Window::new_opengl(plataforma, config, "Giochi Neon Drift")?;
+    // `--sem-vsync` existe porque o KMSDRM desta imagem trava o swap em 60 Hz: com
+    // vsync, todo quadro mais barato que 16,7 ms mede "59,9 fps" e não dá para
+    // saber se sobrou folga ou se faltou 1 ms. Sem vsync o número passa a ser o
+    // custo real do quadro — é o que permite decidir se um efeito novo cabe.
+    if sem_vsync {
+        // No `sdl2` 0.38 o `gl_set_swap_interval` mora no `WindowBuilder`, não no
+        // `Window` — e a engine já criou a janela. Vai pela função C, que é a
+        // mesma que o builder chamaria.
+        let r = unsafe { sdl2::sys::SDL_GL_SetSwapInterval(0) };
+        if r != 0 {
+            eprintln!("aviso: não consegui desligar o vsync ({})", sdl2::get_error());
+        }
+    }
+    let render = RenderContext3D::new(context::create(&janela)?);
+    Ok((janela, render))
+}
+
+/// Grava o back buffer em BMP.
+///
+/// `read_pixels` devolve as linhas de baixo para cima (convenção do GL); o BMP
+/// espera de cima para baixo. Sem a inversão o quadro sai virado e a comparação
+/// com a referência mede o espelho, não o desenho.
+fn gravar_quadro(
+    render: &RenderContext3D,
+    caminho: &str,
+) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let (largura, altura) = render.drawable_size();
+    let mut pixels = render.read_pixels(largura, altura)?;
+    let pitch = largura as usize * 4;
+    for y in 0..altura as usize / 2 {
+        let outro = altura as usize - 1 - y;
+        let (inicio, fim) = pixels.split_at_mut(outro * pitch);
+        inicio[y * pitch..(y + 1) * pitch].swap_with_slice(&mut fim[..pitch]);
+    }
+    let superficie = Surface::from_data(
+        &mut pixels,
+        largura,
+        altura,
+        largura * PixelFormatEnum::RGBA32.byte_size_per_pixel() as u32,
+        PixelFormatEnum::RGBA32,
+    )?;
+    superficie.save_bmp(caminho)?;
+    Ok((largura, altura))
+}
+
+/// Estado do som a partir da corrida.
+fn estado_som(corrida: &Corrida) -> EstadoSom {
+    let carro = &corrida.carro;
+    EstadoSom {
+        rpm: carro.rpm(),
+        marcha: carro.marcha(),
+        acelerando: carro.velocidade > 0.5,
+        deslize: if carro.derrapando {
+            carro.derrapagem.abs()
+        } else {
+            0.0
+        },
+        nitro: carro.nitro_usando,
+        kmh: carro.kmh(),
+        ativo: corrida.fase == Fase::Correndo && corrida.contagem <= 0.0,
+    }
+}
+
+fn principal() -> Result<i32, Box<dyn std::error::Error>> {
+    restaurar_sigpipe();
+    let o = opcoes(std::env::args().skip(1).collect())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    if o.ajuda {
+        ajuda();
+        return Ok(0);
+    }
+    if o.versao {
+        if o.json {
+            println!("{{\"nome\":\"giochi-neon-drift\",\"versao\":\"{VERSAO}\"}}");
+        } else {
+            println!("giochi-neon-drift {VERSAO}");
+        }
+        return Ok(0);
+    }
+
+    // GLES 3 por padrão, com queda para 2 — o piso dos aparelhos do projeto.
+    if std::env::var_os("GIOCHI_GL_VERSION").is_none() {
+        std::env::set_var("GIOCHI_GL_VERSION", "3");
+    }
+
+    let plataforma = Platform::new()?;
+    let tamanho_painel = painel(&plataforma, &o).map_err(std::io::Error::other)?;
+    let (rotacao, fonte_rotacao) =
+        video::resolver(tamanho_painel.0, tamanho_painel.1, o.tamanho.is_none());
+
+    let versao_pedida = GlesVersion::from_env();
+    let tela_cheia = o.tamanho.is_none();
+    let (janela, mut render) =
+        match criar_render(&plataforma, tamanho_painel, tela_cheia, versao_pedida, o.sem_vsync) {
+            Ok(par) => par,
+            Err(erro) if versao_pedida == GlesVersion::Gles3 => {
+                eprintln!("aviso: GLES 3.0 indisponível ({erro}); tentando GLES 2.0");
+                std::env::set_var("GIOCHI_GL_VERSION", "2");
+                criar_render(&plataforma, tamanho_painel, tela_cheia, GlesVersion::Gles2, o.sem_vsync)?
+            }
+            Err(erro) => return Err(error_de_video(erro.to_string()).into()),
+        };
+
+    let (largura, altura) = janela.drawable_size();
+    render.resize(largura, altura);
+    // O `Upscaler` da engine: desenha num alvo menor e estica com bilinear. Num
+    // painel de 720×1280 são 921 mil pixels por quadro, e o Mali-G52 gasta
+    // proporcionalmente ao **pixel**, não ao triângulo — é o botão que troca
+    // nitidez por quadro em qualquer aparelho, com um número só.
+    if o.escala < 0.999 {
+        render.set_render_scale(Some(o.escala.clamp(0.25, 1.0)));
+        let (rw, rh) = render.render_size();
+        println!(
+            "neon-drift: escala {:.2} — desenhando em {rw}x{rh} e esticando para {largura}x{altura}",
+            o.escala
+        );
+    }
+
+    let mut corrida = Corrida::nova();
+    if let Some(tela) = o.tela {
+        match tela {
+            Fase::Correndo => corrida.comecar(),
+            Fase::Resultado => {
+                // Resultado sem ninguém correndo: usa "tempo esgotado", que é o
+                // desfecho honesto dessa situação.
+                corrida.comecar();
+                corrida.contagem = 0.0;
+                corrida.tempo = corrida.tempo_limite;
+                corrida.passo(&Entrada::PARADA, 1.0 / TIQUE);
+                corrida.fase = Fase::Resultado;
+            }
+            Fase::Titulo => corrida.titulo(),
+        }
+    }
+
+    let mut cena = Cena3D::nova(&mut render, &corrida.pista, rotacao)?;
+    cena.so(o.so.clone());
+
+    if !o.json {
+        println!(
+            "neon-drift: painel {largura}x{altura}, rotação {} ({fonte_rotacao}), GLES {} em {}",
+            rotacao.nome(),
+            render.gles_version().major(),
+            render.adapter()
+        );
+        println!(
+            "neon-drift: instancing {}, pista {:.0} m, {} voltas, limite {} fps",
+            if cena.usa_instancing() {
+                "ativo"
+            } else {
+                "indisponível"
+            },
+            corrida.pista.comprimento(),
+            corrida.total_voltas,
+            o.fps
+        );
+    }
+
+    let botoes = evdev::Botoes::iniciar();
+    if !o.json {
+        println!("neon-drift: {} dispositivo(s) de entrada", botoes.abertos());
+    }
+    let mut som = if o.sem_som {
+        Som::sem_dispositivo()
+    } else {
+        Som::iniciar(&plataforma)
+    };
+
+    // `--passos` antes do laço: é o que permite capturar um quadro com a corrida
+    // em andamento (drift, nitro, HUD cheio) sem dedo no aparelho.
+    if o.passos > 0 {
+        let (entrada, acoes) = entrada_jogo::combinar(0, &o.teclas, corrida.fase);
+        if acoes.comecar {
+            corrida.comecar();
+        }
+        // `--piloto` dirige no lugar das teclas fixas. Sem ele, `--passos 900`
+        // com "acelerar" apertado só leva o carro de encontro ao primeiro muro —
+        // medido: 2,6 m/s encostado na borda, e o quadro capturado mostrava a
+        // linha de largada como se a corrida nem tivesse começado.
+        for i in 0..o.passos {
+            let entrada = if o.piloto {
+                giochi_neon_drift_core::piloto::entrada(&corrida)
+            } else {
+                entrada
+            };
+            corrida.passo(&entrada, 1.0 / TIQUE);
+            cena.seguir(&corrida, 1.0 / TIQUE);
+            if corrida.fase == Fase::Resultado {
+                break;
+            }
+            let _ = i;
+        }
+    }
+
+    let mut teclas = o.teclas;
+    let mut sair = false;
+    let mut relogio = Relogio::com_ritmo(TIQUE, o.fps);
+
+    // Quadro único: captura e sai, sem laço de eventos.
+    if let Some(caminho) = &o.quadro {
+        cena.preparar(&mut render);
+        render.begin_frame(&janela);
+        cena.desenhar(&mut render, &corrida, 1.0 / TIQUE)?;
+        let (w, h) = gravar_quadro(&render, caminho)?;
+        render.end_frame(&janela);
+        let erro = render.take_gl_error();
+        if erro != 0 {
+            return Err(format!("erro GLES 0x{erro:04x} ao desenhar o quadro").into());
+        }
+        if o.json {
+            println!(
+                "{{\"quadro\":\"gravado\",\"largura\":{w},\"altura\":{h},\"gles\":{},\"instancing\":{},\"desenhos\":{},\"fase\":\"{:?}\",\"efeitos\":{{{}}},{}}}",
+                render.gles_version().major(),
+                cena.usa_instancing(),
+                cena.desenhos(),
+                corrida.fase,
+                cena.efeitos_json(),
+                diagnostico(&corrida, &cena)
+            );
+        } else {
+            println!("neon-drift: quadro {w}x{h} gravado em {caminho}");
+        }
+        render.release_all();
+        return Ok(0);
+    }
+
+    let inicio = Instant::now();
+    let mut quadros = 0u32;
+    let mut passos_totais = 0u32;
+    let mut ultimo = Instant::now();
+    // Soma do tempo de CPU por quadro, sem o swap (diagnóstico de `--json`).
+    let mut ms_cpu = 0.0f64;
+
+    while !sair {
+        for evento in plataforma.poll_events() {
+            match evento {
+                Event::Quit { .. } => sair = true,
+                Event::KeyDown {
+                    keycode: Some(tecla),
+                    repeat: false,
+                    ..
+                } => {
+                    aplicar_tecla(&mut teclas, tecla, true);
+                }
+                Event::KeyUp {
+                    keycode: Some(tecla), ..
+                } => {
+                    aplicar_tecla(&mut teclas, tecla, false);
+                }
+                _ => {}
+            }
+        }
+        if sair {
+            break;
+        }
+
+        let (entrada, acoes) = entrada_jogo::combinar(botoes.bits(), &teclas, corrida.fase);
+        let reiniciou = acoes.reiniciar;
+        sair |= executar_acoes(&mut corrida, acoes);
+        if reiniciou {
+            // A fumaça da corrida anterior não pode reaparecer no ar do reinício.
+            cena.limpar_efeitos();
+        }
+        if sair {
+            break;
+        }
+
+        let agora = inicio.elapsed().as_secs_f64();
+        let planejado = relogio.avancar(agora);
+        for _ in 0..planejado.ticks {
+            let evento = corrida.passo(&entrada, 1.0 / TIQUE);
+            passos_totais += 1;
+            // Só a batida precisa avisar a cena; o resto ela lê do estado.
+            if evento == Evento::Bateu {
+                cena.bater();
+            }
+        }
+
+        let dt = ultimo.elapsed().as_secs_f32().min(0.1);
+        ultimo = Instant::now();
+        som.atualizar(&estado_som(&corrida), dt);
+
+        cena.preparar(&mut render);
+        let t_cpu = Instant::now();
+        render.begin_frame(&janela);
+        cena.desenhar(&mut render, &corrida, dt)?;
+        // Antes do `end_frame`: ele faz o swap e **bloqueia no vblank**, então
+        // incluí-lo transformaria toda medida em "tempo de vsync" e não diria
+        // nada sobre o custo do quadro.
+        ms_cpu += t_cpu.elapsed().as_secs_f64() * 1000.0;
+        render.end_frame(&janela);
+        quadros += 1;
+
+        if let Some(limite) = o.quadros {
+            if quadros >= limite {
+                break;
+            }
+        }
+
+        std::thread::sleep(planejado.dormir);
+    }
+
+    let decorrido = inicio.elapsed().as_secs_f64();
+    let fps_medio = if decorrido > 0.0 {
+        (quadros.saturating_sub(1)) as f64 / decorrido
+    } else {
+        0.0
+    };
+    if o.json {
+        println!(
+            "{{\"quadros\":{quadros},\"passos\":{passos_totais},\"segundos\":{decorrido:.3},\"fps\":{fps_medio:.1},\"fps_teto\":{},\"ms_cpu\":{:.2},\"particulas\":{},\"desenhos\":{},\"efeitos\":{{{}}},\"gles\":{},\"instancing\":{},\"posicao\":{},\"volta\":{},\"drift\":{},\"fase\":\"{:?}\"}}",
+            o.fps,
+            if quadros > 0 { ms_cpu / quadros as f64 } else { 0.0 },
+            cena.particulas_vivas(),
+            cena.desenhos(),
+            cena.efeitos_json(),
+            render.gles_version().major(),
+            cena.usa_instancing(),
+            corrida.posicao,
+            corrida.volta,
+            corrida.drift.total(),
+            corrida.fase
+        );
+    } else {
+        println!(
+            "neon-drift: fim — {} quadros em {:.2} s ({:.1} fps; teto {}) · drift {} · {}",
+            quadros,
+            decorrido,
+            fps_medio,
+            o.fps,
+            hud::pontos(corrida.drift.total()),
+            corrida.desfecho.map(|d| d.titulo()).unwrap_or("em andamento")
+        );
+    }
+    render.release_all();
+    Ok(0)
+}
+
+/// Liga ou desliga uma tecla do estado.
+fn aplicar_tecla(teclas: &mut Teclas, tecla: Keycode, apertou: bool) {
+    let alvo = match tecla {
+        Keycode::Up | Keycode::W => &mut teclas.cima,
+        Keycode::Down | Keycode::S => &mut teclas.baixo,
+        Keycode::Left | Keycode::A => &mut teclas.esquerda,
+        Keycode::Right | Keycode::D => &mut teclas.direita,
+        Keycode::Space => &mut teclas.espaco,
+        Keycode::LShift | Keycode::RShift => &mut teclas.shift,
+        Keycode::Return | Keycode::KpEnter => &mut teclas.enter,
+        Keycode::Escape | Keycode::Q => &mut teclas.escape,
+        _ => return,
+    };
+    *alvo = apertou;
+}
+
+/// Executa começar/reiniciar/sair. Devolve `true` quando o laço deve terminar.
+fn executar_acoes(corrida: &mut Corrida, acoes: Acoes) -> bool {
+    if acoes.comecar {
+        corrida.comecar();
+    }
+    if acoes.reiniciar {
+        corrida.reiniciar();
+    }
+    acoes.sair
+}
+
+/// Mensagem de erro de vídeo com dica do que fazer.
+fn error_de_video(mensagem: String) -> std::io::Error {
+    let dica = if mensagem.contains("kmsdrm") {
+        "  outro processo está com o DRM (o launcher?). Feche-o antes.\n"
+    } else {
+        ""
+    };
+    std::io::Error::other(format!("{mensagem}\n{dica}"))
+}
+
+fn main() {
+    match principal() {
+        Ok(codigo) => std::process::exit(codigo),
+        Err(erro) => {
+            eprintln!("erro: {erro}");
+            std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn teclas_da_cli_viram_estado() {
+        let t = teclas("a,right,shift").unwrap();
+        assert!(t.cima);
+        assert!(t.direita);
+        assert!(t.shift);
+        assert!(!t.esquerda);
+    }
+
+    #[test]
+    fn tecla_desconhecida_e_erro_com_nome() {
+        let erro = teclas("a,voar").unwrap_err();
+        assert!(erro.contains("voar"), "{erro}");
+    }
+
+    #[test]
+    fn o_teto_de_fps_recusa_acima_de_75() {
+        let erro = opcoes(vec!["--fps-teto".into(), "76".into()]).unwrap_err();
+        assert!(erro.contains("1 e 75"), "{erro}");
+    }
+
+    #[test]
+    fn o_teto_padrao_e_75() {
+        assert_eq!(opcoes(vec![]).unwrap().fps, 75);
+        assert!(opcoes(vec!["--fps-teto".into(), "0".into()]).is_err());
+    }
+
+    #[test]
+    fn tamanho_invalido_e_erro() {
+        assert!(opcoes(vec!["--tamanho".into(), "640".into()]).is_err());
+        assert!(opcoes(vec!["--tamanho".into(), "0x480".into()]).is_err());
+        let o = opcoes(vec!["--tamanho".into(), "800x600".into()]).unwrap();
+        assert_eq!(o.tamanho, Some((800, 600)));
+    }
+
+    #[test]
+    fn tela_desconhecida_e_erro() {
+        assert!(opcoes(vec!["--tela".into(), "inexistente".into()]).is_err());
+        assert_eq!(
+            opcoes(vec!["--tela".into(), "resultado".into()]).unwrap().tela,
+            Some(Fase::Resultado)
+        );
+    }
+
+    #[test]
+    fn argumento_desconhecido_nao_e_ignorado() {
+        assert!(opcoes(vec!["--turbo".into()]).unwrap_err().contains("--turbo"));
+    }
+
+    #[test]
+    fn quadros_zero_e_recusado() {
+        assert!(opcoes(vec!["--quadros".into(), "0".into()]).is_err());
+    }
+
+    #[test]
+    fn as_teclas_do_jogo_mapeiam_para_os_campos_certos() {
+        let mut t = Teclas::default();
+        aplicar_tecla(&mut t, Keycode::Up, true);
+        aplicar_tecla(&mut t, Keycode::Space, true);
+        aplicar_tecla(&mut t, Keycode::LShift, true);
+        assert!(t.cima && t.espaco && t.shift);
+        aplicar_tecla(&mut t, Keycode::Up, false);
+        assert!(!t.cima, "soltar tem de desligar");
+    }
+
+    #[test]
+    fn as_teclas_wasd_fazem_o_mesmo_que_as_setas() {
+        let mut com_seta = Teclas::default();
+        aplicar_tecla(&mut com_seta, Keycode::Left, true);
+        let mut com_wasd = Teclas::default();
+        aplicar_tecla(&mut com_wasd, Keycode::A, true);
+        assert_eq!(com_seta, com_wasd);
+    }
+}

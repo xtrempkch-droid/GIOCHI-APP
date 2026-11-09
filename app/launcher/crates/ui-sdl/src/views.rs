@@ -306,6 +306,23 @@ fn badge(
 }
 
 fn current_clock() -> String {
+    // ## `GIOCHI_HORA_FIXA` existe para a comparação de quadros
+    //
+    // O relógio é lido do sistema, e o aparelho pode estar com a hora errada —
+    // sem NTP, ele fica horas atrás do PC. Medido em 09/11/2026 na imagem nova
+    // do X35H: aparelho `21:58 UTC` contra PC `03:44 UTC`. A comparação
+    // pixel a pixel então acusava **99,9 %** em todas as telas, com a diferença
+    // inteira em x 482..517, y 26..34 — os quatro dígitos do relógio. Nenhuma
+    // regressão de desenho, e um portão que reprova sempre ensina a ignorá-lo.
+    //
+    // Repetir a captura não resolve (o minuto não vira em 1 s), e acertar o
+    // relógio do aparelho seria mudar estado do sistema para fazer um teste
+    // passar. Congelar nos **dois** lados é determinístico.
+    if let Ok(fixa) = std::env::var("GIOCHI_HORA_FIXA") {
+        if !fixa.is_empty() {
+            return fixa;
+        }
+    }
     // Sem dependência de data/hora: o horário real vem do sistema via `chrono`
     // ou de `/proc/driver/rtc` na integração. Aqui fica explícito que é
     // provisório em vez de fingir um relógio.
@@ -314,6 +331,11 @@ fn current_clock() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    formatar_relogio(secs)
+}
+
+/// `HH:MM` a partir de segundos Unix. Puro, para poder ser testado sem relógio.
+fn formatar_relogio(secs: u64) -> String {
     let minutes = (secs / 60) % 60;
     let hours = (secs / 3600) % 24;
     format!("{hours:02}:{minutes:02}")
@@ -1617,10 +1639,28 @@ impl GameLabel for giochi_launcher_core::Game {
 
 #[cfg(test)]
 mod tests {
-    use super::grade_para;
+    use super::{formatar_relogio, grade_para};
 
     fn chaves(state: &giochi_launcher_core::State) -> Vec<&'static str> {
         super::dicas(state).iter().map(|(k, _)| *k).collect()
+    }
+
+    /// O relógio é o que fazia a comparação de quadros reprovar 99,9 %.
+    ///
+    /// Aparelho sem NTP fica horas atrás do PC; os quatro dígitos do relógio
+    /// diferiam e o portão acusava divergência em todas as telas. `formatar_`
+    /// `relogio` é a parte pura — `GIOCHI_HORA_FIXA` (lida em `current_clock`)
+    /// é o que congela os dois lados.
+    #[test]
+    fn relogio_formata_hh_mm() {
+        assert_eq!(formatar_relogio(0), "00:00");
+        assert_eq!(formatar_relogio(59), "00:00");
+        assert_eq!(formatar_relogio(60), "00:01");
+        // 2026-11-09 03:44 UTC (o instante medido no PC nesta rodada)
+        assert_eq!(formatar_relogio(1_794_195_840), "03:44");
+        // vira o dia, e a hora volta a zero em vez de mostrar 24
+        assert_eq!(formatar_relogio(86_400), "00:00");
+        assert_eq!(formatar_relogio(23 * 3600 + 59 * 60), "23:59");
     }
 
     /// O rodapé só pode anunciar o gatilho onde ele faz alguma coisa.

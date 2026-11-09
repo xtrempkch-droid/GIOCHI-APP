@@ -360,3 +360,77 @@ test("a ordem por título é preservada depois da junção", () => {
     ["Aaa", "Zzz"],
   );
 });
+
+test("instalado com role shell no apps.json não vira cartão", () => {
+  // Medido em 09/11/2026: instalar o launcher **com metadata.json** no aparelho
+  // (o certo a fazer) o trazia de volta ao catálogo pela colheita de
+  // instalados, e apertar A nele abriria um segundo launcher — que perde o DRM
+  // exclusivo e morre com `kmsdrm not available`.
+  const base = {
+    schemaVersion: 1,
+    apps: [
+      {
+        id: "launcher",
+        version: "0.1.0",
+        entrypoint: "bin/giochi-launcher",
+        dir: "/opt/giochi/apps/launcher",
+        title: "Giochi Launcher",
+        role: "shell",
+      },
+    ],
+  };
+  // `base` é o catálogo **já filtrado**: o launcher não está nele (é shell).
+  // O papel tem de vir de fora, como o gerador faz lendo o `apps.json`.
+  const { catalogo, avisos } = mesclarInstalados(
+    { schemaVersion: 1, apps: [] },
+    [
+      {
+        id: "launcher",
+        dir: "/opt/giochi/apps/launcher",
+        metadata: { ...METADATA_BASE, entrypoint: "bin/giochi-launcher", title: "Giochi Launcher" },
+      },
+    ],
+    { papeis: new Map([["launcher", "shell"]]) },
+  );
+
+  assert.equal(catalogo.apps.length, 0, "launcher não é algo para iniciar de dentro dele");
+  assert.ok(
+    avisos.some((a) => a.id === "launcher" && a.motivo === MOTIVOS.PAPEL_SHELL),
+    "o motivo tem de dizer que é papel de shell, não que sumiu",
+  );
+});
+
+test("instalado desconhecido do apps.json continua entrando (pacote da loja)", () => {
+  const { catalogo } = mesclarInstalados({ schemaVersion: 1, apps: [] }, [
+    { id: "pacman", dir: "/opt/giochi/apps/pacman", metadata: META_INSTALADO },
+  ]);
+  assert.equal(catalogo.apps.length, 1, "sem role declarado, o app é um app");
+});
+
+test("pacote instalado sem entrada no apps.json leva a licença do metadata", () => {
+  // A ficha do cartão mostra licença. Um app da loja não está no `apps.json`,
+  // então o `metadata.json` é a única fonte — e antes ele saía sem licença.
+  const { catalogo } = mesclarInstalados({ schemaVersion: 1, apps: [] }, [
+    { id: "pacman", metadata: { ...META_INSTALADO, license: "MIT" } },
+  ]);
+  assert.equal(catalogo.apps[0].license, "MIT");
+});
+
+test("apps.json vence o metadata na licença", () => {
+  const base = {
+    schemaVersion: 1,
+    apps: [
+      {
+        id: "pacman",
+        version: "1.0.0",
+        entrypoint: "bin/giochi-pacman",
+        title: "Pac-Man",
+        license: "Proprietary",
+      },
+    ],
+  };
+  const { catalogo } = mesclarInstalados(base, [
+    { id: "pacman", metadata: { ...META_INSTALADO, license: "MIT" } },
+  ]);
+  assert.equal(catalogo.apps[0].license, "Proprietary", "o apps.json é o contrato validado");
+});

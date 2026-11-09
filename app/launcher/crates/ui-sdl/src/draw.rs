@@ -200,7 +200,7 @@ pub fn rotacao_do_arquivo() -> Option<Rotation> {
 ///
 /// `formato_retrato` é o último recurso: só entra quando ninguém declarou nada.
 fn rotacao_configurada(formato_retrato: bool) -> (Rotation, crate::display::Fonte) {
-    use crate::display::{rotacao_do_sistema, Fonte};
+    use crate::display::{rotacao_do_sistema_com_fonte, Fonte};
 
     if let Ok(v) = std::env::var("GIOCHI_ROTATE") {
         if let Some(rot) = rotacao_de_valor(&v) {
@@ -210,8 +210,11 @@ fn rotacao_configurada(formato_retrato: bool) -> (Rotation, crate::display::Font
     if let Some(rot) = rotacao_do_arquivo() {
         return (rot, Fonte::Usuario);
     }
-    if let Some(rot) = rotacao_do_sistema() {
-        return (rot, Fonte::Sistema);
+    // A fonte pode ser `SistemaCmdline`: o sysfs do X55 dizia 0 enquanto o
+    // `cmdline` pedia `fbcon=rotate:3`. Sem esse cruzamento o app desenhava em
+    // projeto 720×1280 num painel retrato.
+    if let Some((rot, fonte)) = rotacao_do_sistema_com_fonte() {
+        return (rot, fonte);
     }
 
     // Ninguém declarou. Se o painel é retrato, algo precisa ser escolhido;

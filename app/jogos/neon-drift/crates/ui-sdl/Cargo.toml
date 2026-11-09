@@ -1,0 +1,22 @@
+[package]
+name = "giochi-neon-drift"
+description = "Neon Drift — corrida arcade noturna sobre GLES e GIOCHI-ENGINE 3D"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "giochi-neon-drift"
+path = "src/main.rs"
+
+[dependencies]
+giochi-neon-drift-core = { path = "../core" }
+# A engine é o snapshot local em `vendor/`: o jogo não compila contra o
+# repositório compartilhado, e uma mudança da equipe da engine não o quebra sem
+# alguém atualizar a cópia de propósito.
+giochi-engine = { path = "../../vendor/giochi-engine", default-features = false, features = ["sdl2-system"] }
+giochi-engine-3d = { path = "../../vendor/giochi-engine-3d", default-features = false, features = ["sdl2-system"] }
+sdl2 = { version = "0.38", default-features = false }
+# `libc` já vem pelo `sdl2`; declarado para uma linha só (restaurar `SIGPIPE`).
+libc = "0.2"

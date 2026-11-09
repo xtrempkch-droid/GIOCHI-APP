@@ -50,6 +50,31 @@ app.giochi.manifest.json  # {schema_version, package, version, sha256, size_byte
 
 O verificador no aparelho recusa o pacote se a assinatura não conferir.
 
+### Qual chave assina — decidido em 07/11/2026
+
+**A chave da loja é a do `Giochi System`.** A pública vai na imagem
+(`/etc/giochi/loja-publica.pem`, versionada em
+`device/common/rootfs-overlay/etc/giochi/loja-publica.pem`); a privada vive fora
+dos dois repositórios, em `~/.cache/giochi-system/chaves-loja/loja-privada.pem`
+(ou em `GIOCHI_CHAVES_DIR`).
+
+`scripts/lib/chave.mjs` resolve, nesta ordem:
+
+1. `--chave <pem>`
+2. `GIOCHI_CHAVE_PRIVADA`
+3. `$GIOCHI_CHAVES_DIR/loja-privada.pem` (padrão: `~/.cache/giochi-system/chaves-loja/`)
+4. `~/.giochi/chave-privada.pem` — padrão histórico, para quem constrói a própria imagem
+
+A ordem começou invertida, e custou uma rodada: o `empacotar.mjs` não achou
+`~/.giochi`, gerou um par novo **em silêncio**, e o R35S recusou um pacote
+íntegro com "assinatura Ed25519 não confere". O `--chave` continua mandando em
+tudo, e o empacotador agora **avisa** quando a privada usada não corresponde à
+pública da imagem — o defeito aparece na hora de assinar, não na de instalar.
+
+A decisão de manter a chave da imagem como oficial é de **versão de teste**:
+quando houver chave de produção, ela é gerada pelo `Giochi System`
+(`scripts/chave-da-loja.sh --gerar`) e a pública acompanha a imagem.
+
 ## Estado real: o antecessor já implementa tudo isso
 
 **Correção (02/11/2026).** A versão anterior deste documento dizia "nada disso está
@@ -213,7 +238,7 @@ depende do Giochi System.
 | Item | Estado |
 | --- | --- |
 | verificação de **assinatura** no aparelho | **sim**, pelo cartão — binário aarch64 ligado a `libcrypto`, exercitado no X55 |
-| chave pública em `/etc/giochi/` | **não** — falta na imagem; sem ela o instalador avisa que não verificou |
+| chave pública em `/etc/giochi/` | **sim**, desde a imagem de 07/11/2026 (`loja-publica.pem` e `licenca-publica.pem`); o instalador verifica a assinatura com ela |
 | verificação de **SHA-256** no aparelho | **sim, pelo cartão** — `instalar-do-cartao.sh` recusa hash que não confere |
 | `.giochi` lido de pendrive/SD pelo launcher | **não** — hoje só por `aparelho.sh instalar-pacote` |
 | loja (download, OAuth, butlerd) | **não** — ver [`loja.md`](loja.md) |

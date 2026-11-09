@@ -19,15 +19,22 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { conferirEstrutura, lerTar, verificar } from "./lib/publicar.mjs";
+import { candidatosDeChavePublica } from "./lib/chave.mjs";
 
 const raiz = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Chave pública padrão: ao lado da privada usada no empacotamento. */
+/**
+ * Chave pública padrão.
+ *
+ * A que decide é a do aparelho (`/etc/giochi/loja-publica.pem`, e
+ * `aparelho.sh instalar-pacote` busca aquela). Aqui a ordem segue a mesma
+ * resolução da privada em `scripts/lib/chave.mjs`, para que assinar e verificar
+ * no PC usem o mesmo par — antes, o `empacotar.mjs` criava uma chave e este
+ * script verificava com outra, e os dois "concordavam" só porque verificavam a
+ * si mesmos.
+ */
 function chavePublicaPadrao() {
-  const candidatos = [
-    join(process.env.HOME ?? "", ".giochi", "chave-privada-publica.pem"),
-    join(raiz, "chaves", "loja-publica.pem"),
-  ];
+  const candidatos = [...candidatosDeChavePublica(), join(raiz, "chaves", "loja-publica.pem")];
   return candidatos.find((c) => existsSync(c)) ?? null;
 }
 

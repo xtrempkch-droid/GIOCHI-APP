@@ -566,6 +566,26 @@ impl App {
         }
     }
 
+    /// Avança a tela de boot até `Running`, como o laço faria.
+    ///
+    /// Existe para o `--teclas`. A tela inicial é `Boot`, e o reducer ignora
+    /// `TabNext`/`Nav` nela (`tab_step` exige `Screen::Running`) — então sem
+    /// este avanço a ferramenta aplicava as teclas em `Boot`, o estado não
+    /// mudava, e ela imprimia `foco HomeCarousel 0` como se tivesse medido
+    /// alguma coisa. É o pior tipo de defeito em ferramenta de diagnóstico:
+    /// resposta plausível e nenhum efeito.
+    ///
+    /// Medido em 07/11/2026: `--teclas r` no PC e no R35S devolvia
+    /// `HomeCarousel 0` em vez de `LibraryGrid`.
+    pub fn avancar_boot(&mut self) {
+        // O limite é a própria constante do boot: se ela mudar, o laço acompanha.
+        let mut quadros = 0;
+        while self.state.screen == Screen::Boot && quadros <= BOOT_FRAMES {
+            self.tick(1.0 / 60.0);
+            quadros += 1;
+        }
+    }
+
     /// Chamado a cada quadro: gamepad, relógios e boot.
     pub fn tick(&mut self, delta_seconds: f32) {
         if self.state.screen == Screen::Boot {
@@ -643,7 +663,23 @@ impl App {
             .and_then(|b| b.percentual)
             .map(|p| p.round() as u8);
 
-        let temperatura = self.energia.temperatura();
+        // `GIOCHI_BATERIA_FIXA` e `GIOCHI_TEMPERATURA_FIXA` congelam os dois
+        // indicadores da barra superior.
+        //
+        // Motivo medido em 09/11/2026 no X35H: o aparelho tem célula (mostra
+        // `78%`) e o PC não (`—`). A comparação pixel a pixel continuava em
+        // 99,6 % **depois** de o relógio ser congelado, com 1277 px divergentes
+        // na faixa de status — badge de bateria, não desenho. Comparar quadros
+        // de máquinas diferentes exige congelar o que vem do hardware delas.
+        let nivel = std::env::var("GIOCHI_BATERIA_FIXA")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+            .or(nivel);
+
+        let temperatura = std::env::var("GIOCHI_TEMPERATURA_FIXA")
+            .ok()
+            .and_then(|v| v.trim().parse::<u16>().ok())
+            .or_else(|| self.energia.temperatura());
 
         // Só registra quando o valor muda: log a cada 5 s afogaria o resto.
         //

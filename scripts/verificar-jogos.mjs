@@ -25,7 +25,7 @@
 // `cobrinha` e 22 px no `pacman`), com folga de 25%.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,18 +46,74 @@ const CELULA_MINIMA = 14;
 const JOGOS = [
   {
     id: "cobrinha",
-    // Campo de 24 colunas emoldurado em BORDA (45,52,74). A moldura tem 2 px de
-    // cada lado, então a célula é (largura - 4) / 24.
+    // ## Por que não é mais a caixa da moldura
+    //
+    // Era: caixa envolvente da cor BORDA (45,52,74) menos 4 px, dividida por 24.
+    // Isso valia para o tabuleiro **2D de frente**. O jogo virou 3D com câmera
+    // em perspectiva, e a mesma conta passou a medir 2,0 px enquanto o tabuleiro
+    // media 415..501 px de largura na tela — o teste reprovava um quadro
+    // perfeito, que é o falso vermelho que este repositório combate.
+    //
+    // Em perspectiva a célula **não tem um tamanho**: a da fileira do fundo é
+    // menor que a da frente. Legibilidade se decide pelo menor, então a medida
+    // é a largura do tabuleiro na sua fileira mais estreita dividida pelas
+    // colunas — o caso pessimista, e não a média.
+    //
+    // As colunas ao longo de x são `COLUNAS` (24): `--tamanho` desliga a
+    // rotação do sistema, então o tabuleiro é sempre desenhado em paisagem.
     medir: (img) => {
-      const caixa = caixaDeCor(
-        img,
-        (c) => Math.abs(c[0] - 45) < 8 && Math.abs(c[1] - 52) < 8 && Math.abs(c[2] - 74) < 10,
-      );
-      const celula = (caixa.w - 4) / 24;
+      const larguras = largurasPorLinha(img, (c) => {
+        // Tabuleiro: casas claras/escuras e a borda, todas azuladas. O fundo é
+        // (6,9,19) e o placar é âmbar, então nenhum dos dois entra.
+        const [r, g, b] = c;
+        return b > r + 18 && b > g + 8 && r < 120 && g < 140;
+      });
+      if (larguras.length === 0) {
+        return { nome: "célula", valor: 0, minimo: CELULA_MINIMA };
+      }
+      // Descarta as linhas de transição (borda superior/inferior), que medem
+      // menos que o tabuleiro por causa do arredondamento do pixel.
+      const maxima = Math.max(...larguras);
+      const uteis = larguras.filter((w) => w >= maxima * 0.6);
+      const estreita = Math.min(...uteis);
+      const celula = estreita / COLUNAS;
       return { nome: "célula", valor: Math.round(celula * 10) / 10, minimo: CELULA_MINIMA };
     },
   },
+  {
+    id: "neon-drift",
+    // Num jogo de corrida não há grade: o que decide "dá para jogar" é **ver o
+    // carro**. Pedir `--tela corrida --piloto --passos` coloca o jogo em
+    // andamento, porque na tela de título não há carro nenhum na pista.
+    argumentos: ["--tela", "corrida", "--piloto", "--passos", "900", "--sem-som"],
+    // A medida é a largura do carro do jogador em pixels de device. Abaixo de
+    // ~40 px a silhueta vira um borrão verde e o jogador não sabe onde está o
+    // próprio carro num painel de 3,5".
+    medir: (img) => {
+      const caixa = caixaDeCor(img, (c) => c[1] > 140 && c[1] > c[0] + 40 && c[1] > c[2] + 40);
+      return { nome: "largura do carro", valor: caixa.w, minimo: 40 };
+    },
+  },
 ];
+
+/** Quantas colunas o `cobrinha` desenha ao longo de x (espelha o núcleo). */
+const COLUNAS = 24;
+
+/** Largura ocupada, por linha de pixel, pelos pixels que passam no teste. */
+function largurasPorLinha(img, teste) {
+  const larguras = [];
+  for (let y = 0; y < img.altura; y++) {
+    let primeiro = -1;
+    let ultimo = -1;
+    for (let x = 0; x < img.largura; x++) {
+      if (!teste(img.em(x, y))) continue;
+      if (primeiro < 0) primeiro = x;
+      ultimo = x;
+    }
+    if (primeiro >= 0) larguras.push(ultimo - primeiro + 1);
+  }
+  return larguras;
+}
 
 /** Caixa envolvente dos pixels que satisfazem o teste. */
 function caixaDeCor(img, teste) {
@@ -132,7 +188,17 @@ function main() {
   }
 
   // `dummy` respeita o tamanho pedido; `x11` devolveria o desktop.
-  const ambiente = { ...process.env, SDL_VIDEODRIVER: "dummy", SDL_RENDER_DRIVER: "software" };
+  //
+  // Mas `dummy` **não tem OpenGL**: o `cobrinha` 3D precisa de um contexto GLES e
+  // falhava com `OpenGL support is either not configured in SDL`, que lido de
+  // fora parece defeito do jogo. `offscreen` (EGL/OSMesa) respeita o tamanho
+  // pedido e **cria** contexto — medido: grava o BMP 640x480 com `instancing
+  // ativo`. A ordem é `offscreen` e depois `dummy`, e o primeiro que produzir
+  // BMP fica valendo para todos os jogos da rodada.
+  const candidatos = [
+    { ...process.env, SDL_VIDEODRIVER: "offscreen", SDL_RENDER_DRIVER: "software" },
+    { ...process.env, SDL_VIDEODRIVER: "dummy", SDL_RENDER_DRIVER: "software" },
+  ];
   let falhou = 0;
 
   for (const tamanho of o.tamanhos) {
@@ -142,7 +208,33 @@ function main() {
     for (const jogo of jogos) {
       const bin = binarioDoJogo(jogo.id);
       const bmp = path.join(SAIDA, `${jogo.id}-${tamanho}.bmp`);
-      execFileSync(bin, ["--tamanho", tamanho, "--quadro", bmp], { env: ambiente, stdio: "ignore" });
+      let erro = null;
+      let gravou = false;
+      for (const ambiente of candidatos) {
+        rmSync(bmp, { force: true });
+        try {
+          execFileSync(bin, ["--tamanho", tamanho, ...(jogo.argumentos ?? []), "--quadro", bmp], {
+            env: ambiente,
+            stdio: "ignore",
+          });
+        } catch (e) {
+          erro = e;
+          continue;
+        }
+        if (existsSync(bmp) && statSync(bmp).size > 0) {
+          gravou = true;
+          break;
+        }
+      }
+      if (!gravou) {
+        // Sem BMP não há medida — dizer isso é diferente de "o jogo não serve
+        // nesse painel", que é o que a tabela abaixo afirmaria.
+        console.log(
+          `  ${jogo.id.padEnd(11)} não gravou quadro em ${tamanho} (${erro?.message?.split("\n")[0] ?? "sem BMP"})`,
+        );
+        falhou++;
+        continue;
+      }
 
       const img = lerBmp(bmp);
       const { nome, valor, minimo } = jogo.medir(img);

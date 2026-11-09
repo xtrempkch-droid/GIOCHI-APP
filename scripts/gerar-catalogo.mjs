@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readIndex } from "./lib/apps.mjs";
 import { gerarCatalogo, mesclarInstalados, serializar, DIR_BASE_PADRAO } from "./lib/catalogo.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,7 +85,18 @@ function main() {
     }
     if (!Array.isArray(lista)) throw new Error("--instalados: esperava uma lista");
 
-    const juntos = mesclarInstalados(catalogo, lista, { dirBase: opcoes.dirBase });
+    // O `role` vem do `apps.json`, **não** do catálogo já filtrado: o launcher
+    // está fora dele justamente por ser shell, e é essa informação que impede a
+    // cópia instalada de voltar como cartão. Ver `mesclarInstalados`.
+    const papeis = new Map();
+    for (const [id, entrada] of readIndex(APP_ROOT).entries) {
+      if (entrada.role) papeis.set(id, entrada.role);
+    }
+
+    const juntos = mesclarInstalados(catalogo, lista, {
+      dirBase: opcoes.dirBase,
+      papeis,
+    });
     catalogo = juntos.catalogo;
     avisos = [...avisos, ...juntos.avisos];
   }

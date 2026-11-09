@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "arch": "aarch64",
   "runtime": "native",
+  "graphics_api": "gles2",
   "entrypoint": "bin/giochi-cobrinha",
   "slug": "cobrinha",
   "license": "Proprietary",

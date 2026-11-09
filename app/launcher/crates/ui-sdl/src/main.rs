@@ -535,6 +535,10 @@ fn main() -> Result<(), String> {
     // `--teclas`: um quadro primeiro (para o desenho publicar o arranjo da
     // grade), depois a sequência pelo mesmo `dispatch` da entrada real.
     if let Some((lista, cmds)) = sequencia {
+        // A tela inicial é `Boot`, e nela o reducer ignora navegação e troca de
+        // aba: sem este avanço as teclas não fazem nada e o estado impresso é o
+        // inicial. Ver `App::avancar_boot`.
+        app.avancar_boot();
         app.render();
         for cmd in cmds {
             app.aplicar(cmd);

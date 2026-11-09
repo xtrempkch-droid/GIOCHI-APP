@@ -39,6 +39,9 @@ export const MOTIVOS = {
   SCAFFOLD: "status scaffold: a fonte não foi migrada ou o binário não foi exportado",
   HOST: "distribution host: roda no PC, não vai para o aparelho",
   SHELL: "role shell: é a própria interface, não algo para iniciar de dentro dela",
+  /** O mesmo motivo de `SHELL`, mas a entrada veio de um `metadata.json` colhido
+   *  no aparelho — o caso do launcher instalado como app. */
+  PAPEL_SHELL: "role shell (declarado no apps.json): a cópia instalada não vira cartão",
   STORE: "distribution store: instalado em /user pela loja, não faz parte da imagem",
   SEM_BIN: "entrypoint não existe no disco",
   SEM_METADATA: "metadata.json ausente",
@@ -190,13 +193,40 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
  *
  * `instalados` vem da varredura do aparelho: `[{ id, metadata, dir }]`.
  */
-export function mesclarInstalados(catalogo, instalados, { dirBase = DIR_BASE_PADRAO } = {}) {
+export function mesclarInstalados(
+  catalogo,
+  instalados,
+  { dirBase = DIR_BASE_PADRAO, papeis = new Map() } = {},
+) {
   const avisos = [];
   const porId = new Map(catalogo.apps.map((a) => [a.id, a]));
 
   for (const inst of instalados) {
     const { id, metadata } = inst;
     if (!id || !metadata) continue;
+
+    // ## `role: shell` vale também para o que veio do aparelho
+    //
+    // O papel é declarado no `apps.json`, e o gerador já o respeitava — mas só
+    // para as entradas do repositório. Instalar o launcher **com o seu
+    // `metadata.json`** no aparelho (que é o certo a fazer, e é o que o
+    // `aparelho.sh catalogo` colhe) trazia ele de volta pela porta dos fundos:
+    // medido em 09/11/2026 na imagem nova, o catálogo ficou com `Giochi
+    // Launcher` e `Giochi Launcher (engine)` como se fossem jogos. Apertar `A`
+    // no primeiro abriria um segundo launcher, que perde o DRM (exclusivo) e
+    // morre com `kmsdrm not available`.
+    //
+    // O papel **não** pode vir do catálogo já filtrado: o launcher está fora
+    // dele justamente por ser shell, então `porId` não tem a informação. É por
+    // isso que o chamador passa `papeis` lido do `apps.json`.
+    //
+    // E herdar do repositório — em vez de fixar `id === "launcher"` — é o que
+    // mantém a regra declarada: renomear a pasta não muda o papel.
+    const papel = porId.get(id)?.role ?? papeis.get(id);
+    if (papel === "shell") {
+      avisos.push({ id, motivo: MOTIVOS.PAPEL_SHELL });
+      continue;
+    }
 
     const entrypoint = metadata.entrypoint;
     if (typeof entrypoint !== "string" || !entrypoint.startsWith("bin/")) {
@@ -205,6 +235,7 @@ export function mesclarInstalados(catalogo, instalados, { dirBase = DIR_BASE_PAD
     }
 
     const anterior = porId.get(id);
+
     const entrada = {
       id,
       version: metadata.version,
@@ -218,7 +249,16 @@ export function mesclarInstalados(catalogo, instalados, { dirBase = DIR_BASE_PAD
       // `apps.json` tem (`license`). Substituir a entrada inteira os apagava:
       // o pacman apareceu no catálogo sem licença depois de instalado pelo
       // pacote. Herdar do anterior preserva a informação em vez de perdê-la.
-      ...(anterior?.license ? { license: anterior.license } : {}),
+      // `license` também existe no `metadata.json` (é campo do schema), e o
+      // app que **não** está no `apps.json` só tem essa fonte. Antes, um pacote
+      // instalado sem entrada no repositório aparecia sem licença na ficha.
+      // O `apps.json` continua ganhando quando existe: é ele que o validador
+      // confere contra o `metadata.json`.
+      ...(anterior?.license
+        ? { license: anterior.license }
+        : metadata.license
+          ? { license: metadata.license }
+          : {}),
     };
 
     if (anterior) {

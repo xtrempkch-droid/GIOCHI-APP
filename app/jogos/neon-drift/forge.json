@@ -1,0 +1,8 @@
+{
+  "arch": "aarch64",
+  "runtime": "native",
+  "graphics_api_min": "gles2",
+  "ram_min_mb": 48,
+  "display_min_width": 480,
+  "display_min_height": 320
+}

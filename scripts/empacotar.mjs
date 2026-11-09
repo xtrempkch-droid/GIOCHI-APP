@@ -12,10 +12,10 @@
 //
 // ## A chave
 //
-// Procura `--chave <arquivo.pem>`; sem ele, usa `~/.giochi/chave-privada.pem`.
-// Se não existir, **cria** e avisa — e imprime a pública, que é o que vai para o
-// aparelho. Criar sem avisar seria o tipo de conveniência que faz o usuário
-// publicar com uma chave que ele não sabe que tem.
+// `--chave <arquivo.pem>` manda; sem ele, a resolução está em
+// `scripts/lib/chave.mjs` (local histórico → chave do `Giochi System`, que é a
+// que a imagem confia). Se não houver nenhuma, **cria** e avisa — e diz
+// explicitamente que a imagem vai recusar até a pública entrar nela.
 //
 // A chave privada nunca vai para o repositório nem para o pacote: quem assina é a
 // máquina de quem publica.
@@ -35,6 +35,7 @@ import {
   slugDoPacote,
   validarPacote,
 } from "./lib/publicar.mjs";
+import { chavePrivadaDoDisco, combinaComAImagem, diretorioDasChavesDoSystem } from "./lib/chave.mjs";
 import { readPngSize } from "./lib/png.mjs";
 
 const raiz = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -90,13 +91,14 @@ function idDoIndice(dirApp) {
   }
 }
 
-/** Chave privada: a pedida, a padrão, ou uma nova — avisando. */
+/** Chave privada: a pedida, uma das documentadas, ou uma nova — avisando. */
 function obterChave(caminhoPedido) {
-  const caminho = caminhoPedido ?? join(homedir(), ".giochi", "chave-privada.pem");
-  if (existsSync(caminho)) {
-    return { privada: readFileSync(caminho, "utf8"), publica: null, caminho, criada: false };
+  const doDisco = caminhoPedido ?? chavePrivadaDoDisco();
+  if (doDisco && existsSync(doDisco)) {
+    return { privada: readFileSync(doDisco, "utf8"), publica: null, caminho: doDisco, criada: false };
   }
 
+  const caminho = join(homedir(), ".giochi", "chave-privada.pem");
   const { privada, publica } = gerarChaves();
   mkdirSync(dirname(caminho), { recursive: true });
   // 0600: a privada assina pacotes; legível por outros usuários seria o mesmo
@@ -199,6 +201,13 @@ function principal() {
   }
 
   const chave = obterChave(opcoes.chave);
+  // A chave que assina tem de ser a mesma cuja pública está na imagem. Quando
+  // não é, o pacote sai íntegro e o aparelho recusa — o erro aparece longe da
+  // causa. Avisar aqui é a diferença entre uma rodada e uma sessão perdida.
+  if (combinaComAImagem(chave.privada) === false) {
+    console.warn("aviso: esta chave NÃO é a da imagem do aparelho — ela vai recusar o pacote");
+    console.warn("       (a pública em /etc/giochi/loja-publica.pem é outra)");
+  }
   // O slug **não** é o nome da pasta: `jogos/pacman` → `pacman`, e um app
   // renomeado na árvore não pode mudar o diretório no aparelho.
   const { slug, origem: origemSlug } = slugDoPacote(metadata, idDoIndice(dirApp));
@@ -240,6 +249,12 @@ function principal() {
     console.log(`  chave pública gravada em ${chave.caminhoPublica}`);
     console.log("  é ela que vai para o aparelho, em /etc/giochi/loja-publica.pem");
     console.log("  a privada NÃO vai para o repositório nem para o pacote.");
+    console.log("");
+    console.log("  ATENÇÃO: a imagem em uso confia na chave do Giochi System.");
+    console.log("  Este pacote só instala depois que esta pública entrar em");
+    console.log("  /etc/giochi/loja-publica.pem — senão o aparelho recusa a assinatura.");
+    console.log("  Em máquina de desenvolvimento, o esperado é achar a chave em");
+    console.log(`  ${join(diretorioDasChavesDoSystem(), "loja-privada.pem")}`);
   }
 }
 
