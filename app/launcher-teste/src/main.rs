@@ -36,8 +36,10 @@ mod icons;
 mod views;
 
 mod draw;
+mod efeitos;
 
 use std::time::Instant;
+
 
 use giochi_engine::{Platform, RenderContext, WindowConfig};
 use giochi_launcher_core::state::{
@@ -46,6 +48,7 @@ use giochi_launcher_core::state::{
 use giochi_launcher_core::{update, Cmd, Dir};
 
 use draw::{CANDIDATOS_FONTE, Painter};
+use efeitos::Efeitos;
 
 fn main() {
     if let Err(e) = principal() {
@@ -79,6 +82,17 @@ fn argumentos() -> Opcoes {
             "--teclas" => o.teclas = proximo(),
             "--tela" => o.tela = proximo(),
             "--demo" => o.demo = true,
+            "--efeitos" => o.efeitos = true,
+            "--bench" => {
+                if let Some(v) = proximo() {
+                    o.bench = v.parse().unwrap_or(600);
+                }
+            }
+            "--efeitos-quadros" => {
+                if let Some(v) = proximo() {
+                    o.efeitos_quadros = v.parse().unwrap_or(90);
+                }
+            }
             "--rotacao" => o.rotacao = proximo(),
             "-h" | "--ajuda" => {
                 ajuda();
@@ -95,7 +109,6 @@ fn argumentos() -> Opcoes {
     o
 }
 
-#[derive(Default)]
 struct Opcoes {
     tamanho: Option<(u32, u32)>,
     dump_frame: Option<String>,
@@ -104,6 +117,29 @@ struct Opcoes {
     tela: Option<String>,
     demo: bool,
     rotacao: Option<String>,
+    efeitos: bool,
+    efeitos_quadros: u32,
+    bench: u32,
+}
+
+impl Default for Opcoes {
+    fn default() -> Self {
+        Self {
+            tamanho: None,
+            dump_frame: None,
+            fonte: None,
+            teclas: None,
+            tela: None,
+            demo: false,
+            rotacao: None,
+            // `GIOCHI_EFEITOS=1` é o caminho do aparelho: quem instala a versão
+            // de teste não quer digitar flag por SSH, e a variável de ambiente
+            // é o mesmo padrão que `GIOCHI_GLES` e `GIOCHI_ROTATE` já usam.
+            efeitos: std::env::var("GIOCHI_EFEITOS").is_ok_and(|v| v != "0"),
+            efeitos_quadros: 90,
+            bench: 0,
+        }
+    }
 }
 
 fn ajuda() {
@@ -119,6 +155,9 @@ opções:
   --teclas a,b,right   aplica comandos antes de desenhar (vírgula)
   --tela <nome>        boot | home | biblioteca | apps | ajustes
   --demo               usa o catálogo de demonstração
+  --efeitos            liga a camada de efeitos (GIOCHI_EFEITOS=1)
+  --efeitos-quadros N  quadros adiantados antes do --dump-frame (padrão 90)
+  --bench N            mede N quadros sem dormir e imprime ms por quadro
   --rotacao 0|90|270   sobrepõe a rotação do sistema
   --fonte <caminho>    caminho do .ttf
   -h, --ajuda          esta ajuda"
@@ -178,12 +217,33 @@ fn principal() -> Result<(), String> {
         state = aplicar_tela(state, tela);
     }
 
+    // ── camada de efeitos (opcional) ─────────────────────────
+    //
+    // Ligada por `--efeitos` / `GIOCHI_EFEITOS=1`. Ligada, o desenho das telas é
+    // **o mesmo**; o que entra é uma camada por cima. Desligada, o quadro tem de
+    // sair idêntico ao do launcher de produção — é o que os 100,0 % medidos
+    // provam, e é por isso que os efeitos não podem ser o padrão.
+    let mut camada = Efeitos::novo(opcoes.efeitos);
+    if camada.ativo() {
+        let (l, a) = painter.logical_size();
+        eprintln!(
+            "efeitos: {} — {l}x{a}, {} quadro(s) adiantados",
+            Efeitos::lista(),
+            opcoes.efeitos_quadros
+        );
+        // Adiantar antes do primeiro desenho é o que torna `--dump-frame`
+        // reprodutível: o BMP não depende de quanto o processo demorou.
+        let cor = theme::ACCENT;
+        camada.semear(l as i32, a as i32);
+        camada.avancar(opcoes.efeitos_quadros, l as i32, a as i32, cor);
+    }
+
     // `--teclas` é aplicado **depois do primeiro desenho**: a navegação usa a
     // grade publicada pelo layout, e antes de desenhar ela seria o padrão. No
     // launcher de produção esta ordem foi um bug medido — a ferramenta
     // imprimia `HomeCarousel` em vez de `LibraryGrid` e "provava" que a
     // navegação não funcionava.
-    desenhar(&mut painter, &mut state);
+    desenhar_com(&mut painter, &mut state, Some(&mut camada));
 
     if let Some(lista) = &opcoes.teclas {
         for nome in lista.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -191,7 +251,12 @@ fn principal() -> Result<(), String> {
                 Some(cmd) => state = update(state, cmd),
                 None => return Err(format!("--teclas: tecla desconhecida: {nome}")),
             }
-            desenhar(&mut painter, &mut state);
+            // A rajada é a resposta visual ao comando — e chamá-la aqui, de quem
+            // **sabe** que uma tecla chegou, evita adivinhar comparando estados
+            // (que erraria em `Back` sobre overlay).
+            let (l, a) = painter.logical_size();
+            camada.rajada(l as i32, a as i32);
+            desenhar_com(&mut painter, &mut state, Some(&mut camada));
         }
         eprintln!(
             "--teclas: {lista} -> foco {:?} {} | filtro {:?} | categoria {:?} | grade {}x{}",
@@ -202,6 +267,57 @@ fn principal() -> Result<(), String> {
             state.grade_biblioteca.cols,
             state.grade_biblioteca.por_pagina
         );
+    }
+
+    // ── medição ──────────────────────────────────────────────
+    //
+    // Sem `--dump-frame` e sem tela, o laço normal dorme 16 ms por quadro e todo
+    // número de tempo mede o `sleep`, não o desenho. Aqui o laço não dorme: o que
+    // sai é o **custo do quadro**, que é o que decide se um efeito cabe.
+    //
+    // `present()` entra na conta de propósito. O desenho e a apresentação são
+    // inseparáveis num aparelho onde o swap espera o vblank: medir só o desenho
+    // daria "0,4 ms" e o usuário veria 30 fps.
+    if opcoes.bench > 0 {
+        let (l, a) = painter.logical_size();
+        camada.semear(l as i32, a as i32);
+        // Aquece: a primeira passada paga cache frio de fonte e de textura e
+        // não representa o regime.
+        for _ in 0..20 {
+            state = update(state, Cmd::TickHud);
+            desenhar_com(&mut painter, &mut state, Some(&mut camada));
+        }
+        let inicio = Instant::now();
+        for _ in 0..opcoes.bench {
+            state = update(state, Cmd::TickHud);
+            desenhar_com(&mut painter, &mut state, Some(&mut camada));
+        }
+        let decorrido = inicio.elapsed().as_secs_f64();
+        let ms = decorrido * 1000.0 / opcoes.bench as f64;
+        let (pl, pa) = painter.painel();
+        if std::env::var("GIOCHI_JSON").is_ok() {
+            println!(
+                "{{\"quadros\":{},\"ms\":{ms:.2},\"fps\":{:.1},\"desenhos\":{},\"brasas\":{},\"brilhos\":{},\"painel\":\"{pl}x{pa}\",\"efeitos\":{}}}",
+                opcoes.bench,
+                1000.0 / ms,
+                camada.desenhos(),
+                camada.brasas(),
+                camada.brilhos(),
+                camada.ativo()
+            );
+        } else {
+            println!(
+                "bench: {} quadros em {:.3} s — {ms:.2} ms/quadro ({:.1} fps) · {} desenho(s) · {} brasa(s), {} brilho(s) · efeitos {} · painel {pl}x{pa}",
+                opcoes.bench,
+                decorrido,
+                1000.0 / ms,
+                camada.desenhos(),
+                camada.brasas(),
+                camada.brilhos(),
+                if camada.ativo() { "ligados" } else { "desligados" }
+            );
+        }
+        return Ok(());
     }
 
     if let Some(destino) = &opcoes.dump_frame {
@@ -218,13 +334,18 @@ fn principal() -> Result<(), String> {
     let _ = &platform;
     loop {
         state = update(state, Cmd::TickHud);
-        desenhar(&mut painter, &mut state);
+        desenhar_com(&mut painter, &mut state, Some(&mut camada));
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }
 
-/// Desenha um quadro completo — a mesma sequência do `App::render` de produção.
-fn desenhar(painter: &mut Painter, state: &mut State) {
+/// A mesma sequência, com a camada de efeitos opcional por cima.
+///
+/// `None` é o caminho que a comparação pixel a pixel usa: sem camada, o quadro
+/// tem de sair **idêntico** ao do launcher de produção — é o que prova que o
+/// porte está fiel. `Some` entra depois do `hud()` e antes do `present()`, então
+/// nada do desenho das telas muda.
+fn desenhar_com(painter: &mut Painter, state: &mut State, mut efeitos: Option<&mut Efeitos>) {
     painter.clear(theme::BG);
 
     // Brilho ambiente no topo, na cor do jogo em foco, em faixas de alfa
@@ -264,6 +385,10 @@ fn desenhar(painter: &mut Painter, state: &mut State) {
     }
     if let Some(grade) = layout.grade_apps {
         state.grade_apps = grade;
+    }
+
+    if let Some(camada) = efeitos.as_mut() {
+        camada.desenhar(painter, state, &layout);
     }
 
     painter.present();

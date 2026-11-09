@@ -13,6 +13,7 @@ produção. Medido em 07/11/2026.
 
 ```bash
 bash scripts/compilar-launcher-teste.sh                  # PC (x86-64)
+bash scripts/verificar-efeitos.sh                          # camada de efeitos
 bash scripts/comparar-launcher-teste.sh                  # compara no PC
 bash scripts/compilar-launcher-teste-arm64.sh --instalar root@10.55.0.2
 bash scripts/aparelho.sh verificar-teste                 # compara NO APARELHO

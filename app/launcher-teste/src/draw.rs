@@ -256,6 +256,14 @@ pub struct Painter {
     clip_stack: Vec<Option<Clip>>,
     rot: Rotation,
     design: (i32, i32),
+    /// Chamadas de desenho emitidas ao backend desde a criação.
+    ///
+    /// Contado **aqui**, no ponto em que se chama o `RenderContext`, e não no
+    /// chamador. A primeira versão contava no módulo de efeitos e mentia: com
+    /// uma mutação que desfazia a batelada (uma chamada por partícula) o número
+    /// continuava 25, porque o contador somava "quantas vezes eu pedi um lote".
+    /// Um contador que mede a intenção não mede o custo.
+    desenhos: u32,
 }
 
 impl Painter {
@@ -317,6 +325,7 @@ impl Painter {
             clip_stack: Vec::new(),
             rot,
             design: proj.design,
+            desenhos: 0,
         })
     }
 
@@ -362,6 +371,12 @@ impl Painter {
         Ok(())
     }
 
+    /// Chamadas de desenho emitidas até agora.
+    pub fn desenhos(&self) -> u32 {
+        self.desenhos
+    }
+
+    /// `true` quando o desenho foi feito; o contador não é escrito à toa.
     pub fn logical_size(&self) -> (u32, u32) {
         (self.design.0.max(1) as u32, self.design.1.max(1) as u32)
     }
@@ -442,6 +457,87 @@ impl Painter {
         self.fill_rect_dev(x, y, w, h, color);
     }
 
+    /// Vários retângulos de **uma vez**, num único `fill_rects` da engine.
+    ///
+    /// Existe para as scanlines dos efeitos: 160 retângulos de 1 px em 160
+    /// `draw_rect` seriam 160 chamadas de desenho por quadro; em lote é **uma**.
+    /// O custo continua sendo a área desenhada — o que o lote evita é a
+    /// chamada, não o pixel.
+    ///
+    /// Com recorte ativo cai para retângulo a retângulo: `fill_rects` da engine
+    /// não recorta, e um efeito que ignorasse o recorte apareceria por cima de
+    /// um overlay que deveria cobri-lo.
+    pub fn fill_rects(&mut self, rects: &[(i32, i32, i32, i32)], color: Color) {
+        if self.clip_dev().is_some() {
+            for &(x, y, w, h) in rects {
+                self.fill_rect(x, y, w, h, color);
+            }
+            return;
+        }
+        let mut lote: Vec<RectEngine> = Vec::with_capacity(rects.len());
+        for &(x, y, w, h) in rects {
+            if w <= 0 || h <= 0 {
+                continue;
+            }
+            let (x, y, w, h) = self.map_rect(x, y, w, h);
+            lote.push(rect_dev(x, y, w, h));
+        }
+        if !lote.is_empty() {
+            self.desenhos += 1;
+            self.render.fill_rects(&lote, para_engine(color));
+        }
+    }
+
+    /// Vários círculos de **uma vez**, num único `fill_rects`.
+    ///
+    /// `fill_circle` faz um `fill_rects` por círculo, e cada um é uma chamada de
+    /// volta ao backend. Desenhar 130 brasas custava 129 chamadas — medido no
+    /// X35H, +2,9 ms por quadro. Aqui as varreduras de todos os círculos vão num
+    /// lote só, então 130 brasas custam **uma**.
+    ///
+    /// Os círculos precisam ter a **mesma cor**: `fill_rects` recebe uma cor para
+    /// o lote inteiro. Quem tem alfa variável separa em faixas e chama uma vez
+    /// por faixa.
+    pub fn fill_circles(&mut self, circulos: &[(i32, i32, i32)], color: Color) {
+        if circulos.is_empty() {
+            return;
+        }
+        if self.clip_dev().is_some() {
+            for &(cx, cy, r) in circulos {
+                self.fill_circle(cx, cy, r, color);
+            }
+            return;
+        }
+        let mut lote: Vec<RectEngine> = Vec::with_capacity(circulos.len() * 8);
+        for &(cx, cy, r) in circulos {
+            if r <= 0 {
+                continue;
+            }
+            let (cx, cy) = self.map_point(cx, cy);
+            for dy in -r..=r {
+                let meia = ((r * r - dy * dy) as f32).sqrt().round() as i32;
+                if meia > 0 {
+                    lote.push(rect_dev(cx - meia, cy + dy, meia * 2, 1));
+                }
+            }
+        }
+        if !lote.is_empty() {
+            self.desenhos += 1;
+            self.render.fill_rects(&lote, para_engine(color));
+        }
+    }
+
+    /// Linha em espaço de projeto.
+    ///
+    /// `line_dev` já existia (os ícones usam), mas era privada: os efeitos
+    /// precisam de linha solta, e expor a versão em espaço de projeto é o que
+    /// impede a camada de efeitos de repetir a matemática de rotação.
+    pub fn line(&mut self, a: (i32, i32), b: (i32, i32), color: Color) {
+        let a = self.map_point(a.0, a.1);
+        let b = self.map_point(b.0, b.1);
+        self.line_dev(a, b, color);
+    }
+
     pub fn fill_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
         let (x, y, w, h) = self.map_rect(x, y, w, h);
         self.fill_round_rect_dev(x, y, w, h, radius, color);
@@ -478,6 +574,7 @@ impl Painter {
             }
             None => (x, y, w, h),
         };
+        self.desenhos += 1;
         self.render.draw_rect(rect_dev(x, y, w, h), para_engine(color));
     }
 
@@ -492,6 +589,7 @@ impl Painter {
             self.fill_rect_dev(x + w - 1, y, 1, h, color);
             return;
         }
+        self.desenhos += 1;
         self.render.stroke_rect(rect_dev(x, y, w, h), para_engine(color));
     }
 
@@ -542,6 +640,7 @@ impl Painter {
                 .collect();
         }
 
+        self.desenhos += 1;
         self.render.fill_rects(&spans, para_engine(color));
     }
 
@@ -574,6 +673,7 @@ impl Painter {
             }
             return;
         }
+        self.desenhos += 1;
         self.render.draw_line(
             Vec2::new(a.0 as f32, a.1 as f32),
             Vec2::new(b.0 as f32, b.1 as f32),
@@ -668,6 +768,7 @@ impl Painter {
                 })
                 .collect();
         }
+        self.desenhos += 1;
         self.render.fill_rects(&spans, para_engine(color));
     }
 
@@ -770,6 +871,7 @@ impl Painter {
             }
         }
         if !spans.is_empty() {
+            self.desenhos += 1;
             self.render.fill_rects(&spans, para_engine(color));
         }
     }
@@ -911,6 +1013,7 @@ impl Painter {
             }
         };
         let src = rect_dev(origem.x, origem.y, origem.w, origem.h);
+        self.desenhos += 1;
         let resultado = self
             .render
             .draw_texture_ex(textura, src, dst, angle, false, false)

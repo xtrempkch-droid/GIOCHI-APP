@@ -31,6 +31,8 @@
 #                                       (instala os .giochi da partição do cartão)
 #   bash scripts/aparelho.sh verificar-teste [tela...]
 #                                       (launcher da engine × launcher de produção)
+#   bash scripts/aparelho.sh verificar-efeitos
+#                                       (a camada de efeitos desenha no aparelho?)
 #
 # Variáveis:
 #   GIOCHI_DEVICE      host do aparelho (padrão: descobre sozinho)
@@ -1417,6 +1419,104 @@ cmd_verificar_jogo() {
 }
 
 
+# ── verificar a camada de efeitos NO APARELHO ───────────────
+#
+# O `verificar-efeitos.sh` roda no PC e prova que a camada desenha, é
+# determinística e cabe no orçamento de chamadas. Ele **não** prova que a mesma
+# camada desenha no aparelho: infraestrutura de desenho diferente (KMSDRM,
+# `opengles2`) e a fonte é a do rootfs, não a do PC.
+#
+# Aqui a pergunta é só essa, e a resposta vem de contagem de pixels: o quadro com
+# efeitos tem de diferir do sem efeitos por uma fração mínima e tem de sair com o
+# tamanho exato do painel. Um BMP de tamanho errado é `read_pixels` devolvendo
+# outra coisa; um BMP igual é a camada não desenhando.
+#
+# `GIOCHI_GLES=0` porque com backend acelerado `--dump-frame` grava **preto** (o
+# swap esvazia o buffer). Medido nos três aparelhos, e é o mesmo motivo do
+# `verificar-teste`.
+# Isolar um efeito é trabalho do `verificar-efeitos.sh`, que roda no PC com
+# `GIOCHI_EFEITOS_SO`. Este comando prova a pergunta que só o aparelho responde:
+# a camada inteira desenha aqui. Aceitar um nome de efeito e ignorá-lo seria
+# pior que não aceitar — seria uma flag que mente.
+cmd_verificar_efeitos() {
+  exigir_aparelho
+  titulo "efeitos do launcher-teste"
+
+  local remoto="/opt/giochi/apps/launcher-teste/bin/giochi-launcher-teste"
+  [ "$(no_aparelho "[ -x $remoto ] && echo SIM || echo NAO")" = "SIM" ] \
+    || morrer "$remoto não está instalado (bash scripts/compilar-launcher-teste-arm64.sh --instalar)"
+
+  local painel
+  painel=$(resolucao_do_aparelho)
+  [ -n "$painel" ] || morrer "não descobri a resolução do painel"
+  local pl pa esperado
+  pl=${painel%x*}
+  pa=${painel#*x}
+  esperado=$(( pl * pa * 3 + 54 ))
+  ok "painel $painel"
+
+  # Duas chamadas e não uma: era uma, com aspas dentro de aspas dentro de
+  # `ssh`, e o `$5` do `awk` virou string vazia — o script disse "não gravou"
+  # com o arquivo lá. É a mesma armadilha que já custou o extrator do `.giochi`.
+  titulo "capturando no aparelho"
+  no_aparelho '
+    kill $(pidof giochi-launcher) 2>/dev/null; sleep 1.5
+    kill $(pidof giochi-launcher) 2>/dev/null; sleep 0.5
+    cd /opt/giochi/apps/launcher-teste || exit 1
+    SDL_VIDEODRIVER=kmsdrm GIOCHI_GLES=0 ./bin/giochi-launcher-teste --demo       --dump-frame /tmp/efeitos_sem.bmp >/dev/null 2>&1
+    echo "sem: $?"
+    SDL_VIDEODRIVER=kmsdrm GIOCHI_GLES=0 GIOCHI_EFEITOS=1 ./bin/giochi-launcher-teste --demo       --efeitos --dump-frame /tmp/efeitos_com.bmp >/dev/null 2>&1
+    echo "com: $?"
+  ' | sed 's/^/  /'
+
+  local tamanho
+  # `wc -c` e não `stat -c`: esta imagem não tem `stat` ("stat: not found").
+  # E `ls | awk` foi o que quebrou na primeira versão, por causa das aspas
+  # aninhadas dentro do comando remoto.
+  tamanho=$(no_aparelho 'wc -c < /tmp/efeitos_com.bmp 2>/dev/null' | tr -d ' ')
+  if [ -z "$tamanho" ]; then
+    morrer "não gravou /tmp/efeitos_com.bmp — a camada não desenhou"
+  elif [ "$tamanho" != "$esperado" ]; then
+    falha "BMP de $tamanho bytes; $painel em 24 bpp seria $esperado"
+  else
+    ok "BMP do tamanho do painel ($tamanho bytes)"
+  fi
+
+  local tmp
+  tmp=$(mktemp -d)
+  if ! "${SCP_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST:/tmp/efeitos_sem.bmp" "$tmp/sem.bmp" 2>/dev/null ||
+     ! "${SCP_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST:/tmp/efeitos_com.bmp" "$tmp/com.bmp" 2>/dev/null; then
+    falha "não consegui baixar os dois quadros"
+  else
+    local n
+    n=$(node -e '
+      const fs = require("fs");
+      const [a, b] = process.argv.slice(1).map(f => fs.readFileSync(f));
+      if (a.length !== b.length) { console.log(-1); process.exit(0); }
+      let n = 0;
+      for (let i = 54; i + 2 < a.length; i += 3) {
+        if (Math.abs(a[i]-b[i]) + Math.abs(a[i+1]-b[i+1]) + Math.abs(a[i+2]-b[i+2]) > 12) n++;
+      }
+      console.log(n);
+    ' "$tmp/sem.bmp" "$tmp/com.bmp")
+    if [ "$n" -lt 0 ]; then
+      falha "os dois BMP têm tamanhos diferentes"
+    elif [ "$n" -lt 2000 ]; then
+      falha "só $n pixels mudaram no aparelho — a camada não desenhou"
+    else
+      ok "a camada muda $n pixels no aparelho"
+    fi
+    mkdir -p "$RAIZ/dist/testes"
+    cp "$tmp/com.bmp" "$RAIZ/dist/testes/efeitos-aparelho.bmp" 2>/dev/null
+    ok "quadro em dist/testes/efeitos-aparelho.bmp"
+  fi
+
+  no_aparelho 'rm -f /tmp/efeitos_sem.bmp /tmp/efeitos_com.bmp'
+  titulo "retomando o launcher"
+  iniciar_launcher | while IFS= read -r linha; do printf '  %s\n' "$linha"; done
+  rm -rf "$tmp"
+}
+
 # ── verificar o launcher sobre a GIOCHI-ENGINE ───────────────
 #
 # O `launcher-teste` desenha as MESMAS telas que o launcher de produção, então a
@@ -1636,6 +1736,7 @@ case "${1:-ajuda}" in
   verificar-teste|teste)
     shift
     cmd_verificar_teste "$@" ;;
+  verificar-efeitos) cmd_verificar_efeitos ;;
   ajuda|--help|-h|"")
     # Só o bloco de comentário do topo: para no primeiro `set -`, não numa
     # faixa fixa de linhas que sai do lugar a cada edição.

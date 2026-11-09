@@ -536,9 +536,12 @@ bash scripts/aparelho.sh capacidades      # códigos que cada dispositivo declar
 bash scripts/aparelho.sh opcoes           # rota e autenticação (rede x usb0)
 bash scripts/aparelho.sh boot-log         # salva o log ANTES de regravar o cartão
 bash scripts/aparelho.sh catalogo         # gera e publica o índice de apps
+bash scripts/aparelho.sh verificar-teste  # launcher-teste × produção, 6 telas
+bash scripts/aparelho.sh verificar-efeitos # a camada de efeitos desenha no aparelho
 
 node scripts/gerar-catalogo.mjs --lista   # quem entra no catálogo e quem fica fora
 node scripts/verificar-frame.mjs --captura f.bmp [--referencia r.bmp] [--rotacao ccw]
+bash scripts/verificar-efeitos.sh        # prova a camada de efeitos do launcher-teste
 node scripts/verificar-telas.mjs         # as 12 telas em 640x480, 800x600, 1280x720
 node scripts/verificar-jogos.mjs         # a geometria dos jogos nos mesmos 3 tamanhos
 node scripts/capacidades-input.mjs [--codigo 116] [--dispositivo gpio]
@@ -3997,3 +4000,125 @@ numa caixa de 3 a 74 m à frente do olho: emitir na volta inteira de 962 m daria
   anima com o tempo, então dois processos em instantes diferentes diferem 5,5 %
   — todo em partículas e no pulso do HUD. A estrutura (média 66,7 contra 66,9,
   mesmo 6,58 % de quase preto, mesmas 28 % de pixels coloridos) bate.
+
+## 30. Efeitos no launcher-teste (09/11/2026)
+
+Pedido do dono: **"adicione efeitos no app launcher-teste e salve no dispositivo os
+jogos e o launcher-teste e teste tudo"**.
+
+O `launcher-teste` é o app cujo valor inteiro é uma medida: **o launcher desenhado
+sobre a GIOCHI-ENGINE sai igual ao de produção?** A resposta era 100,0 % pixel a
+pixel em quatro tamanhos e seis telas. Efeito desenhado por padrão destruiria a
+medida; por isso a camada é **opcional** (`--efeitos` / `GIOCHI_EFEITOS=1`) e o
+desenho das telas não mudou uma linha.
+
+### Os oito efeitos, e o que cada um exercita
+
+| Efeito | Primitiva |
+| --- | --- |
+| `brasas` — partículas subindo na cor do jogo em foco | `fill_circle` → `fill_rects` |
+| `brilho` — estrelinhas de 4 pontas | `fill_rects` |
+| `varredura` — banda de luz descendo a cada 4 s | `draw_rect` em faixas |
+| `vinheta` — topo e base escurecidos | `fill_rects` |
+| `scanlines` — textura de CRT em **um** lote | `fill_rects` com ~120 retângulos |
+| `halo` — brilho pulsante no item em foco | `fill_rects` em 4 bandas |
+| `rastro` — riscos a cada comando | `draw_line` |
+| `borda` — tira de luz respirando na borda | `fill_rects` |
+
+O halo lê a geometria que a **tela publicou** (`layout.hits`), não recalcula:
+`alvo_em_foco` casa o vocabulário do núcleo (zona + índice) com o da tela
+(retângulo + tipo de alvo). Recalcular seria a segunda verdade que já desalinhou
+o carrossel neste projeto.
+
+### Custo medido no X35H (640×480)
+
+| | ms/quadro | fps | chamadas |
+| --- | --- | --- | --- |
+| sem efeitos | 24,18 | **41,4** | 0 |
+| com efeitos | 27,26 | **36,7** | 27 |
+
+**+3,1 ms.** A primeira versão custava **+7,3 ms**, e o caminho até a metade é o
+que vale registrar:
+
+| Versão | Custo | Causa |
+| --- | --- | --- |
+| uma chamada por brasa + `stroke_round_rect` no halo | +7,3 ms | 162 chamadas; o halo sozinho +6,9 ms |
+| batelada por faixa de alfa | **+3,1 ms** | 27 chamadas |
+
+**O halo era o campeão por uma margem de 4×.** `stroke_round_rect` desenha 4
+arestas e 4 arcos, e cada arco é uma polilinha de ~30 `draw_line`; três contornos
+custavam +6,9 ms para uma borda que ninguém vê. Quatro bandas preenchidas num
+`fill_rects` por camada leem igual e custam **+0,4 ms**.
+
+A regra que sai: **`draw_rect` é uma chamada de backend por retângulo.** 130
+brasas uma a uma custavam 129 chamadas; em 8 faixas de alfa, 8. O que sobra é a
+área em tela — e por isso as scanlines ficaram com passo 4 e não 2: era o efeito
+mais caro (+1,4 ms) e o menos legível num painel de LCD.
+
+### O contador de desenho media a si mesmo
+
+A primeira versão contava as chamadas **dentro do módulo de efeitos** e imprimia
+"25 desenhos". Uma mutação que desfazia a batelada continuava imprimindo 25 —
+media *quantas vezes eu pedi um lote*, não quantas chamadas saíram.
+
+Hoje o contador vive no `Painter`, no ponto em que se chama o `RenderContext`, e
+a camada lê a diferença. Com a batelada desfeita ele acusa **182 chamadas** e
+`verificar-efeitos.sh` reprova. É a versão de ferramenta do defeito que este
+repositório já registrou duas vezes: **um número que mede a intenção não mede o
+custo**, e o teste que passa dos dois lados não prova nada.
+
+### `scripts/verificar-efeitos.sh`
+
+Quatro perguntas que nenhuma olhada na tela responde:
+
+1. **Desenhou?** compara com o quadro sem efeito e exige diferença.
+2. **É determinístico?** duas execuções dão o mesmo BMP byte a byte — é o que
+   permite comparar quadro com quadro, e vem da animação por contagem de quadros
+   (`tick`), nunca do relógio.
+3. **Some quando desligado?** sem `--efeitos` o quadro tem de ser estável, que é
+   o pré-requisito da comparação de 100 %.
+4. **Cabe?** conta chamadas de desenho e reprova acima de 40.
+
+E uma quinta que só o `--teclas` responde: `rastro` isolado e sem comando
+legitimamente não muda nada, então ele é medido no laço e não no quadro parado —
+exigir pixels dele num quadro estático seria exigir o contrário do desenho.
+
+**A primeira versão do script imprimiu "ok camada verificada" depois de um
+FALHA**, porque o resumo não olhava para o que tinha acontecido. Um resumo que
+ignora falha é pior que nenhum: ensina a confiar no verde. Agora há contador e
+`exit 1`.
+
+### Três mutações, para provar que os testes mordem
+
+| Mutação | O que reprova |
+| --- | --- |
+| `semear` deixa de espalhar brasas | `semear_espalha_brasas_pela_altura_toda` |
+| halo fixo no cartão 0 | `o_halo_le_o_retangulo_que_a_tela_publicou` + `o_halo_some_quando_o_alvo_nao_foi_publicado` |
+| `rajada` sem a guarda de `ativo` | `desligado_nao_muda_estado_nem_conta_desenho` |
+| brasas sem teto | `avancar_nao_estoura_o_teto_de_brasas` |
+| batelada desfeita (`fill_circles` um a um) | `verificar-efeitos.sh`: 182 chamadas |
+
+`semear` existe porque sem ele o `--dump-frame` mostrava brasas **só no rodapé**:
+elas nascem na base e sobem ~1 px por quadro, então em 90 quadros andaram menos
+de 100 px. O efeito existia e o quadro não o mostrava — a mesma armadilha do
+`--teclas` que imprimia estado sem ter mudado nada.
+
+### Tudo verificado no X35H
+
+```text
+comparar-launcher-teste.sh   640x480 / 800x600 / 1280x720 / 720x1280 ccw   100,0%
+aparelho.sh verificar-teste  home biblioteca apps ajustes busca detalhe     100,0%
+verificar-efeitos.sh         4 tamanhos + 1 rotação, 0 falha
+cargo test                   29 testes (eram 18) — 4 mutações reprovam
+launcher-teste               630c2dfe… instalado, sha256 conferido nas duas pontas
+cobrinha                     e4e5b782… (já estava igual)
+neon-drift                   1ecbb6aa… enviado (o do aparelho era 9f0db73d, de antes
+                             da rodada de efeitos do §29)
+catálogo                     3 apps: cobrinha, equilibrio, neon-drift
+lançar do launcher           launcher pid=1913 → neon-drift pid=1921 ppid=1913 drm=6
+```
+
+O `neon-drift` do aparelho estava **desatualizado** e isso só apareceu porque o
+sha256 foi comparado nas duas pontas: o arquivo tinha 569 784 bytes contra
+603 896 do repositório. Cópia por `scp` sem conferir hash é o mesmo defeito que
+`aparelho.sh instalar` já trata para o launcher.
