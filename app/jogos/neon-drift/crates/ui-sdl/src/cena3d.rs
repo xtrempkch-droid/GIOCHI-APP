@@ -1358,64 +1358,85 @@ impl Cena3D {
         }
 
         // ── rodapé esquerdo: velocímetro, marcha e nitro ──────────
-        let base_y = altura - escala * 16.0;
+        //
+        // A geometria vem de `hud::rodape`, no núcleo, e **não** é recalculada
+        // aqui. A versão anterior montava a pilha com deslocamentos fixos
+        // (`base_y - 2·escala`) para um glifo de `7·escala` de altura, e em
+        // 640×480 os três elementos caíram na mesma faixa de 40 px — o defeito
+        // que o usuário viu como "o velocímetro em cima do nitro". Com as
+        // caixas no núcleo, `os_elementos_do_rodape_nao_se_sobrepoem` afirma a
+        // separação em quatro telas, coisa que olhar a tela não faz.
+        let branco = Color3D::new(1.0, 1.0, 1.0, 1.0);
+        let cinza = Color3D::new(0.70, 0.76, 0.90, 1.0);
+
         let velocidade = hud::velocidade(corrida.carro.kmh());
-        let escala_vel = escala * 1.6;
+        let marcha = format!("{}", corrida.carro.marcha());
+        let r = hud::rodape(largura, altura, &velocidade, &marcha);
+
         self.texto(
             render,
             inst,
             camera,
             &velocidade,
-            largura * 0.03,
-            base_y - escala_vel * 2.0,
-            escala_vel,
-            Color3D::new(1.0, 1.0, 1.0, 1.0),
+            r.velocidade.x,
+            r.velocidade.y,
+            r.escala_velocidade,
+            branco,
         )?;
-        let unidade = "KM/H";
-        let wu = fonte::largura_texto(unidade) as f32 * (escala * 0.6);
         self.texto(
             render,
             inst,
             camera,
-            unidade,
-            largura * 0.03 + wu + fonte::largura_texto(&velocidade) as f32 * escala_vel + escala * 2.0,
-            base_y - escala_vel,
-            escala * 0.6,
-            Color3D::new(0.7, 0.76, 0.9, 1.0),
+            "KM/H",
+            r.unidade.x,
+            r.unidade.y,
+            r.escala_unidade,
+            cinza,
         )?;
-
-        // Marcha: um dígito grande à direita do velocímetro.
-        let marcha = format!("{}", corrida.carro.marcha());
         self.texto(
             render,
             inst,
             camera,
             &marcha,
-            largura * 0.03,
-            base_y + escala * 2.0,
-            escala * 1.2,
+            r.marcha.x,
+            r.marcha.y,
+            r.escala_marcha,
             NEON_CIANO,
         )?;
 
-        // Barra de nitro: fundo escuro + preenchimento ciano + contorno.
-        let barra_w = largura * 0.30;
-        let barra_h = (escala * 3.0).max(6.0);
-        let barra_x = largura * 0.03;
-        let barra_y = base_y + escala * 6.5;
-        self.retangulo(render, inst, camera, barra_x, barra_y, barra_w, barra_h, Color3D::new(0.10, 0.12, 0.20, 0.9))?;
-        let cheio = barra_w * corrida.carro.nitro_fracao();
+        // Barra de nitro: fundo escuro + preenchimento ciano.
+        self.retangulo(
+            render,
+            inst,
+            camera,
+            r.barra.x,
+            r.barra.y,
+            r.barra.largura,
+            r.barra.altura,
+            Color3D::new(0.10, 0.12, 0.20, 0.92),
+        )?;
+        let cheio = r.barra.largura * corrida.carro.nitro_fracao();
         if cheio > 1.0 {
-            self.retangulo(render, inst, camera, barra_x, barra_y, cheio, barra_h, NEON_CIANO)?;
+            self.retangulo(
+                render,
+                inst,
+                camera,
+                r.barra.x,
+                r.barra.y,
+                cheio,
+                r.barra.altura,
+                NEON_CIANO,
+            )?;
         }
         self.texto(
             render,
             inst,
             camera,
             "NITRO",
-            barra_x + barra_w + escala * 2.0,
-            barra_y - escala * 0.5,
-            escala * 0.55,
-            Color3D::new(0.7, 0.76, 0.9, 1.0),
+            r.rotulo.x,
+            r.rotulo.y,
+            r.escala_rotulo,
+            cinza,
         )?;
 
         // ── contagem regressiva ───────────────────────────────────

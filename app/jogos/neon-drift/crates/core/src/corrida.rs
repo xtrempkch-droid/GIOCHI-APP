@@ -102,8 +102,22 @@ pub struct Corrida {
     pub posicao: usize,
     /// Desfecho, quando a corrida terminou.
     pub desfecho: Option<Desfecho>,
-    /// `s` do quadro anterior, para detectar a passagem da linha.
+    /// `s` do quadro anterior, para acumular o progresso com correção de volta.
     s_anterior: f32,
+    /// Metros percorridos desde a linha de largada.
+    ///
+    /// **Negativo antes de cruzar a linha**, porque a grade põe o jogador
+    /// atrás dela. Cresce por `ds` com correção de volta, nunca por `s` cru.
+    ///
+    /// A primeira versão detectava a passagem comparando `s` com frações do
+    /// comprimento (`s_anterior > 0,6·L && s < 0,4·L`). Num circuito fechado
+    /// isso não é confiável: perto da linha o último trecho passa
+    /// geometricamente ao lado do primeiro e o `localizar` oscila entre ~0 e
+    /// ~L a cada passo. Na avenida o defeito creditava uma volta no primeiro
+    /// metro; na descida da Boavista, uma volta em 1,1 s com o carro a 14 km/h.
+    /// Acumular `ds` e derivar a volta de `progresso / L` sobrevive à oscilação,
+    /// porque o erro fica em ±poucos metros em torno da linha e **não acumula**.
+    progresso: f32,
 }
 
 impl Corrida {
@@ -141,7 +155,15 @@ impl Corrida {
     ) -> Self {
         let pista = mapa.pista();
         let mut carro = Carro::novo(Ponto::ZERO, 0.0);
-        carro.posicionar(&pista, 0.0, -3.0);
+        // Três metros **atrás** da linha, e não em `s = 0`.
+        //
+        // `s = 0` com deslocamento lateral é ambíguo: o `localizar` do primeiro
+        // passo procura a amostra mais próxima e pode devolver o *fim* da pista
+        // (962,00 em vez de 0,00 na avenida), porque o último trecho passa
+        // geometricamente ao lado do primeiro. Medido: o carro parado na
+        // largada já reportava `s=961,99`.
+        let largada_s = (pista.comprimento() - 3.0).max(0.0);
+        carro.posicionar(&pista, largada_s, -3.0);
 
         // Largada em grade: o jogador atrás, três adversários à frente e ao
         // lado. A vantagem é de metros, não de uma volta.
@@ -159,6 +181,8 @@ impl Corrida {
             Adversario::novo("TURBO", 4.0, 0.85, 4.3, 3),
         ];
 
+        let carro_s = carro.s;
+        let comprimento = pista.comprimento();
         let mut corrida = Self {
             mapa,
             pista,
@@ -173,7 +197,8 @@ impl Corrida {
             contagem: CONTAGEM,
             posicao: 1,
             desfecho: None,
-            s_anterior: 0.0,
+            s_anterior: carro_s,
+            progresso: -(comprimento - carro_s),
         };
         corrida.reposicionar_adversarios();
         corrida
@@ -192,7 +217,8 @@ impl Corrida {
 
     /// Reinicia a corrida mantendo o número de voltas e o tempo limite.
     pub fn reiniciar(&mut self) {
-        self.carro.posicionar(&self.pista, 0.0, -3.0);
+        let largada_s = (self.pista.comprimento() - 3.0).max(0.0);
+        self.carro.posicionar(&self.pista, largada_s, -3.0);
         self.carro.nitro = 100.0;
         self.drift.reiniciar();
         self.volta = 1;
@@ -200,7 +226,11 @@ impl Corrida {
         self.contagem = CONTAGEM;
         self.posicao = 1;
         self.desfecho = None;
-        self.s_anterior = 0.0;
+        self.s_anterior = self.carro.s;
+        // O `localizar` pode ter devolvido o *fim* da pista (o último trecho
+        // passa ao lado do primeiro); o progresso tem de refletir "3 m atrás
+        // da linha", não o valor cru.
+        self.progresso = -3.0;
         self.reposicionar_adversarios();
         self.fase = Fase::Correndo;
     }
@@ -215,9 +245,20 @@ impl Corrida {
         }
     }
 
-    /// Progresso do jogador, em metros desde a largada.
+    /// `true` depois de o carro cruzar a linha de largada pela primeira vez.
+    pub fn largou(&self) -> bool {
+        self.progresso >= 0.0
+    }
+
+    /// Progresso do jogador, em metros desde a linha de largada.
+    ///
+    /// Enquanto a linha não foi cruzada o jogador está **atrás** dela, e o
+    /// progresso é negativo: é o que o faz largar em último, atrás dos três
+    /// adversários que nascem de 4 a 18 m depois da linha. Sem isto o `s`
+    /// valia `comprimento - 3` e o jogador aparecia ~950 m à frente no primeiro
+    /// quadro — o mesmo erro que já tinha sido corrigido do lado da IA.
     pub fn progresso_jogador(&self) -> f32 {
-        (self.volta.saturating_sub(1)) as f32 * self.pista.comprimento() + self.carro.s
+        self.progresso
     }
 
     /// Posição do jogador na corrida, recalculada.
@@ -263,13 +304,36 @@ impl Corrida {
             EventoCarro::Nada => Evento::Nada,
         };
 
-        // Passagem da linha: o `s` dá a volta. Testar por "diminuiu muito" e não
-        // por "chegou perto de zero" evita perder a volta quando o carro cruza
-        // a linha com o `s` já um pouco adiante.
+        // Passagem da linha pelo **progresso acumulado**, não por limiar no `s`.
+        //
+        // `s` sozinho não serve num circuito fechado: perto da linha o último
+        // trecho passa geometricamente ao lado do primeiro, e o `localizar`
+        // oscila entre ~0 e ~comprimento a cada passo. Era isso que fazia a
+        // avenida creditar uma volta no primeiro metro e a Boavista creditar
+        // uma em 1,1 s, com o carro a 14 km/h (medido em 09/11/2026).
+        //
+        // `ds` com correção de volta transforma o salto em deslocamento
+        // pequeno: a oscilação vira +3 e −3 alternados, que não acumulam.
         let comprimento = self.pista.comprimento();
         let s = self.carro.s;
-        if self.s_anterior > comprimento * 0.6 && s < comprimento * 0.4 {
-            self.volta = self.volta.saturating_add(1);
+        let bruto = s - self.s_anterior;
+        let meia = comprimento * 0.5;
+        let ds = if bruto > meia {
+            bruto - comprimento
+        } else if bruto < -meia {
+            bruto + comprimento
+        } else {
+            bruto
+        };
+        self.progresso += ds;
+        self.s_anterior = s;
+
+        // A volta vem do progresso: 0 m é a linha, `comprimento` fecha a
+        // primeira, e a corrida começa em `volta 1`. Antes da largada o
+        // progresso é negativo e a conta dá 0 — o `max(1)` segura.
+        let volta = ((self.progresso / comprimento).floor() as i64 + 1).max(1) as u32;
+        if volta > self.volta {
+            self.volta = volta;
             if self.volta > self.total_voltas {
                 self.terminar(Desfecho::Vitoria, Evento::Terminou);
                 return Evento::Terminou;
@@ -278,7 +342,6 @@ impl Corrida {
                 evento = Evento::Volta;
             }
         }
-        self.s_anterior = s;
 
         for adversario in self.adversarios.iter_mut() {
             adversario.passo(&self.pista, dt);
@@ -448,17 +511,119 @@ mod testes {
         assert_eq!(c.fase, Fase::Resultado);
     }
 
+    /// Põe o carro 3 m antes da linha e o empurra para depois dela: é a largada.
+    fn cruzar_a_linha(c: &mut Corrida) {
+        let antes = c.pista.comprimento() - 3.0;
+        c.carro.posicionar(&c.pista, antes, 0.0);
+        c.s_anterior = antes;
+        c.progresso = -3.0;
+        piloto_automatico(c, 1.0);
+    }
+
     #[test]
-    fn a_volta_e_contada_ao_cruzar_a_linha() {
+    fn a_primeira_passagem_pela_linha_e_a_largada_e_nao_uma_volta() {
+        // Este teste afirmava o contrário, e era ele que fixava o defeito: a
+        // grade de largada fica **atrás** da linha, então a primeira passagem
+        // é o começo da corrida. Contá-la fazia `2 voltas` terminar em uma.
         let mut c = Corrida::nova();
         c.comecar();
-        assert_eq!(c.volta, 1);
         c.contagem = 0.0;
-        // Põe o carro logo antes da linha e empurra para depois dela.
-        c.carro.posicionar(&c.pista, c.pista.comprimento() - 3.0, 0.0);
-        c.s_anterior = c.pista.comprimento() - 3.0;
-        piloto_automatico(&mut c, 1.0);
-        assert_eq!(c.volta, 2, "não contou a volta; s={:.1}", c.carro.s);
+        assert_eq!(c.volta, 1);
+        cruzar_a_linha(&mut c);
+        assert!(c.largou(), "a passagem não marcou a largada; s={:.1}", c.carro.s);
+        assert_eq!(c.volta, 1, "a largada não pode virar volta 2");
+    }
+
+    #[test]
+    fn a_volta_e_contada_na_segunda_passagem() {
+        // Três voltas de margem: com duas o piloto fecharia a corrida dentro da
+        // janela medida e a asserção leria `volta 3` (o valor de término).
+        let mut c = Corrida::com_config(3, 300.0);
+        c.comecar();
+        c.contagem = 0.0;
+        cruzar_a_linha(&mut c); // largada
+        assert_eq!(c.volta, 1);
+        // Uma volta inteira dirigida, sem reposicionar o carro: é o caminho de
+        // verdade, e o que pega o salto do `localizar` perto da linha — que
+        // reposicionar esconde. Dirige até a volta mudar em vez de fixar um
+        // tempo: o piloto faz ~962 m em 16 a 19 s, e um número mágico aqui
+        // quebraria ao primeiro ajuste de aceleração.
+        let mut segundos = 0.0;
+        while c.volta == 1 && segundos < 40.0 {
+            piloto_automatico(&mut c, 0.5);
+            segundos += 0.5;
+        }
+        assert_eq!(
+            c.volta,
+            2,
+            "rodou {segundos} s e não completou a volta; progresso {:.1}",
+            c.progresso_jogador()
+        );
+    }
+
+    #[test]
+    fn o_localizador_oscilar_perto_da_linha_nao_credita_volta() {
+        // O defeito medido na descida da Boavista em 09/11/2026: perto da linha
+        // o `localizar` alterna entre ~0 e ~comprimento, porque o último trecho
+        // passa geometricamente ao lado do primeiro. Com a detecção por limiar
+        // no `s`, o par (1309, 0.2) creditava uma volta com o carro a 14 km/h.
+        //
+        // Aqui o `s` é forçado a oscilar exatamente como o aparelho fazia, e o
+        // progresso não pode andar mais que o carro andou de verdade.
+        let mut c = Corrida::nova();
+        c.comecar();
+        c.contagem = 0.0;
+        let comprimento = c.pista.comprimento();
+        let mut progresso_antes = c.progresso_jogador();
+        for _ in 0..200 {
+            for alvo in [comprimento - 0.7, 0.2] {
+                c.carro.posicionar(&c.pista, alvo, -2.0);
+                c.passo(&Entrada::PARADA, 1.0 / 75.0);
+            }
+            let agora = c.progresso_jogador();
+            // Cada par oscila ±alguns metros em torno da linha; o que não pode
+            // acontecer é o progresso saltar uma volta.
+            assert!(
+                (agora - progresso_antes).abs() < 20.0,
+                "o progresso andou {:.1} m num par de quadros oscilantes",
+                agora - progresso_antes
+            );
+            progresso_antes = agora;
+        }
+        assert_eq!(c.volta, 1, "oscilação na linha virou volta");
+    }
+
+    #[test]
+    fn largar_nao_credita_volta_nem_adia_a_corrida() {
+        // O sintoma relatado: no primeiro segundo de corrida o contador já
+        // dizia 2/2. Medido antes da correção: `--passos 250 --piloto` dava
+        // `volta=2` com o carro a 0,5 m/s.
+        let mut c = Corrida::nova();
+        c.comecar();
+        dirigir(&mut c, CONTAGEM + 4.0, Entrada::acelerando());
+        assert_eq!(c.volta, 1, "volta {} no primeiro segundo", c.volta);
+        assert!(c.largou(), "o carro andou 4 s e não cruzou a linha?");
+    }
+
+    #[test]
+    fn na_largada_o_jogador_esta_atras_dos_adversarios_no_progresso() {
+        // A grade é uma grade: o jogador larga em último, atrás dos três. Com o
+        // `s` valendo `comprimento - 3` e sem o `largou`, o progresso do
+        // jogador era ~950 m **maior** que o dos adversários no primeiro
+        // quadro, e a posição vinha 1 sem ele ter andado nada.
+        let c = Corrida::nova();
+        let meu = c.progresso_jogador();
+        assert!(meu < 0.0, "o jogador larga atrás da linha: progresso {meu:.1}");
+        for a in &c.adversarios {
+            assert!(
+                a.progresso(&c.pista) > meu,
+                "adversário em {:.1} m não está à frente de {meu:.1}",
+                a.progresso(&c.pista)
+            );
+        }
+        let mut c = c;
+        c.calcular_posicao();
+        assert_eq!(c.posicao, 4, "três à frente = quarto");
     }
 
     #[test]
@@ -488,7 +653,10 @@ mod testes {
             a.s = 5.0;
             a.volta = 1;
         }
+        // Meio de corrida: a largada já foi cruzada.
         c.carro.posicionar(&c.pista, 200.0, 0.0);
+        c.s_anterior = c.carro.s;
+        c.progresso = 200.0;
         c.calcular_posicao();
         assert_eq!(c.posicao, 1);
     }
@@ -499,6 +667,8 @@ mod testes {
         c.comecar();
         c.contagem = 0.0;
         c.carro.posicionar(&c.pista, 100.0, 0.0);
+        c.s_anterior = c.carro.s;
+        c.progresso = 100.0;
         for (i, a) in c.adversarios.iter_mut().enumerate() {
             a.s = 120.0 + i as f32 * 10.0;
             a.volta = 1;
@@ -515,8 +685,10 @@ mod testes {
         // Um adversário já completou a volta.
         c.adversarios[0].volta = 2;
         c.adversarios[0].s = 1.0;
+        // A largada já foi cruzada; esta é a passagem que fecha a volta.
         c.carro.posicionar(&c.pista, c.pista.comprimento() - 2.0, 0.0);
         c.s_anterior = c.pista.comprimento() - 2.0;
+        c.progresso = c.pista.comprimento() - 2.0;
         piloto_automatico(&mut c, 2.0);
         assert_eq!(c.fase, Fase::Resultado);
         assert_eq!(c.posicao, 2, "quem já cruzou tem de ficar à frente");

@@ -244,7 +244,7 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -261,7 +261,13 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
         corrida.mapa.id,
         corrida.carro.raspando,
         corrida.carro.impacto,
-        cena.fragmentos()
+        cena.fragmentos(),
+        // `largou` é o que separa "volta 1" de "corrida começada": sem ele, um
+        // `--passos 250` que responde `volta=1` pode ser uma corrida que não
+        // largou ou uma que largou e ainda não fechou a volta. O diagnóstico
+        // existe para não ter de adivinhar entre as duas.
+        corrida.largou(),
+        corrida.progresso_jogador()
     )
 }
 

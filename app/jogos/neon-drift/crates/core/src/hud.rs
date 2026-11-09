@@ -77,6 +77,139 @@ pub fn largura_em_pixels(texto: &str, escala: f32) -> f32 {
     largura_texto(texto) as f32 * escala
 }
 
+// ── geometria do rodapé ───────────────────────────────────────────
+//
+// A geometria mora aqui porque **sobreposição é um fato aritmético**, não
+// visual. O rodapé já saiu errado uma vez: `texto()` recebe o *topo* da linha
+// e o código somava deslocamentos fixos (`base_y - 2·escala`) para um glifo de
+// `7·escala` de altura. Em 640×480 isso deu velocidade 424..457, marcha
+// 439..464 e barra 452..461 — três elementos na mesma faixa de 40 px, que o
+// usuário viu como "o velocímetro em cima do nitro".
+//
+// Nenhum teste pegava porque o desenho estava legível e nada comparava duas
+// caixas. Aqui a caixa de cada elemento sai da mesma função que o desenho usa,
+// então `caixas_do_rodape` pode afirmar que elas não se tocam.
+
+/// Uma caixa de texto do HUD: canto superior esquerdo e altura de linha.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaixaTexto {
+    pub x: f32,
+    pub y: f32,
+    pub largura: f32,
+    pub altura: f32,
+}
+
+impl CaixaTexto {
+    pub fn base(&self) -> f32 {
+        self.y + self.altura
+    }
+
+    /// Sobreposição de área entre duas caixas. Zero significa que não se tocam.
+    pub fn sobreposicao(&self, outra: &CaixaTexto) -> f32 {
+        let dx = (self.x + self.largura).min(outra.x + outra.largura) - self.x.max(outra.x);
+        let dy = self.base().min(outra.base()) - self.y.max(outra.y);
+        if dx > 0.0 && dy > 0.0 {
+            dx * dy
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Um retângulo do HUD (a barra de nitro e o fundo dela).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Caixa {
+    pub x: f32,
+    pub y: f32,
+    pub largura: f32,
+    pub altura: f32,
+}
+
+/// Posições do rodapé esquerdo: velocímetro, unidade, marcha, barra e rótulo.
+///
+/// A pilha é montada **de baixo para cima** a partir da barra, que é o elemento
+/// mais próximo da borda. Cada passo subtrai a altura **real** da linha
+/// seguinte (`fonte::ALTURA × escala`), não um deslocamento escolhido a olho.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rodape {
+    pub velocidade: CaixaTexto,
+    pub unidade: CaixaTexto,
+    pub marcha: CaixaTexto,
+    pub barra: Caixa,
+    pub rotulo: CaixaTexto,
+    /// Escala da fonte de cada linha, para o desenho não recalcular.
+    pub escala_velocidade: f32,
+    pub escala_marcha: f32,
+    pub escala_unidade: f32,
+    pub escala_rotulo: f32,
+}
+
+/// Monta o rodapé para um painel de `largura` × `altura` em espaço de projeto.
+///
+/// `velocidade` e `marcha` entram como texto porque o `x` da unidade depende da
+/// largura do número — que muda de `0` para `999`.
+pub fn rodape(largura: f32, altura: f32, velocidade: &str, marcha: &str) -> Rodape {
+    let escala = (largura / 220.0).clamp(1.8, 4.2);
+    let escala_velocidade = escala * 1.6;
+    let escala_marcha = escala * 1.2;
+    let escala_unidade = escala * 0.6;
+    let escala_rotulo = escala * 0.55;
+
+    let altura_linha = |e: f32| crate::fonte::ALTURA as f32 * e;
+    let x = largura * 0.03;
+    let barra_largura = largura * 0.30;
+    let barra_altura = (escala * 2.2).max(5.0);
+    // Respiro até a borda do painel: existe para o texto não encostar no bisel.
+    let margem = escala * 2.2;
+
+    let barra_y = altura - margem - barra_altura;
+    let marcha_y = barra_y - escala * 1.4 - altura_linha(escala_marcha);
+    let velocidade_y = marcha_y - escala - altura_linha(escala_velocidade);
+
+    let velocidade = CaixaTexto {
+        x,
+        y: velocidade_y,
+        largura: largura_em_pixels(velocidade, escala_velocidade),
+        altura: altura_linha(escala_velocidade),
+    };
+    // A unidade é sufoco do número: encosta à direita dele e alinha pela base.
+    let unidade = CaixaTexto {
+        x: x + velocidade.largura + escala * 1.2,
+        y: velocidade.base() - altura_linha(escala_unidade),
+        largura: largura_em_pixels("KM/H", escala_unidade),
+        altura: altura_linha(escala_unidade),
+    };
+    let marcha = CaixaTexto {
+        x,
+        y: marcha_y,
+        largura: largura_em_pixels(marcha, escala_marcha),
+        altura: altura_linha(escala_marcha),
+    };
+    let rotulo = CaixaTexto {
+        x: x + barra_largura + escala * 1.5,
+        y: barra_y + barra_altura - altura_linha(escala_rotulo),
+        largura: largura_em_pixels("NITRO", escala_rotulo),
+        altura: altura_linha(escala_rotulo),
+    };
+
+    Rodape {
+        velocidade,
+        unidade,
+        marcha,
+        barra: Caixa {
+            x,
+            y: barra_y,
+            largura: barra_largura,
+            altura: barra_altura,
+        },
+        rotulo,
+        escala_velocidade,
+        escala_marcha,
+        escala_unidade,
+        escala_rotulo,
+    }
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
@@ -141,6 +274,111 @@ mod testes {
     fn combo_tem_o_x() {
         assert_eq!(combo(1), "x1");
         assert_eq!(combo(5), "x5");
+    }
+
+    /// Telas que o jogo precisa cobrir: 480p (X35H/R35S), 600p, 720p (X55 em
+    /// projeto) e o painel retrato do X55.
+    const TELAS: [(f32, f32); 4] = [
+        (640.0, 480.0),
+        (800.0, 600.0),
+        (1280.0, 720.0),
+        (720.0, 1280.0),
+    ];
+
+    #[test]
+    fn os_elementos_do_rodape_nao_se_sobrepoem() {
+        // O bug relatado pelo usuário: "o contador de velocidade fica muito
+        // próximo ao contador de nitro e acaba sobrepondo". Antes da correção
+        // as três caixas dividiam a mesma faixa de 40 px em 640×480.
+        for (largura, altura) in TELAS {
+            for kmh in ["0", "7", "99", "223"] {
+                let r = rodape(largura, altura, kmh, "3");
+                let caixas = [
+                    ("velocidade", r.velocidade),
+                    ("unidade", r.unidade),
+                    ("marcha", r.marcha),
+                    ("rotulo", r.rotulo),
+                ];
+                for (i, (nome_a, a)) in caixas.iter().enumerate() {
+                    for (nome_b, b) in &caixas[i + 1..] {
+                        assert_eq!(
+                            a.sobreposicao(b),
+                            0.0,
+                            "{largura}×{altura} com {kmh} km/h: {nome_a} encosta em {nome_b}"
+                        );
+                    }
+                    let barra = CaixaTexto {
+                        x: r.barra.x,
+                        y: r.barra.y,
+                        largura: r.barra.largura,
+                        altura: r.barra.altura,
+                    };
+                    if *nome_a != "rotulo" {
+                        assert_eq!(
+                            a.sobreposicao(&barra),
+                            0.0,
+                            "{largura}×{altura}: {nome_a} encosta na barra de nitro"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn o_velocimetro_fica_acima_e_a_barra_embaixo() {
+        // A ordem vertical é a leitura do canto: número grande, marcha, barra.
+        let r = rodape(640.0, 480.0, "156", "3");
+        assert!(r.velocidade.base() < r.marcha.y, "velocidade acima da marcha");
+        assert!(r.marcha.base() < r.barra.y, "marcha acima da barra");
+        // E a barra é o elemento mais baixo, com margem até o bisel.
+        assert!(r.barra.y + r.barra.altura < 480.0);
+        let folga = 480.0 - (r.barra.y + r.barra.altura);
+        assert!(folga > 4.0, "folga até a borda era {folga}");
+    }
+
+    #[test]
+    fn o_rodape_cabe_no_painel() {
+        for (largura, altura) in TELAS {
+            let r = rodape(largura, altura, "223", "5");
+            for (nome, c) in [
+                ("velocidade", r.velocidade),
+                ("unidade", r.unidade),
+                ("marcha", r.marcha),
+                ("rotulo", r.rotulo),
+            ] {
+                assert!(c.x >= 0.0 && c.x + c.largura <= largura, "{nome} sai pela direita em {largura}×{altura}");
+                assert!(c.y >= 0.0 && c.base() <= altura, "{nome} sai por baixo em {largura}×{altura}");
+            }
+            assert!(r.barra.x + r.barra.largura <= largura);
+        }
+    }
+
+    #[test]
+    fn a_unidade_encosta_a_direita_do_numero() {
+        // A unidade saía solta no meio do nada porque o `x` somava a própria
+        // largura de "KM/H" ao deslocamento. Ela é sufixo: começa depois do
+        // número e alinha pela base.
+        let r = rodape(640.0, 480.0, "156", "3");
+        assert!((r.unidade.x - (r.velocidade.x + r.velocidade.largura)).abs() < 6.0);
+        assert!((r.unidade.base() - r.velocidade.base()).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_escada_do_rodape_e_medida_pela_altura_da_fonte() {
+        // A regra que faltava: cada degrau usa `7·escala` da linha que está
+        // acima, não uma constante. Se alguém voltar a usar deslocamento fixo,
+        // a distância entre a base da velocidade e o topo da marcha deixa de
+        // ser `escala`.
+        for (largura, altura) in TELAS {
+            let r = rodape(largura, altura, "99", "2");
+            let escala = (largura / 220.0).clamp(1.8, 4.2);
+            let vao_vel_marcha = r.marcha.y - r.velocidade.base();
+            assert!(
+                (vao_vel_marcha - escala).abs() < 0.01,
+                "{largura}×{altura}: vão era {vao_vel_marcha}, esperado {escala}"
+            );
+        }
     }
 
     #[test]
