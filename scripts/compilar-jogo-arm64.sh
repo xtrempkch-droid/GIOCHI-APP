@@ -53,7 +53,15 @@ ok()  { printf '  %sok%s   %s\n' "$VERDE" "$ZERA" "$*"; }
 erro(){ printf '  %sERRO%s %s\n' "$VERMELHO" "$ZERA" "$*" >&2; exit 1; }
 
 JOGO="$RAIZ/app/jogos/$NOME_JOGO"
-BINARIO="giochi-$NOME_JOGO"
+# A convenção é pasta `<slug>` → binário `giochi-<slug>`. Mas `giochi-defender`
+# já nasce com o prefixo, e a regra cega produz `giochi-giochi-defender` — um
+# nome que não existe em `target/`, com erro de "binário não gerado" que manda
+# procurar defeito no compilador. Pasta que já começa com `giochi-` usa o nome
+# dela mesma.
+case "$NOME_JOGO" in
+  giochi-*) BINARIO="$NOME_JOGO" ;;
+  *)        BINARIO="giochi-$NOME_JOGO" ;;
+esac
 if [ ! -f "$JOGO/Cargo.toml" ]; then
   disponiveis="$(find "$RAIZ/app/jogos" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
   erro "jogo desconhecido: $NOME_JOGO (esperado em app/jogos/<nome>)

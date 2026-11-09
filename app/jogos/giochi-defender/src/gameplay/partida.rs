@@ -16,7 +16,7 @@ use crate::gameplay::enemy_pool::{EnemyPool, CAPACIDADE};
 use crate::state::GameState;
 use crate::utils::procedural_mesh::generate_cube;
 use crate::utils::rng::Sorteio;
-use giochi_engine_3d::math3d::{Camera3D, Color3D, Transform3D, Vec3};
+use giochi_engine_3d::math3d::{Camera3D, Transform3D, Vec3};
 use giochi_engine_3d::render3d::{MeshHandle, RenderContext3D, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::Result3D;
@@ -42,8 +42,6 @@ pub const ALTURA_SPAWN: f32 = 4.0;
 /// encosta na ponta da rocha tem de contar como dano. O valor dobra como margem
 /// de leitura — o cubo de 0,8 tem 0,4 de meia-aresta.
 pub const RAIO_COLISAO_ASTEROIDE: f32 = 2.5;
-/// Cor do cubo hostil.
-pub const COR_INIMIGO: Color3D = Color3D::new(0.88, 0.26, 0.18, 1.0);
 /// Passo máximo de uma subdivisão da simulação.
 ///
 /// É o passo fixo do laço. Um `dt` maior que isto vira vários passos, para o
@@ -110,7 +108,8 @@ impl Partida {
                 break;
             }
             let posicao = self.posicao_de_spawn();
-            if self.pool.spawn(posicao, VELOCIDADE).is_none() {
+            let variacao = self.sorteio.faixa(0.0, 1.0);
+            if self.pool.spawn(posicao, VELOCIDADE, variacao).is_none() {
                 break;
             }
             log::debug!(
@@ -163,6 +162,31 @@ impl Partida {
         }
     }
 
+    /// Enche o pool na hora, para diagnóstico e medição.
+    ///
+    /// Existe porque medir "15 cubos a 30 fps" exige 15 cubos **agora**: esperar
+    /// 30 s de spawn a 2 s gastaria mais tempo do que a medição e ainda deixaria
+    /// a cena dependente de mortes no meio.
+    ///
+    /// Devolve quantos couberam.
+    pub fn povoar(&mut self, quantos: u32) -> usize {
+        let mut criados = 0;
+        for _ in 0..quantos {
+            if !self.pool.tem_espaco() {
+                break;
+            }
+            let posicao = self.posicao_de_spawn();
+            let variacao = self.sorteio.faixa(0.0, 1.0);
+            if self.pool.spawn(posicao, VELOCIDADE, variacao).is_some() {
+                criados += 1;
+            }
+        }
+        // O relógio de spawn não é zerado: os cubos criados por aqui entraram no
+        // lugar dos que o tempo ainda traria, e manter o acumulado evita que os
+        // 15 primeiros segundos de uma corrida de medição disparem uma rajada.
+        criados
+    }
+
     /// Quantos cubos estão no ar.
     pub fn inimigos(&self) -> usize {
         self.pool.active_count()
@@ -205,7 +229,7 @@ impl Inimigos {
     pub fn new(render: &mut RenderContext3D) -> Result3D<Self> {
         let malha = generate_cube(crate::gameplay::enemy::LADO_PADRAO);
         let handle = render.create_mesh(&malha.vertices, &malha.indices)?;
-        let shader = render.create_builtin_shader(BuiltinShader::Flat)?;
+        let shader = render.create_builtin_shader(BuiltinShader::Phong)?;
         Ok(Self {
             malha: handle,
             shader,
@@ -219,15 +243,21 @@ impl Inimigos {
         partida: &Partida,
         camera: &Camera3D,
     ) -> Result3D<()> {
+        // Metal quente: especular mais forte que a rocha, para os cubos lerem
+        // como ameaça e não como pedra. `set_light` é aplicado **por desenho**
+        // (o `bind_and_upload` reenvia os uniformes), então trocar aqui não
+        // afeta o asteroide desenhado antes.
+        render.set_light(crate::gameplay::arena::luz_dos_inimigos());
         for (_, inimigo) in partida.pool().iter_alive() {
             render.draw_mesh_colored(
                 self.malha,
                 self.shader,
                 &Transform3D::from_translation(inimigo.position),
                 camera,
-                COR_INIMIGO,
+                inimigo.cor,
             )?;
         }
+        render.set_light(crate::gameplay::arena::luz_do_asteroide());
         Ok(())
     }
 

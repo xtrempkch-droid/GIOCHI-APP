@@ -89,7 +89,7 @@
       "status": "scaffold",
       "distribution": "image",
       "license": "Proprietary",
-      "note": "Tower defense espacial 3D low-poly em Rust com GIOCHI-ENGINE e GIOCHI-ENGINE-3D (snapshot em app/jogos/giochi-defender/vendor/). Bloco 1a entregue: arena e camera orbital; sem inimigos, tiro ou HUD ainda. Ver PROGRESS.md do app.",
+      "note": "Tower defense espacial 3D low-poly em Rust com GIOCHI-ENGINE e GIOCHI-ENGINE-3D (snapshot em app/jogos/giochi-defender/vendor/). Dia 1 do plano fechado: arena com iluminacao direcional, camera orbital, inimigos com pool de 15 e dano. Medido no X35H: 49,3 fps com 15 cubos e 3,09 ms de trabalho por quadro (o teto e o painel). Sem tiro e sem HUD ainda. Ver PROGRESS.md do app.",
       "slug": "giochi-defender"
     }
   ]

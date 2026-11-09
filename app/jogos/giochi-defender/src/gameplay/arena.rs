@@ -19,9 +19,17 @@
 //! preta): sem isso o `phong` multiplicaria a cor pela componente difusa e cada
 //! estrela ficaria com o brilho dependendo da face que aponta para a câmera — o
 //! céu cintilaria ao girar.
+//!
+//! ## Iluminação do bloco 1c
+//!
+//! A rocha e os cubos usam o shader `phong` com uma luz direcional **vinda do
+//! topo**. O `flat` já tinha um termo de Lambert, mas com a direção fixa dentro
+//! do shader: dava para ver a forma e não dava para escolher de onde vem a luz.
+//! Com o `phong` a direção, a cor, o ambiente e o especular são do jogo, e o que
+//! muda entre a rocha e o cubo é a dureza do brilho — rocha fosca, metal quente.
 
 use crate::utils::procedural_mesh::{generate_icosphere, generate_starfield};
-use giochi_engine_3d::math3d::{Camera3D, Color3D, Transform3D};
+use giochi_engine_3d::math3d::{Camera3D, Color3D, Transform3D, Vec3};
 use giochi_engine_3d::render3d::{DirectionalLight, MeshHandle, RenderContext3D, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::Result3D;
@@ -40,7 +48,7 @@ pub const RAIO_CEU: f32 = 120.0;
 pub const ESTRELAS: u32 = 500;
 
 /// Cor do asteroide: cinza-médio, levemente azulado para não parecer concreto.
-pub const COR_ASTEROIDE: Color3D = Color3D::new(0.56, 0.58, 0.63, 1.0);
+pub const COR_ASTEROIDE: Color3D = Color3D::new(0.58, 0.60, 0.66, 1.0);
 
 /// Cor de fundo do espaço.
 pub const COR_ESPACO: Color3D = Color3D::new(0.015, 0.018, 0.032, 1.0);
@@ -80,7 +88,7 @@ impl Arena {
     pub fn new(render: &mut RenderContext3D) -> Result3D<Self> {
         let malha = generate_icosphere(1, RAIO_ASTEROIDE, DISTORCAO);
         let asteroide = render.create_mesh(&malha.vertices, &malha.indices)?;
-        let shader_asteroide = render.create_builtin_shader(BuiltinShader::Flat)?;
+        let shader_asteroide = render.create_builtin_shader(BuiltinShader::Phong)?;
         let shader_estrelas = render.create_builtin_shader(BuiltinShader::Phong)?;
 
         let mut estrelas = Vec::with_capacity(FAIXAS.len());
@@ -142,7 +150,7 @@ impl Arena {
             )?;
         }
 
-        render.set_light(DirectionalLight::sun());
+        render.set_light(luz_do_asteroide());
         render.draw_mesh_colored(
             self.asteroide,
             self.shader_asteroide,
@@ -166,6 +174,45 @@ impl Arena {
         render.destroy_shader(self.shader_asteroide);
         render.destroy_shader(self.shader_estrelas);
     }
+}
+
+/// Luz da rocha: branca, do alto e **do lado da câmera**, com brilho fosco.
+///
+/// A direção aponta **para onde a luz viaja** (convenção da engine, `docs/3D.md`
+/// §5.1), então "do topo" é um Y negativo. O `x` e o `z` não são zero de
+/// propósito: luz exatamente vertical dá o mesmo termo difuso a todas as faces
+/// laterais e o cubo vira um hexágono plano.
+///
+/// O `z` é **negativo** porque a câmera inicial fica em `+Z` olhando para `-Z`:
+/// com a luz viajando para `-z`, a face que o jogador vê é a iluminada. Medido
+/// com a luz viajando para `+z` (a primeira versão), a face da câmera ficava só
+/// com o ambiente e a maior área da tela caía em `(38,40,44)` — um asteroide
+/// quase preto com o topo claro, que é o oposto de volume.
+pub fn luz_do_asteroide() -> DirectionalLight {
+    let mut luz = DirectionalLight::sun();
+    luz.direction = Vec3::new(-0.32, -1.0, -0.50);
+    // Frio, para a rocha não puxar para o amarelo do sol padrão.
+    luz.color = Color3D::new(0.92, 0.95, 1.0, 1.0);
+    luz.ambient = 0.24;
+    luz.specular = 0.16;
+    luz.shininess = 18.0;
+    luz
+}
+
+/// Luz dos inimigos: mais quente, mais dura e mais especular que a da rocha.
+///
+/// `ambient` mais alto porque o cubo é a ameaça: um cubo escuro contra um céu
+/// escuro some, e "não vi de onde veio" é o pior defeito que este jogo pode ter.
+pub fn luz_dos_inimigos() -> DirectionalLight {
+    let mut luz = DirectionalLight::sun();
+    // Mesma razão da rocha para o `z` negativo: o cubo que vem na direção do
+    // jogador tem de estar iluminado do lado que ele vê.
+    luz.direction = Vec3::new(-0.26, -1.0, -0.55);
+    luz.color = Color3D::new(1.0, 0.94, 0.86, 1.0);
+    luz.ambient = 0.36;
+    luz.specular = 0.55;
+    luz.shininess = 42.0;
+    luz
 }
 
 /// Luz que faz a cor do objeto chegar à tela sem atenuação.

@@ -29,6 +29,7 @@ USO:
 
 OPÇÕES:
     --frames N            Roda N quadros e sai (não espera o ESC).
+                          `--quadros N` é aceito como sinônimo.
     --quadro ARQUIVO.bmp  Grava o último quadro em BMP de 32 bits.
     --yaw GRAUS           Yaw inicial da câmera (0 = de frente para a arena).
     --pitch GRAUS         Inclinação inicial (-60 a 80; fora disso é preso).
@@ -36,6 +37,9 @@ OPÇÕES:
     --simular SEGUNDOS    Roda a simulação antes de desenhar (para capturar
                           cubos no ar sem esperar na tela).
     --semente N           Semente do sorteio de posições (padrão: fixa).
+    --inimigos N          Enche o pool com N cubos antes do primeiro quadro.
+    --benchmark N         Roda N quadros sem limite de 60 Hz e mede o tempo de
+                          cada um (imprime fps, p50/p95/p99 e o pior quadro).
     --sem-mouse-relativo  Não prende o cursor.
     -h, --ajuda           Esta mensagem.
 ";
@@ -59,6 +63,10 @@ pub struct Diag {
     pub simular: Option<f32>,
     /// Semente do sorteio de posições.
     pub semente: u64,
+    /// Quantos cubos plantar antes do primeiro quadro.
+    pub inimigos: Option<u32>,
+    /// Quadros a medir sem o limite de 60 Hz.
+    pub benchmark: Option<u64>,
     /// Pediu a ajuda.
     pub ajuda: bool,
 }
@@ -82,6 +90,8 @@ impl Default for Diag {
             distancia: None,
             simular: None,
             semente: SEMENTE_PADRAO,
+            inimigos: None,
+            benchmark: None,
             ajuda: false,
         }
     }
@@ -106,13 +116,25 @@ impl Diag {
             match nome.as_str() {
                 "-h" | "--ajuda" | "--help" => diag.ajuda = true,
                 "--sem-mouse-relativo" => diag.mouse_relativo = false,
-                "--frames" => diag.frames = Some(inteiro(&mut argumentos, embutido, &nome)?),
+                // `--quadros` é o nome que o `aparelho.sh verificar-jogo` usa para
+                // todo jogo (`cobrinha`, `volley`); `--frames` é o dos exemplos da
+                // engine. Aceitar os dois custa uma linha e evita um "argumento
+                // desconhecido" que manda procurar defeito no jogo.
+                "--frames" | "--quadros" => {
+                    diag.frames = Some(inteiro(&mut argumentos, embutido, &nome)?);
+                }
                 "--quadro" => diag.quadro = Some(texto(&mut argumentos, embutido, &nome)?),
                 "--yaw" => diag.yaw_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--pitch" => diag.pitch_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--distancia" => diag.distancia = Some(real(&mut argumentos, embutido, &nome)?),
                 "--simular" => diag.simular = Some(real(&mut argumentos, embutido, &nome)?),
                 "--semente" => diag.semente = inteiro(&mut argumentos, embutido, &nome)?,
+                "--inimigos" => {
+                    diag.inimigos = Some(inteiro(&mut argumentos, embutido, &nome)? as u32);
+                }
+                "--benchmark" => {
+                    diag.benchmark = Some(inteiro(&mut argumentos, embutido, &nome)?);
+                }
                 outro => bail!("argumento desconhecido: '{outro}' (use --ajuda)"),
             }
         }
@@ -280,6 +302,31 @@ mod tests {
         // garante que é um número finito.
         assert_eq!(parse(&["--simular=-1"]).unwrap().simular, Some(-1.0));
         assert!(parse(&["--simular", "muito"]).is_err());
+    }
+
+    #[test]
+    fn quadros_e_frames_sao_o_mesmo_flag() {
+        // O `aparelho.sh verificar-jogo` passa `--quadros`; os exemplos da engine
+        // usam `--frames`. Os dois têm de valer, senão o jogo roda no PC e falha
+        // no aparelho com "argumento desconhecido".
+        assert_eq!(parse(&["--quadros", "3"]).unwrap().frames, Some(3));
+        assert_eq!(parse(&["--frames=3"]).unwrap().frames, Some(3));
+        assert_eq!(parse(&["--quadros=3"]).unwrap().frames, Some(3));
+    }
+
+    #[test]
+    fn os_dois_flags_de_performance_sao_lidos() {
+        let diag = parse(&["--inimigos", "15", "--benchmark=300"]).unwrap();
+        assert_eq!(diag.inimigos, Some(15));
+        assert_eq!(diag.benchmark, Some(300));
+    }
+
+    #[test]
+    fn benchmark_zero_e_aceito_e_nao_roda_nada() {
+        // Zero quadros é resposta legítima (mede o custo de abrir o dispositivo) e
+        // não pode ser confundido com "sem limite".
+        assert_eq!(parse(&["--benchmark", "0"]).unwrap().benchmark, Some(0));
+        assert_eq!(parse(&[]).unwrap().benchmark, None);
     }
 
     #[test]

@@ -42,10 +42,10 @@ impl EnemyPool {
     ///
     /// `None` quando os 15 já estão no ar — quem chama decide se espera o próximo
     /// quadro ou se perde a onda.
-    pub fn spawn(&mut self, posicao: Vec3, velocidade: f32) -> Option<usize> {
+    pub fn spawn(&mut self, posicao: Vec3, velocidade: f32, variacao: f32) -> Option<usize> {
         for (indice, slot) in self.inimigos.iter_mut().enumerate() {
             if !slot.alive {
-                *slot = Enemy::spawn_at(posicao, velocidade);
+                *slot = Enemy::spawn_at(posicao, velocidade, variacao);
                 self.ativos += 1;
                 return Some(indice);
             }
@@ -119,7 +119,7 @@ mod tests {
 
     fn enche(pool: &mut EnemyPool) -> usize {
         let mut criados = 0;
-        while pool.spawn(Vec3::new(10.0, 0.0, 0.0), 3.0).is_some() {
+        while pool.spawn(Vec3::new(10.0, 0.0, 0.0), 3.0, 0.5).is_some() {
             criados += 1;
         }
         criados
@@ -145,10 +145,14 @@ mod tests {
     #[test]
     fn despawn_libera_o_slot_e_o_proximo_reusa() {
         let mut pool = EnemyPool::new();
-        let primeiro = pool.spawn(Vec3::new(10.0, 0.0, 0.0), 1.0).expect("slot");
+        let primeiro = pool
+            .spawn(Vec3::new(10.0, 0.0, 0.0), 1.0, 0.5)
+            .expect("slot");
         assert!(pool.despawn(primeiro));
         assert_eq!(pool.active_count(), 0);
-        let de_novo = pool.spawn(Vec3::new(5.0, 0.0, 0.0), 1.0).expect("slot");
+        let de_novo = pool
+            .spawn(Vec3::new(5.0, 0.0, 0.0), 1.0, 0.5)
+            .expect("slot");
         assert_eq!(de_novo, primeiro, "o slot livre devia ser reusado");
     }
 
@@ -157,7 +161,7 @@ mod tests {
         // Sem a guarda, `ativos` divergiria do número de vivos e o pool passaria
         // a dizer que está cheio com slots livres.
         let mut pool = EnemyPool::new();
-        let indice = pool.spawn(Vec3::ZERO, 1.0).expect("slot");
+        let indice = pool.spawn(Vec3::ZERO, 1.0, 0.5).expect("slot");
         assert!(pool.despawn(indice));
         assert!(
             !pool.despawn(indice),
@@ -178,7 +182,8 @@ mod tests {
     fn o_iterador_so_devolve_vivos() {
         let mut pool = EnemyPool::new();
         for _ in 0..5 {
-            pool.spawn(Vec3::new(10.0, 0.0, 0.0), 1.0).expect("slot");
+            pool.spawn(Vec3::new(10.0, 0.0, 0.0), 1.0, 0.5)
+                .expect("slot");
         }
         pool.despawn(0);
         pool.despawn(2);
@@ -198,7 +203,8 @@ mod tests {
     #[test]
     fn os_vivos_se_movem_pelo_iterador_mutavel() {
         let mut pool = EnemyPool::new();
-        pool.spawn(Vec3::new(10.0, 0.0, 0.0), 5.0).expect("slot");
+        pool.spawn(Vec3::new(10.0, 0.0, 0.0), 5.0, 0.5)
+            .expect("slot");
         for (_, inimigo) in pool.iter_alive_mut() {
             inimigo.update(1.0, Vec3::ZERO);
         }

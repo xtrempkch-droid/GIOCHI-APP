@@ -8,10 +8,16 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Blocos 1a e 1b concluídos** — arena, câmera orbital, inimigos voando para o
-centro e dano no asteroide. Ainda **sem tiro e sem HUD**: o cubo não pode ser
-destruído, ele só chega e dói (o tiro é o 2a). O plano dos nove blocos está em
-[`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em [`IDEAS.md`](IDEAS.md).
+**Dia 1 fechado (blocos 1a, 1b e 1c)** — arena com iluminação direcional,
+câmera orbital, inimigos voando para o centro e dano no asteroide. Ainda **sem
+tiro e sem HUD**: o cubo não pode ser destruído, ele só chega e dói (o tiro é o
+2a). O plano dos nove blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de
+escopo, em [`IDEAS.md`](IDEAS.md).
+
+Medido no aparelho (X35H, 640×480, Mali-G52): **49,3 fps com 15 cubos**, com
+3,09 ms de trabalho por quadro — o teto é o painel, não o jogo.
+
+Quadro do aparelho em [`docs/imagens/giochi-defender-x35h.png`](../../../docs/imagens/giochi-defender-x35h.png).
 
 ## Como rodar
 
@@ -39,6 +45,19 @@ SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --yaw 90 --quadro /tmp/y90.bmp
 
 # adianta a partida para capturar cubos no ar (sem esperar na tela)
 SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --simular 6 --quadro /tmp/cubos.bmp
+
+# mede o intervalo entre quadros e o trabalho de submissão, com o pool cheio
+SDL_VIDEODRIVER=offscreen cargo run --release -- --inimigos 15 --benchmark 300
+```
+
+`--benchmark` imprime mediana, p50/p95/p99 e o pior quadro, além do **trabalho
+de submissão** e a fração que ele ocupa do intervalo — é essa fração que diz se
+o gargalo é o jogo (perto de 1) ou o painel (perto de 0). No aparelho ela é 0,15.
+
+Custo de simulação puro, sem GL:
+
+```bash
+cargo bench --bench frame_time
 ```
 
 `--semente N` troca o sorteio das posições; o padrão é fixo para a captura ser
@@ -55,7 +74,7 @@ PNG para uma captura que o PC converte em um segundo seria peso sem retorno.
 | Rust | 1.82+ | piso da engine |
 | SDL2 | 2.0.14+ | por `pkg-config` (`sdl2-system`, o padrão) |
 | EGL / GLES 2.0 | — | Mesa ou o driver do SoC |
-| `libSDL2_mixer` | — | a engine 2D a usa no `AudioSystem` |
+| `libSDL2_mixer` | — | a engine 2D a usa no `AudioSystem`; **é dependência de carga** (sem ela o processo não sobe) |
 
 Sem `pkg-config` de SDL2, compile o SDL2 do código-fonte:
 
@@ -71,12 +90,19 @@ src/
 ├── lib.rs               o jogo como biblioteca (testável sem janela)
 ├── state.rs             score, vidas, wave, pausa
 ├── diag.rs              argumentos de linha de comando e BMP
+├── bench.rs             medição de intervalo e de trabalho por quadro
 ├── gameplay/
-│   ├── arena.rs         asteroide + céu
-│   └── camera.rs        câmera orbital (yaw/pitch/distância)
-└── utils/
-    ├── math.rs          clamp, lerp, ângulos
-    └── procedural_mesh.rs  icosphere distorcida, cubo, campo de estrelas
+│   ├── arena.rs         asteroide + céu + luzes
+│   ├── camera.rs        câmera orbital (yaw/pitch/distância)
+│   ├── collision.rs     esfera × AABB e raio × AABB
+│   ├── enemy.rs         o cubo hostil e a paleta
+│   ├── enemy_pool.rs    pool fixo de 15
+│   └── partida.rs       simulação (spawn, dano) e o desenho dos cubos
+├── utils/
+│   ├── math.rs          clamp, lerp, ângulos
+│   ├── procedural_mesh.rs  icosphere distorcida, cubo, campo de estrelas
+│   └── rng.rs           sorteio determinístico (céu e posições de spawn)
+└── benches/frame_time.rs  custo de simulação por quadro, sem GL
 vendor/                  snapshot da engine (NÃO editar)
 ```
 
@@ -101,7 +127,9 @@ bash ../../../scripts/compilar-jogo-arm64.sh --jogo giochi-defender
 O script usa o sysroot do próprio aparelho e o wrapper de `rust-lld` do
 `compilar-launcher-arm64.sh`. `Cross.toml` cobre o caminho reprodutível em CI.
 
-Validado em ARM64: **pendente** (bloco 3c).
+Validado no **X35H** em 09/11/2026: GLES 2 sobre Mali-G52 r1, 640×480,
+49,3 fps com 15 cubos, sha256 do binário conferido nas duas pontas. Pendente no
+R35S, cuja imagem é outra (bloco 3c).
 
 ## Testes
 
@@ -112,8 +140,8 @@ cargo test
 cargo doc --no-deps
 ```
 
-51 testes. A geometria e a câmera são testadas sem abrir janela, e a captura
-headless (`--quadro`) é o que prova o desenho.
+118 testes. A geometria, a câmera, a colisão e a simulação são testadas sem
+abrir janela, e a captura headless (`--quadro`) é o que prova o desenho.
 
 ## Licença
 

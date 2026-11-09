@@ -1,20 +1,22 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 1b — Inimigos: spawn, movimento, colisão com núcleo
+## Último bloco concluído: 1c — Polimento da cena 3D + medição em ARM64
 Data: 2026-11-09
 
-Blocos fechados: **1a** (arena e câmera) e **1b** (inimigos e colisão).
+Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão) e
+**1c** (polimento e performance). Dia 1 do plano fechado.
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **102/102** em x86_64
+- [x] `cargo test` — **118/118** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
-- [x] `cargo check --target aarch64-unknown-linux-gnu` — **pendente**; o
-      toolchain aarch64 deste repositório vem do script do launcher e é
-      exercitado no bloco 3c.
+- [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com
+      `scripts/compilar-jogo-arm64.sh` (PT_INTERP conferido) e **instalado no
+      X35H** com sha256 idêntico nas duas pontas.
+- [x] `cargo bench --bench frame_time` — custo de simulação medido sem GL.
 
 ## Testes manuais (o que foi validado)
 
@@ -53,6 +55,69 @@ Comando da captura, para repetir:
 ```bash
 SDL_VIDEODRIVER=offscreen cargo run -- --frames 3 --quadro /tmp/defender.bmp
 ```
+
+### Bloco 1c — medido no X35H (não no PC)
+
+Aparelho: **Powkiddy X35H**, RK3566, Mali-G52 r1 (Panfrost/Mesa), painel
+640×480, imagem `commit 5e81871`, kernel 6.12.0, 964 MB.
+Binário instalado em `/opt/giochi/apps/giochi-defender/bin/giochi-defender`,
+sha256 `5e6817eb…` **idêntico** local e remoto.
+
+| Verificação | Resultado medido |
+| --- | --- |
+| O jogo abre no aparelho | `GLES 2 em 'Mali-G52 r1 (Panfrost)'`, drawable **640×480** |
+| **15 cubos rodam** | **49,3 fps** de mediana (p50 20,28 ms, p95 20,39 ms, p99 20,63 ms) |
+| O gargalo é o painel, não o jogo | trabalho de submissão **3,09 ms = 15 %** do intervalo. Com **0** cubos o mesmo painel dá os mesmos **49,3 fps** com 2,03 ms — ou seja, o teto é o vblank |
+| Folga | 3,09 ms de 20,28 ms ⇒ **~6,5× de margem**; a exigência de 30 fps é atendida com 1,64× |
+| Custo por cubo | 15 cubos custam **+1,06 ms** sobre a arena vazia (~0,07 ms por cubo) |
+| GLES 3 é mais leve na CPU | 2,40 ms de trabalho (12 %) contra 3,09 ms em GLES 2 — a 49,3 fps os dois desenham o mesmo |
+| A rocha mantém o facetado | **27.443 px** de rocha com **69 tons** distintos (no PC, 1280×720, 73 tons) |
+| Variação de cor por cubo | 4 cubos visíveis com médias `(142,31,16)`, `(177,97,27)`, `(183,86,26)`, `(173,62,21)` — vermelho e laranja distinguíveis |
+| Nada de preto puro | **0,00 %**; 84 cores distintas no quadro |
+| Game over | `--simular 40` → **5** `player damaged`, vidas **0**, `GAME OVER` **uma** vez, saída 0 |
+
+Quadros em [`docs/imagens/`](../../../docs/imagens/):
+`giochi-defender-x35h.png` (o aparelho) e `giochi-defender-pc.png` (o PC).
+
+### O que a medição obrigou a mudar no diagnóstico
+
+`--benchmark N` **não bastava**. Ele mede o intervalo entre quadros, e no
+aparelho o intervalo é 20,28 ms com 0 cubos e com 15 — a conclusão sairia
+"49 fps" sem dizer de quem é o limite. Entrou a segunda série: o tempo de
+**submissão**, do começo do desenho até antes de `end_frame` (a troca de buffers
+é onde o KMSDRM espera o vblank, e incluí-la faria o número ser sempre igual ao
+intervalo). Com as duas, `Benchmark::fracao_de_trabalho` responde a pergunta:
+perto de 1 o gargalo é o jogo, perto de 0 é o painel. Aqui: **0,15**.
+
+### Duas iterações que a imagem derrubou
+
+1. **A luz vinha do lado errado.** A primeira versão tinha a luz viajando para
+   `+z`; a câmera inicial fica em `+z`, então a face que o jogador vê era a que
+   só recebia ambiente. Medido no PC: a maior área da tela ficava em
+   `(38,40,44)` e a rocha lia como silhueta escura com o topo claro. Com a luz
+   viajando para `-z`, a luminância média da rocha subiu de **67,1** para
+   **123,6** (p10 de 39,9 para 63,9).
+2. **A rampa de cor tinha duas fontes.** A primeira paleta aplicava um fator de
+   brilho por cima da interpolação, e `cor_do_cubo(0.0)` deixou de ser
+   `COR_VERMELHA` — a constante e a função discordavam no mesmo ponto. Agora a
+   rampa é uma interpolação só, com os extremos iguais às constantes, e a
+   luminância sobe de forma monotônica (é ela que separa dois cubos sobrepostos;
+   só matiz não basta).
+
+### Entregue no bloco 1c
+
+- Iluminação direcional de verdade: rocha e cubos no shader `phong`, com duas
+  luzes distintas (`arena::luz_do_asteroide`, `arena::luz_dos_inimigos`). O
+  `flat` tinha a direção fixa dentro do shader; agora ela é do jogo.
+- Variação de cor por cubo (`enemy::cor_do_cubo`, `COR_VERMELHA`→`COR_LARANJA`),
+  fixada no nascimento e guardada no cubo.
+- `Benchmark` (`src/bench.rs`) com intervalo e trabalho, p50/p95/p99 e a fração
+  que diz quem é o gargalo.
+- `--benchmark N`, `--inimigos N` e o sinônimo `--quadros N` no diagnóstico.
+- `benches/frame_time.rs` (sem `criterion`): custo de simulação por quadro —
+  **0,28 µs** com 15 cubos, 0,00 % do orçamento de 16,67 ms.
+- `scripts/compilar-jogo-arm64.sh` aceita pasta que já começa com `giochi-`
+  (antes produzia `giochi-giochi-defender` e o erro falava de binário ausente).
 
 ## Entregue no bloco 1b
 
@@ -116,26 +181,29 @@ existem para descobrir.
 - `src/utils/math.rs`, `src/diag.rs` (CLI + BMP).
 - `README.md`, `IDEAS.md`, `Cross.toml`, `.gitignore`.
 
-## Próximo bloco: 1c — Polimento da cena 3D
+## Próximo bloco: 2a — Arma: raycast + crosshair + kill
 
-Cores agradáveis (asteroide cinza-médio, cubos vermelho-laranja com variação por
-cubo), escala refinada, iluminação direcional vinda do topo e o "game over
-temporário" já logado no 1b virando estado explícito. O bloco também pede a
-primeira medição de FPS com 15 cubos, que é o que falta para o `benches/` —
-e o teto de 15 do R5 já está fixado por teste.
+O jogador passa a poder destruir os cubos: `weapon.rs` com cooldown de 0,15 s,
+`raycast_aabb` (já escrito e testado no 1b) contra os cubos vivos, mira no centro
+da tela e `+100` no log. É o que transforma o jogo de "esperar perder" em algo
+jogável — hoje o cubo só chega e dói.
 
 ## Bloqueios / pendências
 
 - **ARM64 não testado.** Sem aparelho nesta rodada. O binário compila para
   x86_64 e o caminho de cross-compile está documentado; a validação é o 3c.
-- **Ainda não há tiro.** O cubo não pode ser destruído: no 1b ele só chega e
-  dói. É a entrega do 2a (raycast + crosshair).
-- **`libSDL2_mixer` é dependência de carga, não de áudio.** O `NEEDED` do
-  binário lista `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é
-  usado. Isso é diferente de "o áudio falhou" (R6): biblioteca ausente é falha
-  de carga, o processo não sobe. Na imagem do R35S de 09/11 §36 não há registro
-  dessa biblioteca — **verificar no 3c**; se faltar, a saída é `dlopen` como o
-  `volume.rs` do launcher faz com a `libasound`, ou remover o áudio.
+- **Ainda não há tiro.** O cubo não pode ser destruído: ele só chega e dói. É a
+  entrega do 2a (raycast + crosshair).
+- **`libSDL2_mixer` era o risco, e não é.** O `NEEDED` do binário lista
+  `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é usado, e
+  biblioteca ausente é falha de **carga** (o processo não sobe), não de áudio.
+  Medido no X35H: `libSDL2_mixer`, `libSDL2_image` e `libSDL2_ttf` **presentes**.
+  O `SDL_mixer` avisa `MP3 support not available` e segue — degradação, não
+  falha. Falta conferir no R35S, cuja imagem é outra.
+- **Sem `offscreen` no aparelho.** `SDL_VIDEODRIVER=offscreen` responde
+  `offscreen not available`; lá só existe KMSDRM. Consequência: não há como
+  medir o custo puro de GPU sem vblank no console — é por isso que o
+  `--benchmark` separa submissão de intervalo em vez de tentar enganar o vsync.
 - **Uma correção de manifesto no snapshot.** O `giochi-engine-3d` declara
   `giochi-engine` sem `default-features = false`, e a unificação de features
   liga o `sdl2-bundled` mesmo quando o jogo pede `sdl2-system` — o build cai no
@@ -150,10 +218,17 @@ e o teto de 15 do R5 já está fixado por teste.
 
 ## Métricas de performance
 
-- FPS com 15 cubos em x86_64: **não medido ainda** — é entrega do 1c, que também
-  cria o `benches/frame_time.rs`.
-- Custo do 1b: até **15 desenhos** de cubo (um por cubo) + 4 da arena. Dentro do
-  envelope de ≤ 15 cubos do R5.
+- **X35H, 15 cubos**: 49,3 fps de mediana; trabalho de submissão 3,09 ms (15 % do
+  intervalo). O teto é o painel — com 0 cubos o número é o mesmo.
+- **X35H, 0 cubos**: 49,3 fps, trabalho 2,03 ms (10 %).
+- **X35H, 15 cubos em GLES 3**: 49,3 fps, trabalho 2,40 ms (12 %).
+- **PC (Radeon RX 580, 1280×720, `offscreen`)**: 15 cubos, 0,05 ms de intervalo —
+  sem vblank o número é limite superior de CPU e não serve como FPS do jogo.
+- **Simulação (sem GL)**: 0,28 µs por quadro com 15 cubos — 0,00 % do orçamento.
+- Geração de malha, uma vez na abertura: asteroide 82,8 µs (80 triângulos), céu
+  de 500 estrelas 535,1 µs (6.000 triângulos).
+- Chamadas de desenho por quadro: 4 da arena + até 15 dos cubos = **19**, dentro
+  do envelope do R5.
 - FPS com 15 cubos em ARM64: **pendente**.
 - Custo de desenho do 1a: **4 chamadas** por quadro (3 faixas de estrelas +
   asteroide) e 19.800 vértices de céu + 240 do asteroide. Cabe folgado no

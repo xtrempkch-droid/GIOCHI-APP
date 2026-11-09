@@ -32,6 +32,7 @@ use giochi_engine_3d::context::{self, GlesVersion};
 use giochi_engine_3d::math3d::Camera3D;
 use giochi_engine_3d::RenderContext3D;
 
+use giochi_defender::bench::Benchmark;
 use giochi_defender::diag::{self, Diag};
 use giochi_defender::gameplay::arena::{self, Arena};
 use giochi_defender::gameplay::camera::OrbitalCamera;
@@ -127,6 +128,19 @@ fn executar(diag: Diag) -> Result<()> {
     aplicar_preset(&mut camera, &diag);
     let mut estado = GameState::new();
     let mut partida = Partida::new(diag.semente);
+
+    // `--inimigos N`: mede "15 cubos" sem esperar 30 s de spawn a 2 s. Vem antes
+    // do `--simular` para que a simulação, se pedida, mova esses mesmos cubos.
+    if let Some(quantos) = diag.inimigos {
+        let criados = partida.povoar(quantos);
+        log::info!(
+            "povoado: {criados} de {quantos} cubo(s) pedido(s), capacidade {}",
+            partida.capacidade()
+        );
+        if criados < quantos as usize {
+            log::warn!("o pool encheu: pedido de {quantos} acima da capacidade");
+        }
+    }
 
     // `--simular`: adianta a partida antes do primeiro quadro. Sem isto uma
     // captura headless só mostraria a arena vazia, e a simulação de inimigos
@@ -313,9 +327,25 @@ fn laco(
     let mut relogio = FrameClock::new();
     let mut laco = GameLoop::new();
     let mut quadros: u64 = 0;
+    let mut benchmark = Benchmark::new();
+    // `--benchmark N` implica rodar N quadros, sem o teto de 60 Hz: medir o
+    // intervalo com uma espera artificial dentro dele mediria a espera.
+    let limite = diag.benchmark.or(diag.frames);
+
+    // Início do quadro anterior: o que se mede é o intervalo **entre inícios**,
+    // que é o que o jogador sente. Medir o fim de um quadro até o fim do outro
+    // deixaria o trabalho de preparação de fora justamente no primeiro quadro de
+    // cada rajada.
+    let mut inicio_anterior: Option<Instant> = None;
 
     loop {
         let inicio = Instant::now();
+        if diag.benchmark.is_some() {
+            if let Some(anterior) = inicio_anterior {
+                benchmark.registrar(inicio.duration_since(anterior));
+            }
+            inicio_anterior = Some(inicio);
+        }
 
         let eventos = plataforma.poll_events();
         let mut pediu_sair = false;
@@ -331,7 +361,7 @@ fn laco(
 
         // Em modo de captura o passo é fixo: dois processos têm de simular o
         // mesmo número de segundos, senão comparar quadros mede o relógio.
-        let delta = if diag.frames.is_some() {
+        let delta = if limite.is_some() {
             laco.fixed_timestep()
         } else {
             relogio.tick()
@@ -355,12 +385,19 @@ fn laco(
         let capturar = diag
             .quadro
             .as_deref()
-            .filter(|_| diag.frames.is_some_and(|limite| quadros + 1 >= limite));
+            .filter(|_| limite.is_some_and(|total| quadros + 1 >= total));
         if let Some(caminho) = capturar {
             let (largura, altura) = render.drawable_size();
             let pixels = render.read_pixels(largura, altura)?;
             diag::escrever_bmp(std::path::Path::new(caminho), largura, altura, &pixels)?;
             log::info!("quadro gravado em '{caminho}' ({largura}x{altura})");
+        }
+
+        // Trabalho de submissão: do começo do desenho até antes da troca de
+        // buffers. A troca é onde o KMSDRM espera o vblank, e incluir a espera
+        // aqui faria o número ser sempre igual ao intervalo.
+        if diag.benchmark.is_some() {
+            benchmark.registrar_trabalho(inicio.elapsed());
         }
 
         render.end_frame(janela);
@@ -374,10 +411,12 @@ fn laco(
 
         quadros += 1;
 
-        if let Some(limite) = diag.frames {
-            if quadros >= limite {
+        if let Some(total) = limite {
+            if quadros >= total {
                 break;
             }
+            // No modo de medição não se dorme: o intervalo medido é o do quadro,
+            // não o do quadro mais uma espera escolhida por nós.
             continue;
         }
 
@@ -388,6 +427,10 @@ fn laco(
         if gasto < QUADRO_MS {
             plataforma.delay_ms(QUADRO_MS - gasto);
         }
+    }
+
+    if diag.benchmark.is_some() {
+        log::info!("{}", benchmark.resumo());
     }
 
     let (largura, altura) = render.drawable_size();
