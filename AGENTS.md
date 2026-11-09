@@ -4253,12 +4253,35 @@ dos dois lados. Agora ela mede a queda: depois de 1,7 s, todo destroço vivo tem
 de estar a menos de 0,65 m do chão. (1,7 s porque a peça nasce a 9 m com 14 m/s
 para cima e em 0,67 s ainda está subindo — medido: topo 4,65 m.)
 
-### Medido no PC (llvmpipe, 640×480)
+### O morro era mais claro que o céu, e virava "céu vazio"
+
+Achado que só o número mostrou: um quadro da descida tinha **48 % dos pixels na
+mesma cor** (24,24,48) — e não era o céu. Era o morro, desenhado com
+`PREDIO_LONGE` (0,10 0,12 0,22) contra o céu de `CEU_SERRA` (0,05 0,07 0,13):
+**mais claro** que o céu, uma chapa azul chapada de 48 % da tela. Na foto, lia
+como "o céu está vazio"; no número, lia como "uma malha está pintando metade do
+quadro".
+
+Duas correções, as duas medidas:
+
+1. **Silhueta é mais escura que o fundo.** `morros` ganhou malha e cor próprias
+   (`MORRO` = 0,042 0,048 0,086). Não dava para reusar a `longe`: na avenida ela
+   é cidade iluminada, e ali tem de ficar **mais clara** que o céu. Uma malha só
+   obrigava as duas a dividir a cor, e alguém ia perder.
+2. **A 210 m o morro ficava 4° acima do horizonte.** Com 55–125 m de altura a
+   210 m, o topo passava da linha do horizonte e tapava meio quadro. Passou para
+   420–700 m de distância e 30–75 m de altura: virou a faixa de silhueta que se
+   espera de um vale.
+
+Efeito no quadro: o frame do meio da descida saiu de média **19,9 com 48 cores**
+para **46,1 com 303 cores**.
+
+### Medido no PC (640×480)
 
 ```text
-quadro médio          avenida 41–61 · boavista 33–41   (antes de clarear: 27)
-quase preto           avenida 0,7–10,9 % · boavista 0,00–0,08 %
-cores distintas       avenida 236–501 · boavista 306–704
+quadro médio          avenida 41–61 · boavista 26–46
+quase preto           avenida 0,7–10,9 % · boavista 0,00 % em todos os 9 quadros
+cores distintas       avenida 236–501 · boavista 303–897
 fps com teto 75       as duas pistas batem 75 (o PC não discrimina: só o
                       primeiro processo paga shader frio e mede 11)
 ```

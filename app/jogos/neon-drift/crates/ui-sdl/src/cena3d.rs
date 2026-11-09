@@ -50,7 +50,15 @@ const NOITE: Color3D = Color3D::new(0.020, 0.024, 0.052, 1.0);
 /// quadro; o mesmo quase-preto da avenida (onde os prédios o tapam) lia como
 /// tela apagada. Medido: 28 % do quadro abaixo de 8/255 com o céu da avenida,
 /// 9 % com este.
-const CEU_SERRA: Color3D = Color3D::new(0.052, 0.066, 0.125, 1.0);
+const CEU_SERRA: Color3D = Color3D::new(0.100, 0.095, 0.175, 1.0);
+/// Silhueta dos morros do outro lado do vale.
+///
+/// **Mais escuro que o céu**, e esse é o ponto: medido, os morros usavam
+/// `PREDIO_LONGE` (0,10 0,12 0,22) contra um céu de (0,05 0,07 0,13) e saíam
+/// *mais claros* que ele — 48% do quadro virava uma parede azul chapada que lia
+/// como "céu vazio". Contra a luz, morro é silhueta: escuro por cima de um céu
+/// que ainda tem o brilho da cidade.
+const MORRO: Color3D = Color3D::new(0.042, 0.048, 0.086, 1.0);
 const ASFALTO: Color3D = Color3D::new(0.155, 0.160, 0.215, 1.0);
 const ASFALTO_FAIXA: Color3D = Color3D::new(0.90, 0.94, 1.0, 1.0);
 const GUIA_VERMELHA: Color3D = Color3D::new(0.95, 0.16, 0.30, 1.0);
@@ -85,7 +93,7 @@ const REFLEXO: Color3D = Color3D::new(0.35, 0.78, 1.0, 0.16);
 /// aqui do que o `MURO` de cor chapada era.
 const CONCRETO: Color3D = Color3D::new(0.44, 0.46, 0.56, 1.0);
 const PEDRA: Color3D = Color3D::new(0.52, 0.50, 0.48, 1.0);
-const MATA: Color3D = Color3D::new(0.30, 0.52, 0.30, 1.0);
+const MATA: Color3D = Color3D::new(0.34, 0.60, 0.34, 1.0);
 const GUARDA_CORPO: Color3D = Color3D::new(0.62, 0.64, 0.70, 1.0);
 const PAINEL_NEON: Color3D = Color3D::new(1.0, 0.55, 0.92, 1.0);
 /// Luz de tudo o que é fonte de luz na cena: ambiente cheio e difusa zero.
@@ -227,6 +235,8 @@ pub struct Cena3D {
     poco_luz: MeshHandle,
     telhados: MeshHandle,
     longe: MeshHandle,
+    /// Morros da serra: silhueta escura, cor própria (ver [`MORRO`]).
+    morros: MeshHandle,
     predios_a: MeshHandle,
     predios_b: MeshHandle,
     predios_c: MeshHandle,
@@ -324,6 +334,7 @@ impl Cena3D {
         let poco_luz = criar(render, &mundo.poco_luz)?;
         let telhados = criar(render, &mundo.telhados)?;
         let longe = criar(render, &mundo.longe)?;
+        let morros = criar(render, &mundo.morros)?;
         let predios_a = criar(render, &mundo.predios_a)?;
         let predios_b = criar(render, &mundo.predios_b)?;
         let predios_c = criar(render, &mundo.predios_c)?;
@@ -359,8 +370,16 @@ impl Cena3D {
         // branco. Com 0,62 de ambiente e 0,34 de difusa a cor da malha continua
         // mandando, e ainda há variação entre faces — é o que dá volume ao
         // prédio e ao carro sem apagar a paleta.
+        // A serra recebe mais ambiente que a avenida: medido, o quadro da
+        // descida ficava com média 33 contra 41–61 da cidade, e as copas da mata
+        // saíam a (10, 26, 26) — praticamente preto. Não é atmosfera, é tela
+        // apagada: num painel de 3,5" o que não dá para ler não existe.
+        let ambiente = match cenario {
+            Cenario::Avenida => 0.62,
+            Cenario::Descida => 0.80,
+        };
         let luz_mundo = DirectionalLight::sun()
-            .with_ambient(0.62)
+            .with_ambient(ambiente)
             .with_color(Color3D::new(0.34, 0.34, 0.40, 1.0))
             .with_specular(0.10, 40.0);
 
@@ -387,6 +406,7 @@ impl Cena3D {
             poco_luz,
             telhados,
             longe,
+            morros,
             predios_a,
             predios_b,
             predios_c,
@@ -536,6 +556,7 @@ impl Cena3D {
             ("cones", self.cones, CONE),
             ("largada_b", self.largada_b, LARGADA_B),
             ("longe", self.longe, PREDIO_LONGE),
+            ("morros", self.morros, MORRO),
         ] {
             if self.quero(nome) && !self.desligado(nome) {
                 render.draw_mesh_colored(malha, self.phong, &ident, &camera, cor)?;
@@ -1627,6 +1648,7 @@ struct Mundo {
     poco_luz: Construtor,
     telhados: Construtor,
     longe: Construtor,
+    morros: Construtor,
     predios_a: Construtor,
     predios_b: Construtor,
     predios_c: Construtor,
@@ -1974,7 +1996,11 @@ fn construir_morros(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         let (dx, dz) = girar_direcao(rotacao, a.direcao);
         let giro = dx.atan2(dz);
         for lado in [-1.0f32, 1.0] {
-            let distancia = 210.0 + r * 170.0;
+            // **Longe**, e o número é medido: a 210 m com 125 m de altura o topo
+            // do morro ficava 4° **acima** do horizonte e ele tapava metade do
+            // quadro com uma chapa azul chapada (48% dos pixels, medido). A
+            // 420–700 m ele vira a faixa de silhueta que se espera de um vale.
+            let distancia = 420.0 + r * 280.0;
             let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
             let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
             if pista.folga_em(na_pista) < 60.0 {
@@ -1982,10 +2008,10 @@ fn construir_morros(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             }
             // Base bem abaixo e topo variável: o que importa é a silhueta
             // contra o céu, e ela tem de ser irregular para não virar um muro.
-            let altura = 55.0 + r * 70.0;
-            let largura = 90.0 + r * 110.0;
-            m.longe.caixa_girada(
-                [bx, -50.0 + altura * 0.5, bz],
+            let altura = 30.0 + r * 45.0;
+            let largura = 150.0 + r * 190.0;
+            m.morros.caixa_girada(
+                [bx, -60.0 + altura * 0.5, bz],
                 [largura, altura, largura * 0.8],
                 giro,
             );
