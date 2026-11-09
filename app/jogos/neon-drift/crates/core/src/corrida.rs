@@ -76,6 +76,8 @@ pub enum Evento {
 /// Estado completo de uma partida.
 #[derive(Debug, Clone)]
 pub struct Corrida {
+    /// Mapa em disputa: define voltas, tempo limite e o cenário desenhado.
+    pub mapa: &'static crate::mapa::Mapa,
     /// Pista.
     pub pista: Pista,
     /// Carro do jogador.
@@ -112,14 +114,32 @@ impl Corrida {
 }
 
 impl Corrida {
-    /// Partida nova, parada na tela de título.
+    /// Partida nova no mapa padrão, parada na tela de título.
     pub fn nova() -> Self {
-        Self::com_config(VOLTAS, TEMPO_LIMITE)
+        Self::com_mapa(crate::mapa::PADRAO)
+    }
+
+    /// Partida nova num mapa, com as voltas e o tempo limite **dele**.
+    ///
+    /// Voltas e tempo vivem no mapa e não em constantes globais: um circuito de
+    /// serra de 1,1 km com duas voltas em 150 s seria impossível, e a diferença
+    /// tem de estar onde o mapa está declarado.
+    pub fn com_mapa(mapa: &'static crate::mapa::Mapa) -> Self {
+        Self::com_mapa_e_config(mapa, mapa.voltas, mapa.tempo_limite)
     }
 
     /// Partida nova com número de voltas e tempo limite escolhidos (teste).
     pub fn com_config(voltas: u32, tempo_limite: f32) -> Self {
-        let pista = Pista::nova();
+        Self::com_mapa_e_config(crate::mapa::PADRAO, voltas, tempo_limite)
+    }
+
+    /// Partida nova num mapa, com voltas e tempo escolhidos (teste).
+    pub fn com_mapa_e_config(
+        mapa: &'static crate::mapa::Mapa,
+        voltas: u32,
+        tempo_limite: f32,
+    ) -> Self {
+        let pista = mapa.pista();
         let mut carro = Carro::novo(Ponto::ZERO, 0.0);
         carro.posicionar(&pista, 0.0, -3.0);
 
@@ -140,6 +160,7 @@ impl Corrida {
         ];
 
         let mut corrida = Self {
+            mapa,
             pista,
             carro,
             adversarios,

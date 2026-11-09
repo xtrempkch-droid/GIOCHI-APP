@@ -77,6 +77,31 @@ impl Ponto {
 /// Espaçamento nominal entre amostras da linha central, em metros.
 pub const PASSO: f32 = 2.0;
 
+/// Altura do perfil em `fracao` (0..1), por interpolação linear.
+///
+/// Função livre e não método de `Mapa` porque a `Pista` também precisa dela ao
+/// ser construída por `com_relevo`, sem um `Mapa` em mãos (os testes montam
+/// pistas sintéticas).
+pub fn altura_do_perfil(relevo: &[(f32, f32)], fracao: f32) -> f32 {
+    if relevo.is_empty() {
+        return 0.0;
+    }
+    let f = fracao - fracao.floor();
+    for par in relevo.windows(2) {
+        let (a, ha) = par[0];
+        let (b, hb) = par[1];
+        if f >= a && f <= b {
+            let t = if (b - a).abs() < 1e-6 {
+                0.0
+            } else {
+                (f - a) / (b - a)
+            };
+            return ha + (hb - ha) * t;
+        }
+    }
+    relevo.last().map(|(_, h)| *h).unwrap_or(0.0)
+}
+
 /// Uma amostra da linha central, já com o comprimento de arco acumulado.
 #[derive(Debug, Clone, Copy)]
 pub struct Amostra {
@@ -90,6 +115,12 @@ pub struct Amostra {
     pub normal: Ponto,
     /// Metade da largura do asfalto.
     pub meia_largura: f32,
+    /// Altura do asfalto neste ponto, em metros.
+    ///
+    /// A pista é 2D no plano e **não** é plana: o relevo do mapa entra aqui e é
+    /// o que faz a câmera subir na serra e a cidade ficar lá embaixo. Sem este
+    /// campo, "descida" seria um circuito plano com nome bonito.
+    pub altura: f32,
     /// `true` dentro do túnel.
     pub tunel: bool,
 }
@@ -122,44 +153,10 @@ pub struct Pista {
     largada: usize,
 }
 
-/// Os pontos de controle do circuito, em metros.
-///
-/// O desenho é: **reta longa** para o nitro (a primeira), praça larga para drift,
-/// **túnel** na diagonal, e uma curva fechada no retorno. Eles são a única
-/// "arte" desta pista; o resto é derivado.
-const CONTROLES: [Ponto; 15] = [
-    Ponto::new(0.0, 0.0),
-    Ponto::new(0.0, 120.0),
-    Ponto::new(0.0, 218.0),
-    Ponto::new(24.0, 268.0),
-    Ponto::new(86.0, 292.0),
-    Ponto::new(152.0, 284.0),
-    Ponto::new(206.0, 240.0),
-    Ponto::new(232.0, 178.0),
-    Ponto::new(238.0, 112.0),
-    Ponto::new(230.0, 62.0),
-    Ponto::new(206.0, 30.0),
-    Ponto::new(172.0, 20.0),
-    Ponto::new(138.0, 26.0),
-    Ponto::new(70.0, 14.0),
-    Ponto::new(6.0, -34.0),
-];
-
-/// Meia-largura do asfalto no trecho que **começa** em cada ponto de controle.
-///
-/// A praça de drift é o trecho largo; o túnel é estreito de propósito, porque
-/// um túnel largo não assusta e o efeito dele é justamente apertar a linha.
-const LARGURAS: [f32; 15] = [
-    9.5, 9.5, 10.0, 12.0, 19.0, 17.0, 11.0, 10.0, 8.5, 8.5, 8.0, 8.0, 9.0, 11.0, 10.0,
-];
-
-/// Trechos (índice do ponto de controle onde começam) que são túnel.
-const TUNEIS: [usize; 3] = [7, 8, 9];
-
 impl Pista {
-    /// Constrói o circuito padrão.
+    /// Constrói o circuito do mapa padrão.
     pub fn nova() -> Self {
-        Self::com_controles(&CONTROLES, &LARGURAS, &TUNEIS)
+        Self::do_mapa(crate::mapa::PADRAO)
     }
 
     /// Constrói a partir de pontos de controle, larguras e trechos de túnel.
@@ -167,6 +164,22 @@ impl Pista {
     /// Exposto para teste: dá para montar uma pista sintética (um círculo, por
     /// exemplo) e conferir a matemática sem depender do traçado do jogo.
     pub fn com_controles(controles: &[Ponto], larguras: &[f32], tuneis: &[usize]) -> Self {
+        Self::com_relevo(controles, larguras, tuneis, &[])
+    }
+
+    /// Constrói a partir de um mapa: traçado, larguras, túneis e **relevo**.
+    pub fn do_mapa(mapa: &crate::mapa::Mapa) -> Self {
+        Self::com_relevo(mapa.controles, mapa.larguras, mapa.tuneis, mapa.relevo)
+    }
+
+    /// Constrói a partir de pontos de controle, larguras, túneis e perfil de
+    /// elevação (`(fração da volta, metros)`).
+    pub fn com_relevo(
+        controles: &[Ponto],
+        larguras: &[f32],
+        tuneis: &[usize],
+        relevo: &[(f32, f32)],
+    ) -> Self {
         let n = controles.len();
         assert!(n >= 4, "um laço fechado precisa de ao menos 4 pontos");
         assert_eq!(larguras.len(), n, "uma largura por ponto de controle");
@@ -206,6 +219,7 @@ impl Pista {
                     direcao,
                     normal: direcao.perpendicular(),
                     meia_largura: largura,
+                    altura: 0.0,
                     tunel,
                 });
             }
@@ -222,14 +236,26 @@ impl Pista {
             direcao,
             normal: direcao.perpendicular(),
             meia_largura,
+            altura: 0.0,
             tunel: false,
         });
+
+        // O relevo é aplicado **depois** de o comprimento estar fechado: a
+        // fração da volta só existe quando se sabe o total. Aplicar durante a
+        // construção usaria um comprimento ainda parcial e o perfil sairia
+        // esticado de um jeito que só aparece na tela.
+        if !relevo.is_empty() {
+            let comprimento = acumulado.max(1e-3);
+            for amostra in amostras.iter_mut() {
+                amostra.altura = altura_do_perfil(relevo, amostra.s / comprimento);
+            }
+        }
 
         // A linha de largada fica no primeiro ponto de controle, que é o começo
         // da reta longa.
         let largada = 0;
 
-        let obstaculos = obstaculos_padrao(&amostras);
+        let obstaculos = obstaculos_padrao(&amostras, controles);
         Self {
             comprimento: acumulado,
             amostras,
@@ -311,6 +337,24 @@ impl Pista {
     pub fn meia_largura_em(&self, s: f32) -> f32 {
         let (a, b, t) = self.interpolar(s);
         a.meia_largura + (b.meia_largura - a.meia_largura) * t
+    }
+
+    /// Altura do asfalto em `s`, em metros.
+    pub fn altura_em(&self, s: f32) -> f32 {
+        let (a, b, t) = self.interpolar(s);
+        a.altura + (b.altura - a.altura) * t
+    }
+
+    /// Inclinação em `s`: metros de subida por metro percorrido.
+    ///
+    /// Positiva subindo, negativa descendo. É derivada das amostras vizinhas e
+    /// não do perfil do mapa: quem consulta quer a inclinação **da pista**, e
+    /// uma segunda fonte de verdade para o mesmo número envelheceria diferente.
+    pub fn inclinacao_em(&self, s: f32) -> f32 {
+        let passo = 4.0;
+        let a = self.altura_em(s - passo);
+        let b = self.altura_em(s + passo);
+        (b - a) / (passo * 2.0)
     }
 
     /// `true` quando `s` cai dentro do túnel.
@@ -555,7 +599,7 @@ fn knot(a: Ponto, b: Ponto) -> f32 {
 /// traçado mudou o obstáculo ficou 2 m fora do asfalto — um cone na grama, que
 /// nunca colide com nada e não avisa. Aqui `s` vem da amostra mais próxima de
 /// cada ponto de controle, então mover a pista move os cones.
-fn obstaculos_padrao(amostras: &[Amostra]) -> Vec<Obstaculo> {
+fn obstaculos_padrao(amostras: &[Amostra], controles: &[Ponto]) -> Vec<Obstaculo> {
     // `s` da amostra mais próxima de um ponto de controle.
     let s_de = |alvo: Ponto| -> f32 {
         amostras
@@ -569,8 +613,12 @@ fn obstaculos_padrao(amostras: &[Amostra]) -> Vec<Obstaculo> {
             .map(|a| a.s)
             .unwrap_or(0.0)
     };
-    let praca = s_de(CONTROLES[3]);
-    let grampo = s_de(CONTROLES[8]);
+    // Índices fixos, com saturação no fim: a posição dos cones é relativa ao
+    // **traçado**, então mover a pista move os cones. Um mapa com menos de nove
+    // pontos de controle usa o último em vez de estourar o índice.
+    let ultimo = controles.len().saturating_sub(1);
+    let praca = s_de(controles[3.min(ultimo)]);
+    let grampo = s_de(controles[8.min(ultimo)]);
 
     vec![
         // Entrada da praça de drift: dois cones marcando a linha de fora.
@@ -611,6 +659,33 @@ pub(crate) fn pista_de_teste() -> Pista {
     }
     let larguras = vec![10.0; controles.len()];
     Pista::com_controles(&controles, &larguras, &[])
+}
+
+/// A mesma pista de teste, com relevo.
+///
+/// Existe para separar gravidade de curvatura: na `BOAVISTA` as curvas da serra
+/// tiram o carro da pista em três segundos, e o teste de "a descida acelera"
+/// acabava medindo colisão. Aqui há 1000 m de reta com inclinação conhecida.
+#[cfg(test)]
+pub(crate) fn pista_de_teste_com_relevo(relevo: &[(f32, f32)]) -> Pista {
+    use std::f32::consts::PI;
+    let mut controles = Vec::new();
+    for i in 0..=20 {
+        controles.push(Ponto::new(0.0, i as f32 * 50.0));
+    }
+    for k in 1..=5 {
+        let a = k as f32 / 6.0 * PI;
+        controles.push(Ponto::new(30.0 - 30.0 * a.cos(), 1000.0 + 30.0 * a.sin()));
+    }
+    for i in (0..=20).rev() {
+        controles.push(Ponto::new(60.0, i as f32 * 50.0));
+    }
+    for k in 1..=5 {
+        let a = k as f32 / 6.0 * PI;
+        controles.push(Ponto::new(30.0 + 30.0 * a.cos(), -30.0 * a.sin()));
+    }
+    let larguras = vec![10.0; controles.len()];
+    Pista::com_relevo(&controles, &larguras, &[], relevo)
 }
 
 #[cfg(test)]

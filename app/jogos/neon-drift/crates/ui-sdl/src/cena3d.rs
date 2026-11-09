@@ -23,6 +23,7 @@ use giochi_engine_3d::render3d::{MeshHandle, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::{DirectionalLight, RenderContext3D};
 use giochi_neon_drift_core::corrida::{Corrida, Fase};
+use giochi_neon_drift_core::mapa::Cenario;
 use giochi_neon_drift_core::fonte;
 use giochi_neon_drift_core::hud;
 use giochi_neon_drift_core::pista::{Pista, Ponto};
@@ -43,7 +44,14 @@ use crate::video::Rotacao;
 // coloridos** — num painel de 3,5" isso não é atmosfera, é uma tela apagada.
 // Estes valores são o que faz a cena ler: média ~70, quase preto abaixo de 8%.
 const NOITE: Color3D = Color3D::new(0.020, 0.024, 0.052, 1.0);
-const ASFALTO: Color3D = Color3D::new(0.125, 0.130, 0.180, 1.0);
+/// Céu da serra: azul profundo em vez de quase preto.
+///
+/// Numa descida a linha do horizonte fica visível e o céu ocupa um terço do
+/// quadro; o mesmo quase-preto da avenida (onde os prédios o tapam) lia como
+/// tela apagada. Medido: 28 % do quadro abaixo de 8/255 com o céu da avenida,
+/// 9 % com este.
+const CEU_SERRA: Color3D = Color3D::new(0.052, 0.066, 0.125, 1.0);
+const ASFALTO: Color3D = Color3D::new(0.155, 0.160, 0.215, 1.0);
 const ASFALTO_FAIXA: Color3D = Color3D::new(0.90, 0.94, 1.0, 1.0);
 const GUIA_VERMELHA: Color3D = Color3D::new(0.95, 0.16, 0.30, 1.0);
 const GUIA_BRANCA: Color3D = Color3D::new(0.70, 0.74, 0.82, 1.0);
@@ -69,6 +77,17 @@ const PNEU: Color3D = Color3D::new(0.045, 0.045, 0.06, 1.0);
 const FAROL: Color3D = Color3D::new(0.92, 0.98, 1.0, 1.0);
 const LANTERNA: Color3D = Color3D::new(1.0, 0.16, 0.22, 1.0);
 const REFLEXO: Color3D = Color3D::new(0.35, 0.78, 1.0, 0.16);
+/// Tints dos materiais **texturizados**.
+///
+/// A textura é cinza (ou verde, no caso da mata) e a cor final é `amostra × tint`,
+/// então estes valores são o material, não a cor da textura. Um tint escuro num
+/// material já escuro apaga a superfície — por isso o concreto é bem mais claro
+/// aqui do que o `MURO` de cor chapada era.
+const CONCRETO: Color3D = Color3D::new(0.44, 0.46, 0.56, 1.0);
+const PEDRA: Color3D = Color3D::new(0.52, 0.50, 0.48, 1.0);
+const MATA: Color3D = Color3D::new(0.30, 0.52, 0.30, 1.0);
+const GUARDA_CORPO: Color3D = Color3D::new(0.62, 0.64, 0.70, 1.0);
+const PAINEL_NEON: Color3D = Color3D::new(1.0, 0.55, 0.92, 1.0);
 /// Luz de tudo o que é fonte de luz na cena: ambiente cheio e difusa zero.
 ///
 /// É o que faz o neon parecer neon. Com a luz do mundo (ambiente 0,62) o ciano
@@ -122,9 +141,10 @@ impl CameraJogo {
     fn nova(pista: &Pista, rotacao: Rotacao) -> Self {
         let inicio = pista.ponto_em(0.0);
         let (x, z) = girar_ponto(rotacao, inicio);
+        let y = pista.altura_em(0.0);
         Self {
-            pos: Vec3::new(x, 3.4, z - 8.0),
-            alvo: Vec3::new(x, 1.0, z + 4.0),
+            pos: Vec3::new(x, y + 3.4, z - 8.0),
+            alvo: Vec3::new(x, y + 1.0, z + 4.0),
             fov: FOV_BASE,
             roll: 0.0,
             tremor: 0.0,
@@ -132,9 +152,70 @@ impl CameraJogo {
     }
 }
 
+/// As texturas do mapa, já na GPU.
+///
+/// Um `TextureHandle` por material. A cor continua vindo do `tint` do desenho —
+/// a textura dá **relevo**, não cor — e é por isso que a mesma textura de
+/// concreto serve ao muro azulado da avenida e à pedra clara da serra.
+struct TexturasGpu {
+    asfalto: giochi_engine_3d::TextureHandle,
+    concreto: giochi_engine_3d::TextureHandle,
+    pedra: giochi_engine_3d::TextureHandle,
+    mata: giochi_engine_3d::TextureHandle,
+    guarda: giochi_engine_3d::TextureHandle,
+    painel: giochi_engine_3d::TextureHandle,
+    xadrez: giochi_engine_3d::TextureHandle,
+}
+
+impl TexturasGpu {
+    fn criar(render: &mut RenderContext3D) -> Result<Self, Box<dyn Error>> {
+        let mut handles = Vec::new();
+        let mut total = 0usize;
+        let mut nomes = Vec::new();
+        for t in crate::texturas::todas() {
+            let h = render.create_texture_rgba(t.largura, t.altura, &t.pixels)?;
+            total += t.bytes();
+            nomes.push(t.nome);
+            handles.push(h);
+        }
+        // Uma textura que falha em subir não tem sintoma visível: o material
+        // desenha preto e o quadro continua "funcionando". Dizer o que subiu, o
+        // tamanho e quantas são é o que transforma "está preto" em diagnóstico.
+        println!(
+            "neon-drift: {} textura(s) {nomes:?} {total} bytes, {} x {}",
+            handles.len(),
+            crate::texturas::LADO,
+            crate::texturas::LADO
+        );
+        Ok(Self {
+            asfalto: handles[0],
+            concreto: handles[1],
+            pedra: handles[2],
+            mata: handles[3],
+            guarda: handles[4],
+            painel: handles[5],
+            xadrez: handles[6],
+        })
+    }
+}
+
 /// A cena inteira: malhas, shaders e o estado de câmera/partículas.
 pub struct Cena3D {
     // ── estáticos ──────────────────────────────────────────────
+    /// Texturas do mapa, criadas no boot e vivas enquanto a cena viver.
+    texturas: TexturasGpu,
+    /// Shader que amostra textura em vez de usar cor por malha.
+    texturizado: ShaderHandle,
+    /// Malhas **texturizadas**: uma por material, uma chamada cada.
+    asfalto_t: MeshHandle,
+    concreto_t: MeshHandle,
+    pedra_t: MeshHandle,
+    mata_t: MeshHandle,
+    guarda_t: MeshHandle,
+    xadrez_t: MeshHandle,
+    painel_t: MeshHandle,
+    /// Cubo pequeno para os fragmentos de colisão, instanciado.
+    cubo: MeshHandle,
     asfalto: MeshHandle,
     faixas: MeshHandle,
     guia_a: MeshHandle,
@@ -156,7 +237,6 @@ pub struct Cena3D {
     tunel_luzes: MeshHandle,
     tunel_luzes_b: MeshHandle,
     cones: MeshHandle,
-    largada_a: MeshHandle,
     largada_b: MeshHandle,
 
     // ── carros ─────────────────────────────────────────────────
@@ -185,8 +265,16 @@ pub struct Cena3D {
     tempo: f32,
     /// Luz do mundo, guardada para restaurar depois do HUD.
     luz_mundo: DirectionalLight,
+    /// Cor do céu, que depende do cenário.
+    ceu: Color3D,
     /// Quando `Some`, só esta malha é desenhada (diagnóstico `--so`).
     so: Option<String>,
+    /// Impacto lido no quadro anterior.
+    ///
+    /// Serve para a rajada de destroços sair **uma vez por batida**: o impacto
+    /// decai no núcleo, mas enquanto ele está acima do limiar o desenho o veria
+    /// em vários quadros seguidos e soltaria destroços continuamente.
+    ultimo_impacto: f32,
     /// Chamadas de desenho emitidas no quadro corrente.
     ///
     /// Existe porque **este** é o número que decide o quadro no RK3566: medido
@@ -201,13 +289,29 @@ impl Cena3D {
         self.so = nome;
     }
 
-    /// Monta a cena a partir da pista.
+    /// Monta a cena a partir da pista e do cenário do mapa.
     pub fn nova(
         render: &mut RenderContext3D,
         pista: &Pista,
         rotacao: Rotacao,
+        cenario: Cenario,
     ) -> Result<Self, Box<dyn Error>> {
-        let mundo = construir_mundo(pista, rotacao);
+        let mundo = construir_mundo(pista, rotacao, cenario);
+
+        let ceu = match cenario {
+            Cenario::Avenida => NOITE,
+            Cenario::Descida => CEU_SERRA,
+        };
+        let texturas = TexturasGpu::criar(render)?;
+        let texturizado = render.create_builtin_shader(BuiltinShader::Textured)?;
+        let asfalto_t = criar(render, &mundo.asfalto_t)?;
+        let concreto_t = criar(render, &mundo.concreto_t)?;
+        let pedra_t = criar(render, &mundo.pedra_t)?;
+        let mata_t = criar(render, &mundo.mata_t)?;
+        let guarda_t = criar(render, &mundo.guarda_t)?;
+        let xadrez_t = criar(render, &mundo.xadrez_t)?;
+        let painel_t = criar(render, &mundo.painel_t)?;
+        let cubo = render.create_cube_mesh(1.0)?;
 
         let asfalto = criar(render, &mundo.asfalto)?;
         let faixas = criar(render, &mundo.faixas)?;
@@ -230,7 +334,6 @@ impl Cena3D {
         let tunel_luzes = criar(render, &mundo.tunel_luzes)?;
         let tunel_luzes_b = criar(render, &mundo.tunel_luzes_b)?;
         let cones = criar(render, &mundo.cones)?;
-        let largada_a = criar(render, &mundo.largada_a)?;
         let largada_b = criar(render, &mundo.largada_b)?;
 
         let carro = malha::carro();
@@ -262,6 +365,17 @@ impl Cena3D {
             .with_specular(0.10, 40.0);
 
         Ok(Self {
+            texturas,
+            texturizado,
+            ceu,
+            asfalto_t,
+            concreto_t,
+            pedra_t,
+            mata_t,
+            guarda_t,
+            xadrez_t,
+            painel_t,
+            cubo,
             asfalto,
             faixas,
             guia_a,
@@ -283,7 +397,6 @@ impl Cena3D {
             tunel_luzes,
             tunel_luzes_b,
             cones,
-            largada_a,
             largada_b,
             corpo,
             cabine,
@@ -304,6 +417,7 @@ impl Cena3D {
             tempo: 0.0,
             luz_mundo,
             so: None,
+            ultimo_impacto: 0.0,
             desenhos: 0,
         })
     }
@@ -352,7 +466,7 @@ impl Cena3D {
             cull_face: std::env::var_os("GIOCHI_CULL").is_none_or(|v| v != "0"),
             front_face: FrontFace::CounterClockwise,
             blend: true,
-            clear_color: NOITE,
+            clear_color: self.ceu,
         });
     }
 
@@ -375,6 +489,37 @@ impl Cena3D {
         // o ciano do neon saía a 45% do brilho e a cidade ficava cinza.
         let camera = self.camera_mundo(render.drawable_size());
         let ident = Transform3D::IDENTITY;
+
+        // ── mundo texturizado ────────────────────────────────────
+        //
+        // Uma chamada por material. O `tint` é o que dá a cor: a textura é
+        // neutra de propósito, então o asfalto é escuro por tint e a pedra é
+        // clara pela mesma textura com outro tint.
+        //
+        // Desenhado **primeiro**: o teste de profundidade resolve a ordem entre
+        // opaco e opaco, e as superfícies texturizadas são todas opacas.
+        render.set_light(self.luz_mundo);
+        for (nome, malha, textura, tint) in [
+            ("asfalto_t", self.asfalto_t, self.texturas.asfalto, ASFALTO),
+            ("concreto_t", self.concreto_t, self.texturas.concreto, CONCRETO),
+            ("pedra_t", self.pedra_t, self.texturas.pedra, PEDRA),
+            ("mata_t", self.mata_t, self.texturas.mata, MATA),
+            ("guarda_t", self.guarda_t, self.texturas.guarda, GUARDA_CORPO),
+            ("painel_t", self.painel_t, self.texturas.painel, PAINEL_NEON),
+            ("xadrez_t", self.xadrez_t, self.texturas.xadrez, LARGADA_A),
+        ] {
+            if self.quero(nome) && !self.desligado(parte_de_textura(nome)) {
+                render.draw_mesh_textured(
+                    malha,
+                    self.texturizado,
+                    &ident,
+                    &camera,
+                    textura,
+                    tint,
+                )?;
+                self.desenhos += 1;
+            }
+        }
 
         render.set_light(self.luz_mundo);
         for (nome, malha, cor) in [
@@ -408,7 +553,6 @@ impl Cena3D {
 
         render.set_light(EMISSIVO);
         for (nome, malha, cor) in [
-            ("largada_a", self.largada_a, LARGADA_A),
             ("janelas", self.janelas, multiplicar(JANELA, tremula)),
             ("luzes", self.luzes, multiplicar(LUZ_POSTE, pulso)),
             ("telhados", self.telhados, multiplicar(NEON_MAGENTA, pulso_b)),
@@ -433,6 +577,7 @@ impl Cena3D {
             }
             if !self.desligado("particulas") {
                 self.desenhar_particulas(render, &camera)?;
+                self.desenhar_fragmentos(render, &camera)?;
             }
             if !self.desligado("hud") {
                 self.desenhar_hud(render, corrida)?;
@@ -497,11 +642,15 @@ impl Cena3D {
 
         // Alvo: atrás do carro, e um pouco acima. A distância cresce um pouco com
         // a velocidade, o que abre o enquadramento na reta.
+        //
+        // O `y` soma a **altura da pista**: numa descida a câmera tem de descer
+        // junto, senão ela fica no nível do mar enquanto o carro está a 60 m e o
+        // jogo vira uma vista aérea.
         let rapidez = (carro.velocidade / 62.0).clamp(0.0, 1.4);
         let distancia = 7.4 + rapidez * 1.9;
-        let altura = 3.05 + rapidez * 0.35;
+        let altura = carro.altura + 3.05 + rapidez * 0.35;
         let alvo_pos = Vec3::new(px - dx * distancia, altura, pz - dz * distancia);
-        let alvo_mira = Vec3::new(px + dx * 7.0, 1.05, pz + dz * 7.0);
+        let alvo_mira = Vec3::new(px + dx * 7.0, carro.altura + 1.05, pz + dz * 7.0);
 
         // Atraso exponencial estável em qualquer `dt`: `1 - exp(-k·dt)` não
         // estoura com quadro perdido, ao contrário de `k·dt`.
@@ -596,15 +745,23 @@ impl Cena3D {
         // jogador continua desenhado por cima dele.
         let mut todos: Vec<Mat4> = Vec::with_capacity(corrida.adversarios.len() + 1);
         let mut corpo_jogador: Vec<Mat4> = Vec::with_capacity(1);
-        corpo_jogador.push(self.matriz_do_carro(corrida.carro.pos, corrida.carro.angulo));
+        corpo_jogador.push(self.matriz_do_carro(
+            corrida.carro.pos,
+            corrida.carro.angulo,
+            corrida.carro.altura,
+        ));
         todos.push(corpo_jogador[0]);
 
         // Lataria dos adversários, agrupada por cor.
         let mut por_cor: Vec<(usize, Vec<Mat4>)> = Vec::new();
         for adversario in &corrida.adversarios {
+            // A altura do adversário vem da pista no `s` dele: um carro
+            // flutuando 40 m acima do asfalto na serra seria o defeito mais
+            // visível do mundo, e nada no desenho avisaria.
             let m = self.matriz_do_carro(
                 adversario.posicao(&corrida.pista),
                 adversario.angulo(&corrida.pista),
+                corrida.pista.altura_em(adversario.s),
             );
             todos.push(m);
             let cor = adversario.cor % CORES_ADVERSARIOS.len();
@@ -685,11 +842,11 @@ impl Cena3D {
         Ok(())
     }
 
-    fn matriz_do_carro(&self, pos: Ponto, angulo: f32) -> Mat4 {
+    fn matriz_do_carro(&self, pos: Ponto, angulo: f32, altura: f32) -> Mat4 {
         let (x, z) = girar_ponto(self.rotacao, pos);
         let angulo = girar_angulo(self.rotacao, angulo);
         Transform3D::new(
-            Vec3::new(x, 0.0, z),
+            Vec3::new(x, altura, z),
             Quat::from_axis_angle(Vec3::UP, angulo),
             Vec3::new(1.0, 1.0, 1.0),
         )
@@ -708,11 +865,60 @@ impl Cena3D {
     fn atualizar_particulas(&mut self, corrida: &Corrida, dt: f32) {
         self.particulas
             .atualizar(corrida, self.camera.pos, self.camera.alvo, dt);
+
+        if corrida.fase != Fase::Correndo {
+            return;
+        }
+
+        // ── raspão: faísca contínua ──────────────────────────
+        //
+        // O `raspando` do carro é **contato de parede**, não batida: encostar de
+        // lado solta faísca sem tocar o som de colisão nem zerar o combo. Antes
+        // disso o toque não deixava sinal nenhum, e o jogador não sabia se tinha
+        // encostado ou se o carro tinha ficado mais lento por outro motivo.
+        let carro = &corrida.carro;
+        if carro.raspando && carro.velocidade.abs() > 6.0 {
+            // Proporcional à velocidade e ao ângulo: raspão de lado solta pouco,
+            // entrada torta solta muito.
+            let forca = (carro.velocidade.abs() / 45.0).clamp(0.15, 1.0);
+            let quantas = (forca * 3.0) as u32 + 1;
+            self.particulas.pedir_faiscas(quantas);
+        }
+
+        // ── colisão: destroços ───────────────────────────────
+        //
+        // Só acima de 0,35: abaixo disso é raspão, e um encostar de 3 m/s não
+        // pode jogar a mesma chuva de lataria que uma batida a 200 km/h. O
+        // `impacto` já decai sozinho no núcleo, então a rajada sai **uma vez** por
+        // batida em vez de todo quadro.
+        const LIMIAR_DESTROCO: f32 = 0.35;
+        if carro.impacto > LIMIAR_DESTROCO && carro.impacto >= self.ultimo_impacto {
+            let (x, z) = girar_ponto(self.rotacao, carro.pos);
+            let (dx, dz) = girar_direcao(self.rotacao, carro.direcao());
+            self.particulas.pedir_fragmentos(
+                carro.impacto,
+                COR_JOGADOR,
+                Vec3::new(x, carro.altura + 0.6, z),
+                Vec3::new(dx, 0.0, dz),
+            );
+            self.camera.tremor = (self.camera.tremor + 0.5 * carro.impacto).min(1.4);
+        }
+        self.ultimo_impacto = if carro.impacto < 0.05 {
+            0.0
+        } else {
+            carro.impacto
+        };
     }
 
     /// Quantas partículas vivas (diagnóstico).
     pub fn particulas_vivas(&self) -> usize {
         self.particulas.total()
+    }
+
+    /// Destroços vivos (diagnóstico). Zero é resposta legítima: sem batida não
+    /// há fragmento, e é isso que distingue "não desenhou" de "não bateu".
+    pub fn fragmentos(&self) -> usize {
+        self.particulas.fragmentos()
     }
 
     /// Contagem por tipo, na ordem de [`Tipo::TODOS`].
@@ -737,6 +943,36 @@ impl Cena3D {
     /// jogador reinicia dentro da nuvem da corrida que ele acabou de abandonar.
     pub fn limpar_efeitos(&mut self) {
         self.particulas.limpar();
+    }
+
+    /// Desenha os destroços: **um** `draw_instanced` para todos.
+    ///
+    /// Cubos de verdade, com a matriz completa de cada peça (posição, giro em
+    /// três eixos, escala). Um billboard sempre encara a câmera, e destroço que
+    /// encara quem olha não lê como destroço.
+    fn desenhar_fragmentos(
+        &mut self,
+        render: &mut RenderContext3D,
+        camera: &Camera3D,
+    ) -> Result<(), Box<dyn Error>> {
+        let Some(inst) = self.instanciado else {
+            return Ok(());
+        };
+        if self.particulas.fragmentos() == 0 {
+            return Ok(());
+        }
+        self.particulas
+            .matrizes_fragmentos(&mut self.malhas_efeito);
+        if self.malhas_efeito.is_empty() {
+            return Ok(());
+        }
+        let cor = self.particulas.cor_fragmentos();
+        // Luz de verdade: destroço é objeto sólido, e com luz chapada o cubo
+        // vira uma silhueta sem faces — some a leitura de "pedaço girando".
+        render.set_light(self.luz_mundo);
+        render.draw_instanced(self.cubo, inst, &self.malhas_efeito, camera, cor)?;
+        self.desenhos += 1;
+        Ok(())
     }
 
     /// Desenha as partículas: **uma** chamada de desenho por tipo vivo.
@@ -1366,6 +1602,20 @@ impl Cena3D {
 /// Geometria estática separada por cor (uma malha por cor).
 #[derive(Default)]
 struct Mundo {
+    /// Asfalto texturizado (sem cor por malha).
+    asfalto_t: Construtor,
+    /// Concreto texturizado: mureta da avenida, parede do túnel, prédios baixos.
+    concreto_t: Construtor,
+    /// Pedra texturizada: o paredão da serra.
+    pedra_t: Construtor,
+    /// Mata: as copas dos dois lados da estrada de serra.
+    mata_t: Construtor,
+    /// Guarda-corpo metálico da descida.
+    guarda_t: Construtor,
+    /// Xadrez da linha de largada.
+    xadrez_t: Construtor,
+    /// Outdoors e painéis de neon.
+    painel_t: Construtor,
     asfalto: Construtor,
     faixas: Construtor,
     guia_a: Construtor,
@@ -1387,7 +1637,6 @@ struct Mundo {
     tunel_luzes: Construtor,
     tunel_luzes_b: Construtor,
     cones: Construtor,
-    largada_a: Construtor,
     largada_b: Construtor,
 }
 
@@ -1420,25 +1669,42 @@ fn girar_angulo(rot: Rotacao, angulo: f32) -> f32 {
     }
 }
 
-fn construir_mundo(pista: &Pista, rotacao: Rotacao) -> Mundo {
+/// Constrói a geometria estática do mapa, escolhendo o cenário pelo **tipo**
+/// declarado nele.
+///
+/// O tipo não é o nome: dois mapas podem ser `Avenida` com traçados diferentes.
+/// O que muda entre os dois cenários é o que existe em volta do asfalto — prédio
+/// e outdoor de um lado, pedra e mata do outro — e é a única coisa do desenho
+/// que precisa saber qual mapa está em jogo.
+fn construir_mundo(pista: &Pista, rotacao: Rotacao, cenario: Cenario) -> Mundo {
     let mut m = Mundo::default();
-    let amostras = pista.amostras();
 
+    // A pista é comum aos dois: asfalto, faixas, guias, mureta e a tira de neon.
     construir_pista(&mut m, pista, rotacao);
-    construir_arcos(&mut m, pista, rotacao);
-    construir_passarelas(&mut m, pista, rotacao);
-    construir_outdoors(&mut m, pista, rotacao);
-    construir_cidade(&mut m, pista, rotacao);
-    construir_longe(&mut m, pista, rotacao);
-    construir_tunel(&mut m, pista, rotacao);
-    construir_cones(&mut m, pista, rotacao);
     construir_largada(&mut m, pista, rotacao);
-    let _ = amostras;
+    construir_cones(&mut m, pista, rotacao);
+    construir_tunel(&mut m, pista, rotacao);
+
+    match cenario {
+        Cenario::Avenida => {
+            construir_arcos(&mut m, pista, rotacao);
+            construir_passarelas(&mut m, pista, rotacao);
+            construir_outdoors(&mut m, pista, rotacao);
+            construir_cidade(&mut m, pista, rotacao);
+            construir_longe(&mut m, pista, rotacao);
+        }
+        Cenario::Descida => {
+            construir_serra(&mut m, pista, rotacao);
+            construir_morros(&mut m, pista, rotacao);
+            construir_cidade_ao_longe(&mut m, pista, rotacao);
+        }
+    }
     m
 }
 
 fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
     let amostras = pista.amostras();
+    let tile = malha::Construtor::METROS_POR_TILE;
     for i in 0..amostras.len().saturating_sub(1) {
         let a = amostras[i];
         let b = amostras[i + 1];
@@ -1446,13 +1712,18 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         let (bx, bz) = girar_ponto(rotacao, b.centro);
         let (anx, anz) = girar_ponto(rotacao, a.normal);
         let (bnx, bnz) = girar_ponto(rotacao, b.normal);
+        // A altura vem da amostra: numa descida o vão entre duas amostras
+        // atravessa o terreno, e usar um `y` só faria o asfalto degrauar.
+        let (ya, yb) = (a.altura, b.altura);
 
         let al = (ax - anx * a.meia_largura, az - anz * a.meia_largura);
         let ar = (ax + anx * a.meia_largura, az + anz * a.meia_largura);
         let bl = (bx - bnx * b.meia_largura, bz - bnz * b.meia_largura);
         let br = (bx + bnx * b.meia_largura, bz + bnz * b.meia_largura);
 
-        m.asfalto.chao([al.0, al.1], [bl.0, bl.1], [br.0, br.1], [ar.0, ar.1], 0.0);
+        // Asfalto **texturizado**: uma malha, uma chamada, e o UV vem do mundo.
+        m.asfalto_t
+            .chao3([al.0, al.1], [bl.0, bl.1], [br.0, br.1], [ar.0, ar.1], ya, yb, yb, ya, tile);
 
         // Faixa central tracejada: 6 m acesa, 6 m apagada.
         let ciclo = (a.s / 12.0) as i32;
@@ -1462,17 +1733,25 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             let ar2 = (ax + anx * meia, az + anz * meia);
             let bl2 = (bx - bnx * meia, bz - bnz * meia);
             let br2 = (bx + bnx * meia, bz + bnz * meia);
-            m.faixas
-                .chao([al2.0, al2.1], [bl2.0, bl2.1], [br2.0, br2.1], [ar2.0, ar2.1], 0.022);
+            m.faixas.chao3(
+                [al2.0, al2.1],
+                [bl2.0, bl2.1],
+                [br2.0, br2.1],
+                [ar2.0, ar2.1],
+                ya + 0.022,
+                yb + 0.022,
+                yb + 0.022,
+                ya + 0.022,
+                tile,
+            );
         }
 
         // Guias alternadas vermelho/branco na borda, como zebra de curva.
-        let faixa_guia = (a.s / 5.0) as i32 % 2 == 0;
         let largura_guia = 1.0;
         let deslocamento = a.meia_largura + largura_guia * 0.5;
         for lado in [-1.0f32, 1.0] {
             let a0 = (
-                ax + anx * deslocamento * lado - anx * largura_guia * 0.0,
+                ax + anx * deslocamento * lado,
                 az + anz * deslocamento * lado,
             );
             let b0 = (
@@ -1487,14 +1766,41 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
                 bx + bnx * (deslocamento + largura_guia) * lado,
                 bz + bnz * (deslocamento + largura_guia) * lado,
             );
-            if lado > 0.0 {
-                m.guia_a
-                    .chao([a0.0, a0.1], [b0.0, b0.1], [b1.0, b1.1], [a1.0, a1.1], 0.012);
+            let malha = if lado > 0.0 {
+                &mut m.guia_a
             } else {
-                m.guia_b
-                    .chao([a1.0, a1.1], [b1.0, b1.1], [b0.0, b0.1], [a0.0, a0.1], 0.012);
+                &mut m.guia_b
+            };
+            malha.chao3(
+                [a0.0, a0.1],
+                [b0.0, b0.1],
+                [b1.0, b1.1],
+                [a1.0, a1.1],
+                ya + 0.012,
+                yb + 0.012,
+                yb + 0.012,
+                ya + 0.012,
+                tile,
+            );
+        }
+
+        // Mureta: uma caixa a cada duas amostras, do lado de fora. Concreto
+        // texturizado — é a superfície que o jogador vê de perto a corrida
+        // inteira, e a que mais ganha com tijolo em vez de cor chapada.
+        if i % 2 == 0 {
+            let dist = a.meia_largura + 2.4;
+            for lado in [-1.0f32, 1.0] {
+                let (px, pz) = (ax + anx * dist * lado, az + anz * dist * lado);
+                let (dx, dz) = girar_direcao(rotacao, a.direcao);
+                let giro = dx.atan2(dz);
+                let comprimento = (b.s - a.s).max(1.0) * 2.2;
+                m.concreto_t.caixa_texturizada(
+                    [px, ya + 0.45, pz],
+                    [0.45, 0.9, comprimento],
+                    giro,
+                    tile,
+                );
             }
-            let _ = faixa_guia;
         }
 
         // Refletor no topo da mureta, a cada quatro amostras. É o que dá a
@@ -1504,23 +1810,8 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             let dist = a.meia_largura + 2.4;
             for lado in [-1.0f32, 1.0] {
                 let (px, pz) = (ax + anx * dist * lado, az + anz * dist * lado);
-                m.faixas.caixa_girada([px, 1.05, pz], [0.34, 0.22, 0.34], 0.0);
-            }
-        }
-
-        // Mureta: uma caixa a cada duas amostras, do lado de fora.
-        if i % 2 == 0 {
-            let dist = a.meia_largura + 2.4;
-            for lado in [-1.0f32, 1.0] {
-                let (px, pz) = (
-                    ax + anx * dist * lado,
-                    az + anz * dist * lado,
-                );
-                let (dx, dz) = girar_direcao(rotacao, a.direcao);
-                let giro = dx.atan2(dz);
-                let comprimento = (b.s - a.s).max(1.0) * 2.2;
-                m.muros
-                    .caixa_girada([px, 0.45, pz], [0.45, 0.9, comprimento], giro);
+                m.faixas
+                    .caixa_girada([px, ya + 1.05, pz], [0.34, 0.22, 0.34], 0.0);
             }
         }
 
@@ -1539,12 +1830,12 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
                 } else {
                     &mut m.neon_b
                 };
-                malha.caixa_girada([px, 0.42, pz], [0.26, 0.72, comprimento], giro);
+                malha.caixa_girada([px, ya + 0.42, pz], [0.26, 0.72, comprimento], giro);
 
                 // Reflexo: um quad deitado, mais largo, do lado de dentro. Sem
                 // render-to-texture, o "asfalto molhado" é este brilho.
                 m.reflexos.caixa_girada(
-                    [px - anx * 1.9 * lado, 0.012, pz - anz * 1.9 * lado],
+                    [px - anx * 1.9 * lado, ya + 0.012, pz - anz * 1.9 * lado],
                     [2.6, 0.012, comprimento * 0.95],
                     giro,
                 );
@@ -1553,23 +1844,206 @@ fn construir_pista(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
     }
 }
 
-
 // ────────────────────────────────────────────────────────────
-// CENÁRIO NOVO: arcos, passarelas, outdoors, refletores
+// CENÁRIO: serra (a descida)
 // ────────────────────────────────────────────────────────────
 //
-// Tudo aqui entra nas malhas que **já existem**: um arco é uma caixa em `muros`
-// e uma tira em `neon`. A alternativa — uma malha por tipo de objeto — custaria
-// uma chamada de desenho por tipo, e medido no aparelho cada chamada custa
-// ~0,13 ms no quadro de 16,7 ms. O cenário cresce em geometria e não em
-// chamadas, que é a moeda certa num aparelho limitado por pixel.
+// O que muda em relação à avenida não é a pista, é o que existe em volta:
+//
+// * **paredão de pedra** do lado de dentro da curva, em vez de prédio;
+// * **mata** dos dois lados, em vez de janela iluminada;
+// * **guarda-corpo** do lado de fora, porque numa descida o lado de fora é um
+//   precipício e a mureta de concreto leria como avenida;
+// * **a cidade lá embaixo**, longe e baixa, em vez de um skyline alto ao redor.
+//
+// Tudo isso entra nas malhas texturizadas que já existem — pedra, mata,
+// guarda-corpo — então o cenário novo custa **zero** chamada de desenho.
 
-/// Arcos de neon sobre a pista, a cada ~26 m.
+fn construir_serra(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let tile = malha::Construtor::METROS_POR_TILE;
+
+    for i in 0..amostras.len().saturating_sub(1) {
+        let a = amostras[i];
+        let b = amostras[i + 1];
+        let (ax, az) = girar_ponto(rotacao, a.centro);
+        let (bx, bz) = girar_ponto(rotacao, b.centro);
+        let (anx, anz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        let (ya, yb) = (a.altura, b.altura);
+
+        // Dentro do túnel não há serra: a parede de pedra a 5 m do asfalto
+        // atravessava o concreto e o quadro virava uma parede laranja sem
+        // pista. O túnel tem geometria própria.
+        if a.tunel || b.tunel {
+            continue;
+        }
+
+        // ── guarda-corpo do lado de fora ─────────────────────
+        // Chapa de 0,9 m com montante a cada duas amostras. Fica logo além da
+        // guia, onde na avenida há mureta.
+        if i % 2 == 0 {
+            let dist = a.meia_largura + 0.9;
+            for lado in [-1.0f32, 1.0] {
+                let (px, pz) = (ax + anx * dist * lado, az + anz * dist * lado);
+                m.guarda_t.caixa_texturizada(
+                    [px, ya + 0.55, pz],
+                    [0.12, 0.55, (b.s - a.s).max(1.0) * 2.1],
+                    giro,
+                    tile,
+                );
+            }
+            // Montante: só do lado de fora, para o guarda-corpo não virar uma
+            // cerca dos dois lados (a serra é de um lado só).
+            let (px, pz) = (ax + anx * dist * -1.0, az + anz * dist * -1.0);
+            m.guarda_t.caixa_texturizada(
+                [px, ya + 0.30, pz],
+                [0.16, 0.60, 0.16],
+                0.0,
+                tile,
+            );
+        }
+
+        // ── paredão de pedra do lado de dentro ───────────────
+        // Tira que acompanha o traçado, não caixa: a caixa de 19 m cortava a
+        // curva por dentro (ver `parede3`). O lado vem da curvatura porque
+        // numa serra a encosta fica sempre do lado de dentro da curva.
+        let curvatura = curvatura_local(pista, a.s);
+        let lado = if curvatura >= 0.0 { -1.0 } else { 1.0 };
+        let dist = a.meia_largura + 6.0;
+        let (pax, paz) = (ax + anx * dist * lado, az + anz * dist * lado);
+        let (pbx, pbz) = (bx + anx * dist * lado, bz + anz * dist * lado);
+        let altura = 5.0 + ((a.s * 0.03).sin() * 1.6).abs();
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        m.pedra_t.parede3(
+            [pax, paz],
+            [pbx, pbz],
+            ya - 0.4,
+            yb - 0.4,
+            altura,
+            [nx * lado, nz * lado],
+            tile * 2.0,
+        );
+
+        // ── mata dos dois lados ──────────────────────────────
+        // Copas em duas fileiras, mais altas do lado de fora (a encosta desce).
+        if i % 3 == 0 {
+            let semente = (a.s * 0.31).sin() * 43758.545;
+            let r = semente - semente.floor();
+            for (fileira, lado_mata) in [(0usize, -1.0f32), (1, 1.0)] {
+                let d = a.meia_largura + 11.0 + fileira as f32 * 8.0 + r * 5.0;
+                let (px, pz) = (ax + anx * d * lado_mata, az + anz * d * lado_mata);
+                let altura_copa = 5.0 + r * 5.0 + fileira as f32 * 2.5;
+                m.mata_t.caixa_texturizada(
+                    [px, ya - 2.5 + altura_copa * 0.5, pz],
+                    [6.5, altura_copa, 6.5],
+                    0.0,
+                    tile * 1.6,
+                );
+            }
+        }
+    }
+}
+
+/// Curvatura local em `s`, positiva para a direita. Usada para decidir de que
+/// lado fica o paredão: numa curva para a direita a serra está à esquerda.
+fn curvatura_local(pista: &Pista, s: f32) -> f32 {
+    let passo = 12.0;
+    let a = pista.direcao_em(s);
+    let b = pista.direcao_em(s + passo);
+    let cruz = a.x * b.z - a.z * b.x;
+    let escalar = a.ponto(b).clamp(-1.0, 1.0);
+    cruz.signum() * escalar.acos()
+}
+
+/// Morros do outro lado do vale.
 ///
-/// É o que mais muda a leitura da avenida: sem eles a pista é uma fita entre
-/// prédios; com eles, o jogador passa **por baixo** de alguma coisa a cada
-/// segundo, e a velocidade ganha referência. Fica de fora do túnel, onde
-/// brigaria com o teto.
+/// Sem eles o horizonte da serra é uma linha reta entre o asfalto e o céu, e a
+/// descida perde a profundidade — o quadro fica com um terço de céu vazio em
+/// cima e nada que diga "há um vale aqui". São caixas largas e baixas, muito
+/// longe, com topo irregular; a 300 m, o que se vê é a silhueta.
+fn construir_morros(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = 31;
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let semente = (indice as f32 * 3.117).sin() * 51247.19;
+        let r = semente - semente.floor();
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        for lado in [-1.0f32, 1.0] {
+            let distancia = 210.0 + r * 170.0;
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+            if pista.folga_em(na_pista) < 60.0 {
+                continue;
+            }
+            // Base bem abaixo e topo variável: o que importa é a silhueta
+            // contra o céu, e ela tem de ser irregular para não virar um muro.
+            let altura = 55.0 + r * 70.0;
+            let largura = 90.0 + r * 110.0;
+            m.longe.caixa_girada(
+                [bx, -50.0 + altura * 0.5, bz],
+                [largura, altura, largura * 0.8],
+                giro,
+            );
+        }
+    }
+}
+
+/// A cidade **lá embaixo**: luzes baixas e distantes, sem prédio alto.
+///
+/// É o que dá a altura da serra. Um skyline alto ao redor diria "avenida"; pontos
+/// de luz abaixo do nível da pista dizem "estou no morro".
+fn construir_cidade_ao_longe(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let amostras = pista.amostras();
+    let passo = 17;
+    for (indice, a) in amostras.iter().enumerate().step_by(passo) {
+        let semente = (indice as f32 * 5.733).sin() * 31847.219;
+        let r = semente - semente.floor();
+        let (px, pz) = girar_ponto(rotacao, a.centro);
+        let (nx, nz) = girar_ponto(rotacao, a.normal);
+        let (dx, dz) = girar_direcao(rotacao, a.direcao);
+        let giro = dx.atan2(dz);
+        for lado in [-1.0f32, 1.0] {
+            if r > 0.55 && lado > 0.0 {
+                // Só um lado em metade das amostras: duas fileiras de torre
+                // fechariam o horizonte e a serra perderia a vista.
+                continue;
+            }
+            let distancia = a.meia_largura + 120.0 + r * 190.0;
+            let (bx, bz) = (px + nx * distancia * lado, pz + nz * distancia * lado);
+            let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
+            if pista.folga_em(na_pista) < 30.0 {
+                continue;
+            }
+            // **Abaixo** da pista: a cidade no fundo do vale. `-40` de base é o
+            // que faz a diferença de altura existir na tela.
+            let base = -42.0 + a.altura * 0.12;
+            let altura = 12.0 + r * 26.0;
+            let largura = 9.0 + r * 14.0;
+            m.longe.caixa_girada(
+                [bx, base + altura * 0.5, bz],
+                [largura, altura, largura * 1.1],
+                giro,
+            );
+            // Janelas: uma faixa fina e acesa em cada torre. A 150 m isso é o
+            // suficiente para ler como cidade, e custa uma caixa.
+            m.janelas.caixa_girada(
+                [bx, base + altura * 0.72, bz],
+                [largura * 1.02, 0.7, largura * 1.12],
+                giro,
+            );
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// CENÁRIO: avenida (o circuito original)
+// ────────────────────────────────────────────────────────────
+
 fn construir_arcos(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
     let amostras = pista.amostras();
     let mut proximo = 24.0f32;
@@ -1588,15 +2062,16 @@ fn construir_arcos(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         let (dx, dz) = girar_direcao(rotacao, a.direcao);
         let giro = dx.atan2(dz);
         let vao = (a.meia_largura + 1.6) * 2.0;
+        let y = a.altura;
 
         // Duas colunas e a viga. As colunas ficam **fora** da guia, para não
         // virarem obstáculo visual no meio da pista.
         for lado in [-1.0f32, 1.0] {
             let d = a.meia_largura + 1.6;
             let (cx, cz) = (px + nx * d * lado, pz + nz * d * lado);
-            m.muros.caixa_girada([cx, 3.6, cz], [0.34, 7.2, 0.34], giro);
+            m.muros.caixa_girada([cx, y + 3.6, cz], [0.34, 7.2, 0.34], giro);
         }
-        m.muros.caixa_girada([px, 7.15, pz], [vao, 0.42, 0.46], giro);
+        m.muros.caixa_girada([px, y + 7.15, pz], [vao, 0.42, 0.46], giro);
 
         // Tira de neon embaixo da viga, alternando ciano e magenta. Duas cores
         // alternadas custam zero: as duas malhas já existem.
@@ -1605,9 +2080,10 @@ fn construir_arcos(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         } else {
             &mut m.neon_b
         };
-        malha.caixa_girada([px, 6.86, pz], [vao * 0.94, 0.13, 0.16], giro);
+        malha.caixa_girada([px, y + 6.86, pz], [vao * 0.94, 0.13, 0.16], giro);
         // E o lampião da viga, que ilumina a pista de verdade.
-        m.luzes.caixa_girada([px, 6.62, pz], [vao * 0.55, 0.10, 0.10], giro);
+        m.luzes
+            .caixa_girada([px, y + 6.62, pz], [vao * 0.55, 0.10, 0.10], giro);
         indice_arco += 1;
     }
 }
@@ -1629,26 +2105,28 @@ fn construir_passarelas(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         let giro = dx.atan2(dz);
         let meia = pista.meia_largura_em(s);
         let vao = (meia + 5.0) * 2.0;
+        let y = pista.altura_em(s);
 
         // Laje e as duas torres de apoio.
-        m.muros.caixa_girada([px, 8.6, pz], [vao, 0.9, 4.2], giro);
+        m.concreto_t
+            .caixa_texturizada([px, y + 8.6, pz], [vao, 0.9, 4.2], giro, 3.0);
         for lado in [-1.0f32, 1.0] {
             let d = meia + 5.0;
             let (cx, cz) = (px + nx * d * lado, pz + nz * d * lado);
             m.predios_c
-                .caixa_girada([cx, 4.3, cz], [1.1, 8.6, 1.1], giro);
+                .caixa_girada([cx, y + 4.3, cz], [1.1, 8.6, 1.1], giro);
         }
         // Faixa de neon na face de baixo — é o que dá o "teto" luminoso.
         m.telhados
-            .caixa_girada([px, 8.1, pz], [vao * 0.96, 0.16, 3.9], giro);
+            .caixa_girada([px, y + 8.1, pz], [vao * 0.96, 0.16, 3.9], giro);
     }
 }
 
 /// Outdoors luminosos na beira da pista.
 ///
-/// Placa alta com moldura de neon: sem texto (não há como desenhar letra numa
-/// caixa), mas a proporção vertical e a moldura leem como publicidade de
-/// avenida, que é o que a cena pede.
+/// Placa alta com moldura de neon. A face é a **textura de painel** (faixas
+/// diagonais com alfa), então o outdoor tem conteúdo em vez de ser um retângulo
+/// chapado — e continua sem texto, que não há como desenhar numa caixa.
 fn construir_outdoors(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
     let amostras = pista.amostras();
     let mut proximo = 62.0f32;
@@ -1674,15 +2152,20 @@ fn construir_outdoors(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         if pista.folga_em(a.centro.mais(a.normal.vezes(d * lado))) < 8.0 {
             continue;
         }
+        let y = a.altura;
 
-        // Estrutura, face iluminada e moldura.
-        m.predios_c.caixa_girada([bx, 8.0, bz], [8.0, 5.2, 0.5], giro);
-        m.janelas
-            .caixa_girada([bx, 8.1, bz - 0.3 * lado], [7.0, 4.2, 0.12], giro);
-        m.neon_b.caixa_girada([bx, 10.7, bz], [8.2, 0.20, 0.14], giro);
-        m.neon_b.caixa_girada([bx, 5.3, bz], [8.2, 0.20, 0.14], giro);
+        // Estrutura, face texturizada e moldura.
+        m.predios_c.caixa_girada([bx, y + 8.0, bz], [8.0, 5.2, 0.5], giro);
+        m.painel_t.caixa_texturizada(
+            [bx, y + 8.1, bz - 0.3 * lado],
+            [7.0, 4.2, 0.12],
+            giro,
+            2.2,
+        );
+        m.neon_b.caixa_girada([bx, y + 10.7, bz], [8.2, 0.20, 0.14], giro);
+        m.neon_b.caixa_girada([bx, y + 5.3, bz], [8.2, 0.20, 0.14], giro);
         // Mastro, para a placa não flutuar.
-        m.postes.caixa_girada([bx, 4.0, bz], [0.26, 8.0, 0.26], giro);
+        m.postes.caixa_girada([bx, y + 4.0, bz], [0.26, 8.0, 0.26], giro);
     }
 }
 
@@ -1695,6 +2178,7 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         let (nx, nz) = girar_ponto(rotacao, a.normal);
         let (dx, dz) = girar_direcao(rotacao, a.direcao);
         let giro = dx.atan2(dz);
+        let y = a.altura;
 
         // Pseudoaleatório determinístico por índice: a cidade tem de ser a mesma
         // em todo quadro e em todo boot, senão a referência de comparação muda.
@@ -1710,12 +2194,8 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             // Prédio em cima de outro trecho da pista é o defeito que a cidade
             // aleatória produz sozinha num laço fechado: os do fim da volta
             // nasciam sobre a reta de largada e a câmera amanhecia dentro de um
-            // deles. A folga é medida **no espaço da pista** (o deslocamento é
-            // calculado antes de girar), contra a volta inteira, já contando o
-            // raio da caixa.
-            let na_pista = a
-                .centro
-                .mais(a.normal.vezes(distancia * lado));
+            // deles. A folga é medida **no espaço da pista**.
+            let na_pista = a.centro.mais(a.normal.vezes(distancia * lado));
             if pista.folga_em(na_pista) < largura * 0.75 + 4.0 {
                 continue;
             }
@@ -1727,7 +2207,7 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
                 _ => &mut m.predios_c,
             };
             malha.caixa_girada(
-                [bx, altura * 0.5, bz],
+                [bx, y + altura * 0.5, bz],
                 [largura, altura, largura * (0.8 + r * 0.5)],
                 giro,
             );
@@ -1735,7 +2215,7 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             // Faixa de neon no topo do prédio: de longe é o que desenha a
             // silhueta da cidade, e custa uma caixa por prédio.
             m.telhados.caixa_girada(
-                [bx, altura + 0.35, bz],
+                [bx, y + altura + 0.35, bz],
                 [largura * 0.92, 0.30, largura * 0.75],
                 giro,
             );
@@ -1744,10 +2224,13 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             // que faz a cidade parecer habitada à noite.
             let altura_janela = altura * 0.5;
             for k in 0..3 {
-                let y = altura * (0.22 + k as f32 * 0.26);
-                let frente = (bx + nx * (largura * 0.52) * -lado, bz + nz * (largura * 0.52) * -lado);
+                let yj = y + altura * (0.22 + k as f32 * 0.26);
+                let frente = (
+                    bx + nx * (largura * 0.52) * -lado,
+                    bz + nz * (largura * 0.52) * -lado,
+                );
                 m.janelas.caixa_girada(
-                    [frente.0, y, frente.1],
+                    [frente.0, yj, frente.1],
                     [largura * 0.62, 0.5 + altura_janela * 0.02, 0.35],
                     giro,
                 );
@@ -1757,13 +2240,16 @@ fn construir_cidade(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             if indice % (passo * 2) == 0 {
                 let dp = a.meia_largura + 3.2;
                 let (lx, lz) = (px + nx * dp * lado, pz + nz * dp * lado);
-                m.postes.caixa_girada([lx, 3.4, lz], [0.22, 6.8, 0.22], 0.0);
-                m.luzes.caixa_girada([lx, 6.9, lz], [0.9, 0.28, 0.9], 0.0);
+                m.postes.caixa_girada([lx, y + 3.4, lz], [0.22, 6.8, 0.22], 0.0);
+                m.luzes.caixa_girada([lx, y + 6.9, lz], [0.9, 0.28, 0.9], 0.0);
                 // Poça de luz no asfalto: é o que faz o poste existir à noite.
                 // Sem ela, o lampião flutua e a rua continua preta embaixo dele.
-                let (qx, qz) = (px + nx * (a.meia_largura - 2.6) * lado, pz + nz * (a.meia_largura - 2.6) * lado);
+                let (qx, qz) = (
+                    px + nx * (a.meia_largura - 2.6) * lado,
+                    pz + nz * (a.meia_largura - 2.6) * lado,
+                );
                 m.poco_luz
-                    .caixa_girada([qx, 0.015, qz], [6.5, 0.015, 9.0], 0.0);
+                    .caixa_girada([qx, y + 0.015, qz], [6.5, 0.015, 9.0], 0.0);
             }
         }
     }
@@ -1795,13 +2281,10 @@ fn construir_longe(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             }
             m.longe
                 .caixa_girada([bx, altura * 0.5, bz], [largura, altura, largura * 1.2], giro);
-            // Duas faixas de neon na torre distante. O skyline era um bloco
-            // escuro com topo colorido; com faixas em duas alturas ele passa a
-            // ter **andares**, e a 100 m da pista isso é toda a diferença entre
-            // "parede" e "cidade".
-            let y = altura * 0.62;
+            // Faixa de neon na torre distante: dá andares ao bloco escuro, e a
+            // 100 m da pista isso é toda a diferença entre parede e cidade.
             m.telhados.caixa_girada(
-                [bx, y, bz],
+                [bx, altura * 0.62, bz],
                 [largura * 0.72, 0.34, largura * 0.9],
                 giro,
             );
@@ -1818,23 +2301,30 @@ fn construir_tunel(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
         }
         let b = amostras[i + 1];
         let (ax, az) = girar_ponto(rotacao, a.centro);
-        let (bx, bz) = girar_ponto(rotacao, b.centro);
         let (anx, anz) = girar_ponto(rotacao, a.normal);
-        let (bnx, bnz) = girar_ponto(rotacao, b.normal);
         let (dx, dz) = girar_direcao(rotacao, a.direcao);
         let giro = dx.atan2(dz);
         let comprimento = (b.s - a.s).max(1.2) * 1.15;
+        let y = a.altura;
 
-        // Parede dos dois lados e teto.
+        // Parede dos dois lados e teto, em concreto texturizado.
         for lado in [-1.0f32, 1.0] {
             let d = a.meia_largura + 1.4;
             let (px, pz) = (ax + anx * d * lado, az + anz * d * lado);
-            m.tunel
-                .caixa_girada([px, 3.0, pz], [0.8, 6.0, comprimento], giro);
+            m.concreto_t.caixa_texturizada(
+                [px, y + 3.0, pz],
+                [0.8, 6.0, comprimento],
+                giro,
+                3.0,
+            );
         }
         let teto = 6.2;
-        m.tunel
-            .caixa_girada([ax, teto, az], [a.meia_largura * 2.0 + 2.8, 0.5, comprimento], giro);
+        m.concreto_t.caixa_texturizada(
+            [ax, y + teto, az],
+            [a.meia_largura * 2.0 + 2.8, 0.5, comprimento],
+            giro,
+            3.0,
+        );
 
         // Lâmpadas no teto, uma a cada duas amostras, alternando entre **duas**
         // malhas. Duas malhas de cor independente e pulsos em oposição de fase dão
@@ -1847,57 +2337,80 @@ fn construir_tunel(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
             } else {
                 &mut m.tunel_luzes_b
             };
-            alvo.caixa_girada([ax, teto - 0.35, az], [a.meia_largura * 0.9, 0.16, 1.1], giro);
+            alvo.caixa_girada(
+                [ax, y + teto - 0.35, az],
+                [a.meia_largura * 0.9, 0.16, 1.1],
+                giro,
+            );
         }
         // Faixa de luz nas paredes: o túnel precisa ser visível de dentro.
         if i % 3 == 0 {
             for lado in [-1.0f32, 1.0] {
                 let d = a.meia_largura + 1.0;
                 let (px, pz) = (ax + anx * d * lado, az + anz * d * lado);
-                m.tunel_luzes
-                    .caixa_girada([px, 2.2, pz], [0.12, 0.22, comprimento], giro);
+                m.tunel_luzes.caixa_girada(
+                    [px, y + 2.2, pz],
+                    [0.12, 0.22, comprimento],
+                    giro,
+                );
             }
         }
-        let _ = (bx, bz, bnx, bnz);
     }
 }
 
 fn construir_cones(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
+    let tile = malha::Construtor::METROS_POR_TILE;
     for obstaculo in pista.obstaculos() {
         let p = pista.ponto_lateral(obstaculo.s, obstaculo.lateral);
         let (x, z) = girar_ponto(rotacao, p);
-        m.cones
-            .caixa([x, obstaculo.raio * 0.6, z], [obstaculo.raio * 1.2, obstaculo.raio * 1.2, obstaculo.raio * 1.2]);
+        let y = pista.altura_em(obstaculo.s);
+        let _ = tile;
+        m.cones.caixa(
+            [x, y + obstaculo.raio * 0.6, z],
+            [
+                obstaculo.raio * 1.2,
+                obstaculo.raio * 1.2,
+                obstaculo.raio * 1.2,
+            ],
+        );
     }
 }
 
 fn construir_largada(m: &mut Mundo, pista: &Pista, rotacao: Rotacao) {
-    // Quadriculado de 2 fileiras na linha de largada. É a referência visual de
-    // "a volta começou e vai terminar aqui".
+    // Quadriculado de 2 fileiras na linha de largada, em **textura de xadrez**:
+    // é o único lugar do jogo onde a textura substitui 20 caixas.
     let meia = pista.meia_largura_em(0.0);
-    let colunas = 10;
-    let largura_casa = (meia * 2.0) / colunas as f32;
-    for linha in 0..2 {
-        for coluna in 0..colunas {
-            let s = linha as f32 * 1.6;
-            let lateral = -meia + (coluna as f32 + 0.5) * largura_casa;
-            let centro = pista.ponto_lateral(s, lateral);
-            let (x, z) = girar_ponto(rotacao, centro);
-            let (dx, dz) = girar_direcao(rotacao, pista.direcao_em(s));
-            let giro = dx.atan2(dz);
-            let alvo = if (linha + coluna) % 2 == 0 {
-                &mut m.largada_a
-            } else {
-                &mut m.largada_b
-            };
-            alvo.caixa_girada([x, 0.02, z], [largura_casa * 0.96, 0.02, 1.5], giro);
-        }
-    }
+    let y = pista.altura_em(0.0);
+    let (dx, dz) = girar_direcao(rotacao, pista.direcao_em(0.0));
+    let giro = dx.atan2(dz);
+    // A posição vem do **ponto da pista**, não da origem do mundo: a largada da
+    // serra não fica em (0,0) e a primeira versão desenhava o xadrez no meio do
+    // nada.
+    let centro = pista.ponto_lateral(1.6, 0.0);
+    let (cx, cz) = girar_ponto(rotacao, centro);
+    m.xadrez_t
+        .caixa_texturizada([cx, y + 0.02, cz], [meia * 2.0, 0.02, 3.2], giro, 1.6);
 }
 
 // ════════════════════════════════════════════════════════════
 // MATRIZES DE HUD
 // ════════════════════════════════════════════════════════════
+
+/// Nome da parte que o diagnóstico `GIOCHI_SEM` usa para um material texturizado.
+///
+/// `--so` aceita o nome da malha ("asfalto_t"); `GIOCHI_SEM` usa o nome do
+/// **material** ("asfalto"), porque é assim que se pensa ao medir: "sem asfalto".
+fn parte_de_textura(nome: &str) -> &str {
+    match nome {
+        "asfalto_t" => "asfalto",
+        "concreto_t" => "concreto",
+        "pedra_t" => "pedra",
+        "mata_t" => "mata",
+        "guarda_t" => "guarda",
+        "painel_t" => "painel",
+        outro => outro,
+    }
+}
 
 /// Multiplica o RGB por um fator, preservando o alfa.
 fn multiplicar(cor: Color3D, k: f32) -> Color3D {

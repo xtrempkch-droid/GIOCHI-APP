@@ -23,6 +23,19 @@ pub const VEL_NITRO_MAX: f32 = 82.0;
 pub const ACEL: f32 = 19.0;
 /// Desaceleração do freio, em m/s².
 pub const FREIO: f32 = 42.0;
+
+/// Aceleração da gravidade usada na inclinação, em m/s².
+///
+/// **Não é 9,81** — é 9,81 × 3,5, e o fator é de arcade com motivo medido: numa
+/// rampa de 11 % a gravidade real dá **1,08 m/s²**, que é menos que o atrito de
+/// rolagem do próprio modelo. O carro descia a serra exatamente como desce a
+/// avenida, e o mapa novo era um circuito plano com o asfalto torto.
+///
+/// Com o fator, a descida da Boavista empurra ~3,7 m/s² e a subida segura os
+/// mesmos 3,7 — números que se sentem no controle e que ainda deixam o carro
+/// dirigível (a 11 % de rampa, um carro de verdade sai de 0 a 100 km/h em ~8 s
+/// só pela gravidade).
+pub const GRAVIDADE: f32 = 9.81 * 3.5;
 /// Rotação máxima do volante, em rad/s.
 pub const GIRO_MAX: f32 = 1.75;
 /// Aceleração extra do nitro, em m/s².
@@ -111,6 +124,24 @@ pub struct Carro {
     pub tempo_drift: f32,
     /// Quanto o carro está fora do asfalto, em metros.
     pub fora: f32,
+    /// Altura do carro sobre o nível do mar, em metros.
+    ///
+    /// Derivada da pista a cada passo (o carro está **sobre** o asfalto, não
+    /// voando): é o que faz a câmera subir na serra e a cidade ficar lá embaixo.
+    pub altura: f32,
+    /// `true` no passo em que o carro tocou a mureta, **mesmo de raspão**.
+    ///
+    /// Separado de `Evento::Bateu` de propósito: raspar é contínuo e não deve
+    /// tocar o som de batida nem zerar o combo do drift, mas precisa soltar
+    /// faísca. Antes, ou o toque era batida (e punha o carro a 1,3 m/s) ou não
+    /// deixava sinal nenhum.
+    pub raspando: bool,
+    /// Força do último impacto, 0 (raspão) a 1 (de frente a 60 m/s).
+    ///
+    /// O desenho lê este número para decidir quantos fragmentos saem. Sem ele a
+    /// colisão só saberia "bateu", e um encostar de 3 m/s jogaria a mesma
+    /// chuva de destroços que uma batida a 200 km/h.
+    pub impacto: f32,
     /// Índice da amostra da pista mais próxima (dica para a busca do próximo
     /// quadro — sem ela a localização seria uma varredura da volta inteira).
     pub indice_pista: Option<usize>,
@@ -131,6 +162,9 @@ impl Carro {
             derrapando: false,
             tempo_drift: 0.0,
             fora: 0.0,
+            altura: 0.0,
+            raspando: false,
+            impacto: 0.0,
             indice_pista: None,
             s: 0.0,
         }
@@ -205,6 +239,7 @@ impl Carro {
 
         let nitro_ativo = self.nitro_ativo(entrada);
         self.nitro_usando = nitro_ativo;
+        self.raspando = false;
         let vel = self.velocidade;
 
         // ── motor, freio e arrasto ────────────────────────────────
@@ -224,10 +259,17 @@ impl Carro {
 
         // Solto, o carro **desacelera**: freio-motor + arrasto. Sem isso ele
         // andaria de graça até o fim da corrida.
+        // A parcela **constante** é a resistência de rolagem + freio-motor. Ela
+        // tem de ficar abaixo da gravidade numa descida de 11 % (3,7 m/s² com o
+        // fator de arcade) — com os 4,5 da primeira versão o carro ficava
+        // **parado** numa ladeira, e a serra virava um circuito plano.
+        //
+        // Em alta velocidade quem manda é o termo quadrático, então soltar o
+        // acelerador a 150 km/h continua freando forte.
         let arrasto = if entrada.acelerar > 0.05 {
             0.55
         } else {
-            4.5 + 0.07 * vel.abs() + 0.004 * vel * vel
+            1.6 + 0.07 * vel.abs() + 0.004 * vel * vel
         };
 
         // Fora do asfalto o atrito sobe muito: é o que faz a grama punir sem
@@ -240,7 +282,20 @@ impl Carro {
             0.0
         };
 
-        let mut forca = motor + extra_nitro - arrasto - atrito_extra;
+        // ── gravidade na inclinação ──────────────────────────────
+        //
+        // É o que faz uma descida ser uma descida. `-g·sen(θ)`, e a inclinação
+        // vem da pista em metros por metro — para ângulos pequenos,
+        // `sen(θ) ≈ inclinação`, e o erro a 20 % de rampa é 1,3 %.
+        //
+        // O sinal segue o **sentido do movimento**: subindo de ré, a gravidade
+        // empurra para frente; descendo de ré, para trás. Sem isso o carro
+        // ganhava velocidade infinita ao descer em marcha à ré.
+        let inclinacao = pista.inclinacao_em(self.s).clamp(-0.42, 0.42);
+        let gravidade =
+            -GRAVIDADE * inclinacao * if self.velocidade >= 0.0 { 1.0 } else { -1.0 };
+
+        let mut forca = motor + extra_nitro - arrasto - atrito_extra + gravidade;
 
         // Freio e ré são a mesma tecla com significados diferentes, e **não se
         // somam**: somados, o carro parava e entrava em ré no mesmo instante a
@@ -300,6 +355,7 @@ impl Carro {
         self.indice_pista = Some(local.indice);
         self.s = local.s;
         self.fora = local.fora_por();
+        self.altura = pista.altura_em(local.s);
 
         if let Some(evento_novo) = self.resolver_limites(pista, &local, dt) {
             evento = evento_novo;
@@ -341,10 +397,15 @@ impl Carro {
             }
         }
 
+        // O impacto é um pulso: sem decaimento, o primeiro toque deixaria o
+        // carro "em colisão" pelo resto da corrida e cada quadro soltaria
+        // destroços.
+        self.impacto = (self.impacto - dt * 6.0).max(0.0);
+
         evento
     }
 
-    /// Empurra o carro de volta para o asfalto quando ele passa da borda.
+    /// Empurra o carro de volta para o asfalto quando ele passa pela borda.
     fn resolver_limites(
         &mut self,
         pista: &Pista,
@@ -368,6 +429,12 @@ impl Carro {
         // piloto ficou 40 s parado na linha de largada depois de sair largo da
         // curva fechada, e o mesmo aconteceria com o jogador.
         let de_frente = self.direcao().ponto(normal).abs();
+        // O impacto é o que o jogador **fez**: ângulo contra a parede vezes
+        // velocidade. Raspar (de_frente ~0) dá zero; bater de frente a 40 m/s
+        // dá 1. É o número que separa "faísca" de "destroço".
+        let impacto = (de_frente * (self.velocidade.abs() / 26.0)).clamp(0.0, 1.0);
+        self.impacto = self.impacto.max(impacto);
+        self.raspando = true;
         let perda = (0.05 + 0.90 * de_frente).clamp(0.0, 0.98);
         self.velocidade *= 1.0 - perda * dt.min(1.0) * 12.0;
         self.derrapagem *= -0.25;
@@ -414,6 +481,12 @@ impl Carro {
             self.pos = centro.mais(empurrao);
             self.velocidade *= 0.62;
             self.derrapagem *= 0.5;
+            self.raspando = true;
+            // Cone é objeto pequeno e duro: dói mais que a mureta na mesma
+            // velocidade, e é o que justifica a chuva de destroços.
+            self.impacto = self
+                .impacto
+                .max((self.velocidade.abs() / 20.0).clamp(0.2, 1.0));
             return Some(Evento::Bateu);
         }
         None
@@ -481,13 +554,14 @@ mod testes {
     #[test]
     fn o_freio_para_o_carro() {
         let (mut c, pista) = carro_na_reta();
-        simular(&mut c, &pista, Entrada::acelerando(), 6.0);
-        assert!(c.velocidade > 30.0, "não acelerou: {:.1}", c.velocidade);
+        // Velocidade **definida**, não alcançada: acelerar 6 s chegava a 58 m/s
+        // (e não aos ~40 que o comentário antigo supunha), então o teste media
+        // quanto tempo o carro levou para acelerar, não quanto o freio freia.
+        c.velocidade = 40.0;
         let freando = Entrada {
             frear: 1.0,
             ..Entrada::PARADA
         };
-        // Tempo de parada a 42 m/s² a partir de ~40 m/s: ~1 s.
         simular(&mut c, &pista, freando, 1.0);
         assert!(c.velocidade.abs() < 6.0, "sobrou {:.1} m/s depois de 1 s freando", c.velocidade);
     }
@@ -705,5 +779,152 @@ mod testes {
             "drift não recarregou: {baixo:.1} → {:.1}",
             c.nitro
         );
+    }
+    // ── relevo, raspão e impacto ────────────────────────────
+
+    #[test]
+    fn a_descida_acelera_o_carro_sem_acelerador() {
+        // O que faz uma descida ser uma descida. Sem gravidade na inclinação, a
+        // serra é um circuito plano com o asfalto torto — e o jogador não sente
+        // diferença nenhuma entre os dois mapas.
+        // Reta de 1000 m com 12 % de descida — a inclinação média da serra.
+        // Numa pista com curvas o carro sai da pista em três segundos e o teste
+        // passa a medir colisão, não gravidade.
+        // 11 % de rampa: 56 m em 547 m, que é a inclinação média da serra.
+        let pista = crate::pista::pista_de_teste_com_relevo(&[
+            (0.00, 80.0),
+            (0.25, 24.0),
+            (0.50, 0.0),
+            (0.75, 24.0),
+            (1.00, 80.0),
+        ]);
+        let s_inicio = pista.comprimento() * 0.10;
+        assert!(
+            pista.inclinacao_em(s_inicio) < -0.02,
+            "o trecho em {s_inicio:.0} m não desce (inclinação {:.3})",
+            pista.inclinacao_em(s_inicio)
+        );
+
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, s_inicio, 0.0);
+        // Solto: nenhum botão apertado.
+        for _ in 0..150 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+        }
+        assert!(
+            c.velocidade > 3.0,
+            "o carro solto não ganhou velocidade na descida: {:.2} m/s",
+            c.velocidade
+        );
+    }
+
+    #[test]
+    fn a_subida_segura_o_carro() {
+        // O espelho do teste acima, e ele é o que impede a "correção" de trocar
+        // o sinal: com o sinal invertido, a volta pela encosta aceleraria sozinha
+        // e ninguém notaria até a corrida ficar impossível de perder.
+        let pista = crate::pista::pista_de_teste_com_relevo(&[
+            (0.00, 0.0),
+            (0.25, 56.0),
+            (0.50, 80.0),
+            (0.75, 56.0),
+            (1.00, 0.0),
+        ]);
+        let s_subida = pista.comprimento() * 0.10;
+        assert!(
+            pista.inclinacao_em(s_subida) > 0.02,
+            "o trecho em {s_subida:.0} m não sobe (inclinação {:.3})",
+            pista.inclinacao_em(s_subida)
+        );
+
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, s_subida, 0.0);
+        c.velocidade = 30.0;
+        for _ in 0..60 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+        }
+        assert!(
+            c.velocidade < 30.0,
+            "subindo solto o carro não perdeu velocidade: {:.2} m/s",
+            c.velocidade
+        );
+    }
+
+    #[test]
+    fn a_altura_do_carro_acompanha_a_pista() {
+        let pista = crate::mapa::BOAVISTA.pista();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, pista.comprimento() * 0.05, 0.0);
+        c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+        let esperado = pista.altura_em(c.s);
+        assert!(
+            (c.altura - esperado).abs() < 0.5,
+            "altura do carro {:.2} contra {esperado:.2} da pista",
+            c.altura
+        );
+        assert!(c.altura > 30.0, "no alto da serra a altura devia passar de 30 m: {:.1}", c.altura);
+    }
+
+    #[test]
+    fn raspar_a_parede_de_lado_solta_faisca_sem_ser_batida() {
+        // A queixa que originou isto: encostar na mureta não deixava sinal
+        // nenhum — nem faísca, nem som, nem perda perceptível.
+        let pista = crate::pista::pista_de_teste();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        // Além do limite (meia-largura + 2,2 m): encostado é *fora* da margem,
+        // senão o teste mede o carro andando no asfalto e "prova" um raspão que
+        // não existe.
+        c.posicionar(&pista, 200.0, pista.meia_largura_em(200.0) + 2.35);
+        c.velocidade = 40.0;
+        // Rumo **paralelo** à pista: é o caso do raspão.
+        c.angulo = 0.0;
+
+        let mut raspou = false;
+        let mut maior_impacto = 0.0f32;
+        for _ in 0..30 {
+            c.passo(&Entrada { acelerar: 0.5, ..Entrada::PARADA }, &pista, 1.0 / 75.0);
+            raspou |= c.raspando;
+            maior_impacto = maior_impacto.max(c.impacto);
+        }
+        assert!(raspou, "o carro encostado não marcou raspão");
+        assert!(
+            maior_impacto < 0.5,
+            "raspar de lado marcou impacto {maior_impacto:.2}; devia ser quase zero"
+        );
+        assert!(
+            c.velocidade > 20.0,
+            "raspar de lado parou o carro: {:.1} m/s",
+            c.velocidade
+        );
+    }
+
+    #[test]
+    fn bater_de_frente_marca_impacto_alto() {
+        let pista = crate::pista::pista_de_teste();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, 200.0, pista.meia_largura_em(200.0) + 1.0);
+        c.velocidade = 55.0;
+        // Apontado 60° para a mureta: é uma batida, não um raspão.
+        c.angulo = 1.05;
+
+        let mut maior = 0.0f32;
+        for _ in 0..40 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+            maior = maior.max(c.impacto);
+        }
+        assert!(maior > 0.6, "batida de frente marcou impacto só {maior:.2}");
+    }
+
+    #[test]
+    fn o_impacto_some_depois_da_batida() {
+        // Sem decaimento o carro ficaria "em colisão" para sempre e cada quadro
+        // soltaria destroços, mesmo andando longe da parede.
+        let pista = crate::pista::pista_de_teste();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.impacto = 1.0;
+        for _ in 0..60 {
+            c.passo(&Entrada::PARADA, &pista, 1.0 / 75.0);
+        }
+        assert!(c.impacto < 0.01, "o impacto ficou em {:.2}", c.impacto);
     }
 }

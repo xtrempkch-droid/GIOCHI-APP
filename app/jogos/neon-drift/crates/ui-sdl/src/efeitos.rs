@@ -187,6 +187,31 @@ impl Particula {
     }
 }
 
+/// Um pedaço de lataria que sai na colisão.
+///
+/// Diferente das partículas de billboard, o fragmento é **3D de verdade**: um
+/// cubo pequeno que gira em três eixos e cai. Um quad virado para a câmera não
+/// lê como destroço — ele sempre encara quem olha, e o olho percebe.
+///
+/// Custa **uma** chamada de desenho para todos: é um `draw_instanced` com a
+/// matriz completa de cada peça.
+#[derive(Debug, Clone, Copy)]
+pub struct Fragmento {
+    pub pos: Vec3,
+    pub vel: Vec3,
+    /// Eixo de rotação (unitário) e velocidade angular, em rad/s.
+    pub eixo: Vec3,
+    pub giro: f32,
+    /// Ângulo acumulado.
+    pub angulo: f32,
+    /// Meia-aresta do cubo, em metros.
+    pub tamanho: f32,
+    pub vida: f32,
+    pub vida_max: f32,
+    /// Cor do pedaço (a lataria de quem bateu).
+    pub cor: [f32; 3],
+}
+
 // ════════════════════════════════════════════════════════════
 // SISTEMA
 // ════════════════════════════════════════════════════════════
@@ -194,6 +219,9 @@ impl Particula {
 /// Todas as partículas vivas do jogo.
 pub struct Particulas {
     itens: Vec<Particula>,
+    /// Destroços de colisão. Lista separada porque eles não são billboard e não
+    /// passam pelo mesmo desenho: são cubos com matriz completa.
+    fragmentos: Vec<Fragmento>,
     /// Estado do sorteio determinístico.
     semente: u32,
     /// Acumulador fracionário por emissor contínuo: a 75 Hz uma taxa de 40/s dá
@@ -215,6 +243,7 @@ impl Particulas {
     pub fn nova() -> Self {
         Self {
             itens: Vec::with_capacity(1024),
+            fragmentos: Vec::with_capacity(64),
             // Semente fixa: duas execuções com os mesmos passos desenham o mesmo
             // quadro. Sem isso a comparação PC × aparelho nunca fecharia.
             semente: 0x9e37_79b9,
@@ -243,6 +272,7 @@ impl Particulas {
     /// Esvazia tudo (reinício de corrida).
     pub fn limpar(&mut self) {
         self.itens.clear();
+        self.fragmentos.clear();
     }
 
     /// Pede uma rajada de faíscas no carro do jogador (batida).
@@ -317,6 +347,33 @@ impl Particulas {
             };
         }
         self.itens.retain(|p| p.vida > 0.0);
+
+        self.avancar_fragmentos(dt);
+    }
+
+    /// Integra só os destroços.
+    ///
+    /// Separado de `atualizar` porque a física do estilhaço não depende da
+    /// corrida nem da câmera: assim ela tem teste sem montar um `Corrida`, que
+    /// arrastaria meia simulação para dentro de um teste de partícula.
+    pub fn avancar_fragmentos(&mut self, dt: f32) {
+        // Gravidade alta e nenhum arrasto: destroço cai rápido. Flutuar no ar é
+        // o que faz parecer fumaça em vez de estilhaço.
+        for f in self.fragmentos.iter_mut() {
+            f.vida -= dt;
+            f.vel = somar(f.vel, Vec3::new(0.0, -26.0 * dt, 0.0));
+            f.pos = somar(f.pos, escalar(f.vel, dt));
+            f.angulo += f.giro * dt;
+            // Quica uma vez no chão: a segunda batida não acrescenta nada visual
+            // e só somaria uma condição a mais.
+            let chao = 0.05;
+            if f.pos.y < chao {
+                f.pos.y = chao;
+                f.vel = Vec3::new(f.vel.x * 0.55, f.vel.y.abs() * 0.32, f.vel.z * 0.55);
+                f.giro *= 0.6;
+            }
+        }
+        self.fragmentos.retain(|f| f.vida > 0.0);
     }
 
     fn contabilizar(&mut self) {
@@ -607,6 +664,101 @@ impl Particulas {
         }
     }
 
+    /// Quantos destroços vivos (diagnóstico).
+    pub fn fragmentos(&self) -> usize {
+        self.fragmentos.len()
+    }
+
+    /// Solta uma rajada de destroços, com a força do impacto.
+    ///
+    /// `impacto` é 0..1: um raspão (0,05) solta 2 lascas; uma batida de frente a
+    /// 200 km/h solta 18. É o que faz a colisão ter **tamanho** em vez de ser
+    /// sempre a mesma chuva de detritos.
+    pub fn pedir_fragmentos(&mut self, impacto: f32, cor: [f32; 3], pos: Vec3, direcao: Vec3) {
+        let forca = impacto.clamp(0.0, 1.0);
+        let quantos = ((forca * 18.0) as u32 + 2).min(20);
+        for _ in 0..quantos {
+            let espalha = Vec3::new(
+                self.entre(-1.0, 1.0),
+                self.entre(0.1, 1.4),
+                self.entre(-1.0, 1.0),
+            );
+            let velocidade = somar(
+                escalar(direcao, -self.entre(2.0, 9.0) * (0.4 + forca)),
+                escalar(espalha, 6.0 + forca * 8.0),
+            );
+            let vida = self.entre(1.1, 2.4);
+            let desvio = Vec3::new(
+                self.entre(-0.6, 0.6),
+                self.entre(0.2, 0.8),
+                self.entre(-0.6, 0.6),
+            );
+            let eixo = direcao_normalizada(Vec3::new(
+                self.entre(-1.0, 1.0),
+                self.entre(-1.0, 1.0),
+                self.entre(-1.0, 1.0),
+            ));
+            let giro = self.entre(-14.0, 14.0);
+            let angulo = self.entre(0.0, 6.28);
+            let tamanho = self.entre(0.06, 0.19);
+            self.fragmentos.push(Fragmento {
+                pos: somar(pos, desvio),
+                vel: velocidade,
+                eixo,
+                giro,
+                angulo,
+                tamanho,
+                vida,
+                vida_max: vida,
+                cor,
+            });
+        }
+        // Teto rígido: memória e previsibilidade do quadro.
+        if self.fragmentos.len() > 90 {
+            let excesso = self.fragmentos.len() - 90;
+            self.fragmentos.drain(0..excesso);
+        }
+    }
+
+    /// Empacota as matrizes dos destroços para o desenho instanciado.
+    ///
+    /// A matriz é translação · rotação(eixo, ângulo) · escala — cada peça com o
+    /// seu giro, e por isso **um** cubo serve para todas.
+    pub fn matrizes_fragmentos(&self, saida: &mut Vec<Mat4>) {
+        use giochi_engine_3d::math3d::Transform3D;
+        saida.clear();
+        for f in &self.fragmentos {
+            // Encolhe no fim da vida: o pedaço some em vez de piscar.
+            let vida = (f.vida / f.vida_max).clamp(0.0, 1.0);
+            let escala = f.tamanho * (0.35 + vida * 0.65);
+            saida.push(
+                Transform3D::new(
+                    f.pos,
+                    giochi_engine_3d::math3d::Quat::from_axis_angle(f.eixo, f.angulo),
+                    Vec3::new(escala, escala * 0.55, escala * 1.25),
+                )
+                .matrix(),
+            );
+        }
+    }
+
+    /// Cor média dos destroços, para a chamada de desenho.
+    pub fn cor_fragmentos(&self) -> Color3D {
+        if self.fragmentos.is_empty() {
+            return Color3D::new(0.7, 0.7, 0.8, 1.0);
+        }
+        let mut r = 0.0;
+        let mut g = 0.0;
+        let mut b = 0.0;
+        for f in &self.fragmentos {
+            r += f.cor[0];
+            g += f.cor[1];
+            b += f.cor[2];
+        }
+        let n = self.fragmentos.len() as f32;
+        Color3D::new(r / n, g / n, b / n, 1.0)
+    }
+
     /// Empacota as matrizes de instância de uma faixa de um tipo.
     ///
     /// `direita`/`cima` vêm da câmera (billboard). As marcas ignoram a base e
@@ -780,6 +932,112 @@ mod testes {
         let mut c = Corrida::nova();
         c.comecar();
         c
+    }
+
+    // ── destroços de colisão ─────────────────────────────────
+    // O que estes testes protegem, e por que existem: durante uma sessão inteira
+    // a rajada disparou **zero** vez e o `--json` dizia `"fragmentos":0`, que é
+    // indistinguível de "o efeito não foi implementado". Um zero por ausência e
+    // um zero por defeito têm o mesmo número — só o teste separa os dois.
+
+    fn rajada(impacto: f32) -> Particulas {
+        let mut p = Particulas::nova();
+        p.pedir_fragmentos(
+            impacto,
+            [0.9, 0.5, 0.2],
+            Vec3::new(0.0, 0.6, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        p
+    }
+
+    #[test]
+    fn batida_forte_solta_mais_destroco_que_raspao() {
+        let fraco = rajada(0.05).fragmentos();
+        let forte = rajada(0.95).fragmentos();
+        assert!(fraco >= 2, "raspão soltou {fraco}: nem lasca");
+        assert!(
+            forte > fraco * 3,
+            "batida forte soltou {forte} contra {fraco} do raspão — a força do \
+             impacto não chega ao tamanho da rajada"
+        );
+    }
+
+    #[test]
+    fn destroco_cai_e_nao_atravessa_o_chao() {
+        let mut p = rajada(0.5);
+        // A primeira versão só exigia "nada abaixo do asfalto" e passava **sem
+        // gravidade nenhuma**: sem aceleração nada desce e a asserção virava
+        // tautologia. O efeito promete queda, então é a queda que se mede.
+        //
+        // 1,7 s porque a peça nasce a até 9 m de altura com 14 m/s para cima:
+        // em 0,67 s ela ainda está subindo (medido: topo 4,65 m). Julgar antes
+        // do ápice reprova a física correta.
+        for _ in 0..100 {
+            p.avancar_fragmentos(1.0 / 60.0);
+        }
+        assert!(
+            p.fragmentos() > 0,
+            "a rajada inteira morreu antes de 1,7 s e a queda não foi medida"
+        );
+        for f in &p.fragmentos {
+            assert!(
+                f.pos.y <= 0.65,
+                "destroço ainda no ar em y={:.2} depois de 1,7 s",
+                f.pos.y
+            );
+            assert!(
+                f.pos.y >= 0.049,
+                "destroço em y={} atravessou o asfalto",
+                f.pos.y
+            );
+        }
+    }
+
+    #[test]
+    fn a_rajada_nao_estoura_o_teto_de_destrocos() {
+        let mut p = Particulas::nova();
+        for _ in 0..40 {
+            p.pedir_fragmentos(
+                1.0,
+                [1.0, 1.0, 1.0],
+                Vec3::new(0.0, 0.5, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            );
+        }
+        assert!(
+            p.fragmentos() <= 90,
+            "quarenta batidas seguidas deixaram {} destroços vivos",
+            p.fragmentos()
+        );
+    }
+
+    #[test]
+    fn destroco_encolhe_ate_sumir() {
+        let mut p = rajada(0.5);
+        let mut saida = Vec::new();
+        p.matrizes_fragmentos(&mut saida);
+        // Coluna 0 da matriz (column-major) é o eixo X já escalado: o
+        // comprimento dela é a escala da peça.
+        let escala = |m: &Mat4| (m.data[0] * m.data[0] + m.data[1] * m.data[1] + m.data[2] * m.data[2]).sqrt();
+        let grande = saida.iter().map(escala).fold(0.0f32, f32::max);
+        for _ in 0..70 {
+            p.avancar_fragmentos(1.0 / 60.0);
+        }
+        p.matrizes_fragmentos(&mut saida);
+        let pequeno = saida.iter().map(escala).fold(0.0f32, f32::max);
+        assert!(
+            pequeno < grande * 0.85,
+            "o destroço não encolheu: {grande:.3} -> {pequeno:.3} (vida {:.2})",
+            p.fragmentos()
+        );
+    }
+
+    #[test]
+    fn sem_batida_nao_ha_destroco() {
+        // Zero aqui é a resposta certa; o teste existe para o "zero" do
+        // diagnóstico poder ser interpretado.
+        assert_eq!(Particulas::nova().fragmentos(), 0);
     }
 
     #[test]

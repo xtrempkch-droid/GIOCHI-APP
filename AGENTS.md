@@ -4122,3 +4122,150 @@ O `neon-drift` do aparelho estava **desatualizado** e isso só apareceu porque o
 sha256 foi comparado nas duas pontas: o arquivo tinha 569 784 bytes contra
 603 896 do repositório. Cópia por `scp` sem conferir hash é o mesmo defeito que
 `aparelho.sh instalar` já trata para o launcher.
+
+## 31. Neon Drift: dois mapas, texturas e o relevo na física (10/11/2026)
+
+Pedido do dono: **"quero expandir com mais mapas e adicionar texturas (faísca
+quando o carro raspa em algo e fragmentos nas colisões). O mapa recomendo usar a
+descida do Alto da Boavista (Rio de Janeiro) como referência"**.
+
+### O mapa virou dado
+
+`crates/core/src/mapa.rs` descreve cada pista com pontos de controle, largura
+mínima/máxima, trechos de túnel, perfil de altura, voltas, tempo limite,
+dificuldade e **qual cenário construir**. `PADRAO` continua sendo a avenida de
+962 m, para nenhum teste antigo mudar de pista sem avisar.
+
+| `--mapa` | Pista | Desnível | Cenário |
+| --- | --- | --- | --- |
+| `avenida` | 962 m | 0 m | cidade noturna (o de antes, sem regressão) |
+| `boavista` | **1 309 m** | **74 m** | serra: paredão de pedra, mata, guarda-corpo, cidade lá embaixo, morros |
+
+Acrescentar um terceiro mapa é uma constante e uma linha em `TODOS`.
+
+### Relevo: a gravidade entrou na física, e quase matou o jogo
+
+`Amostra` ganhou `altura` e `Pista` ganhou `inclinacao_em(s)`. O carro sente a
+rampa como aceleração na frente: desce acelerando, sobe perdendo, e o sinal
+inverte em marcha à ré (senão ele acelera sem limite descendo de ré).
+
+**A primeira versão usou a gravidade real e o carro parava na descida.** 9,81 ×
+rampa de 11 % = 1,08 m/s² contra um atrito de rolagem constante de 4,5. Numa
+reta ele desacelerava mais do que a rampa acelerava, e o sintoma era "o carro
+trava no meio da serra" — que parece bug de colisão. Correção dupla:
+`GRAVIDADE = 9,81 × 3,5` (arcade, como todo jogo de corrida) e rolagem em 1,6.
+
+### Três armadilhas de teste que o relevo expôs
+
+1. **Teste de física numa pista com curvas mede colisão.** Os testes de subida e
+   descida usavam a `BOAVISTA`, onde as curvas da serra tiram o carro da pista e
+   o resultado era "velocidade 0" por batida, não por física. Criado
+   `pista_de_teste_com_relevo(relevo)`: 1000 m de reta com perfil conhecido.
+2. **`o_freio_para_o_carro` supunha 40 m/s** e o carro chegava a 58 m/s depois
+   de 6 s com a rolagem menor. O teste passou a **definir** a velocidade antes
+   de frear: ele mede a frenagem, não a aceleração.
+3. **A pista de teste tem 2 188 m** e o degrau de 10 % fica em 218 m, não nos
+   300 m que outros testes usavam.
+
+### Texturas: procedural, porque o aparelho não lê PNG
+
+Sete materiais gerados em código (`crates/ui-sdl/src/texturas.rs`): asfalto,
+concreto, rocha, mata, guarda-corpo, painel de neon e o xadrez da largada.
+64×64 (potência de dois é exigência do GLES 2.0 para `REPEAT`), sorteio xorshift
+com semente fixa.
+
+**A razão é medida, não estética**: no R35S o `libSDL2_image` foi compilado sem
+`--enable-png` e `IMG_Load` responde *"PNG images are not supported"* (§24). Um
+jogo com PNG no asset não abriria lá.
+
+Nascem **neutras e claras**; a cor é `amostra × tint`. A primeira tentativa usou
+texturas escuras e a serra ficou com **28 % do quadro quase preto** — escura ×
+escura = preto. A correção foi clarear a textura, não o tint.
+
+### A engine ganhou textura (no snapshot vendorizado)
+
+O `Vertex` já tinha `uv`, o shader `textured` já existia e `set_texture` já
+ligava textura e sampler — mas **faltava criar textura GL e desenhar com ela**.
+Entraram em `vendor/giochi-engine-3d/src/render3d/`:
+
+```text
+texture.rs    GlTexture::from_rgba / destroy, MAX_DIMENSION = 8192, LINEAR+REPEAT
+renderer.rs   TextureHandle, create_texture_rgba, destroy_texture, texture_size,
+              texture_count, draw_mesh_textured
+```
+
+`GIOCHI-ENGINE-3D` **não foi tocada** — mesmo HEAD antes e depois. Atualizar a
+engine do jogo é copiar de novo, de propósito.
+
+### UV por mundo, não 0..1 por quadrilátero
+
+`chao3` calcula o UV da **posição no mundo**: com UV 0..1 por segmento, a textura
+reiniciaria a cada 4 m de serra e a emenda apareceria como uma faixa correndo ao
+lado do carro. `caixa_texturizada` faz o mesmo por face (`largura/tile`), e
+deduz o sentido pela normal — sem isso metade das faces some com `cull_face` e o
+único aviso é o buraco.
+
+### O paredão cortava a curva — e o sintoma era "pedra sem pista"
+
+O paredão da serra era uma **caixa de 19 m colocada a cada duas amostras** (~8 m).
+Na reta parece contínuo; numa curva de raio 20 m a corda de 19 m entra **2,2 m**
+para dentro do asfalto. A câmera ficava dentro do bloco e o quadro virava uma
+parede laranja sem pista — visível em 2 dos 9 quadros amostrados ao longo da
+volta.
+
+Correção: `Construtor::parede3`, uma **tira** que liga duas amostras
+consecutivas. Acompanha o traçado por construção, e sai com as **duas faces**
+(uma face só aposta que a normal está do lado certo; quando não está, a parede
+some). Três testes, e a mutação que emite uma face só reprova 2.
+
+### Faísca no raspão, destroço na batida
+
+| Situação | Campo | Efeito |
+| --- | --- | --- |
+| encostou e seguiu | `carro.raspando` | faíscas contínuas + som de raspagem, **sem** zerar combo |
+| bateu de frente | `carro.impacto > 0,35` | rajada de **cubos 3D** girando, com quique no chão, + tremor |
+
+`impacto = |dir·normal| × clamp(|v|/26, 0, 1)`, decai `dt·6`. A rajada é
+`impacto × 18 + 2` peças (raspão 2–3, batida forte 18), teto de 90 vivas.
+
+Separar os dois é o que torna o raspão divertido: antes **todo** contato era
+`Evento::Bateu` e encostar de leve na mureta zerava o combo como uma batida a
+200 km/h.
+
+### Cinco testes que os destroços precisaram, e a mutação que provou cada um
+
+`--json` passou a trazer `mapa`, `altitude`, `impacto` e `fragmentos`. Zero ali
+é resposta legítima (não bateu), e é justamente por isso que existem testes: um
+zero por ausência e um zero por defeito têm o mesmo número.
+
+| Teste | Mutação que o reprova |
+| --- | --- |
+| `batida_forte_solta_mais_destroco_que_raspao` | `quantos = 3` fixo |
+| `destroco_cai_e_nao_atravessa_o_chao` | remover a gravidade (−26 m/s²) |
+| `a_rajada_nao_estoura_o_teto_de_destrocos` | remover o corte em 90 |
+| `destroco_encolhe_ate_sumir` | escala fixa |
+| `a_parede_sai_com_as_duas_faces` / `..._por_metro_e_nao_por_segmento` | uma face só; UV 0..1 |
+
+**A primeira versão de `destroco_cai_e_nao_atravessa_o_chao` passava sem
+gravidade nenhuma**: ela só exigia "nada abaixo do asfalto", e sem aceleração
+nada desce. Virou uma asserção tautológica — a mesma família do teste que passa
+dos dois lados. Agora ela mede a queda: depois de 1,7 s, todo destroço vivo tem
+de estar a menos de 0,65 m do chão. (1,7 s porque a peça nasce a 9 m com 14 m/s
+para cima e em 0,67 s ainda está subindo — medido: topo 4,65 m.)
+
+### Medido no PC (llvmpipe, 640×480)
+
+```text
+quadro médio          avenida 41–61 · boavista 33–41   (antes de clarear: 27)
+quase preto           avenida 0,7–10,9 % · boavista 0,00–0,08 %
+cores distintas       avenida 236–501 · boavista 306–704
+fps com teto 75       as duas pistas batem 75 (o PC não discrimina: só o
+                      primeiro processo paga shader frio e mede 11)
+```
+
+**O que não foi medido:** FPS no aparelho. O X35H saiu da rede no meio da rodada
+(`aparelho.sh procurar` → nenhum aparelho nas duas tentativas), então as
+texturas **não** têm número de RK3566. É a mesma classe de pendência do §29: a
+Avenida fazia 39,5 fps antes das texturas e a serra nunca rodou no hardware.
+Cross-compile aarch64 **compila e linka** (620 KB, `PT_INTERP` presente); falta
+instalar e medir.

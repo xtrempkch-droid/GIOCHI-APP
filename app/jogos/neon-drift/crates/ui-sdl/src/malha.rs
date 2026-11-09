@@ -149,19 +149,259 @@ impl Construtor {
         self
     }
 
-    /// Quadrilátero no plano do chão (`y` constante), visto de cima.
-    pub fn chao(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2], y: f32) -> &mut Self {
-        self.quad(
-            [
-                [a[0], y, a[1]],
-                [b[0], y, b[1]],
-                [c[0], y, c[1]],
-                [d[0], y, d[1]],
-            ],
-            [0.0, 1.0, 0.0],
-            1.0,
-        )
+    /// Metros de mundo por repetição de textura.
+    ///
+    /// Fixar isto em **um** número é o que faz a textura ter a mesma densidade no
+    /// asfalto de 640×480 e no de 1280×720: sem ele, a mesma parede de 8 m
+    /// mostraria 8 tijolos num painel e 8 tijolos no outro, mas cada tijolo com
+    /// tamanho diferente em tela.
+    pub const METROS_POR_TILE: f32 = 3.0;
+
+    /// Quadrilátero com **altura por canto**, para o chão de uma pista com
+    /// relevo.
+    ///
+    /// `chao` recebe um `y` só, e numa descida o vão entre duas amostras
+    /// atravessa o terreno: os cantos vêm em alturas diferentes. O UV sai da
+    /// posição no mundo dividida pelo tile, então a textura acompanha a curva em
+    /// vez de esticar.
+    pub fn chao3(
+        &mut self,
+        a: [f32; 2],
+        b: [f32; 2],
+        c: [f32; 2],
+        d: [f32; 2],
+        ya: f32,
+        yb: f32,
+        yc: f32,
+        yd: f32,
+        tile: f32,
+    ) -> &mut Self {
+        // UV a partir da **posição no mundo**: é o que faz a textura continuar de
+        // um quadrilátero para o seguinte em vez de reiniciar em cada um. Com UV
+        // 0..1 por quad, o asfalto de 962 m mostraria 481 repetições da textura
+        // inteira, uma por segmento, e a emenda apareceria como faixa.
+        let tile = tile.max(0.25);
+        let base = self.vertices.len() as u32;
+        let cantos = [
+            [a[0], ya, a[1]],
+            [b[0], yb, b[1]],
+            [c[0], yc, c[1]],
+            [d[0], yd, d[1]],
+        ];
+        for canto in cantos.iter() {
+            self.vertices.push(Vertex::new(
+                *canto,
+                [0.0, 1.0, 0.0],
+                [canto[0] / tile, canto[2] / tile],
+            ));
+        }
+        // Sentido pela normal, como o `quad`: a ordem dos cantos não importa.
+        let u = [cantos[1][0] - cantos[0][0], 0.0, cantos[1][2] - cantos[0][2]];
+        let v = [cantos[2][0] - cantos[0][0], 0.0, cantos[2][2] - cantos[0][2]];
+        let cruz_y = u[2] * v[0] - u[0] * v[2];
+        if cruz_y >= 0.0 {
+            self.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        } else {
+            self.indices
+                .extend([base, base + 3, base + 2, base, base + 2, base + 1]);
+        }
+        self
     }
+
+    /// Caixa com UV **proporcional ao tamanho de cada face**.
+    ///
+    /// `caixa_girada` usa o cubo unitário, cujas faces têm UV 0..1. Numa caixa de
+    /// 30 m de comprimento isso significa uma única repetição da textura esticada
+    /// por 30 m — o tijolo vira um borrão de 3 m. Aqui cada face recebe
+    /// `largura/tile` por `altura/tile`, então a densidade é a mesma em qualquer
+    /// tamanho.
+    ///
+    /// As 6 faces são emitidas separadamente porque cada uma precisa da sua
+    /// própria contagem de repetições.
+    pub fn caixa_texturizada(
+        &mut self,
+        centro: [f32; 3],
+        tamanho: [f32; 3],
+        giro: f32,
+        tile: f32,
+    ) -> &mut Self {
+        let tile = tile.max(0.25);
+        let (sen, cos) = giro.sin_cos();
+        let (hx, hy, hz) = (tamanho[0] * 0.5, tamanho[1] * 0.5, tamanho[2] * 0.5);
+        let uv = |eixo_u: f32, eixo_v: f32| -> [f32; 2] {
+            [
+                (eixo_u / tile).max(0.01),
+                (eixo_v / tile).max(0.01),
+            ]
+        };
+        // Normal e quatro cantos de cada face, no espaço local da caixa.
+        // Ordem dos cantos: baixo-esquerda, baixo-direita, cima-direita,
+        // cima-esquerda — o `quad` corrige o sentido pela normal.
+        let faces: [([f32; 3], [[f32; 3]; 4], [f32; 2]); 6] = [
+            (
+                [0.0, 0.0, 1.0],
+                [
+                    [-hx, -hy, hz],
+                    [hx, -hy, hz],
+                    [hx, hy, hz],
+                    [-hx, hy, hz],
+                ],
+                uv(tamanho[0], tamanho[1]),
+            ),
+            (
+                [0.0, 0.0, -1.0],
+                [
+                    [hx, -hy, -hz],
+                    [-hx, -hy, -hz],
+                    [-hx, hy, -hz],
+                    [hx, hy, -hz],
+                ],
+                uv(tamanho[0], tamanho[1]),
+            ),
+            (
+                [1.0, 0.0, 0.0],
+                [
+                    [hx, -hy, hz],
+                    [hx, -hy, -hz],
+                    [hx, hy, -hz],
+                    [hx, hy, hz],
+                ],
+                uv(tamanho[2], tamanho[1]),
+            ),
+            (
+                [-1.0, 0.0, 0.0],
+                [
+                    [-hx, -hy, -hz],
+                    [-hx, -hy, hz],
+                    [-hx, hy, hz],
+                    [-hx, hy, -hz],
+                ],
+                uv(tamanho[2], tamanho[1]),
+            ),
+            (
+                [0.0, 1.0, 0.0],
+                [
+                    [-hx, hy, hz],
+                    [hx, hy, hz],
+                    [hx, hy, -hz],
+                    [-hx, hy, -hz],
+                ],
+                uv(tamanho[0], tamanho[2]),
+            ),
+            (
+                [0.0, -1.0, 0.0],
+                [
+                    [-hx, -hy, -hz],
+                    [hx, -hy, -hz],
+                    [hx, -hy, hz],
+                    [-hx, -hy, hz],
+                ],
+                uv(tamanho[0], tamanho[2]),
+            ),
+        ];
+
+        let girar = |p: [f32; 3]| -> [f32; 3] {
+            [
+                p[0] * cos + p[2] * sen + centro[0],
+                p[1] + centro[1],
+                -p[0] * sen + p[2] * cos + centro[2],
+            ]
+        };
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        for (normal, cantos, escala_uv) in faces {
+            let n = [normal[0] * cos + normal[2] * sen, normal[1], -normal[0] * sen + normal[2] * cos];
+            let base = self.vertices.len() as u32;
+            for (canto, uv) in cantos.iter().zip(uvs.iter()) {
+                self.vertices.push(Vertex::new(
+                    girar(*canto),
+                    n,
+                    [uv[0] * escala_uv[0], uv[1] * escala_uv[1]],
+                ));
+            }
+            // Sentido deduzido pela normal, como no `quad`: sem isto a caixa
+            // texturizada some com `cull_face` ligado, e "some" é o único aviso.
+            let g = [girar(cantos[0]), girar(cantos[1]), girar(cantos[2])];
+            let u = [g[1][0] - g[0][0], g[1][1] - g[0][1], g[1][2] - g[0][2]];
+            let v = [g[2][0] - g[0][0], g[2][1] - g[0][1], g[2][2] - g[0][2]];
+            let cruz = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let concordam = cruz[0] * n[0] + cruz[1] * n[1] + cruz[2] * n[2] >= 0.0;
+            if concordam {
+                self.indices
+                    .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            } else {
+                self.indices
+                    .extend([base, base + 3, base + 2, base, base + 2, base + 1]);
+            }
+        }
+        self
+    }
+
+    /// Parede em **tira**: liga duas amostras consecutivas da pista.
+    ///
+    /// O paredão da serra era uma caixa de 19 m colocada a cada duas amostras
+    /// (~8 m). Parecia contínuo na reta e **cortava a curva por dentro**: numa
+    /// curva fechada de raio 20 m a corda de 19 m entra 2,2 m para dentro do
+    /// asfalto, a câmera ficava dentro do bloco e o quadro virava uma parede
+    /// de pedra sem pista nenhuma. A tira usa os dois centros reais, então
+    /// acompanha o traçado por construção.
+    ///
+    /// Sai com as **duas faces**. Uma só economiza metade dos triângulos e
+    /// aposta que a normal está do lado certo; quando não está, a parede some
+    /// e o único sintoma é o buraco no horizonte.
+    pub fn parede3(
+        &mut self,
+        a: [f32; 2],
+        b: [f32; 2],
+        ya: f32,
+        yb: f32,
+        altura: f32,
+        normal: [f32; 2],
+        tile: f32,
+    ) -> &mut Self {
+        let tile = tile.max(0.25);
+        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+        let comp = (dx * dx + dz * dz).sqrt().max(0.001);
+        let (ux, uz) = (dx / comp, dz / comp);
+        let cantos = [
+            [a[0], ya, a[1]],
+            [b[0], yb, b[1]],
+            [b[0], yb + altura, b[1]],
+            [a[0], ya + altura, a[1]],
+        ];
+        let uvs: [[f32; 2]; 4] = [
+            [(cantos[0][0] * ux + cantos[0][2] * uz) / tile, cantos[0][1] / tile],
+            [(cantos[1][0] * ux + cantos[1][2] * uz) / tile, cantos[1][1] / tile],
+            [(cantos[2][0] * ux + cantos[2][2] * uz) / tile, cantos[2][1] / tile],
+            [(cantos[3][0] * ux + cantos[3][2] * uz) / tile, cantos[3][1] / tile],
+        ];
+        // A normal que a ordem `a_baixo, b_baixo, b_cima, a_cima` produz é
+        // `(-uz, 0, ux)` — o produto vetorial de uma parede vertical não tem
+        // componente y, então o teste do `quad` não serve aqui. Escolhido o
+        // sentido, as duas faces saem com a ordem certa.
+        let esquerda = (-uz, ux);
+        for lado in [1.0f32, -1.0] {
+            let n = [normal[0] * lado, 0.0, normal[1] * lado];
+            let base = self.vertices.len() as u32;
+            for (canto, uv) in cantos.iter().zip(uvs.iter()) {
+                self.vertices.push(Vertex::new(*canto, n, *uv));
+            }
+            let concorda = esquerda.0 * n[0] + esquerda.1 * n[2] >= 0.0;
+            if concorda {
+                self.indices
+                    .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            } else {
+                self.indices
+                    .extend([base, base + 3, base + 2, base, base + 2, base + 1]);
+            }
+        }
+        self
+    }
+
 }
 
 impl Default for Construtor {
@@ -350,10 +590,161 @@ mod testes {
     #[test]
     fn o_chao_aponta_a_normal_para_cima() {
         let mut c = Construtor::new();
-        c.chao([0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], 0.5);
+        c.chao3(
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            1.0,
+        );
         for v in c.vertices() {
             assert_eq!(v.normal, [0.0, 1.0, 0.0]);
             assert!((v.position[1] - 0.5).abs() < 1e-6);
         }
+    }
+}
+
+#[cfg(test)]
+mod testes_textura {
+    use super::*;
+
+    #[test]
+    fn a_caixa_texturizada_tem_seis_faces_e_uv_proporcional() {
+        let mut c = Construtor::new();
+        c.caixa_texturizada([0.0, 0.0, 0.0], [6.0, 3.0, 9.0], 0.0, 3.0);
+        // 6 faces × 4 vértices, 6 faces × 6 índices.
+        assert_eq!(c.vertices().len(), 24);
+        assert_eq!(c.indices().len(), 36);
+        // A face de cima de uma caixa 6×3×9 com tile 3 tem de repetir 2× e 3×.
+        let mut maior_u: f32 = 0.0;
+        let mut maior_v: f32 = 0.0;
+        for v in c.vertices() {
+            maior_u = maior_u.max(v.uv[0]);
+            maior_v = maior_v.max(v.uv[1]);
+        }
+        assert!((maior_u - 3.0).abs() < 1e-3, "u máximo {maior_u}");
+        assert!((maior_v - 3.0).abs() < 1e-3, "v máximo {maior_v}");
+    }
+
+    #[test]
+    fn a_caixa_texturizada_nao_some_com_descarte_de_faces() {
+        // O `quad` deduz o sentido pela normal; a caixa tem de fazer o mesmo,
+        // senão metade das faces desaparece e o sintoma é "a parede tem um
+        // buraco" sem erro nenhum.
+        let mut c = Construtor::new();
+        c.caixa_texturizada([0.0, 0.0, 0.0], [4.0, 4.0, 4.0], 0.7, 2.0);
+        let v = c.vertices();
+        let i = c.indices();
+        for tri in i.chunks(3) {
+            let a = v[tri[0] as usize];
+            let b = v[tri[1] as usize];
+            let cc = v[tri[2] as usize];
+            let u = [
+                b.position[0] - a.position[0],
+                b.position[1] - a.position[1],
+                b.position[2] - a.position[2],
+            ];
+            let w = [
+                cc.position[0] - a.position[0],
+                cc.position[1] - a.position[1],
+                cc.position[2] - a.position[2],
+            ];
+            let cruz = [
+                u[1] * w[2] - u[2] * w[1],
+                u[2] * w[0] - u[0] * w[2],
+                u[0] * w[1] - u[1] * w[0],
+            ];
+            let produto = cruz[0] * a.normal[0] + cruz[1] * a.normal[1] + cruz[2] * a.normal[2];
+            assert!(produto >= 0.0, "triângulo com a normal ao contrário");
+        }
+    }
+
+    #[test]
+    fn o_chao_com_alturas_inclina_o_quadrilatero() {
+        let mut c = Construtor::new();
+        c.chao3([0.0, 0.0], [0.0, 10.0], [4.0, 10.0], [4.0, 0.0], 8.0, 4.0, 4.0, 8.0, 3.0);
+        let alturas: Vec<f32> = c.vertices().iter().map(|v| v.position[1]).collect();
+        assert_eq!(alturas, vec![8.0, 4.0, 4.0, 8.0]);
+        // E a normal continua para cima, senão o chão some com `cull_face`.
+        assert!(c.vertices()[0].normal[1] > 0.9);
+        // UV vem do mundo: um canto em (4, 0) com tile 3 dá u = 4/3.
+        assert!((c.vertices()[3].uv[0] - 4.0 / 3.0).abs() < 1e-4);
+        assert!((c.vertices()[1].uv[1] - 10.0 / 3.0).abs() < 1e-4);
+    }
+
+    // ── parede em tira ───────────────────────────────────────
+    // O paredão da serra era uma caixa de 19 m a cada duas amostras. Na curva
+    // fechada (raio ~20 m) a corda entrava 2,2 m no asfalto, a câmera ficava
+    // dentro do bloco e o quadro virava pedra sem pista. O teste mede isso:
+    // numa curva, o ponto médio da tira tem de estar **na** curva.
+
+    #[test]
+    fn a_parede_segue_a_curva_em_vez_de_cortar_por_dentro() {
+        // Trecho de círculo de raio 20 m, 19 m de arco — o mesmo vão que a caixa
+        // antiga cobria.
+        let raio = 20.0f32;
+        let passo = 19.0 / raio;
+        let a = [raio, 0.0];
+        let b = [raio * passo.cos(), raio * passo.sin()];
+        let mut c = Construtor::new();
+        c.parede3(a, b, 0.0, 0.0, 6.0, [-1.0, 0.0], 3.0);
+        let v = c.vertices();
+        // Vértices 0 e 1 são a base do primeiro lado: são exatamente as duas
+        // amostras da pista, sem encurtar.
+        assert!((v[0].position[0] - a[0]).abs() < 1e-4 && (v[0].position[2] - a[1]).abs() < 1e-4);
+        assert!((v[1].position[0] - b[0]).abs() < 1e-4 && (v[1].position[2] - b[1]).abs() < 1e-4);
+        // O ponto médio da corda fica a 19,4 m do centro; na curva, a 20. A
+        // diferença é o que a caixa comia do asfalto.
+        let mx = (a[0] + b[0]) * 0.5;
+        let mz = (a[1] + b[1]) * 0.5;
+        let corda = (mx * mx + mz * mz).sqrt();
+        assert!(
+            raio - corda > 1.0,
+            "o teste não exercita a curva: a corda mede {corda:.2} de {raio:.2}"
+        );
+    }
+
+    #[test]
+    fn a_parede_sai_com_as_duas_faces() {
+        // Uma face só economiza metade dos triângulos e aposta que a normal está
+        // do lado certo; quando não está, a parede some e o sintoma é o buraco.
+        let mut c = Construtor::new();
+        c.parede3([0.0, 0.0], [0.0, 10.0], 0.0, 0.0, 4.0, [1.0, 0.0], 3.0);
+        assert_eq!(c.vertices().len(), 8);
+        assert_eq!(c.indices().len(), 12);
+        let n0 = c.vertices()[0].normal;
+        let n1 = c.vertices()[4].normal;
+        assert!((n0[0] + n1[0]).abs() < 1e-5, "as duas faces olham para o mesmo lado");
+        // E cada triângulo concorda com a sua normal, senão some com `cull_face`.
+        let v = c.vertices();
+        for tri in c.indices().chunks(3) {
+            let a = v[tri[0] as usize];
+            let b = v[tri[1] as usize];
+            let d = v[tri[2] as usize];
+            let u = [b.position[0] - a.position[0], b.position[1] - a.position[1], b.position[2] - a.position[2]];
+            let w = [d.position[0] - a.position[0], d.position[1] - a.position[1], d.position[2] - a.position[2]];
+            let cruz = [
+                u[1] * w[2] - u[2] * w[1],
+                u[2] * w[0] - u[0] * w[2],
+                u[0] * w[1] - u[1] * w[0],
+            ];
+            let produto = cruz[0] * a.normal[0] + cruz[1] * a.normal[1] + cruz[2] * a.normal[2];
+            assert!(produto >= 0.0, "face da parede com a normal ao contrário");
+        }
+    }
+
+    #[test]
+    fn a_parede_repete_a_textura_por_metro_e_nao_por_segmento() {
+        // UV 0..1 por segmento faria a textura reiniciar a cada 4 m de serra e a
+        // emenda apareceria como faixa vertical correndo ao lado do carro.
+        let mut c = Construtor::new();
+        c.parede3([0.0, 0.0], [12.0, 0.0], 0.0, 0.0, 5.0, [0.0, 1.0], 3.0);
+        let v = c.vertices();
+        assert!((v[1].uv[0] - 4.0).abs() < 1e-4, "u em b = {}", v[1].uv[0]);
+        assert!((v[2].uv[1] - 5.0 / 3.0).abs() < 1e-4, "v no topo = {}", v[2].uv[1]);
     }
 }

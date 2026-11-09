@@ -14,6 +14,7 @@ use crate::error::{Error3D, Result3D};
 use crate::math3d::{Camera3D, Color3D, Mat4, Transform3D};
 use crate::mesh::{Mesh, Vertex};
 use crate::registry::HandleRegistry;
+use crate::render3d::texture::GlTexture;
 use crate::render3d::{DirectionalLight, InstancedRenderer, Upscaler};
 use crate::shader::{BuiltinShader, Program};
 
@@ -29,6 +30,8 @@ pub type MeshHandle = u64;
 ///
 /// `typedef uint64_t GiochiShaderHandle;`.
 pub type ShaderHandle = u64;
+/// Opaque handle to a texture. `0` is invalid.
+pub type TextureHandle = u64;
 
 /// The 3D renderer.
 ///
@@ -44,6 +47,7 @@ pub struct RenderContext3D {
     light: DirectionalLight,
     meshes: HandleRegistry<Mesh>,
     shaders: HandleRegistry<Program>,
+    textures: HandleRegistry<GlTexture>,
     /// Set when the frame renders below the window size; `None` is full resolution.
     ///
     /// Stored as the requested scale rather than as a `bool` so a resize can rebuild the
@@ -71,6 +75,7 @@ impl std::fmt::Debug for RenderContext3D {
             .field("light", &self.light)
             .field("meshes", &self.meshes.len())
             .field("shaders", &self.shaders.len())
+            .field("textures", &self.textures.len())
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +105,7 @@ impl RenderContext3D {
             light: DirectionalLight::sun(),
             meshes: HandleRegistry::new(),
             shaders: HandleRegistry::new(),
+            textures: HandleRegistry::new(),
             render_scale: None,
             upscaler: None,
             // `RenderContext3D::new` is infallible by contract, so a refused buffer
@@ -779,6 +785,93 @@ impl RenderContext3D {
         program.set_color(self.gl.glow(), "u_color", colour.clamped());
 
         mesh.draw(self.gl.glow(), &program);
+
+        #[cfg(feature = "profiling")]
+        self.counters.record_mesh(
+            u64::from(mesh.vertex_count()),
+            u64::from(mesh.vertex_count()) * std::mem::size_of::<Vertex>() as u64,
+        );
+
+        Ok(true)
+    }
+
+    /// Cria uma textura RGBA8 (`width * height * 4` bytes, linha a linha).
+    ///
+    /// A textura nasce em `LINEAR` + `REPEAT`: `NEAREST` transforma a textura de
+    /// asfalto em blocos, e `CLAMP` mostra a emenda em cada borda de UV.
+    pub fn create_texture_rgba(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result3D<TextureHandle> {
+        let textura = GlTexture::from_rgba(self.gl.glow(), width, height, pixels)?;
+        Ok(self.textures.insert(textura))
+    }
+
+    /// Apaga uma textura. Devolve `false` se o handle não existia.
+    pub fn destroy_texture(&mut self, handle: TextureHandle) -> bool {
+        match self.textures.take(handle) {
+            Some(textura) => {
+                // `Rc::try_unwrap` falha se a textura estiver emprestada num
+                // desenho em curso; nesse caso o GL object fica para o driver
+                // liberar no fim do contexto, e o handle já não resolve.
+                if let Ok(gl_texture) = std::rc::Rc::try_unwrap(textura) {
+                    gl_texture.destroy(self.gl.glow());
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Medidas de uma textura, em pixels.
+    pub fn texture_size(&self, handle: TextureHandle) -> Option<(u32, u32)> {
+        self.textures.get(handle).map(|t| (t.width, t.height))
+    }
+
+    /// Quantas texturas vivas.
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Desenha `mesh` com `texture` no lugar de uma cor sólida.
+    ///
+    /// `shader` tem de ser [`BuiltinShader::Textured`] — é o único par de shaders
+    /// que lê `a_uv` e amostra `u_texture`. Passar um `Phong` aqui desenha a
+    /// malha com a cor de `tint` e ignora a textura, sem erro nenhum; por isso o
+    /// nome da função diz "textured" e não "com um parâmetro a mais".
+    ///
+    /// `tint` multiplica a amostra: branco devolve a textura como ela é, e uma cor
+    /// escura escurece o material sem precisar de uma segunda textura.
+    pub fn draw_mesh_textured(
+        &mut self,
+        mesh: MeshHandle,
+        shader: ShaderHandle,
+        model: &Transform3D,
+        camera: &Camera3D,
+        texture: TextureHandle,
+        tint: Color3D,
+    ) -> Result3D<bool> {
+        let Some(mesh) = self.meshes.get(mesh) else {
+            return Ok(false);
+        };
+        let Some(program) = self.shaders.get(shader) else {
+            return Ok(false);
+        };
+        let Some(texture) = self.textures.get(texture) else {
+            return Ok(false);
+        };
+
+        self.bind_and_upload(&program, model, camera)?;
+
+        let gl = self.gl.glow();
+        // O sampler precisa apontar para a **mesma** unidade em que a textura foi
+        // ligada: `set_texture` faz as duas coisas, e separá-las dá textura preta.
+        program.set_texture(gl, "u_texture", texture.handle, 0);
+        program.set_color(gl, "u_tint", tint.clamped());
+
+        mesh.draw(gl, &program);
 
         #[cfg(feature = "profiling")]
         self.counters.record_mesh(

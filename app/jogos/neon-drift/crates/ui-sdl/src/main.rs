@@ -17,6 +17,7 @@
 mod audio;
 mod cena3d;
 mod efeitos;
+mod texturas;
 mod entrada_jogo;
 mod evdev;
 mod malha;
@@ -57,6 +58,7 @@ struct Opcoes {
     sem_som: bool,
     piloto: bool,
     so: Option<String>,
+    mapa: Option<String>,
     sem_vsync: bool,
     escala: f32,
     ajuda: bool,
@@ -77,6 +79,7 @@ impl Default for Opcoes {
             sem_som: false,
             piloto: false,
             so: None,
+            mapa: None,
             sem_vsync: std::env::var_os("GIOCHI_VSYNC").is_some_and(|v| v == "0"),
             escala: std::env::var("GIOCHI_ESCALA")
                 .ok()
@@ -167,6 +170,10 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
                 o.piloto = true;
                 i += 1;
             }
+            "--mapa" => {
+                o.mapa = Some(argv.get(i + 1).ok_or("--mapa sem nome")?.clone());
+                i += 2;
+            }
             "--so" => {
                 o.so = Some(argv.get(i + 1).ok_or("--so sem nome de malha")?.clone());
                 i += 1;
@@ -229,7 +236,7 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -238,10 +245,15 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
         corrida.carro.s,
         s.x,
         s.z,
+        corrida.carro.altura,
         cx,
         cy,
         cz,
-        fov
+        fov,
+        corrida.mapa.id,
+        corrida.carro.raspando,
+        corrida.carro.impacto,
+        cena.fragmentos()
     )
 }
 
@@ -417,7 +429,23 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         );
     }
 
-    let mut corrida = Corrida::nova();
+    // O mapa define traçado, relevo, voltas, tempo limite e cenário. Default: o
+    // primeiro da lista, para `--mapa` ausente não mudar o comportamento de
+    // ninguém que já usava o binário.
+    let mapa = match &o.mapa {
+        Some(id) => match giochi_neon_drift_core::mapa::por_id(id) {
+            Some(m) => m,
+            None => {
+                let nomes: Vec<&str> = giochi_neon_drift_core::mapa::TODOS
+                    .iter()
+                    .map(|m| m.id)
+                    .collect();
+                return Err(format!("--mapa '{id}' não existe (use: {})", nomes.join(", ")).into());
+            }
+        },
+        None => giochi_neon_drift_core::mapa::PADRAO,
+    };
+    let mut corrida = Corrida::com_mapa(mapa);
     if let Some(tela) = o.tela {
         match tela {
             Fase::Correndo => corrida.comecar(),
@@ -434,7 +462,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         }
     }
 
-    let mut cena = Cena3D::nova(&mut render, &corrida.pista, rotacao)?;
+    let mut cena = Cena3D::nova(&mut render, &corrida.pista, rotacao, corrida.mapa.cenario)?;
     cena.so(o.so.clone());
 
     if !o.json {
@@ -443,6 +471,13 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             rotacao.nome(),
             render.gles_version().major(),
             render.adapter()
+        );
+        println!(
+            "neon-drift: mapa \"{}\" ({}) — pista {:.0} m, desnível {:.0} m",
+            mapa.nome,
+            mapa.id,
+            corrida.pista.comprimento(),
+            mapa.desnivel()
         );
         println!(
             "neon-drift: instancing {}, pista {:.0} m, {} voltas, limite {} fps",
