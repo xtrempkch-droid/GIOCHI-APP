@@ -76,13 +76,82 @@ if ! rustup target list --installed 2>/dev/null | grep -qx "$ALVO"; then
 fi
 ok "alvo $ALVO presente"
 
-# ── 2. compilar ─────────────────────────────────────────────
+# ── 2. codegen para a CPU do console (fase 18 da engine) ────
+# `-C target-cpu=native` não serve num cross-compile: o compilador roda no
+# **host**, então "native" descreveria a máquina errada. O core tem de ser
+# nomeado.
+#
+# ## Medido: este jogo **não ganha**, e por isso o padrão é desligado
+#
+# O engine mediu o phase-18 e concluiu "tamanho, não velocidade" — lá o ganho de
+# tamanho vinha de `strip` e LTO, que este jogo **já tinha** (`lto = true` é fat,
+# `strip = true`, `codegen-units = 1`). O que sobra para medir aqui é só o
+# `target-cpu`, e no X35H ele custou sem pagar: 5 corridas intercaladas de 400
+# quadros deram mediana **37,0 fps sem** (36,7/36,8/37,0/37,4/37,5) contra
+# **36,8 com** (36,4/36,7/36,8/36,8/36,8); e o binário ficou 3,9 % **maior**
+# (675 584 → 701 712 B). Mais lento dentro do ruído, maior de verdade e sem
+# ganho nenhum: o padrão fica sem `target-cpu`.
+#
+# O mecanismo continua aqui porque o dia em que a engine ou o rustc mudarem a
+# qualidade de codegen para ARM o número muda, e porque build de aparelho único
+# pode querer o core exato.
+#
+# ## Se você ligar, o valor seguro é `cortex-a35`
+#
+# O mesmo `bin/giochi-neon-drift` é instalado no R35S (A35), no X35H e no X55
+# (A55). Medido com `rustc --print cfg`:
+#
+#   -C target-cpu=cortex-a35  → aes, crc, neon, sha2
+#   -C target-cpu=cortex-a55  → aes, crc, neon, sha2, **lse**
+#
+# `lse` são as atômicas ARMv8.1 (`ldadd`/`swpal`); o A35 é ARMv8.0-A e não
+# decodifica nenhuma delas — o binário morre com SIGILL na primeira atômica, que
+# num jogo é um `Arc::clone` do primeiro quadro. O engine mediu a mesma coisa
+# (docs/PERF_LOG.md): lá o plano pedia `+lse` e foi recusado pelo mesmo motivo.
+#
+# `GIOCHI_TARGET_CPU` troca o alvo para builds de aparelho único, sabendo que o
+# binário deixa de rodar nos aparelhos mais antigos.
+# Vazio = sem `-C target-cpu` (o padrão medido). `GIOCHI_TARGET_CPU=cortex-a35`
+# liga o alvo conservador para toda a frota.
+GIOCHI_TARGET_CPU="${GIOCHI_TARGET_CPU:-}"
+case "$GIOCHI_TARGET_CPU" in
+  "") GIOCHI_TARGET_FEATURES="${GIOCHI_TARGET_FEATURES:-}" ;;
+  cortex-a35|cortex-a53|cortex-a55|cortex-a72|cortex-a76|cortex-a78)
+    # `+crc,+aes,+sha2` já vêm implícitos no `-C target-cpu=cortex-a35` deste
+    # rustc (conferido com `--print cfg`); declarados mesmo assim porque um
+    # `target-cpu` diferente, ou um rustc que mude a tabela, deixaria de os
+    # ligar em silêncio. São instruções que os três aparelhos declaram no
+    # `/proc/cpuinfo` e que o codegen do jogo não usa — ficam ligadas porque
+    # descrevem a peça, não porque pagam.
+    GIOCHI_TARGET_FEATURES="${GIOCHI_TARGET_FEATURES:-+crc,+aes,+sha2}" ;;
+  *)
+    # CPU desconhecida não ganha feature nenhuma: `+feature` errada é SIGILL num
+    # aparelho que ninguém está olhando; otimização faltando é só mais lento.
+    GIOCHI_TARGET_FEATURES="${GIOCHI_TARGET_FEATURES:-}" ;;
+esac
+if printf '%s' "$GIOCHI_TARGET_FEATURES" | grep -q 'lse'; then
+  erro "+lse não pode ser ligado: o R35S é Cortex-A35 (ARMv8.0-A) e não
+  decodifica as atômicas ARMv8.1 — o binário morreria com SIGILL no primeiro
+  quadro. Use GIOCHI_TARGET_CPU=cortex-a55 só para build de um aparelho único."
+fi
+
+# ── 3. compilar ─────────────────────────────────────────────
 # Os mesmos `-L` do launcher. `sdl2-sys` acha os **cabeçalhos** pelo pkg-config
 # do host (cabeçalho não tem arquitetura); quem precisa ser aarch64 é a
 # biblioteca, e é isso que estes `-L` garantem — `$LIBDIR` vem primeiro.
+#
+# A CPU entra **aqui** e não num `.cargo/config.toml`: cargo ignora a tabela
+# `rustflags` do config por completo quando `RUSTFLAGS` está definido no
+# ambiente, e este script o define para pôr o sysroot na linha de link. Foi
+# exatamente assim que a fase 18 da engine passou um tempo compilando para
+# ARMv8-A genérico com o config "certo", sem nada falhar.
 export GIOCHI_ARM64_SYSROOT="$SYSROOT"
 export GIOCHI_ARM64_LOADER="/lib/ld-linux-aarch64.so.1"
-export RUSTFLAGS="-C linker=$CACHE/cc-aarch64.sh \
+FLAGS_CPU=""
+[ -n "$GIOCHI_TARGET_CPU" ] && FLAGS_CPU="-C target-cpu=$GIOCHI_TARGET_CPU"
+[ -n "$GIOCHI_TARGET_FEATURES" ] && FLAGS_CPU="$FLAGS_CPU -C target-feature=$GIOCHI_TARGET_FEATURES"
+export RUSTFLAGS="$FLAGS_CPU \
+-C linker=$CACHE/cc-aarch64.sh \
 -C link-arg=--sysroot=$SYSROOT \
 -C link-arg=-L$LIBDIR \
 -C link-arg=-L$SYSROOT/usr/aarch64-linux-gnu/lib \
@@ -104,6 +173,7 @@ if [ -n "${GIOCHI_SDL2_PREFIX:-}" ] || [ -d "$HOME/.cache/giochi-sdl2/root" ]; t
 fi
 
 cd "$JOGO"
+echo "  cpu: ${GIOCHI_TARGET_CPU:-(sem target-cpu: ARMv8-A genérico — foi o mais rápido medido)}"
 echo "  compilando $BINARIO para $ALVO..."
 cargo build --release --target "$ALVO" --offline 2>&1 | grep -vE "^\s*(Compiling|Finished|Downloading)" || true
 
