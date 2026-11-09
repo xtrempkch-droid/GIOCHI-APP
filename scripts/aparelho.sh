@@ -128,6 +128,21 @@ eh_o_aparelho() {
 
 # Varre a /24 em paralelo. Serial levaria minutos com 254 endereços e timeout.
 procurar() {
+  # ## "Não achei" e "achei mas não entrei" são diagnósticos diferentes
+  #
+  # Medido em 09/11/2026: a imagem nova do R35S trocou a host key **e** não
+  # trouxe a nossa chave. O aparelho respondia na porta 22 em 0,5 ms, o `ssh`
+  # devolvia `Permission denied (publickey,password)` e `procurar` dizia
+  # "nenhum aparelho Giochi encontrado" — que manda conferir cabo e rede, onde
+  # não havia nada de errado. Um IP que aceita conexão mas recusa autenticação
+  # é a assinatura de chave faltando (ou host key obsoleta), e o remédio é
+  # outro: instalar a chave por senha, e `ssh-keygen -R <ip>` se o aviso for
+  # de chave trocada.
+  #
+  # `RECUSADOS` acumula esses endereços para a mensagem de erro poder dizer
+  # isso — o silêncio era o defeito, não a varredura.
+  RECUSADOS=()
+
   # Endereços conhecidos primeiro: o `usb0` tem IP fixo (10.55.0.2) e responde
   # em um segundo. Varrer a /24 inteira quando o aparelho está no cabo USB é
   # desperdício — e pior, não acha nada, porque o usb0 não está nessa faixa.
@@ -138,6 +153,7 @@ procurar() {
         printf '%s\n' "$ip"
         return 0
       fi
+      RECUSADOS+=("$ip")
     fi
   done
 
@@ -151,6 +167,9 @@ procurar() {
       if timeout 1 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null; then
         if eh_o_aparelho "$ip" >/dev/null 2>&1; then
           printf '%s\n' "$ip" >> "$encontrados"
+        else
+          # Arquivo próprio e não a variável: isto roda em subshell.
+          printf '%s\n' "$ip" >> "$encontrados.recusados"
         fi
       fi
     ) &
@@ -168,8 +187,13 @@ procurar() {
   rm -f "$encontrados"
 
   if [ -z "$lista" ]; then
+    if [ -s "$encontrados.recusados" ]; then
+      RECUSADOS+=($(sort -u "$encontrados.recusados"))
+    fi
+    rm -f "$encontrados.recusados"
     return 1
   fi
+  rm -f "$encontrados.recusados"
   printf '%s\n' "$lista"
 }
 
@@ -604,6 +628,18 @@ cmd_procurar() {
   printf '  candidatos fixos tentados antes da varredura: %s\n' "${CANDIDATOS[*]}"
   local lista
   if ! lista=$(procurar); then
+    # A distinção importa: mandar conferir o cabo quando o aparelho está no
+    # cabo custa uma sessão inteira de diagnóstico no lugar errado.
+    if [ "${#RECUSADOS[@]}" -gt 0 ]; then
+      falha "aparelho responde em ${RECUSADOS[*]}, mas o SSH recusou a autenticação"
+      printf '  isso é chave faltando ou host key obsoleta, NÃO cabo nem rede\n'
+      printf '  dicas:\n'
+      printf '    - chave nova na imagem? entre por senha e instale a sua:\n'
+      printf '        GIOCHI_DEVICE=%s GIOCHI_SENHA=<senha> bash scripts/aparelho.sh procurar\n' "${RECUSADOS[0]}"
+      printf '    - aviso de "REMOTE HOST IDENTIFICATION HAS CHANGED"? é a imagem regravada:\n'
+      printf '        ssh-keygen -R %s\n' "${RECUSADOS[0]}"
+      exit 1
+    fi
     falha "nenhum aparelho Giochi encontrado"
     printf '  dicas:\n'
     printf '    - está ligado? mesma rede Wi-Fi? GIOCHI_DEVICE=ip para fixar\n'

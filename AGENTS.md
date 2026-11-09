@@ -4979,3 +4979,97 @@ Duas coisas a lembrar de rodadas anteriores, para não redescobrir:
 E o teto de 75 fps não muda com o mapa: o que muda é contagem de malha nova.
 **Cenário novo não pode criar malha nova** sem motivo — arco, passarela,
 outdoor e faixa de torre saem das malhas que já existem.
+
+## 36. O aparelho no SSH virou R35S — instalado e medido (09/11/2026)
+
+Pedido: **"instale o launcher teste e o jogo para eu testar no dispositivo que
+está no ssh"**.
+
+O `10.55.0.2` **não era mais o X35H**: é uma imagem nova do **R35S** (commit
+`5e81871`, `built_at_utc=2026-11-09T02:07:46Z`), a mesma que o §26 registrou
+como "não tem a interface". O IP é o mesmo e o `usb0` é o mesmo; quem mudou foi o
+cartão. Vale a regra já escrita no §26.1: **não confie no nome do aparelho nem no
+IP — leia `/etc/giochi/build-info.txt`**.
+
+### Esta imagem é melhor que a anterior, e por medição
+
+| Item | Antes (§24/§26) | Agora |
+| --- | --- | --- |
+| PNG no `SDL2_image` | **"PNG images are not supported"** | `libpng16.so.16` presente, `strings \| grep -c` = **0** |
+| `libasound.so.2` | ausente (o mixer caía em `Ausente`) | **presente**, com `aplay` e `amixer` |
+| `SDL2_ttf` + fontes | presentes | presentes (`DejaVuSans*.ttf`) |
+| `inittab` | `::respawn:/usr/bin/giochi-init` | igual |
+| interface instalada | **nenhuma** | **nenhuma** — `/opt/giochi/apps/` só tem `bin/` |
+
+A correção do `BR2_PACKAGE_LIBPNG` no defconfig do System (feita em §24 e até
+então "só no fonte") **está nesta imagem**. Confirmado por duas medidas
+independentes, não pelo commit: a biblioteca existe e o `SDL2_image` não carrega
+mais a mensagem de recusa.
+
+### Três armadilhas de acesso, e as três custaram tempo
+
+1. **Host key nova.** `ssh` responde `REMOTE HOST IDENTIFICATION HAS CHANGED`, e
+   a mensagem fala de ataque MITM. É imagem regravada: `ssh-keygen -R 10.55.0.2`.
+2. **A nossa chave não veio.** Depois da host key, `Permission denied
+   (publickey,password)`. A entrada é por senha (`SSH_ASKPASS` + `setsid -w`,
+   receita no §26.1), e a chave é instalada uma vez.
+3. **`/run/giochi` não existe.** A flag `dev-free-console` falhava com
+   `No such file or directory` e o supervisor ganhava a corrida do DRM. `mkdir
+   -p` antes.
+
+E a ferramenta mentiu sobre a causa, o que é o defeito de sempre: `procurar`
+dizia **"nenhum aparelho Giochi encontrado"** com o aparelho respondendo na
+porta 22 em 0,5 ms. Agora ela distingue os dois casos e diz o remédio de cada um:
+
+```text
+FALHA aparelho responde em 10.55.0.2, mas o SSH recusou a autenticação
+  isso é chave faltando ou host key obsoleta, NÃO cabo nem rede
+```
+
+### Instalado, sha256 conferido nas duas pontas
+
+| Item | Caminho | sha256 |
+| --- | --- | --- |
+| launcher-teste | `/opt/giochi/apps/launcher-teste/bin/` | `b30dc6ac…` |
+| `giochi-teste` | `/opt/giochi/apps/launcher-teste/` | `bd91110d…` |
+| wrapper da interface | `/opt/giochi/apps/launcher/bin/giochi-launcher` | `exec … --efeitos` |
+| neon-drift | `/user/apps/neon-drift/bin/giochi-neon-drift` | `20266ed8…` |
+
+O pacote foi verificado com a **chave do aparelho**
+(`--chave-publica <loja-publica.pem do R35S>`) antes de instalar, não com uma
+chave qualquer do PC — verificar contra a chave errada produz um veredito, e um
+veredito errado é pior que nenhum.
+
+### Medido nesta imagem
+
+```text
+launcher-teste   6 telas a 100,0 % contra o launcher de produção
+                 (home, biblioteca, apps, ajustes, busca, detalhe)
+neon-drift       640x480, GLES 3 em Mali-G31 (Panfrost), 619 cores, 0,00 % de preto
+                 HUD: velocidade, KM/H, marcha, barra e NITRO separados
+ciclo            --lancar neon-drift → jogo com ppid do launcher, dri=6
+                 jogo fechado → launcher volta com dri=6 e opengles2
+supervisor       giochi-init sobe o launcher sozinho (ppid do init, não do ssh)
+áudio            /dev/snd com captura e reprodução, aplay e amixer presentes
+```
+
+**O R35S não declara `KEY_POWER`** (§22): o botão de energia corta no hardware e
+nunca chega ao kernel, então o toque curto para dormir não existe aqui. O menu de
+energia continua no START. O launcher avisa uma vez, e isso é o comportamento
+certo — promessa falsa é pior que função ausente.
+
+### O carro não aparece no quadro capturado
+
+Fica registrado porque é o próximo item a olhar junto com o §35: no BMP do
+aparelho a pista, os prédios e o HUD desenham, e **o carro não tem silhueta
+legível**. Pode ser o mesmo sinal do §35 visto pelo outro lado (o desenho
+apontando para o lado oposto ao movimento, e a câmera, que fica atrás do
+movimento, olhando para a traseira dele), ou só o contraste de um carro escuro
+numa cena noturna a 640×480. As duas hipóteses se separam com o teste que o §35
+pede: comparar o centro dos faróis com `direcao()` no mesmo ângulo.
+
+### Correção de ferramenta desta rodada
+
+`procurar` passou a acumular os IPs que **aceitam conexão e recusam
+autenticação** e a usá-los na mensagem de erro. Antes o mesmo sintoma cobria
+"cabo fora" e "chave faltando", e os dois remédios são diferentes.
