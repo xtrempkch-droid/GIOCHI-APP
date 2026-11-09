@@ -281,6 +281,45 @@ Uma armadilha medida: com a gravidade **real** (9,81 m/s²), uma rampa de 11 % d
 **parava** no meio da descida. A correção foi dupla: gravidade arcade
 (`9,81 × 3,5`, como todo jogo de corrida faz) e atrito de rolagem em 1,6.
 
+### O nitro dava velocidade permanente
+
+Achado ao medir o salar, o mapa mais aberto: a corrida fechava com média de
+**78,2 m/s** contra um teto de **82**. Com tanque de 100, gasto de 30/s e recarga
+de 8/s, o ciclo ativo do nitro é **21 %** — a média não podia passar de ~66.
+
+A causa: o motor zera no topo (`sobra = 0`), mas isso só **impede acelerar mais**.
+Nada trazia o carro de volta, e o arrasto com o acelerador preso é uma constante
+de 0,55 m/s². Medido: **82 → 62 levava 36 s**, mais que uma volta inteira. O nitro
+emprestava velocidade e ela nunca era devolvida.
+
+A correção é uma parcela que só existe **acima** do topo:
+
+```rust
+let excesso = (vel - vel_topo).max(0.0) * FREIO_EXCESSO;   // 1,0 s⁻¹
+let resistencias = arrasto + atrito_extra + excesso;
+```
+
+Ela não pode entrar no arrasto geral: lá também age **abaixo** do topo, e foi
+exatamente esse erro que deixava o carro em 32,7 m/s numa versão anterior desta
+conta (o comentário no código registra isso).
+
+| Mapa | Média antes | depois |
+| --- | --- | --- |
+| salar | **78,2 m/s** | **67,1 m/s** |
+| circuito | 63,6 m/s | **56,3 m/s** |
+| boavista | 53,1 m/s | 50,6 m/s |
+| avenida | 46,4 m/s | 46,4 m/s |
+| porto | 32,9 m/s | 32,9 m/s |
+
+`o_nitro_nao_deixa_velocidade_permanente` exige o carro de volta ao topo em 4 s;
+revertendo a correção ele reprova com *"ainda estava a 79,8 m/s"*. E
+`abaixo_do_topo_o_freio_de_excesso_nao_aparece` guarda o outro lado: a parcela é
+zero em qualquer velocidade legal.
+
+A descida assenta em **65–67 m/s** quando o nitro acaba: a gravidade sustenta
+parte do excesso (`62 + 4,5 m/s² ÷ 1,0 s ≈ 66,5`), e é isso que faz a serra ter
+caráter sem o carro passar a corrida acima do topo.
+
 E as texturas de chão usam **UV pela posição no mundo**, não 0..1 por
 quadrilátero: com UV por segmento, a textura reiniciaria a cada 4 m de serra e a
 emenda apareceria como uma faixa correndo ao lado do carro.
@@ -331,7 +370,7 @@ seria o próximo número mágico a dar errado.
 | --- | --- |
 | Pista | **cinco mapas**: avenida (962 m, túnel de 157 m, curva de raio 20 m), descida (1 309 m, 74 m de desnível), **circuito (2 081 m com 3 rampas)**, porto (1 030 m, hairpin de raio 22 m) e salar (2 188 m, 1 rampa) |
 | Salto | rampa é dado do mapa; o carro decola com **6,8 m de pico** e 1,7 s de voo, e no ar não colide nem acumula drift |
-| Carro | física arcade: 62 m/s no asfalto, **82 m/s com nitro**, derrapagem que só existe com o freio de mão; rolagem e arrasto **freiam até zero e nunca empurram o carro para trás** |
+| Carro | física arcade: 62 m/s no asfalto, **82 m/s com nitro** (e o carro **volta** ao topo em ~3 s quando ele acaba), derrapagem que só existe com o freio de mão; rolagem e arrasto **freiam até zero e nunca empurram o carro para trás** |
 | Drift | combo até ×5, pontos por segundo de derrapagem; bater zera o combo e mantém o que já foi somado |
 | Adversários | três, com linha própria e freando na curva; ~9 s atrás de um piloto competente em duas voltas |
 | Câmera | terceira pessoa com atraso exponencial, inclinação na derrapagem, tremor na batida e **FOV que abre no nitro** |
@@ -388,7 +427,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--texturas t.bmp` | grava as 7 texturas lado a lado, **sem abrir janela** — o molde para pintar |
-| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo` e a contagem de cada tipo de partícula |
+| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando` e a contagem de cada tipo de partícula |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não

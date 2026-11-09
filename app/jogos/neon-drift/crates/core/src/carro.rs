@@ -70,6 +70,18 @@ pub const QUEDA_FORTE: f32 = 9.0;
 pub const GIRO_MAX: f32 = 1.75;
 /// Aceleração extra do nitro, em m/s².
 pub const NITRO_ACEL: f32 = 26.0;
+/// Freio proporcional ao quanto a velocidade passa do topo **sem nitro**.
+///
+/// O motor zera no topo (`sobra = 0`), mas isso só impede acelerar mais: sem
+/// esta parcela nada traz o carro **de volta** ao topo depois que o nitro acaba.
+/// Medido no salar, com o acelerador preso: 82 → 62 levava **36 s**, mais que uma
+/// volta inteira, e a corrida fechava com média de **78,2 m/s** contra um teto de
+/// 82 — o nitro virava velocidade permanente e a recarga deixava de ser economia.
+///
+/// Não pode entrar no arrasto geral: lá ele também age **abaixo** do topo, e a
+/// primeira versão dessa conta deixava o carro em 32,7 m/s em vez dos 62 que o
+/// velocímetro promete. Aqui ele é zero em qualquer velocidade legal.
+pub const FREIO_EXCESSO: f32 = 1.0;
 /// Nitro consumido por segundo com o botão apertado.
 pub const NITRO_GASTO: f32 = 30.0;
 /// Nitro recarregado por segundo sem usar.
@@ -383,7 +395,11 @@ impl Carro {
         // ficava lá, porque `arrasto` cresce com `|v|` e nunca chega a zero.
         // Aqui a resistência só consome velocidade existente, limitada a ela:
         // freia até parar e nunca inverte o sentido.
-        let resistencias = arrasto + atrito_extra;
+        // Acima do `vel_topo` o carro freia **decisivamente** de volta a ele. A
+        // constante de tempo é `1/FREIO_EXCESSO = 1 s`: 82 → 62 leva ~3 s, que é
+        // o que se sente como "o nitro acabou", nem abrupto nem eterno.
+        let excesso = (vel - vel_topo).max(0.0) * FREIO_EXCESSO;
+        let resistencias = arrasto + atrito_extra + excesso;
         let consumo = (resistencias * dt).min(nova.abs());
         nova -= consumo * nova.signum();
 
@@ -646,6 +662,49 @@ mod testes {
         for _ in 0..passos {
             carro.passo(&entrada, pista, dt);
         }
+    }
+
+    /// O nitro **empresta** velocidade; não a torna permanente.
+    ///
+    /// Com o acelerador preso e o tanque vazio, o carro tem de voltar ao topo em
+    /// poucos segundos. Sem `FREIO_EXCESSO` ele levava **36 s** — medido no
+    /// salar, onde a pista larga não obriga a frear e a corrida inteira ficava
+    /// acima do topo, com média de 78,2 m/s contra um teto de 82.
+    #[test]
+    fn o_nitro_nao_deixa_velocidade_permanente() {
+        let (mut c, pista) = carro_na_reta();
+        // Tanque vazio: sem isso o piloto automático do teste abriria o nitro e
+        // o carro nunca sairia de perto do teto de 82, que é outra pergunta.
+        c.nitro = 0.0;
+        c.velocidade = VEL_NITRO_MAX;
+        simular(&mut c, &pista, Entrada::acelerando(), 4.0);
+        assert!(
+            c.velocidade < VEL_MAX + 1.5,
+            "4 s depois de o nitro acabar o carro ainda estava a {:.1} m/s \
+             (topo sem nitro = {VEL_MAX})",
+            c.velocidade
+        );
+        assert!(
+            c.velocidade > VEL_MAX - 8.0,
+            "o carro caiu para {:.1} m/s: o excesso não pode virar freio forte \
+             abaixo do topo",
+            c.velocidade
+        );
+    }
+
+    /// E acima do topo ele **não** age: o carro não pode ficar preso em 62 na
+    /// descida, que é o que a ladeira usa para acelerar.
+    #[test]
+    fn abaixo_do_topo_o_freio_de_excesso_nao_aparece() {
+        let (mut c, pista) = carro_na_reta();
+        c.velocidade = VEL_MAX * 0.5;
+        let antes = c.velocidade;
+        simular(&mut c, &pista, Entrada::acelerando(), 1.0);
+        assert!(
+            c.velocidade > antes,
+            "de {antes:.1} m/s o carro não acelerou: chegou a {:.1}",
+            c.velocidade
+        );
     }
 
     #[test]

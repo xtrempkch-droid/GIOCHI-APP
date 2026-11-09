@@ -269,7 +269,7 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2},\"nitro\":{:.1},\"nitro_usando\":{},\"derrapando\":{}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -298,7 +298,13 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
         // indistinguível de uma rampa que não existe.
         corrida.carro.no_ar,
         corrida.carro.velocidade_vertical,
-        corrida.pista.altura_em(corrida.carro.s)
+        corrida.pista.altura_em(corrida.carro.s),
+        // O nitro é a economia do jogo: `gasto 30/s` contra `recarga 8/s` dá
+        // 21 % de ciclo ativo. Sem expor os dois, "o carro passa dos 200 km/h
+        // direto" é indistinguível de "o tanque está infinito".
+        corrida.carro.nitro,
+        corrida.carro.nitro_usando,
+        corrida.carro.derrapando
     )
 }
 

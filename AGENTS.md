@@ -5325,10 +5325,79 @@ O número que prova que o sprite está sendo **amostrado** e não desenhado como
 quadrado: um quadrilátero sólido dá 2 ou 3 níveis de luminância; o atlas medido dá
 **114 níveis e 86,2 % de pixels em rampa**.
 
+### 9. O nitro dava velocidade permanente — o ponto aberto do §28
+
+O resumo da rodada anterior deixou isto como **suspeita**: "a corrida do salar
+fecha em 56 s com progresso 4 377 m = 78 m/s de média, acima de
+`VEL_NITRO_MAX = 82` só no pico mas suspeito". Foi investigado e **é bug**.
+
+Com tanque 100, gasto 30/s e recarga 8/s, o ciclo ativo do nitro é **21 %**: a
+média não podia passar de ~66 m/s. Medido em `--json` (que passou a expor
+`nitro`, `nitro_usando` e `derrapando`):
+
+```text
+t= 2,3 s  v=82,0  nitro=30,4  usando=True
+t= 3,6 s  v=82,0  nitro=14,7  usando=False   ← acabou o tanque
+t= 6,3 s  v=81,6  nitro=21,9  usando=False   ← e a velocidade é a mesma
+t=10,3 s  v=79,4  nitro=53,9  usando=False
+```
+
+**O motor zera no topo, mas nada traz o carro de volta.** `sobra = 0` só impede
+acelerar mais; o arrasto com o acelerador preso é uma constante de 0,55 m/s², e
+82 → 62 leva **36 segundos** — mais que uma volta. O nitro emprestava velocidade
+e ela nunca era devolvida, então no salar (pista larga, sem curva que obrigue a
+frear) a corrida inteira ficava acima do topo.
+
+A correção é uma parcela que só existe **acima** do topo:
+
+```rust
+let excesso = (vel - vel_topo).max(0.0) * FREIO_EXCESSO;   // 1,0 s⁻¹
+let resistencias = arrasto + atrito_extra + excesso;
+```
+
+Com `FREIO_EXCESSO = 1,0`, a constante de tempo é 1 s: 82 → 62 em ~3 s, que é o
+que se sente como "o nitro acabou".
+
+**Ela não pode entrar no arrasto geral.** Lá a parcela também age **abaixo** do
+topo, e é literalmente o erro que uma versão anterior desta conta já tinha
+cometido — o comentário de `arrasto` registra o carro estabilizando em 32,7 m/s
+em vez dos 62 prometidos. Foi o que motivou o segundo teste.
+
+| Mapa | Média antes | depois | Corrida antes | depois |
+| --- | --- | --- | --- | --- |
+| salar | **78,2 m/s** | **67,1** | 56,0 s | 65,3 s |
+| circuito | 63,6 m/s | **56,3** | 65,4 s | 74,0 s |
+| boavista | 53,1 m/s | 50,6 | 49,3 s | 51,8 s |
+| avenida | 46,4 m/s | 46,4 | 41,5 s | 41,5 s |
+| porto | 32,9 m/s | 32,9 | 93,9 s | 93,9 s |
+
+A avenida e o porto **não mudaram** — não são largos o bastante para o carro
+passar a corrida acima do topo. Foi o mapa novo que tornou o bug visível.
+
+#### A descida do boavista continua sendo descida
+
+Preocupação legítima: a ladeira usa a gravidade para acelerar (§31), e um freio
+de excesso poderia matá-la. Não mata, e o número explica: com 13 % de inclinação
+a gravidade dá 4,46 m/s², então o equilíbrio é `62 + 4,46 / 1,0 ≈ 66,5`. Medido
+na descida: **66,8 → 65,3 m/s** depois que o nitro acaba. Ou seja, a serra
+continua rendendo **+4 m/s** sobre o plano, e o nitro continua valendo os 82.
+O que acabou foi o carro fazer a volta inteira no teto absoluto por gravidade —
+que era a anomalia, não o relevo.
+
+#### Os dois testes, e a mutação que os prova
+
+| Teste | O que exige |
+| --- | --- |
+| `o_nitro_nao_deixa_velocidade_permanente` | tanque vazio, partindo de 82 com o acelerador preso: em 4 s tem de estar a menos de 1,5 m/s do topo |
+| `abaixo_do_topo_o_freio_de_excesso_nao_aparece` | a 31 m/s o carro **acelera** — a parcela é zero em velocidade legal |
+
+Revertendo a correção (`0.0 * excesso`), o primeiro reprova com *"4 s depois de o
+nitro acabar o carro ainda estava a 79.8 m/s (topo sem nitro = 62)"*. Verificado.
+
 ### Números desta rodada
 
 ```text
-cargo test --workspace (neon-drift)   123 ui-sdl + 128 core = 251   (eram 231)
+cargo test --workspace (neon-drift)   123 ui-sdl + 130 core = 253   (eram 231)
 cargo build --release                 zero erro, zero aviso
 tests/run-all.mjs                     199/199 JS
 validate-app.mjs --all                8 apps válidos (1 em scaffold)
