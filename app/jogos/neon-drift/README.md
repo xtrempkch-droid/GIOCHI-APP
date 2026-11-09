@@ -1,7 +1,8 @@
 # Neon Drift
 
 Corrida arcade 3D noturna, em Rust, sobre a **GIOCHI-ENGINE-3D** e o KMSDRM do
-aparelho. Um jogador, três adversários, duas voltas e um teto rígido de **75 fps**.
+aparelho. Um jogador, três adversários, **cinco pistas** e um teto rígido de
+**75 fps**.
 
 O teto é de **simulação**, não de desenho: a física roda em passo fixo de 75 Hz e
 o laço só desenha o que couber. Quanto cada aparelho entrega está na tabela de
@@ -10,7 +11,7 @@ painel, não do jogo: no R35S, cujo display é de 60 Hz, **uma malha só** já m
 59,7 fps, então nenhum jogo passa disso ali.
 
 ```bash
-cargo test --workspace                        # 121 (ui-sdl) + 119 (core)
+cargo test --workspace                        # 123 (ui-sdl) + 128 (core)
 cargo build --release
 SDL_VIDEODRIVER=offscreen ./target/release/giochi-neon-drift --quadro /tmp/q.bmp
 ./target/release/giochi-neon-drift --mapa boavista --tela corrida --passos 800 --piloto
@@ -82,17 +83,26 @@ jogo **não** tem caminho por software: ele desenha por GL direto, não pelo
 renderer do SDL). Alguém que "desligue a GPU" com `GIOCHI_GLES=0` vai medir duas
 vezes a mesma coisa.
 
-## Dois mapas: avenida e a descida
+## Cinco mapas
 
-| `--mapa` | Pista | Desnível | Cenário |
-| --- | --- | --- | --- |
-| `avenida` (padrão) | 962 m, tudo plano | 0 m | cidade noturna, arcos de neon, passarelas, outdoors |
-| `boavista` | 1 309 m | **74 m** | serra: paredão de pedra, mata, guarda-corpo, cidade lá embaixo e morros no horizonte |
+| `--mapa` | Pista | Desnível | Dificuldade | Cenário |
+| --- | --- | --- | --- | --- |
+| `avenida` (padrão) | 962 m, tudo plano | 0 m | 3 | cidade noturna: arcos de neon, passarelas, outdoors |
+| `boavista` | 1 309 m, 2 voltas | **74 m** | 4 | serra: paredão de pedra, mata, guarda-corpo, cidade lá embaixo |
+| `circuito` | **2 081 m** (o dobro da avenida) | 0 m | 5 | autódromo: barreiras, torres de luz, arquibancada, **3 rampas** |
+| `porto` | 1 030 m, **3 voltas** | 0 m | 3 | cais: contêineres, guindastes, mar com reflexos |
+| `salar` | **2 188 m** | 0 m | 2 | planície de sal: pista larga, montanhas, **1 rampa** na reta de 500 m |
 
 O mapa é **dado**, não código (`crates/core/src/mapa.rs`): pontos de controle,
-largura mínima e máxima da pista, trechos de túnel, perfil de altura, voltas,
-tempo limite, dificuldade e qual cenário construir. Acrescentar um terceiro é
-acrescentar uma constante e uma linha em `TODOS`.
+largura mínima e máxima da pista, trechos de túnel, perfil de altura, **rampas**,
+voltas, tempo limite, dificuldade e qual cenário construir. Acrescentar um sexto
+é acrescentar uma constante e uma linha em `TODOS`.
+
+A **dificuldade declarada não é enfeite**: o teste de promessa
+(`cada_mapa_constroi_uma_pista_com_comprimento_utilizavel`) cobra curva fechada
+de verdade (`>= 1,2 rad em 45 m`) só de quem declara `>= 3`. O salar promete
+"larga e reta" e é medido por isso — antes o piso era fixo e reprovava o mapa
+por ele ser exatamente o que promete.
 
 A **descida** usa o Alto da Boavista (Rio de Janeiro) como referência de
 *forma*, não como cópia: serpenteia para baixo, tem uma curva fechada de raio
@@ -135,6 +145,15 @@ não tinha criação de textura GL nem desenho texturizado, embora já tivesse
 `create_texture_rgba`, `draw_mesh_textured`, `texture_size` e `destroy_texture`
 (`vendor/giochi-engine-3d/src/render3d/texture.rs`). A engine original continua
 intocada — atualizar é copiar de novo.
+
+**Para pintar as suas:** [`TEXTURAS.md`](TEXTURAS.md) tem a ficha completa —
+64×64 RGBA, cinza-claro neutro, 3 m por tile, faixa útil de luminância, a
+tabela de qual malha usa qual material e as três armadilhas de BMP. O molde sai
+do próprio jogo:
+
+```bash
+giochi-neon-drift --texturas /tmp/texturas.bmp   # as 7 lado a lado, 480x72
+```
 
 ## Sprites: as partículas deixaram de ser quadrados
 
@@ -188,6 +207,11 @@ vai para a posição da forma *i*. Nada do desenho sabe de onde ela veio, então
 não há um segundo caminho de código que possa envelhecer diferente.
 
 O RGB da sua folha é descartado (a cor vem do `tint`) e o que vale é o **alfa**.
+
+A ficha de arte (grade 4×4, margem de 1e-4, por que o `gota` cresce 1,30×, BMP de
+24 bits usando a luminância como máscara) está em [`TEXTURAS.md`](TEXTURAS.md). E
+o arquivo para conferir é `--atlas /tmp/atlas.bmp`, que sai com fundo **magenta**:
+alfa 0 sobre preto é indistinguível de "não desenhou".
 Num BMP de 24 bits, que perdeu o alfa, a **luminância** vira máscara: branco
 opaco, preto transparente — a convenção das folhas de efeito.
 
@@ -261,11 +285,52 @@ E as texturas de chão usam **UV pela posição no mundo**, não 0..1 por
 quadrilátero: com UV por segmento, a textura reiniciaria a cada 4 m de serra e a
 emenda apareceria como uma faixa correndo ao lado do carro.
 
+## Rampas de salto: o carro sai do chão
+
+Uma rampa **não** é um morrinho no relevo. Um morrinho é uma ladeira suave: a
+física mantém o carro grudado no chão e ele nunca decola. Para o carro **sair do
+chão** o piso tem de cair mais rápido do que a gravidade conseguiria trazê-lo de
+volta — ou seja, um **corte seco** depois da subida, e isso não cabe num perfil
+de `(fração, altura)` interpolado entre dois pontos.
+
+Por isso a rampa é **dado declarado**, com `s` exato:
+
+```rust
+Rampa { fracao: 0.500, comprimento: 30.0, altura: 3.3 }
+```
+
+`RampaS::altura_em(s)` devolve a subida e **zero depois do topo** — é esse corte
+que faz o carro voar. E o topo é **encaixado numa amostra** da pista
+(`encaixar_em_amostra`): o asfalto é desenhado ligando a altura de amostras
+vizinhas, e um topo no meio de um segmento faria o piso descer suave, de novo sem
+decolagem. A decolagem é decidida por `pista.rampa_cruzada(s_anterior, s)`, não
+por "o piso caiu".
+
+No ar: não colide com mureta nem obstáculo, o drift não acumula e o nariz do
+carro sobe e desce com `atan2(velocidade_vertical, velocidade)`. O voo entra na
+física como fato, com `Decolou`/`Aterrissou` avisando a cena e o som.
+
+Medido na rampa 1 do circuito a 62 m/s: decola com 11,6 m/s verticais, **pico de
+6,8 m** e aterrissa **1,73 s** depois.
+
+Duas constantes existem porque a física "correta" não é divertida:
+`BONUS_SALTO = 1,7` (fisicamente `v·inclinação` daria 2,8 s de voo, que é longo
+demais) e `GRAVIDADE_VOO = 15,0`, mais fraca que a `GRAVIDADE = 34,3` da ladeira.
+
+### O `s` salta no ar, e isso quase creditou uma volta
+
+Voando, o `localizar` pode trocar de referência ao atravessar o miolo de uma
+curva: medido, o `s` saltou **96,76 m num único quadro** de 1/75 s. O progresso
+da corrida passou a usar o **deslocamento real projetado na pista**
+(`pos_anterior: Ponto`), que é imune a isso por construção — um teto arbitrário
+seria o próximo número mágico a dar errado.
+
 ## O que o jogo tem
 
 | Peça | Como está |
 | --- | --- |
-| Pista | **dois mapas**: a avenida de **962 m** (reta de 170 m, praça de drift de 19 m de meia-largura, **túnel de 157 m**, curva de raio 20 m) e a descida de **1 309 m** com 74 m de desnível |
+| Pista | **cinco mapas**: avenida (962 m, túnel de 157 m, curva de raio 20 m), descida (1 309 m, 74 m de desnível), **circuito (2 081 m com 3 rampas)**, porto (1 030 m, hairpin de raio 22 m) e salar (2 188 m, 1 rampa) |
+| Salto | rampa é dado do mapa; o carro decola com **6,8 m de pico** e 1,7 s de voo, e no ar não colide nem acumula drift |
 | Carro | física arcade: 62 m/s no asfalto, **82 m/s com nitro**, derrapagem que só existe com o freio de mão; rolagem e arrasto **freiam até zero e nunca empurram o carro para trás** |
 | Drift | combo até ×5, pontos por segundo de derrapagem; bater zera o combo e mantém o que já foi somado |
 | Adversários | três, com linha própria e freando na curva; ~9 s atrás de um piloto competente em duas voltas |
@@ -311,8 +376,9 @@ recusa `--fps-teto` fora de 1..75.
 | `--passos 1500` | adianta a simulação |
 | `--piloto` | o piloto artificial dirige durante os `--passos` |
 | `--tela corrida` | força uma tela |
-| `--mapa boavista` | escolhe o mapa (`avenida` ou `boavista`) |
-| `--so asfalto` | desenha **uma** malha só |
+| `--mapa porto` | escolhe o mapa (`avenida`, `boavista`, `circuito`, `porto`, `salar`) |
+| `--em 1240` | posiciona o carro em `s = 1240 m` já a 48 m/s — é como se cai **em cima** de uma rampa sem dirigir até ela |
+| `--so asfalto_t` | desenha **uma** malha só (nome da malha; `GIOCHI_SEM` usa o nome da textura) |
 | `--so mundo` | desenha toda a geometria estática e mais nada |
 | `--teclas w,a,space` | teclas seguradas |
 | `--quadros N` | desenha N quadros e sai (mede fps quando há relógio) |
@@ -321,7 +387,8 @@ recusa `--fps-teto` fora de 1..75.
 | `--sem-vsync` | pede troca de buffer sem espera (`GIOCHI_VSYNC=0`). No KMSDRM do aparelho **não tem efeito**: o `drmModePageFlip` continua esperando o campo, e é por isso que se mede comparando configurações, não buscando o "custo puro" |
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
-| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso` e a contagem de cada tipo de partícula |
+| `--texturas t.bmp` | grava as 7 texturas lado a lado, **sem abrir janela** — o molde para pintar |
+| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo` e a contagem de cada tipo de partícula |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não
@@ -331,6 +398,26 @@ as partes "está lento" não diz o que cortar.
 `--piloto` existe porque `--passos` sozinho media outra coisa: com o acelerador
 preso, o carro batia no primeiro muro e ficava a 2,6 m/s encostado — e o quadro
 capturado mostrava a linha de largada como se a corrida não tivesse começado.
+
+O salto se confere numa linha, sem dirigir até a rampa — **com `--quadro`**, que
+é o que faz o processo sair depois de imprimir:
+
+```bash
+giochi-neon-drift --mapa circuito --em 1240 --teclas up --passos 60 \
+                  --quadro /tmp/j.bmp --json
+# no_ar:true  v_vertical:8.43  s:1279.9   ← subindo
+# passos 90:  no_ar:true  v_vertical:2.43   ← perto do ápice
+# passos 120: no_ar:true  v_vertical:-3.57  ← caindo
+```
+
+`--em` também marca a largada (`marcar_largou`): sem isso o carro teleportado
+apareceria com volta 0 e o diagnóstico mediria outra coisa.
+
+**`--passos` sozinho não para o processo.** Ele adianta a simulação antes do
+laço e o laço continua até `Esc` ou `--quadros`; o `--json` que sai no fim é do
+estado **depois** da corrida inteira. Sem `--quadro` a medição do salto reporta
+`no_ar:false` porque o carro já pousou — o número é verdadeiro e responde outra
+pergunta.
 
 `--so` existe porque "o quadro está estranho" não diz **qual** malha está
 errada. Foi ele que mostrou o asfalto ausente com a malha tendo 2 560 vértices:
@@ -441,21 +528,35 @@ Um quad é uma matriz de modelo de 4×4, e dois campos dela enganam:
    Há teste para os dois casos (`o_quad_deitado_do_carro_fica_com_a_normal_para_cima`,
    `a_normal_do_quad_deitado_aponta_para_cima`).
 
-## Pendências conhecidas
+## Os carros corriam de ré — corrigido, com prova
 
-### O carro é desenhado de ré (180° entre modelo e rumo)
+Relatado pelo dono: *"parece que os carros estão correndo de ré."* Era exatamente
+isso, e a causa era **180° entre o modelo e o rumo**:
 
-`core/carro.rs` define `direcao() = (sin(angulo), cos(angulo))` — com `angulo = 0`
-o carro **anda para +Z**. `ui-sdl/malha.rs` constrói os faróis em `z = -2,14` e
-as lanternas em `z = +2,14` — a **frente desenhada é -Z**.
+| Onde | O que dizia |
+| --- | --- |
+| `core/carro.rs` — `direcao()` | `(sin θ, cos θ)` → com θ = 0 o carro **anda para +Z** |
+| `ui-sdl/malha.rs` — `carro()` | faróis em `z = -2,14`, lanternas em `z = +2,14` → a **frente desenhada é -Z** |
 
-A rotação é a mesma nos dois (`Quat::from_axis_angle(UP, angulo)`), então o
-desenho aponta para o lado oposto ao movimento. Como a câmera fica atrás do
-movimento, o jogador vê os faróis apontando para ele.
+Girar `(0,0,-1)` por `θ` em Y dá `(-sin θ, -cos θ)`, que é **menos** a
+`direcao()`. A câmera fica atrás do movimento, então o jogador via os faróis
+apontando para ele.
 
-Registrado em [`AGENTS.md`](../../../AGENTS.md) §35, com as duas correções
-possíveis e o teste que decide qual delas: comparar o centro dos faróis com
-`direcao()` no mesmo ângulo.
+A correção é uma linha — `matriz_de_carro` gira por `θ + π` — e **não toca a
+física nem a malha**. O teste que a sustenta,
+`o_carro_desenhado_aponta_para_onde_ele_anda`, pega o centro dos vértices dos
+faróis, aplica a matriz e compara com `direcao()`: revertendo o `+ π`, ele falha
+com produto escalar `-1.000`.
+
+E a prova em imagem, contando pixels na área do carro no mesmo comando
+(`--tela corrida --piloto --passos 900`):
+
+```text
+antes     lanternas  1 px   ·  faróis 41 px    ← de ré
+depois    lanternas 149 px  ·  faróis 54 px    ← de frente
+```
+
+![Carro antes e depois](../../../docs/imagens/neon-drift-carro-antes-depois.png)
 
 ## O que este jogo **não** faz
 
@@ -471,10 +572,13 @@ possíveis e o teste que decide qual delas: comparar o centro dos faróis com
 ```text
 crates/core/     regras puras: mapa, pista, carro, drift, IA, corrida, fonte,
                  HUD, relógio e o piloto artificial. Sem SDL, sem janela e sem
-                 arquivo: 119 testes.
+                 arquivo: 128 testes.
 crates/ui-sdl/   cena 3D, efeitos, malhas, texturas e atlas de sprites
                  procedurais (ou folha externa em BMP), áudio, evdev, entrada e o
-                 laço. É a única parte que precisa de tela: 121 testes.
+                 laço. É a única parte que precisa de tela: 123 testes.
 vendor/          cópia isolada da GIOCHI-ENGINE-3D. A engine original é outro
                  repositório e **não** é editada por este app.
+TEXTURAS.md      guia de arte: tamanho, canais, escala no mundo, faixa de
+                 luminância, as três armadilhas de BMP e onde mexer para cada
+                 mudança.
 ```

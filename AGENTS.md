@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 06/11/2026 (com acesso ao aparelho real).
+> Atualizado em: 10/11/2026 (com acesso ao aparelho real).
 
 ## 0. Estado em uma tela (leia isto primeiro)
 
@@ -4941,7 +4941,12 @@ interface depois da primeira captura.
 Duas coisas, registradas aqui para não dependerem de memória. Nenhuma foi
 alterada nesta rodada — o dono disse "fica para próxima".
 
-### 1. "Parece que os carros estão correndo de ré" — causa localizada em leitura
+### 1. "Parece que os carros estão correndo de ré" — **RESOLVIDO**, ver §37
+
+> Corrigido em 10/11/2026: a hipótese abaixo estava certa e o teste que ela pedia
+> foi escrito antes da correção. A correção foi a opção 1 (girar o desenho por
+> `θ + π`), com prova em imagem. O texto original fica porque o raciocínio é o
+> registro de como o bug foi encontrado.
 
 Não é física: é **180° entre o modelo e o rumo**. As duas convenções existem no
 código e discordam:
@@ -4980,7 +4985,7 @@ Não confirmei em imagem: o carro do jogador sai escuro no quadro noturno e não
 tem silhueta legível a 640×480. A leitura de código é conclusiva quanto ao
 sinal; o que falta é a imagem que mostre o efeito ao dono.
 
-### 2. Mais três mapas
+### 2. Mais três mapas — **RESOLVIDO em §37**
 
 Pedido do dono: *"quero mais 3 mapas"*. O que existe hoje é `avenida` (962 m,
 plano) e `boavista` (1310 m, descida). O caminho já está aberto — `mapa.rs`
@@ -5090,8 +5095,246 @@ movimento, olhando para a traseira dele), ou só o contraste de um carro escuro
 numa cena noturna a 640×480. As duas hipóteses se separam com o teste que o §35
 pede: comparar o centro dos faróis com `direcao()` no mesmo ângulo.
 
+> **Fechado em 10/11/2026 (§37): era a primeira.** O carro estava desenhado,
+> apontando para o lado errado. Não era contraste. O teste foi escrito, o
+> `θ + π` entrou e a contagem de pixels na área do carro foi de 1 para 149
+> lanternas.
+
 ### Correção de ferramenta desta rodada
 
 `procurar` passou a acumular os IPs que **aceitam conexão e recusam
 autenticação** e a usá-los na mensagem de erro. Antes o mesmo sintoma cobria
 "cabo fora" e "chave faltando", e os dois remédios são diferentes.
+
+## 37. Neon Drift: os carros corriam de ré, e três mapas novos (10/11/2026)
+
+Pedido do dono: **"corrija o neon drift e expanda com 3 mapas. mapa com rampas de
+salto e com o dobro do tamanho. preciso de detalhes para criar sprite de
+textura para o jogo"**. Três entregas, e a primeira era um bug que ele já tinha
+relatado no §35 e que estava esperando a próxima rodada.
+
+### 1. "Os carros estão correndo de ré" — era literal
+
+A leitura de código do §35 estava certa, e o teste que ele pedia foi escrito
+**antes** da correção (é o que decide qual das duas correções aplicar):
+
+| Onde | O que diz | Consequência |
+| --- | --- | --- |
+| `core/carro.rs` — `direcao()` | `(sin θ, cos θ)` | com θ = 0 o carro **anda para +Z** |
+| `ui-sdl/malha.rs` — `carro()` | faróis em `z = -2,14`, lanternas em `z = +2,14` | a **frente desenhada é -Z** |
+
+Girar `(0,0,-1)` por θ em Y dá `(-sin θ, -cos θ)` — exatamente **menos** a
+`direcao()`. As duas convenções estavam documentadas, em arquivos diferentes, e
+ninguém as tinha colocado lado a lado. A câmera fica atrás do movimento, então o
+jogador via os faróis apontando para ele.
+
+A correção é **uma linha** — `matriz_de_carro` gira por `θ + π` — e não toca a
+física nem a malha. A outra opção (inverter a malha) exigiria trocar o sinal de
+todos os `z` de faróis, lanternas, capô, aerofólio e cabine, com risco real de
+deixar uma peça para trás.
+
+**`o_carro_desenhado_aponta_para_onde_ele_anda`** pega o centro dos vértices dos
+faróis, aplica a matriz do carro e compara com `direcao()` no mesmo ângulo.
+Revertendo o `+ π`, falha com produto escalar **-1.000**.
+
+Prova em imagem, contando pixels na área do carro no mesmo comando
+(`--tela corrida --piloto --passos 900`):
+
+```text
+antes     lanternas  1 px   ·  faróis 41 px    ← de ré
+depois    lanternas 149 px  ·  faróis 54 px    ← de frente
+```
+
+[`docs/imagens/neon-drift-carro-antes-depois.png`](docs/imagens/neon-drift-carro-antes-depois.png)
+
+#### O §36 fecha junto
+
+O §36 anotou "o carro não aparece no quadro capturado" e deixou duas hipóteses. É
+a primeira: o carro **estava** desenhado, apontando para o lado errado, e a
+câmera olhava para a traseira dele. Não era contraste.
+
+#### Um erro de diagnóstico no caminho
+
+`--quadro` desenha **um** quadro e ignora `--quadros`, e a câmera só converge no
+`cena.seguir` do laço de `--passos`. A primeira captura saiu com o carro gigante
+no canto — artefato de captura, não bug do jogo. A receita que funciona é
+`--tela corrida --piloto --passos 900`.
+
+### 2. Rampas de salto: dado declarado, não relevo
+
+Uma rampa **não pode** ser um morrinho no perfil de elevação. Um morrinho é uma
+ladeira suave: a física mantém o carro grudado no chão e ele nunca decola. Para
+sair do chão o piso tem de cair mais rápido do que a gravidade traz o carro de
+volta — um **corte seco**, e um perfil `(fração, altura)` interpola dois pontos
+com uma reta: "topo em 4 m e logo abaixo 0 m" só existiria com os dois pontos a
+centímetros um do outro.
+
+Hoje é dado do mapa:
+
+```rust
+Rampa { fracao: 0.500, comprimento: 30.0, altura: 3.3 }
+```
+
+| Peça | Papel |
+| --- | --- |
+| `RampaS::altura_em(s)` | devolve a subida e **zero depois do topo** — é esse corte que faz voar |
+| `ensaixar_em_amostra` | o topo cai **numa amostra** da pista |
+| `pista.rampa_cruzada(de, ate)` | é a decolagem: pergunta "cruzei o topo neste passo?", não "o piso caiu" |
+
+O `encaixar_em_amostra` existe porque o asfalto é desenhado ligando a `altura` de
+amostras vizinhas: topo no meio de um segmento faz o piso descer suave, e o
+carro nunca decola — o defeito apareceria como "a rampa não funciona", longe da
+causa.
+
+**Dois números existem porque a física correta não é divertida:**
+`BONUS_SALTO = 1,7` (fisicamente `v·inclinação` a 62 m/s em 22 % dá 13,6 m/s →
+2,8 s de voo, "correto e sem graça") e `GRAVIDADE_VOO = 15,0`, mais fraca que a
+`GRAVIDADE = 34,3` da ladeira, senão o voo dura meio segundo.
+
+Medido na rampa 1 do circuito a 62 m/s: decola com **11,6 m/s** verticais, pico
+de **6,8 m**, aterrissa **1,73 s** depois.
+
+### 3. O `s` salta no ar — e quase creditou uma volta
+
+Voando, o `localizar` pode trocar de referência ao atravessar o miolo de uma
+curva. Medido: o `s` saltou **96,76 m num único quadro** de 1/75 s.
+
+Duas correções foram tentadas, e a segunda é a que ficou:
+
+1. **teto arbitrário** (`clamp(-velocidade*dt*2.4-3.0, ...)`) — funciona e é o
+   próximo número mágico a dar errado num mapa mais rápido;
+2. **deslocamento real projetado na pista** (`pos_anterior: Ponto`,
+   `ds = (pos - pos_anterior) · direcao_pista`) — imune por construção, porque o
+   `s` é derivado de onde o carro **esteve**, não do índice que o localizador
+   devolveu.
+
+O teste `o_salto_nao_credita_volta_nem_dispara_o_progresso` mede no **progresso
+da corrida**, não no `s` do carro: um teste que olhasse o `s` passaria dos dois
+lados, porque o `s` continua saltando — o que mudou é quem o consome.
+
+### 4. Os três mapas
+
+| `--mapa` | Comprimento | Voltas | Desnível | Dificuldade | Rampas | Cenário |
+| --- | --- | --- | --- | --- | --- | --- |
+| `avenida` (padrão) | 962 m | 2 | 0 | 3 | — | cidade noturna |
+| `boavista` | 1 309 m | 2 | **74 m** | 4 | — | serra |
+| **`circuito`** | **2 081 m** | 2 | 0 | 5 | **3** | autódromo |
+| **`porto`** | 1 030 m | **3** | 0 | 3 | — | cais |
+| **`salar`** | **2 188 m** | 2 | 0 | 2 | **1** | planície de sal |
+
+`TODOS` virou `&[&Mapa]` — o laço de teste e o `por_id` já funcionavam com slice.
+
+#### "O dobro do tamanho" foi medido, não estimado
+
+Dobro **da avenida**, que é o mapa padrão: 962 × 2 ≈ 1 900 m. A primeira versão
+do circuito fechava em **1 537 m** e foi esticada até passar de 1 900. O teste
+`o_circuito_tem_o_dobro_do_tamanho_da_avenida` guarda a promessa.
+
+#### O porto precisou de um hairpin de verdade
+
+A primeira versão tinha só quatro cantos de 90° e o teste de promessa devolveu
+**1,00 rad em 45 m** — reprovado, porque o porto declara dificuldade 3. Os três
+pontos de controle `(240,85) (196,78) (160,118)` dão raio **~22 m**.
+
+#### O piso de curvatura passou a vir da dificuldade declarada
+
+O teste exigia `> 1,2 rad em 45 m` de **todo** mapa. O salar declara dificuldade
+2 e promete "larga e reta" — o piso o reprovava por ele ser exatamente o que
+promete. Agora `>= 3 → 1,2 rad`, senão `0,4`.
+
+Isso é diferente de lista de exceções: a exceção seria "o salar não precisa"; a
+regra é "quem promete curva fechada é cobrado por curva fechada". Um mapa novo
+com dificuldade 2 nasce coberto.
+
+### 5. Cenário novo não cria malha nova — com uma exceção já aprendida
+
+Os três cenários usam só malhas que já existiam (`muros`, `neon`, `neon_b`,
+`predios_a/b/c`, `telhados`, `longe`, `faixas`): arcos de arquibancada, torres de
+luz, contêineres, guindastes e estacas custaram **zero chamada de desenho**.
+Medido: 48–51 desenhos por quadro nos cinco mapas.
+
+#### Mar e montanha usam `longe` — e isso é o **oposto** do morro do §31
+
+O §31 registrou o morro da serra ganhando malha e cor próprias porque, desenhado
+com `PREDIO_LONGE`, ele saía **mais claro que o céu** e virava uma chapa azul de
+48 % do quadro.
+
+Aqui o papel é outro e a medição confirma: a água **reflete as luzes do cais** e
+a rocha do salar **recebe luar**, então as duas ficam mais claras que o céu —
+32,9 % de céu contra 14,1 % de mar no porto. Se algum dia elas ficarem mais
+claras do que deviam, o sintoma é o do §31 e a correção é a mesma.
+
+Quatro constantes (`BARREIRA`, `CONTEINER_A/B/C`, `AGUA`, `SAL`, `MONTANHA`)
+foram declaradas durante o desenho e **nunca usadas**: a cor de uma malha é
+decidida quando ela é montada, não no desenho, e dar cor própria a um contêiner
+custaria malha nova. Foram removidas em vez de ficarem como aviso de
+`dead_code` — um aviso que ninguém lê ensina a ignorar avisos.
+
+### 6. Quadros medidos (1024×768, offscreen, 700 passos com piloto)
+
+```text
+porto      2649 cores · média 45,5 · quase-preto 0,23 % · céu 32,9 % · mar 14,1 %
+salar       889 cores · média 35,1 · quase-preto 0,04 % · céu 34,8 % · montanha 11,9 %
+circuito    852 cores · média 30,8 · quase-preto 0,04 %
+```
+
+Nenhum mapa novo tem o problema de §31 (chapa chapada): o mais concentrado é o
+circuito com 42,6 % numa cor, e essa cor é o céu.
+
+### 7. Diagnóstico novo: `--em`
+
+`--em <metros>` posiciona o carro em `s` já a 48 m/s. Existe porque testar o
+salto exigia dirigir até a rampa — e o piloto artificial às vezes não chega lá
+com velocidade. Com ele o salto é medido em três linhas:
+
+```bash
+giochi-neon-drift --mapa circuito --em 1240 --teclas up --passos 60 \
+                  --quadro /tmp/j.bmp --json
+# no_ar:true v_vertical:8.43   (subindo)   passos 90 → 2.43 (ápice)
+#                                          passos 120 → -3.57 (caindo)
+```
+
+**`--passos` sozinho não para o processo.** Ele adianta a simulação antes do laço
+e o laço continua até `Esc` ou `--quadros`; o `--json` final é do estado **depois
+da corrida inteira** e responde outra pergunta. A primeira versão desta receita
+foi escrita **sem `--quadro`** e reportava `no_ar:false` num jogo que salta — o
+número era verdadeiro e a conclusão teria sido falsa. Documentação de ferramenta
+também precisa ser executada.
+
+`--em` chama `marcar_largou()` junto: sem isso o carro teleportado apareceria com
+volta 0 e o diagnóstico mediria outra coisa.
+
+### 8. `--texturas`: o molde para pintar
+
+```bash
+giochi-neon-drift --texturas /tmp/texturas.bmp   # 480x72, as 7 lado a lado
+```
+
+Existia `--atlas` para os sprites e **nada** para as texturas de superfície: "que
+densidade tem o asfalto?" só se respondia lendo o código. A tira sai com 4 px de
+separação e fundo cinza-escuro, na ordem de `texturas::todas()`.
+
+O guia completo está em
+[`app/jogos/neon-drift/TEXTURAS.md`](app/jogos/neon-drift/TEXTURAS.md): 64×64
+RGBA, cinza-claro neutro (a cor vem do `tint`), 3 m por tile, faixa útil de
+luminância 0,45–0,95, as três armadilhas de BMP (altura negativa, alinhamento em
+4 bytes, compressão), a margem de 1e-4 entre células do atlas e o que **não**
+existe (textura externa de superfície, mipmap, folha com mais de 8 formas).
+
+O número que prova que o sprite está sendo **amostrado** e não desenhado como
+quadrado: um quadrilátero sólido dá 2 ou 3 níveis de luminância; o atlas medido dá
+**114 níveis e 86,2 % de pixels em rampa**.
+
+### Números desta rodada
+
+```text
+cargo test --workspace (neon-drift)   123 ui-sdl + 128 core = 251   (eram 231)
+cargo build --release                 zero erro, zero aviso
+tests/run-all.mjs                     199/199 JS
+validate-app.mjs --all                8 apps válidos (1 em scaffold)
+verificar-jogos.mjs                   ok nos 3 tamanhos
+```
+
+E a correção de §35 fecha uma pendência aberta desde 09/11 sem código novo na
+rodada seguinte: o teste que ele pedia **foi escrito antes da correção**, como
+ele mandou.
