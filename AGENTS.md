@@ -4292,3 +4292,138 @@ texturas **não** têm número de RK3566. É a mesma classe de pendência do §2
 Avenida fazia 39,5 fps antes das texturas e a serra nunca rodou no hardware.
 Cross-compile aarch64 **compila e linka** (620 KB, `PT_INTERP` presente); falta
 instalar e medir.
+
+## 32. Neon Drift: atlas de sprites, e o `--json` que não era JSON (10/11/2026)
+
+Pedido do dono: uma **folha de sprites de exemplo** ("exemplo de sprites que
+pode ser usado") e `try again`. A rodada anterior tinha acabado de medir a serra,
+então isto foi a próxima camada: as partículas eram **quadriláteros sólidos**, e
+num painel de 3,5" um quadrado não lê como fumaça, lê como quadrado.
+
+### O atlas é gerado, e é máscara de alfa
+
+`crates/ui-sdl/src/atlas.rs` — 128×128, oito formas: `puff`, `gota`, `faisca`,
+`risco`, `chuva`, `halo`, `borrao`, `anel`. Mesmo motivo das texturas de
+superfície: **o aparelho não decodifica PNG** (§24). A diferença é que ali o RGB
+dá relevo e aqui o RGB é **branco em toda parte** — quem desenha é o `a`. A cor
+vem do `tint` e o desbotamento da faixa de vida, então uma nuvem nasce branca,
+fica cinza e some sem uma textura por cor.
+
+| Célula | Onde |
+| --- | --- |
+| `puff` | fumaça de pneu |
+| `gota` | respingo de água |
+| `faisca` | raspão e batida |
+| `risco` | rastro de nitro |
+| `chuva` | gota caindo |
+| `halo` | mote de neon |
+| `borrao` | marca de pneu deitada |
+| `anel` | reservada (fragmento de vidro) |
+
+Uma forma por **malha**, não por uniforme: `malha::quad_celula` embute o
+retângulo de UV da célula no quadrilátero. É o que permite as centenas de cópias
+de um tipo saírem numa chamada instanciada sem um atributo por instância — a
+célula é geometria.
+
+O retângulo de UV é encolhido 1e-4 dentro da célula. Sem isso a amostragem
+`LINEAR` na borda puxa o texel da célula vizinha e cada sprite ganha um risco
+reto atravessando a forma.
+
+### A engine ganhou o par que faltava: `TexturedInstanced`
+
+O snapshot em `vendor/` já tinha `Instanced` (cor) e `Textured` (cor + UV), e
+nenhum dos dois servia: o primeiro não tem UV, o segundo não tem matriz por
+instância. Hoje tem
+
+- `shaders/textured_instanced.vert` — o encontro dos dois;
+- `BuiltinShader::TexturedInstanced`, com o **mesmo** `textured.frag` (só o
+  estágio de vértice difere, então um sprite é sombreado igual à malha ao lado);
+- `RenderContext3D::draw_instanced_textured`.
+
+`draw_instanced` virou um invólucro de `draw_instanced_inner`, que recebe
+`Option<cor>` / `Option<(textura, tint)>` e **ramifica pelo uniforme do shader**,
+não por uma flag de modo: quem escolhe o programa texturizado não tem como a cor
+vencer em silêncio.
+
+### A prova de que o sprite está sendo amostrado
+
+Um quadro de partículas com mundo, carros e HUD desligados
+(`GIOCHI_SEM=mundo,carros,hud`), medido no PC:
+
+```text
+níveis de luminância distintos: 107
+pixels intermediários (rampa de alfa): 83,4 %
+```
+
+Um quadrilátero sólido dá **dois ou três** níveis (fundo, partícula, e a borda
+do antialias do próprio SDL) e ~0 % de rampa. 107 níveis só existem se a
+textura estiver sendo amostrada com alfa por texel. É a mesma lição do §30: o
+número tem de ser confrontado com o que já se sabia, senão "desenhou" e
+"desenhou um quadrado" ficam iguais.
+
+E o custo em chamadas **não mudou**: 51–54 desenhos por quadro com 640–783
+partículas, exatamente a estrutura de antes (um por tipo × faixa de vida). O que
+mudou é o que cada chamada amostra.
+
+### O ganho de tamanho existe num lugar só
+
+A `gota` é desenhada **1,30×** maior. O raio dela é 0,72 do meio-quadrado; o
+quadrilátero cheio ia até 1,0. Sem o ganho o respingo encolheria 28 % sem que
+ninguém tivesse mexido no tamanho dele — um efeito que "some" e cuja causa não
+está no código alterado. As outras formas já encostam na borda da célula, e
+ampliá-las passaria a amostrar o vizinho.
+
+### Dois defeitos que só apareceram ao ligar a ferramenta
+
+1. **`--json` não era JSON.** As linhas `neon-drift:` (texturas, atlas, painel,
+   mapa) iam para **stdout** junto do objeto, e `--json | python3 -m json.tool`
+   respondia `Expecting value: line 1 column 1`. Agora são `eprintln!`: stdout é
+   só dado. É a regra que o §19 já tinha escrito para a loja e que o jogo nunca
+   tinha aplicado a si mesmo.
+2. **Chave duplicada no JSON.** `posicao`, `volta` e `drift` apareciam **duas
+   vezes** — uma do laço, outra de `diagnostico()`. `json.load` fica com a
+   última e o consumidor nunca sabe que existe uma segunda fonte. Passaram a
+   sair só de `diagnostico()`. É a mesma classe do "duas listas envelhecem
+   diferente" que o §16 registrou para o enum de runtimes.
+
+### `--atlas`: olhar para o que as partículas amostram
+
+```bash
+giochi-neon-drift --atlas /tmp/atlas.bmp    # sem janela, sem contexto GL
+```
+
+O fundo sai **magenta**, não preto: alfa 0 sobre preto é indistinguível de "não
+desenhou", e o arquivo mentiria sobre ter gerado as formas. Foi ele que mostrou
+que as oito células estão onde o `retangulo()` diz.
+
+Existe porque "a função roda" e "a forma está certa" são afirmações diferentes:
+uma gaussiana centrada errada gera bytes válidos e desenha a nuvem fora do quad.
+
+### Números
+
+```text
+cargo test --workspace   108 core + 113 SDL = 221   (eram 209; +12)
+tests/run-all.mjs        199/199 JS
+validate-app.mjs --all   8 apps válidos (1 em scaffold)
+verificar-jogos.mjs      ok nos 3 tamanhos
+aarch64                  647 224 bytes, sha256 af8aafe9…, NEEDED = SDL2 +
+                         libgcc_s + libm + libc (o atlas não pede biblioteca nova)
+```
+
+### Mutações que provam os testes novos
+
+| Mutação | Reprova |
+| --- | --- |
+| `Forma::ganho` devolve 1,0 para a gota | `so_a_gota_cresce_para_compensar_a_forma_redonda` |
+| `Marca` aponta para `Halo` | `cada_tipo_de_particula_usa_uma_forma_diferente` |
+| `alfa_da_forma` com degrau (`if r<0.5 {1} else {0}`) | `o_puff_desbota_em_muitos_texels_e_nao_em_degrau` |
+| célula com RGB 0 em vez de branco | `o_rgb_e_branco_e_so_o_alfa_desenha` |
+| `quad_celula` usa o UV inteiro (`quad()` no lugar) | `o_retangulo_de_cada_celula_cabe_no_atlas_e_nao_se_sobrepoe` |
+
+### O que continua sendo afirmação
+
+**Nenhum número de FPS no aparelho nesta rodada.** O X35H saiu da rede nas três
+tentativas (`aparelho.sh procurar` → nenhum aparelho), e o R35S não respondeu.
+O que existe é: o binário aarch64 compila, linka, tem `PT_INTERP` e **não pediu
+biblioteca nova** — o custo do atlas numa Mali-G31/Mali-G52 continua medido só
+no PC (AMD RX 580). É a mesma pendência do §31 e do §29.

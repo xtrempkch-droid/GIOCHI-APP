@@ -906,11 +906,53 @@ impl RenderContext3D {
         camera: &Camera3D,
         colour: Color3D,
     ) -> Result3D<u32> {
+        self.draw_instanced_inner(mesh, shader, instances, camera, Some(colour), None)
+    }
+
+    /// [`RenderContext3D::draw_instanced`] sampling `texture` at each mesh UV.
+    ///
+    /// `shader` must be [`BuiltinShader::TexturedInstanced`]. `tint` multiplies the
+    /// sample, the same way it does in [`RenderContext3D::draw_mesh_textured`].
+    ///
+    /// Every instance shares the mesh's UVs. That is the whole point: a quad whose
+    /// UVs cover **one cell** of a sprite atlas can be stamped a thousand times in a
+    /// single call, and a second cell is a second (cheap) mesh, not a second texture.
+    pub fn draw_instanced_textured(
+        &mut self,
+        mesh: MeshHandle,
+        shader: ShaderHandle,
+        instances: &[Mat4],
+        camera: &Camera3D,
+        texture: TextureHandle,
+        tint: Color3D,
+    ) -> Result3D<u32> {
+        self.draw_instanced_inner(mesh, shader, instances, camera, None, Some((texture, tint)))
+    }
+
+    /// Shared body of the two instanced entry points.
+    ///
+    /// Exactly one of `colour` / `texture` is set by the public wrappers; the branch is
+    /// on the *shader's* uniform, not on a mode flag, so a caller cannot pick a
+    /// textured shader and have the colour silently used instead.
+    fn draw_instanced_inner(
+        &mut self,
+        mesh: MeshHandle,
+        shader: ShaderHandle,
+        instances: &[Mat4],
+        camera: &Camera3D,
+        colour: Option<Color3D>,
+        texture: Option<(TextureHandle, Color3D)>,
+    ) -> Result3D<u32> {
         if instances.is_empty() {
             return Ok(0);
         }
         if self.meshes.get(mesh).is_none() || self.shaders.get(shader).is_none() {
             return Ok(0);
+        }
+        if let Some((handle, _)) = texture {
+            if self.textures.get(handle).is_none() {
+                return Ok(0);
+            }
         }
 
         // Split the borrow: the program and the mesh come out of different registries,
@@ -927,6 +969,11 @@ impl RenderContext3D {
             .get(mesh)
             .expect("checked immediately above")
             .clone();
+        let amostra = texture.and_then(|(handle, tint)| {
+            self.textures
+                .get(handle)
+                .map(|gl_texture| (gl_texture.handle, tint))
+        });
 
         if !program.is_instanced() {
             // A `Phong`/`Flat` program has no instance attributes, so the instanced
@@ -940,7 +987,17 @@ impl RenderContext3D {
 
         // View-projection and the light are identical for every instance.
         self.bind_and_upload_shared(&program, camera)?;
-        program.set_color(self.gl.glow(), "u_color", colour.clamped());
+        match (amostra, colour) {
+            (Some((texture_handle, tint)), _) => {
+                let gl = self.gl.glow();
+                program.set_texture(gl, "u_texture", texture_handle, 0);
+                program.set_color(gl, "u_tint", tint.clamped());
+            }
+            (None, Some(colour)) => {
+                program.set_color(self.gl.glow(), "u_color", colour.clamped());
+            }
+            (None, None) => {}
+        }
 
         let available = self
             .instanced
@@ -981,7 +1038,17 @@ impl RenderContext3D {
         }
         for model in instances {
             self.bind_and_upload_matrix(&program, model, camera)?;
-            program.set_color(self.gl.glow(), "u_color", colour.clamped());
+            match (amostra, colour) {
+                (Some((texture_handle, tint)), _) => {
+                    let gl = self.gl.glow();
+                    program.set_texture(gl, "u_texture", texture_handle, 0);
+                    program.set_color(gl, "u_tint", tint.clamped());
+                }
+                (None, Some(colour)) => {
+                    program.set_color(self.gl.glow(), "u_color", colour.clamped());
+                }
+                (None, None) => {}
+            }
             geometry.draw(self.gl.glow(), &program);
         }
 

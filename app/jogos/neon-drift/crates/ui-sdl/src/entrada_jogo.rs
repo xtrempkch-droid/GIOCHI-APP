@@ -43,6 +43,12 @@ pub struct Teclas {
 pub struct Acoes {
     /// Começar a corrida (tela de título).
     pub comecar: bool,
+    /// Pedido de troca de mapa, `-1` ou `+1`; `0` é "nada".
+    ///
+    /// Só tem efeito na tela de título. Ali o carro não anda, então a seta
+    /// esquerda/direita está livre — e é onde o jogador procura o mapa, não na
+    /// linha de comando de um aparelho sem teclado.
+    pub trocar_mapa: i32,
     /// Reiniciar (tela de resultado).
     pub reiniciar: bool,
     /// Sair do jogo.
@@ -91,8 +97,25 @@ pub fn combinar(bits: u32, teclas: &Teclas, fase: Fase) -> (Entrada, Acoes) {
     let confirmar = bits & evdev::CONFIRMAR != 0 || teclas.enter;
     let sair = bits & evdev::SAIR != 0 || teclas.escape;
 
+    // No título as setas escolhem o mapa. Em qualquer outra fase elas voltam a
+    // ser volante, e `trocar_mapa` fica 0 — uma tecla com dois significados
+    // simultâneos seria pior que tecla morta.
+    let trocar_mapa = if fase == Fase::Titulo {
+        let mut passo = 0;
+        if bits & evdev::ESQUERDA != 0 || teclas.esquerda {
+            passo -= 1;
+        }
+        if bits & evdev::DIREITA != 0 || teclas.direita {
+            passo += 1;
+        }
+        passo
+    } else {
+        0
+    };
+
     let acoes = Acoes {
         comecar: confirmar && fase == Fase::Titulo,
+        trocar_mapa,
         reiniciar: confirmar && fase == Fase::Resultado,
         sair,
     };
@@ -113,6 +136,7 @@ mod testes {
         let (e, a) = combinar(0, &sem_teclas(), Fase::Correndo);
         assert_eq!(e, Entrada::PARADA);
         assert!(!a.comecar && !a.reiniciar && !a.sair);
+        assert_eq!(a.trocar_mapa, 0);
     }
 
     #[test]
@@ -232,5 +256,21 @@ mod testes {
                 assert!((0.0..=1.0).contains(&e.frear));
             }
         }
+    }
+
+    #[test]
+    fn seta_no_titulo_troca_de_mapa_e_na_corrida_vira_volante() {
+        let esq = Teclas {
+            esquerda: true,
+            ..sem_teclas()
+        };
+        let (_, a) = combinar(0, &esq, Fase::Titulo);
+        assert_eq!(a.trocar_mapa, -1);
+        let (e, a) = combinar(0, &esq, Fase::Correndo);
+        assert_eq!(a.trocar_mapa, 0, "na corrida a seta é volante, não menu");
+        assert_eq!(e.virar, -1.0);
+
+        let (_, a) = combinar(evdev::DIREITA, &sem_teclas(), Fase::Titulo);
+        assert_eq!(a.trocar_mapa, 1, "o direcional do controle também escolhe");
     }
 }

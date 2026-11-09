@@ -67,6 +67,36 @@ impl Tipo {
         Tipo::Mote,
     ];
 
+    /// Qual célula do atlas de sprites este tipo desenha.
+    ///
+    /// Antes desta função toda partícula era um **quadrilátero sólido**, e num
+    /// painel de 3,5" isso lê como quadrado. A célula é o que transforma fumaça
+    /// em nuvem, faísca em cruz e chuva em risco.
+    pub fn forma(self) -> crate::atlas::Forma {
+        use crate::atlas::Forma;
+        match self {
+            Tipo::Fumaca => Forma::Puff,
+            Tipo::Respingo => Forma::Gota,
+            Tipo::Faisca => Forma::Faisca,
+            Tipo::Nitro => Forma::Risco,
+            Tipo::Chuva => Forma::Chuva,
+            Tipo::Mote => Forma::Halo,
+            Tipo::Marca => Forma::Borrao,
+        }
+    }
+
+    /// Correção de tamanho para a forma ocupar o mesmo espaço que o quadrado
+    /// antigo ocupava.
+    ///
+    /// Antes desta rodada toda partícula era um quadrado **cheio**: o tamanho que
+    /// se via era o tamanho da matriz. Uma gota de raio 0,72 desenhada no mesmo
+    /// tamanho encolheria o respingo em 28% sem que ninguém tivesse mexido no
+    /// tamanho dele — o efeito simplesmente sumiria e a causa não estaria no
+    /// código que mudou.
+    pub fn ganho(self) -> f32 {
+        self.forma().ganho()
+    }
+
     /// Nome estável, usado no diagnóstico `--json`.
     pub fn nome(self) -> &'static str {
         match self {
@@ -778,11 +808,67 @@ impl Particulas {
             .iter()
             .filter(|p| p.tipo == tipo && faixa_de(p, faixa, total))
         {
+            let ganho = p.tipo.ganho();
             saida.push(if p.tipo.deitada() {
-                matriz_deitada(p.pos, p.giro, p.escala() * 0.62, p.escala() * 3.4)
+                matriz_deitada(
+                    p.pos,
+                    p.giro,
+                    p.escala() * 0.62 * ganho,
+                    p.escala() * 3.4 * ganho,
+                )
             } else {
-                matriz_esticada(p.pos, direita, cima, p.vel, p.escala(), p.esticado)
+                matriz_esticada(
+                    p.pos,
+                    direita,
+                    cima,
+                    p.vel,
+                    p.escala() * ganho,
+                    p.esticado,
+                )
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod testes_do_atlas {
+    use super::*;
+
+    #[test]
+    fn cada_tipo_de_particula_usa_uma_forma_diferente() {
+        // Duas partículas na mesma célula é uma forma a menos do que o código
+        // promete, e o sintoma seria só "fica esquisito" — nenhum erro, nenhum
+        // aviso, uma forma desenhada onde se esperava outra.
+        let mut indices: Vec<usize> = Tipo::TODOS.iter().map(|t| t.forma().indice()).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(
+            indices.len(),
+            Tipo::TODOS.len(),
+            "dois tipos desenham a mesma célula do atlas"
+        );
+    }
+
+    #[test]
+    fn a_marca_de_pneu_usa_a_forma_deitada_e_nao_a_de_fumaca() {
+        // A marca é a única partícula deitada no chão: se ela herdasse a célula
+        // da fumaça, apareceria como nuvem em pé no asfalto.
+        assert_eq!(Tipo::Marca.forma(), crate::atlas::Forma::Borrao);
+        assert_eq!(Tipo::Fumaca.forma(), crate::atlas::Forma::Puff);
+    }
+
+    #[test]
+    fn so_a_gota_cresce_para_compensar_a_forma_redonda() {
+        // O ganho existe porque o respingo era um quadrado cheio. Aplicá-lo a
+        // mais tipos passaria a amostrar a célula vizinha no atlas.
+        for tipo in Tipo::TODOS {
+            let esperado = if tipo == Tipo::Respingo { 1.3 } else { 1.0 };
+            assert!(
+                (tipo.ganho() - esperado).abs() < 1e-6,
+                "{} tem ganho {} e devia ter {esperado}",
+                tipo.nome(),
+                tipo.ganho()
+            );
         }
     }
 }

@@ -24,15 +24,26 @@ pub enum BuiltinShader {
     /// the same sun are pixel-identical. The vertex shader reads the model matrix from
     /// attributes 3..6 instead of `u_model`.
     Instanced,
+    /// [`BuiltinShader::Textured`] with a per-instance model matrix.
+    ///
+    /// The pair exists for sprite batches: one atlas texture, one quad per
+    /// material carrying the atlas cell in its UVs, and one draw call for every
+    /// copy of that material.
+    ///
+    /// No lighting uniforms, exactly like `Textured`: a smoke puff lit by a
+    /// directional sun would go dark on one side, and it is drawn with blending
+    /// over the scene anyway.
+    TexturedInstanced,
 }
 
 impl BuiltinShader {
     /// Every built-in, for tests and for `--help` output.
-    pub const ALL: [BuiltinShader; 4] = [
+    pub const ALL: [BuiltinShader; 5] = [
         BuiltinShader::Flat,
         BuiltinShader::Textured,
         BuiltinShader::Phong,
         BuiltinShader::Instanced,
+        BuiltinShader::TexturedInstanced,
     ];
 
     /// A stable name, used in logs and errors.
@@ -42,6 +53,7 @@ impl BuiltinShader {
             Self::Textured => "textured",
             Self::Phong => "phong",
             Self::Instanced => "instanced",
+            Self::TexturedInstanced => "textured-instanced",
         }
     }
 
@@ -52,6 +64,7 @@ impl BuiltinShader {
             Self::Textured => include_str!("../../shaders/textured.vert"),
             Self::Phong => include_str!("../../shaders/phong.vert"),
             Self::Instanced => include_str!("../../shaders/instanced.vert"),
+            Self::TexturedInstanced => include_str!("../../shaders/textured_instanced.vert"),
         }
     }
 
@@ -59,7 +72,12 @@ impl BuiltinShader {
     pub fn fragment_source(self) -> &'static str {
         match self {
             Self::Flat => include_str!("../../shaders/flat.frag"),
-            Self::Textured => include_str!("../../shaders/textured.frag"),
+            // The instanced variant reuses it for the same reason the `Phong` pair
+            // does: only the vertex stage differs, and a textured sprite must shade
+            // exactly like a textured mesh.
+            Self::Textured | Self::TexturedInstanced => {
+                include_str!("../../shaders/textured.frag")
+            }
             // Deliberately the same fragment source: an instanced scene must shade
             // exactly like the non-instanced one, or the two arms of the phase-17
             // benchmark would not be drawing the same picture.
@@ -81,7 +99,7 @@ impl BuiltinShader {
     /// `draw_instanced` requires it and the plain `draw_mesh` paths refuse it, so a
     /// mismatch is reported instead of producing N copies stacked at the origin.
     pub fn is_instanced(self) -> bool {
-        matches!(self, Self::Instanced)
+        matches!(self, Self::Instanced | Self::TexturedInstanced)
     }
 }
 

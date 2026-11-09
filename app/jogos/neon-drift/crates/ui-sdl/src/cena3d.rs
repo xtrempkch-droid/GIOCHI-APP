@@ -189,7 +189,7 @@ impl TexturasGpu {
         // Uma textura que falha em subir não tem sintoma visível: o material
         // desenha preto e o quadro continua "funcionando". Dizer o que subiu, o
         // tamanho e quantas são é o que transforma "está preto" em diagnóstico.
-        println!(
+        eprintln!(
             "neon-drift: {} textura(s) {nomes:?} {total} bytes, {} x {}",
             handles.len(),
             crate::texturas::LADO,
@@ -214,6 +214,17 @@ pub struct Cena3D {
     texturas: TexturasGpu,
     /// Shader que amostra textura em vez de usar cor por malha.
     texturizado: ShaderHandle,
+    /// Atlas de sprites das partículas (formas com alfa).
+    ///
+    /// Separado de `texturas` de propósito: aquelas são **materiais** opacos com
+    /// UV de mundo, esta é uma **máscara** com UV de célula. Misturar as duas
+    /// coisas num só registro faria o próximo material herdar `REPEAT` e mostrar
+    /// oito sprites no asfalto.
+    atlas_t: giochi_engine_3d::TextureHandle,
+    /// Um quadrilátero por forma, com o UV da célula já embutido.
+    sprites: Vec<MeshHandle>,
+    /// Shader instanciado + texturizado das partículas.
+    sprite_shader: ShaderHandle,
     /// Malhas **texturizadas**: uma por material, uma chamada cada.
     asfalto_t: MeshHandle,
     concreto_t: MeshHandle,
@@ -357,6 +368,21 @@ impl Cena3D {
         let (qv, qi) = malha::quad();
         let quad = render.create_mesh(&qv, &qi)?;
 
+        // Atlas de sprites: uma textura, uma malha por forma.
+        let atlas_pixels = crate::atlas::gerar();
+        let atlas_t = render.create_texture_rgba(
+            crate::atlas::LADO,
+            crate::atlas::LADO,
+            &atlas_pixels,
+        )?;
+        let sprites = crate::atlas::Forma::TODAS
+            .iter()
+            .map(|forma| {
+                let (sv, si) = malha::quad_celula(forma.indice());
+                render.create_mesh(&sv, &si)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let phong = render.create_builtin_shader(BuiltinShader::Phong)?;
         let instancing = render.supports_instancing();
         let instanciado = if instancing {
@@ -364,6 +390,14 @@ impl Cena3D {
         } else {
             None
         };
+        let sprite_shader = render.create_builtin_shader(BuiltinShader::TexturedInstanced)?;
+        let nomes: Vec<&str> = crate::atlas::Forma::TODAS.iter().map(|f| f.nome()).collect();
+        eprintln!(
+            "neon-drift: atlas de sprites {}x{} {nomes:?} {} bytes",
+            crate::atlas::LADO,
+            crate::atlas::LADO,
+            atlas_pixels.len()
+        );
 
         // `sun()` puro (ambiente 0,3 + difusa 1,0 + especular 0,25) satura: o
         // que era branco virava 255,255,255 chapado e o que era claro virava
@@ -386,6 +420,9 @@ impl Cena3D {
         Ok(Self {
             texturas,
             texturizado,
+            atlas_t,
+            sprites,
+            sprite_shader,
             ceu,
             asfalto_t,
             concreto_t,
@@ -1009,9 +1046,12 @@ impl Cena3D {
         if self.particulas.total() == 0 {
             return Ok(());
         }
-        let Some(inst) = self.instanciado else {
+        // Sem instancing as partículas ficam de fora: o caminho não instanciado
+        // desenharia todas empilhadas na origem, e um sprite na origem lê como
+        // defeito, não como efeito ausente.
+        if self.instanciado.is_none() {
             return Ok(());
-        };
+        }
 
         // Billboards: os eixos vêm da câmera, então o quad sempre encara quem
         // olha. Um quad fixo sumiria de perfil.
@@ -1041,7 +1081,22 @@ impl Cena3D {
                     continue;
                 }
                 let cor = Color3D::new(base.r, base.g, base.b, alfa);
-                render.draw_instanced(self.quad, inst, &self.malhas_efeito, camera, cor)?;
+                // Sprite texturizado: a forma vem do atlas, a cor do tint. Antes
+                // disto toda partícula era um quadrado sólido — que num painel de
+                // 3,5" lê como "quadrado", não como fumaça.
+                let malha = self
+                    .sprites
+                    .get(tipo.forma().indice())
+                    .copied()
+                    .unwrap_or(self.quad);
+                render.draw_instanced_textured(
+                    malha,
+                    self.sprite_shader,
+                    &self.malhas_efeito,
+                    camera,
+                    self.atlas_t,
+                    cor,
+                )?;
                 self.desenhos += 1;
             }
         }
@@ -1088,7 +1143,7 @@ impl Cena3D {
         let altura = projeto.1 as f32;
 
         match corrida.fase {
-            Fase::Titulo => self.hud_titulo(render, inst, &camera, largura, altura)?,
+            Fase::Titulo => self.hud_titulo(render, inst, &camera, largura, altura, corrida.mapa)?,
             Fase::Correndo => self.hud_corrida(render, inst, &camera, corrida, largura, altura)?,
             Fase::Resultado => self.hud_resultado(render, inst, &camera, corrida, largura, altura)?,
         }
@@ -1109,6 +1164,7 @@ impl Cena3D {
         camera: &Camera3D,
         largura: f32,
         altura: f32,
+        mapa: &giochi_neon_drift_core::mapa::Mapa,
     ) -> Result<(), Box<dyn Error>> {
         let escala = (largura / 200.0).clamp(2.0, 5.0);
         let titulo = fonte::largura_texto(NOME) as f32 * escala;
@@ -1135,10 +1191,26 @@ impl Cena3D {
             NEON_MAGENTA,
         )?;
 
+        // O mapa escolhido aparece **na tela**, com o nome: um mapa que só se
+        // alcança por `--mapa` não existe para quem joga no aparelho.
+        let escolhido = format!("MAPA  {}", mapa.nome.to_uppercase());
+        let w = fonte::largura_texto(&escolhido) as f32 * (escala * 0.5);
+        self.texto(
+            render,
+            inst,
+            camera,
+            &escolhido,
+            (largura - w) * 0.5,
+            altura * 0.20 + escala * 20.0,
+            escala * 0.5,
+            Color3D::new(0.55, 1.0, 0.75, 1.0),
+        )?;
+
         let linhas = [
             "WASD OU SETAS  VIRAR",
             "ESPACO  FREIO DE MAO",
             "SHIFT  NITRO",
+            "ESQ/DIR  TROCAR MAPA",
             "ENTER  JOGAR",
         ];
         let escala_corpo = (escala * 0.62).clamp(1.6, 3.4);

@@ -182,6 +182,16 @@ impl Carro {
         self.tempo_drift = 0.0;
         self.s = s;
         self.indice_pista = None;
+        // A altura vem da pista **aqui**, e não só no primeiro `passo`.
+        //
+        // Faltava, e o efeito era grande: no mapa com 74 m de desnível o carro
+        // nascia com `altura` 0 enquanto o piso estava a 74 — a câmera do título
+        // ficava 74 m **abaixo** do asfalto, olhando o vazio, e no primeiro passo
+        // a imagem saltava 74 m. Medido: `--json` dizia `"s":0,"altitude":0` e
+        // `"s":1.2,"altitude":73.9`.
+        self.altura = pista.altura_em(s);
+        self.raspando = false;
+        self.impacto = 0.0;
     }
 
     /// Direção para onde o carro aponta (unitária).
@@ -863,6 +873,23 @@ mod testes {
             c.altura
         );
         assert!(c.altura > 30.0, "no alto da serra a altura devia passar de 30 m: {:.1}", c.altura);
+    }
+
+    #[test]
+    fn posicionar_ja_deixa_o_carro_na_altura_da_pista() {
+        // Sem isto o carro nasce em `altura` 0 enquanto o piso está a 74 m: a
+        // câmera do título fica **abaixo** do asfalto e a imagem salta no
+        // primeiro passo. O bug existia com o mapa novo e não aparecia em mapa
+        // plano nenhum — por isso o teste usa a serra.
+        let pista = crate::mapa::BOAVISTA.pista();
+        let mut c = Carro::novo(Ponto::ZERO, 0.0);
+        c.posicionar(&pista, 0.0, -3.0);
+        assert!(
+            (c.altura - pista.altura_em(0.0)).abs() < 0.01,
+            "altura {:.2} contra {:.2} da pista na largada",
+            c.altura,
+            pista.altura_em(0.0)
+        );
     }
 
     #[test]

@@ -117,8 +117,23 @@ impl Construtor {
         normal: [f32; 3],
         uv_escala: f32,
     ) -> &mut Self {
-        let base = self.vertices.len() as u32;
         let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        self.quad_uv(cantos, normal, uvs, uv_escala)
+    }
+
+    /// Quadrilátero com UV explícito por canto.
+    ///
+    /// `uvs` estão na ordem dos cantos (`0..3`) e a escala multiplica os dois
+    /// eixos. É o que permite um quad cujo UV cobre **uma célula** de um atlas,
+    /// que é como um sprite vira geometria em vez de uniforme.
+    pub fn quad_uv(
+        &mut self,
+        cantos: [[f32; 3]; 4],
+        normal: [f32; 3],
+        uvs: [[f32; 2]; 4],
+        uv_escala: f32,
+    ) -> &mut Self {
+        let base = self.vertices.len() as u32;
         for (canto, uv) in cantos.iter().zip(uvs.iter()) {
             self.vertices.push(Vertex::new(
                 *canto,
@@ -424,6 +439,41 @@ pub fn quad() -> (Vec<Vertex>, Vec<u32>) {
             [-0.5, 0.5, 0.0],
         ],
         [0.0, 0.0, 1.0],
+        1.0,
+    );
+    (c.vertices, c.indices)
+}
+
+/// Quadrilátero unitário do plano XY cujo UV cobre **uma célula** do atlas de
+/// sprites.
+///
+/// A célula entra pela geometria, não por uniforme: é o que permite desenhar
+/// todas as partículas de um tipo com **uma** chamada instanciada, já que todas
+/// compartilham o mesmo mesh — e as de outro tipo usam outro mesh e outra célula.
+///
+/// O `+1e-4` encolhe o retângulo de UV um fio dentro da célula. Sem ele, a
+/// amostragem `LINEAR` na borda puxa o texel da célula vizinha e cada sprite
+/// ganha um risco da forma ao lado — que num puff radial vira um risco reto
+/// atravessando a fumaça.
+pub fn quad_celula(indice: usize) -> (Vec<Vertex>, Vec<u32>) {
+    let r = crate::atlas::retangulo(indice);
+    let f = 1e-4;
+    let uvs = [
+        [r[0] + f, r[1] + f],
+        [r[2] - f, r[1] + f],
+        [r[2] - f, r[3] - f],
+        [r[0] + f, r[3] - f],
+    ];
+    let mut c = Construtor::com_capacidade(4, 6);
+    c.quad_uv(
+        [
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ],
+        [0.0, 0.0, 1.0],
+        uvs,
         1.0,
     );
     (c.vertices, c.indices)

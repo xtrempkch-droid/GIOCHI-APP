@@ -14,6 +14,7 @@
 //! com alguém olhando a tela: o `--teclas` do launcher passou 223 testes verdes
 //! imprimindo um estado que não tinha mudado.
 
+mod atlas;
 mod audio;
 mod cena3d;
 mod efeitos;
@@ -48,6 +49,8 @@ const VERSAO: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 struct Opcoes {
     quadro: Option<String>,
+    /// Grava o atlas de sprites em BMP e sai, sem abrir janela.
+    atlas: Option<String>,
     tamanho: Option<(u32, u32)>,
     quadros: Option<u32>,
     passos: u32,
@@ -69,6 +72,7 @@ impl Default for Opcoes {
     fn default() -> Self {
         Self {
             quadro: None,
+            atlas: None,
             tamanho: None,
             quadros: None,
             passos: 0,
@@ -98,6 +102,10 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
         match argv[i].as_str() {
             "--quadro" => {
                 o.quadro = Some(argv.get(i + 1).ok_or("--quadro sem caminho")?.clone());
+                i += 2;
+            }
+            "--atlas" => {
+                o.atlas = Some(argv.get(i + 1).ok_or("--atlas sem caminho")?.clone());
                 i += 2;
             }
             "--tamanho" => {
@@ -272,8 +280,10 @@ Uso:
   giochi-neon-drift --tela resultado        forçar uma tela
   giochi-neon-drift --fps-teto 75           limite: 1 a 75 (é também o padrão)
   giochi-neon-drift --sem-som               sem áudio
+  giochi-neon-drift --mapa boavista         escolhe o mapa (avenida, boavista)
   giochi-neon-drift --so asfalto            desenha uma malha só (diagnóstico)
-  giochi-neon-drift --json                  saída de máquina
+  giochi-neon-drift --atlas a.bmp           grava o atlas de sprites e sai
+  giochi-neon-drift --json                  saída de máquina (stdout é só o JSON)
   giochi-neon-drift --versao
 
 Controles: WASD/setas, ESPACO freio de mao, SHIFT nitro, ENTER, ESC.
@@ -356,6 +366,47 @@ fn gravar_quadro(
     Ok((largura, altura))
 }
 
+/// Grava o atlas de sprites em BMP, **sem abrir janela nem contexto GL**.
+///
+/// O atlas é uma função pura (`atlas::gerar`), mas "a função roda" não é a mesma
+/// afirmação que "a forma está certa": uma gaussiana centrada errada continua
+/// gerando bytes válidos e desenha a nuvem fora do quad. Este arquivo é a única
+/// forma de olhar para o que as partículas vão amostrar.
+///
+/// O fundo sai **magenta**, e não preto: o alfa 0 de uma célula vazia é
+/// indistinguível de um sprite preto sobre preto, e o quadro mentiria sobre ter
+/// desenhado.
+fn gravar_atlas(caminho: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let lado = atlas::LADO;
+    let origem = atlas::gerar();
+    let mut pixels = vec![0u8; (lado * lado * 4) as usize];
+    for i in 0..(lado * lado) as usize {
+        let a = f32::from(origem[i * 4 + 3]) / 255.0;
+        // Fundo magenta fixo; o branco do atlas entra por cima ponderado pelo alfa.
+        let fundo = [255.0f32, 0.0, 255.0];
+        for canal in 0..3 {
+            let cor = f32::from(origem[i * 4 + canal]);
+            pixels[i * 4 + canal] = (fundo[canal] * (1.0 - a) + cor * a).round() as u8;
+        }
+        pixels[i * 4 + 3] = 255;
+    }
+    let superficie = Surface::from_data(
+        &mut pixels,
+        lado,
+        lado,
+        lado * PixelFormatEnum::RGBA32.byte_size_per_pixel() as u32,
+        PixelFormatEnum::RGBA32,
+    )?;
+    superficie.save_bmp(caminho)?;
+    eprintln!(
+        "neon-drift: atlas {}x{} com {} formas gravado em {caminho}",
+        lado,
+        lado,
+        atlas::Forma::TODAS.len()
+    );
+    Ok(())
+}
+
 /// Estado do som a partir da corrida.
 fn estado_som(corrida: &Corrida) -> EstadoSom {
     let carro = &corrida.carro;
@@ -391,6 +442,11 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         return Ok(0);
     }
 
+    if let Some(caminho) = &o.atlas {
+        gravar_atlas(caminho)?;
+        return Ok(0);
+    }
+
     // GLES 3 por padrão, com queda para 2 — o piso dos aparelhos do projeto.
     if std::env::var_os("GIOCHI_GL_VERSION").is_none() {
         std::env::set_var("GIOCHI_GL_VERSION", "3");
@@ -423,7 +479,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
     if o.escala < 0.999 {
         render.set_render_scale(Some(o.escala.clamp(0.25, 1.0)));
         let (rw, rh) = render.render_size();
-        println!(
+        eprintln!(
             "neon-drift: escala {:.2} — desenhando em {rw}x{rh} e esticando para {largura}x{altura}",
             o.escala
         );
@@ -464,22 +520,26 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
 
     let mut cena = Cena3D::nova(&mut render, &corrida.pista, rotacao, corrida.mapa.cenario)?;
     cena.so(o.so.clone());
+    let mut indice_mapa = giochi_neon_drift_core::mapa::TODOS
+        .iter()
+        .position(|m| std::ptr::eq(*m, mapa))
+        .unwrap_or(0);
 
     if !o.json {
-        println!(
+        eprintln!(
             "neon-drift: painel {largura}x{altura}, rotação {} ({fonte_rotacao}), GLES {} em {}",
             rotacao.nome(),
             render.gles_version().major(),
             render.adapter()
         );
-        println!(
+        eprintln!(
             "neon-drift: mapa \"{}\" ({}) — pista {:.0} m, desnível {:.0} m",
             mapa.nome,
             mapa.id,
             corrida.pista.comprimento(),
             mapa.desnivel()
         );
-        println!(
+        eprintln!(
             "neon-drift: instancing {}, pista {:.0} m, {} voltas, limite {} fps",
             if cena.usa_instancing() {
                 "ativo"
@@ -494,7 +554,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
 
     let botoes = evdev::Botoes::iniciar();
     if !o.json {
-        println!("neon-drift: {} dispositivo(s) de entrada", botoes.abertos());
+        eprintln!("neon-drift: {} dispositivo(s) de entrada", botoes.abertos());
     }
     let mut som = if o.sem_som {
         Som::sem_dispositivo()
@@ -530,6 +590,8 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
 
     let mut teclas = o.teclas;
     let mut sair = false;
+    // Último `trocar_mapa` visto, para trocar só na borda.
+    let mut ultima_troca = 0i32;
     let mut relogio = Relogio::com_ritmo(TIQUE, o.fps);
 
     // Quadro único: captura e sai, sem laço de eventos.
@@ -554,7 +616,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
                 diagnostico(&corrida, &cena)
             );
         } else {
-            println!("neon-drift: quadro {w}x{h} gravado em {caminho}");
+            eprintln!("neon-drift: quadro {w}x{h} gravado em {caminho}");
         }
         render.release_all();
         return Ok(0);
@@ -591,6 +653,44 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         }
 
         let (entrada, acoes) = entrada_jogo::combinar(botoes.bits(), &teclas, corrida.fase);
+        // Troca de mapa na tela de título: o mapa é **construtivo** (define
+        // pista, relevo, voltas, cenário e até as malhas), então trocar é
+        // reconstruir a corrida e a cena. `release_all` antes libera as malhas
+        // e texturas do mapa anterior; sem isso cada troca deixaria um mundo
+        // pendurado na GPU.
+        //
+        // Borda, não nível: segurar a seta trocaria de mapa 75 vezes por segundo.
+        // O teste com `--teclas right` mostrou exatamente isso — quatro quadros,
+        // quatro trocas —, e uma seta segurada é o caso normal de quem está
+        // escolhendo.
+        let troca = if acoes.trocar_mapa != ultima_troca {
+            acoes.trocar_mapa
+        } else {
+            0
+        };
+        ultima_troca = acoes.trocar_mapa;
+        if troca != 0 && corrida.fase == Fase::Titulo {
+            let total = giochi_neon_drift_core::mapa::TODOS.len() as i32;
+            let atual = indice_mapa as i32;
+            let novo = (atual + troca).rem_euclid(total) as usize;
+            if novo != indice_mapa {
+                indice_mapa = novo;
+                let mapa = giochi_neon_drift_core::mapa::TODOS[novo];
+                corrida = Corrida::com_mapa(mapa);
+                render.release_all();
+                cena = Cena3D::nova(&mut render, &corrida.pista, rotacao, mapa.cenario)?;
+                cena.so(o.so.clone());
+                if !o.json {
+                    eprintln!(
+                        "neon-drift: mapa \"{}\" ({}) — pista {:.0} m, desnível {:.0} m",
+                        mapa.nome,
+                        mapa.id,
+                        corrida.pista.comprimento(),
+                        mapa.desnivel()
+                    );
+                }
+            }
+        }
         let reiniciou = acoes.reiniciar;
         sair |= executar_acoes(&mut corrida, acoes);
         if reiniciou {
@@ -643,8 +743,17 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         0.0
     };
     if o.json {
+        // Stdout é **só dado** neste ramo: as linhas `neon-drift:` (texturas,
+        // painel, mapa, atlas) vão para stderr. Antes elas dividiam o stdout com
+        // o JSON e `--json | jq` falhava com "Expecting value: line 1 column 1" —
+        // o consumidor lia a prosa do diagnóstico como se fosse o objeto.
         println!(
-            "{{\"quadros\":{quadros},\"passos\":{passos_totais},\"segundos\":{decorrido:.3},\"fps\":{fps_medio:.1},\"fps_teto\":{},\"ms_cpu\":{:.2},\"particulas\":{},\"desenhos\":{},\"efeitos\":{{{}}},\"gles\":{},\"instancing\":{},\"posicao\":{},\"volta\":{},\"drift\":{},\"fase\":\"{:?}\"}}",
+            // `posicao`, `volta` e `drift` **não** aparecem aqui: `diagnostico`
+            // já os emite, e a versão anterior do JSON trazia os dois — chave
+            // duplicada, com o último valor vencendo em silêncio. Duas fontes do
+            // mesmo número envelhecem diferente; esta é a que não tem a corrida
+            // em mãos.
+            "{{\"quadros\":{quadros},\"passos\":{passos_totais},\"segundos\":{decorrido:.3},\"fps\":{fps_medio:.1},\"fps_teto\":{},\"ms_cpu\":{:.2},\"particulas\":{},\"desenhos\":{},\"efeitos\":{{{}}},\"gles\":{},\"instancing\":{},\"fase\":\"{:?}\",{}}}",
             o.fps,
             if quadros > 0 { ms_cpu / quadros as f64 } else { 0.0 },
             cena.particulas_vivas(),
@@ -652,13 +761,11 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             cena.efeitos_json(),
             render.gles_version().major(),
             cena.usa_instancing(),
-            corrida.posicao,
-            corrida.volta,
-            corrida.drift.total(),
-            corrida.fase
+            corrida.fase,
+            diagnostico(&corrida, &cena)
         );
     } else {
-        println!(
+        eprintln!(
             "neon-drift: fim — {} quadros em {:.2} s ({:.1} fps; teto {}) · drift {} · {}",
             quadros,
             decorrido,

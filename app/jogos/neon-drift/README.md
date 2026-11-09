@@ -57,6 +57,52 @@ não tinha criação de textura GL nem desenho texturizado, embora já tivesse
 (`vendor/giochi-engine-3d/src/render3d/texture.rs`). A engine original continua
 intocada — atualizar é copiar de novo.
 
+## Sprites: as partículas deixaram de ser quadrados
+
+Oito formas num atlas de 128×128, também **geradas em código**
+(`crates/ui-sdl/src/atlas.rs`): nuvem, gota, faísca, risco de nitro, risco de
+chuva, halo, borrão de pneu e anel. Antes disto toda partícula era um
+**quadrilátero sólido** — e num painel de 3,5" isso não lê como fumaça, lê como
+quadrado.
+
+| Forma | Onde aparece |
+| --- | --- |
+| `puff` | fumaça de pneu na derrapagem |
+| `gota` | respingo de água no asfalto molhado |
+| `faisca` | raspão na mureta e batida |
+| `risco` | rastro de nitro no escapamento |
+| `chuva` | gota caindo, alinhada à velocidade relativa |
+| `halo` | mote de neon flutuando na cidade |
+| `borrao` | marca de pneu deitada no chão |
+| `anel` | (reservada) fragmento de vidro |
+
+O atlas é **máscara de alfa**: RGB branco em toda parte, e quem desenha é o
+canal `a`. A cor vem do `tint` e o desbotamento vem da faixa de vida, então uma
+nuvem nasce branca, fica cinza e some sem precisar de uma textura por cor.
+
+Cada célula vira uma **malha** cujo UV cobre só aquele retângulo
+(`malha::quad_celula`), e o desenho usa `draw_instanced_textured`. A célula é
+escolhida pela geometria, não por uniforme: é isso que permite as centenas de
+cópias de um tipo saírem em **uma** chamada. O número de desenhos por quadro
+não mudou — continua um por (tipo, faixa de vida).
+
+O ganho de tamanho existe num lugar só: a `gota` é desenhada 1,30× maior, porque
+o raio dela (0,72 do meio-quadrado) é menor que o quadrado cheio que ela
+substituiu. Sem isso o respingo encolheria 28 % sem ninguém ter mexido no
+tamanho dele.
+
+```bash
+giochi-neon-drift --atlas /tmp/atlas.bmp     # o atlas em BMP, fundo magenta
+```
+
+O fundo é magenta de propósito: alfa 0 sobre preto é indistinguível de "não
+desenhou", e o arquivo mentiria sobre ter gerado as formas.
+
+E a engine vendorizada ganhou o par que faltava: `BuiltinShader::TexturedInstanced`
+(`shaders/textured_instanced.vert`) e
+`RenderContext3D::draw_instanced_textured`. O fragmento é o mesmo do `Textured`,
+então um sprite recebe exatamente a mesma luz que uma malha texturizada ao lado.
+
 ## Faísca no raspão, destroço na batida
 
 Duas respostas diferentes para dois contatos diferentes:
@@ -104,7 +150,7 @@ emenda apareceria como uma faixa correndo ao lado do carro.
 | Adversários | três, com linha própria e freando na curva; ~9 s atrás de um piloto competente em duas voltas |
 | Câmera | terceira pessoa com atraso exponencial, inclinação na derrapagem, tremor na batida e **FOV que abre no nitro** |
 | HUD | volta, posição, tempo, velocímetro, marcha, barra de nitro, pontos e combo de drift |
-| Efeitos | **7 tipos de partícula** (fumaça, respingo, faísca, nitro, chuva, poeira de neon, marca de pneu), raios de velocidade, clarão de nitro, aura de neon sob os carros, feixe de farol no asfalto e áudio sintetizado (motor, derrapagem, nitro, vento) |
+| Efeitos | **7 tipos de partícula**, cada um com a sua forma no atlas de sprites (fumaça, respingo, faísca, nitro, chuva, poeira de neon, marca de pneu), raios de velocidade, clarão de nitro, aura de neon sob os carros, feixe de farol no asfalto e áudio sintetizado (motor, derrapagem, nitro, vento) |
 | Cenário | avenida: cidade noturna com **arcos de neon a cada 26 m**, três passarelas, outdoors luminosos, refletores na mureta, faixas de neon nas torres distantes e **pulos de luz em duas fases** no túnel |
 | Telas | título com instruções, corrida e resultado com "reiniciar" |
 
@@ -150,6 +196,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine) |
 | `--sem-vsync` | não espera o vblank — mede o custo real do quadro |
 | `--teclas w,a,space` | teclas seguradas |
+| `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `mapa`, `altitude`, `impacto`, `fragmentos` e a contagem de cada tipo de partícula |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
@@ -219,9 +266,10 @@ Um quad é uma matriz de modelo de 4×4, e dois campos dela enganam:
 
 ```text
 crates/core/     regras puras: mapa, pista, carro, drift, IA, corrida, fonte,
-                 HUD, relógio e o piloto artificial. Sem SDL: 107 testes.
-crates/ui-sdl/   cena 3D, efeitos, malhas e texturas procedurais, áudio, evdev,
-                 entrada e o laço. É a única parte que precisa de tela: 100 testes.
+                 HUD, relógio e o piloto artificial. Sem SDL: 108 testes.
+crates/ui-sdl/   cena 3D, efeitos, malhas, texturas e atlas de sprites
+                 procedurais, áudio, evdev, entrada e o laço. É a única parte que
+                 precisa de tela: 113 testes.
 vendor/          cópia isolada da GIOCHI-ENGINE-3D. A engine original é outro
                  repositório e **não** é editada por este app.
 ```
