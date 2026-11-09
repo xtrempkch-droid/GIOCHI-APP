@@ -682,6 +682,12 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
                 let mapa = giochi_neon_drift_core::mapa::TODOS[novo];
                 corrida = Corrida::com_mapa(mapa);
                 render.release_all();
+                // `release_all` leva o buffer de instâncias junto. Sem recriar,
+                // o mundo novo desenha carros e partículas **empilhados na
+                // origem** — medido antes desta linha: 50 desenhos por quadro
+                // antes da troca, 30 depois, porque `desenhar_carros` e
+                // `desenhar_particulas` desistem sem instancing.
+                render.rebuild_instancing();
                 cena = Cena3D::nova(&mut render, &corrida.pista, rotacao, mapa.cenario)?;
                 cena.so(o.so.clone());
                 if !o.json {

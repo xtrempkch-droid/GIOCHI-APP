@@ -636,6 +636,30 @@ impl RenderContext3D {
         self.meshes.is_empty() && self.shaders.is_empty() && leaked == 0
     }
 
+    /// Recria o buffer de instâncias depois de
+    /// [`RenderContext3D::release_all`].
+    ///
+    /// `release_all` leva o `InstancedRenderer` junto com o resto — é o que a
+    /// promessa "nenhum objeto GL depois disto" exige. O que ele **não** faz é
+    /// voltar a existir. Sem esta chamada, `draw_instanced` cai no caminho de N
+    /// desenhos com um programa que não tem `u_model`: todas as cópias saem
+    /// empilhadas na origem, e o único sinal é um `warn!` que ninguém lê no meio
+    /// de um quadro. Um app que destrói o mundo para reconstruí-lo (troca de
+    /// mapa, recarga de fase) tem de chamar isto entre as duas coisas.
+    ///
+    /// Devolve o mesmo veredito de
+    /// [`RenderContext3D::supports_instancing`]: `false` quando o driver não
+    /// oferece desenho instanciado.
+    pub fn rebuild_instancing(&mut self) -> bool {
+        if self.instanced.is_none() {
+            match InstancedRenderer::new(self.gl.glow(), self.gl.instancing()) {
+                Ok(instanced) => self.instanced = Some(instanced),
+                Err(err) => log::warn!("instanced drawing is unavailable: {err}"),
+            }
+        }
+        self.supports_instancing()
+    }
+
     // ---- drawing ---------------------------------------------------------
 
     /// Uploads the matrices and the light for one draw, binding `program` first.
@@ -1207,6 +1231,7 @@ mod tests {
         // ---- release_all, which goes through the same two calls ---------------
         // It inherited the same leak, so both paths are asserted together and a future
         // fix cannot repair one and leave the other.
+        let tinha_instancing = render.supports_instancing();
         assert!(render.release_all());
         assert_eq!(render.mesh_count(), 0);
         assert_eq!(render.shader_count(), 0);
@@ -1235,6 +1260,23 @@ mod tests {
                 !render.glow().is_program(bulk_program),
                 "release_all leaked a program"
             );
+        }
+
+        // ---- release_all takes the instance buffer; rebuild brings it back ----------
+        // Not a detail: with the buffer gone, `draw_instanced` falls back to N plain
+        // draws on a program that has no `u_model`, so every copy lands at the origin.
+        // Measured in neon-drift when a map switch rebuilt the world: 50 draw calls per
+        // frame before the switch, 30 after, and cars and particles simply missing.
+        if tinha_instancing {
+            assert!(
+                !render.supports_instancing(),
+                "release_all left the instance buffer alive"
+            );
+            assert!(
+                render.rebuild_instancing(),
+                "rebuild_instancing did not recreate the instance buffer"
+            );
+            assert!(render.supports_instancing());
         }
 
         // ---- release_all must not claim success while something is referenced --------

@@ -4403,10 +4403,11 @@ uma gaussiana centrada errada gera bytes válidos e desenha a nuvem fora do quad
 
 ```text
 cargo test --workspace   110 core + 113 SDL = 223   (eram 209; +14)
+vendor, --lib           186 testes da engine, com o novo de instancing
 tests/run-all.mjs        199/199 JS
 validate-app.mjs --all   8 apps válidos (1 em scaffold)
 verificar-jogos.mjs      ok nos 3 tamanhos
-aarch64                  647 432 bytes, sha256 2b7a4545…, NEEDED = SDL2 +
+aarch64                  648 200 bytes, sha256 c6f53b35…, NEEDED = SDL2 +
                          libgcc_s + libm + libc (o atlas não pede biblioteca nova)
 ```
 
@@ -4419,6 +4420,33 @@ aarch64                  647 432 bytes, sha256 2b7a4545…, NEEDED = SDL2 +
 | `alfa_da_forma` com degrau (`if r<0.5 {1} else {0}`) | `o_puff_desbota_em_muitos_texels_e_nao_em_degrau` |
 | célula com RGB 0 em vez de branco | `o_rgb_e_branco_e_so_o_alfa_desenha` |
 | `quad_celula` usa o UV inteiro (`quad()` no lugar) | `o_retangulo_de_cada_celula_cabe_no_atlas_e_nao_se_sobrepoe` |
+
+### Trocar de mapa no título matava carros e partículas
+
+A troca de mapa é construtiva: `Corrida` nova, `release_all()` e `Cena3D` nova.
+O `release_all` leva o `InstancedRenderer` junto com o resto — é o que a promessa
+"nenhum objeto GL depois disto" exige — e **nada o recriava**. `supports_instancing()`
+passava a responder `false`, e `desenhar_carros`/`desenhar_particulas` desistem
+sem instancing.
+
+Medido, um comando só de diferença:
+
+```text
+--tela titulo                  instancing=true   desenhos=50
+--tela titulo --teclas right   instancing=false  desenhos=30   ← 20 desenhos a menos
+```
+
+Trocado de mapa, o jogo ficava sem carros e sem partículas até ser reaberto. E
+se o caminho de N desenhos rodasse com o programa instanciado, as cópias iriam
+todas para a origem, porque ele não tem `u_model` — o `warn!` que avisa disso se
+perde no meio de um quadro.
+
+A engine ganhou `RenderContext3D::rebuild_instancing()`, chamado entre
+`release_all()` e a construção do mundo novo, e o teste de contexto único do
+`renderer.rs` passou a exigir as três coisas: o buffer morre no `release_all`,
+volta com `rebuild_instancing` e o veredito de `supports_instancing` acompanha.
+Deixar o buffer vivo no `release_all` reprova com
+`release_all left the instance buffer alive` — verificado.
 
 ### O bug de física que apareceu ao testar: o carro andava de ré sozinho
 
