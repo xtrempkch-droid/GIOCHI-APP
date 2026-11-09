@@ -318,12 +318,9 @@ pub struct Cena3D {
     /// decai no núcleo, mas enquanto ele está acima do limiar o desenho o veria
     /// em vários quadros seguidos e soltaria destroços continuamente.
     ultimo_impacto: f32,
-    /// Chamadas de desenho emitidas no quadro corrente.
-    ///
-    /// Existe porque **este** é o número que decide o quadro no RK3566: medido
-    /// no aparelho, cada chamada custa ~0,15 ms de CPU e o orçamento de 60 Hz
-    /// são 16,7 ms. Sem contar, "otimizar" vira palpite.
-    desenhos: u32,
+    // O contador de chamadas de desenho **não** mora aqui: quem conta é a
+    // engine (`RenderContext3D::frame_counters`), no ponto em que a chamada é
+    // emitida. Ver o comentário de `diagnostico` em `main.rs`.
 }
 
 impl Cena3D {
@@ -524,14 +521,11 @@ impl Cena3D {
             luz_mundo,
             so: None,
             ultimo_impacto: 0.0,
-            desenhos: 0,
         })
     }
 
     /// Chamadas de desenho do último quadro.
-    pub fn desenhos(&self) -> u32 {
-        self.desenhos
-    }
+
 
     /// `true` quando o driver aceita desenho instanciado.
     pub fn usa_instancing(&self) -> bool {
@@ -584,7 +578,6 @@ impl Cena3D {
         dt: f32,
     ) -> Result<(), Box<dyn Error>> {
         self.seguir(corrida, dt);
-        self.desenhos = 0;
 
         // Duas luzes no mesmo quadro: `set_light` grava uniforme por desenho,
         // então dá para trocar entre um objeto e outro (o `set_state` não, que
@@ -623,7 +616,6 @@ impl Cena3D {
                     textura,
                     tint,
                 )?;
-                self.desenhos += 1;
             }
         }
 
@@ -646,7 +638,6 @@ impl Cena3D {
         ] {
             if self.quero(nome) && !self.desligado(nome) {
                 render.draw_mesh_colored(malha, self.phong, &ident, &camera, cor)?;
-                self.desenhos += 1;
             }
         }
 
@@ -672,7 +663,6 @@ impl Cena3D {
         ] {
             if self.quero(nome) && !self.desligado(nome) {
                 render.draw_mesh_colored(malha, self.phong, &ident, &camera, cor)?;
-                self.desenhos += 1;
             }
         }
         render.set_light(self.luz_mundo);
@@ -877,7 +867,6 @@ impl Cena3D {
         // Lataria: uma chamada por cor (1 do jogador + até 3 dos adversários).
         let jogador = Color3D::new(COR_JOGADOR[0], COR_JOGADOR[1], COR_JOGADOR[2], 1.0);
         render.draw_instanced(self.corpo, inst, &corpo_jogador, camera, jogador)?;
-        self.desenhos += 1;
         for (indice, lista) in &por_cor {
             let c = CORES_ADVERSARIOS[*indice];
             render.draw_instanced(
@@ -887,7 +876,6 @@ impl Cena3D {
                 camera,
                 Color3D::new(c[0], c[1], c[2], 1.0),
             )?;
-            self.desenhos += 1;
         }
 
         // Peças de cor única: uma chamada para os quatro carros.
@@ -900,7 +888,6 @@ impl Cena3D {
             (self.lanternas, LANTERNA),
         ] {
             render.draw_instanced(malha, inst, &todos, camera, cor)?;
-            self.desenhos += 1;
         }
 
         // ── aura de neon sob os carros ───────────────────────
@@ -924,7 +911,6 @@ impl Cena3D {
             camera,
             Color3D::new(jogador.r * 0.55, jogador.g * 0.55, jogador.b * 0.55, 0.42),
         )?;
-        self.desenhos += 1;
 
         // ── feixe de farol no asfalto ────────────────────────
         // Um quad comprido à frente de cada carro, translúcido. É o que faz o
@@ -941,7 +927,6 @@ impl Cena3D {
             camera,
             Color3D::new(0.72, 0.84, 1.0, 0.16),
         )?;
-        self.desenhos += 1;
         Ok(())
     }
 
@@ -1089,7 +1074,6 @@ impl Cena3D {
         // vira uma silhueta sem faces — some a leitura de "pedaço girando".
         render.set_light(self.luz_mundo);
         render.draw_instanced(self.cubo, inst, &self.malhas_efeito, camera, cor)?;
-        self.desenhos += 1;
         Ok(())
     }
 
@@ -1157,7 +1141,6 @@ impl Cena3D {
                     self.atlas_t,
                     cor,
                 )?;
-                self.desenhos += 1;
             }
         }
 
@@ -1670,7 +1653,6 @@ impl Cena3D {
         }
         let cor = Color3D::new(0.80, 0.94, 1.0, 0.06 + intensidade * 0.16);
         render.draw_instanced(self.quad, inst, &self.instancias, camera, cor)?;
-        self.desenhos += 1;
         Ok(())
     }
 
@@ -1702,7 +1684,6 @@ impl Cena3D {
             camera,
             Color3D::new(0.35, 0.75, 1.0, 0.05 + 0.05 * pulso),
         )?;
-        self.desenhos += 1;
         Ok(())
     }
 
@@ -1728,7 +1709,6 @@ impl Cena3D {
             h,
         ));
         render.draw_instanced(self.quad, inst, &self.instancias, camera, cor)?;
-        self.desenhos += 1;
         Ok(())
     }
 
@@ -1764,7 +1744,6 @@ impl Cena3D {
             ));
         }
         render.draw_instanced(self.quad, inst, &self.instancias, camera, cor)?;
-        self.desenhos += 1;
         Ok(())
     }
 }

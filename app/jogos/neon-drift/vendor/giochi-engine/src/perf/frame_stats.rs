@@ -419,7 +419,17 @@ pub(crate) fn fps(frames: u32, frame_time_ns: u64) -> f32 {
 }
 
 /// Selects the `percentile`-th sample (0.0–1.0) from an ascending slice.
+///
+/// `allow(dead_code)` porque este snapshot é um **recorte** do crate de 2D: só
+/// `frame_stats.rs` foi vendorizado, e o único chamador em produção é
+/// `Profiler::summary`, que vive num `profiler.rs` que não veio junto. Os testes
+/// abaixo continuam a exercitar a função — uso em `#[cfg(test)]` não conta como
+/// vivo para compilar o binário, e é daí que vem o aviso.
+///
+/// Reavaliar ao sincronizar o vendor com a engine: se o recorte passar a incluir
+/// o profiler, o `allow` sai.
 #[cfg(feature = "profiling")]
+#[allow(dead_code)]
 pub(crate) fn percentile(sorted: &[u64], percentile: f32) -> u64 {
     if sorted.is_empty() {
         return 0;

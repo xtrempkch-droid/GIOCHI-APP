@@ -265,11 +265,17 @@ fn teclas(valor: &str) -> Result<Teclas, String> {
 ///
 /// Existe porque `--passos` sem número de retorno é fé: rodar 900 passos e
 /// receber `"fase":"Correndo"` não diz se o carro andou 4 m ou 500 m.
-fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
+fn diagnostico(corrida: &Corrida, cena: &Cena3D, render: &RenderContext3D) -> String {
+    // Contadores da **engine**, não do jogo. O jogo tinha um `desenhos` próprio,
+    // incrementado à mão em cada ponto de desenho, e ele já estava errado por um:
+    // os riscos de velocidade emitiam `draw_instanced` sem incrementar. Um
+    // contador que o autor precisa lembrar de atualizar mede intenção; este conta
+    // no ponto em que o backend emite a chamada.
+    let contadores = render.frame_counters();
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2},\"nitro\":{:.1},\"nitro_usando\":{},\"derrapando\":{}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2},\"nitro\":{:.1},\"nitro_usando\":{},\"derrapando\":{},\"malhas\":{},\"vertices\":{}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -304,7 +310,9 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D) -> String {
         // direto" é indistinguível de "o tanque está infinito".
         corrida.carro.nitro,
         corrida.carro.nitro_usando,
-        corrida.carro.derrapando
+        corrida.carro.derrapando,
+        contadores.meshes_drawn,
+        contadores.vertices_uploaded
     )
 }
 
@@ -739,10 +747,10 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
                 "{{\"quadro\":\"gravado\",\"largura\":{w},\"altura\":{h},\"gles\":{},\"instancing\":{},\"desenhos\":{},\"fase\":\"{:?}\",\"efeitos\":{{{}}},{}}}",
                 render.gles_version().major(),
                 cena.usa_instancing(),
-                cena.desenhos(),
+                render.frame_counters().draw_calls,
                 corrida.fase,
                 cena.efeitos_json(),
-                diagnostico(&corrida, &cena)
+                diagnostico(&corrida, &cena, &render)
             );
         } else {
             eprintln!("neon-drift: quadro {w}x{h} gravado em {caminho}");
@@ -896,12 +904,12 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             o.fps,
             if quadros > 0 { ms_cpu / quadros as f64 } else { 0.0 },
             cena.particulas_vivas(),
-            cena.desenhos(),
+            render.frame_counters().draw_calls,
             cena.efeitos_json(),
             render.gles_version().major(),
             cena.usa_instancing(),
             corrida.fase,
-            diagnostico(&corrida, &cena)
+            diagnostico(&corrida, &cena, &render)
         );
     } else {
         eprintln!(
