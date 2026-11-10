@@ -29,6 +29,60 @@ os aparelhos Giochi.
 > Ou seja: **o teto de 75 é real e alcançável**, e não um número de fachada.
 > No X55 o port **não foi medido**.
 
+## Resolução: 800×600 de alvo num painel de 640×480
+
+O jogo **supersampleia** por padrão: o quadro é desenhado em **800×600** e
+apresentado em 640×480. Foi pedido do dono do projeto — *"é um jogo leve, acho
+que por ele em 800×600 daria para manter acima dos 60 fps ou 45 pelo menos"* —
+e o número caiu exatamente no fator 1,25 (640 × 1,25 = 800).
+
+```bash
+giochi-cobrinha                 # padrão: alvo 800x600, apresenta no painel
+giochi-cobrinha --escala 1      # desenha na resolução da tela
+giochi-cobrinha --escala 2      # 1280x960 de alvo (4x o custo de fill)
+```
+
+`--escala` aceita **0,25 a 2,0**; abaixo de 1 reduz (mais FPS), acima
+supersampleia (mais nitidez). O padrão é `1.25`.
+
+### O que mudou na engine vendorizada
+
+`Upscaler` só sabia **reduzir**: `MAX_SCALE` era `1.0` e `set_render_scale`
+filtrava por `< MAX_SCALE`. Agora são `2.0`, existe `UNITY_SCALE = 1.0` como "sem
+escala" (o filtro passou a ser `!= 1.0`) e `sanitise_scale` devolve **1,0** para
+valor inválido — antes devolvia `MAX_SCALE`, que com o teto novo significaria
+supersampling dobrado a partir de um `NaN`.
+
+O caminho de desenho é o **mesmo** nos dois sentidos: alvo `800x600` → passe
+final com filtro linear → `640x480`. Não há um segundo caminho de desenho para
+envelhecer diferente.
+
+### Medido no X35H (640×480, Mali-G52, imagem de 09/11)
+
+```text
+--escala 1.0   49,3 fps    521 cores distintas no quadro
+--escala 1.25  49,2 fps  4 604 cores distintas no quadro
+```
+
+**Custo: nenhum mensurável** (−0,2 %, dentro do ruído), e o ganho é real: os
+dois quadros diferem em **13,41 %** dos pixels, e as cores distintas vão de 521
+para 4 604 — é a antialiasing das bordas, que antes eram degrau puro. O mesmo
+par de quadros no PC dá 517 → 4 552 cores, com os mesmos 13,46 % de pixels
+diferentes: **o aparelho e o PC desenham o mesmo**.
+
+A queda de 74,2 fps (medida em 09/11 num outro estado do painel) para 49,3 aqui
+é do **display**, não do jogo: `atrasados` marca ~99 % dos quadros contra o
+orçamento de 13,3 ms e as duas escalas empatam. Foi o mesmo efeito já registrado
+no neon-drift (`cobrinha` e `neon-drift` medindo 49,3 no mesmo instante).
+
+### `--quadro` lia o alvo intermediário
+
+Com escala de render o `drawable_size()` do renderer é o **alvo** (800×600), e
+`--quadro` gravava um BMP de 800×600 chamando `read_pixels` de uma janela de
+640×480 — região fora da tela. Agora a captura usa o tamanho da **janela**: o
+BMP sai sempre do tamanho do que é apresentado, e é isso que permite comparar
+duas escalas pixel a pixel (antes a comparação virava comparação de tamanhos).
+
 ## Construir e testar
 
 ```bash
@@ -49,6 +103,7 @@ arquivos no repositório separado da engine; a dependência local está em
 ```bash
 giochi-cobrinha --versao
 giochi-cobrinha --fps-teto 75 --quadros 150 --json
+giochi-cobrinha --escala 1.25 --quadro /tmp/cobrinha.bmp   # alvo 800x600
 giochi-cobrinha --tamanho 640x480 --quadro /tmp/cobrinha.bmp
 giochi-cobrinha --tamanho 720x1280 --quadro /tmp/cobrinha-retrato.bmp
 GIOCHI_GL_VERSION=2 giochi-cobrinha

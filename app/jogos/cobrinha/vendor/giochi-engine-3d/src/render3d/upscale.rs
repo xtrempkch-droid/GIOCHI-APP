@@ -42,12 +42,17 @@ use crate::shader::Program;
 /// enough that driver minimums could be hit instead. `0.25` is a 4x reduction.
 pub const MIN_SCALE: f32 = 0.25;
 
-/// The largest scale that still saves work.
+/// The largest supported scale.
 ///
-/// `1.0` means "do not upscale at all", which the renderer expresses as `None`; anything
-/// above it would be supersampling, which is the opposite optimisation and not what this
-/// type does.
-pub const MAX_SCALE: f32 = 1.0;
+/// `1.0` means "do not scale at all", which the renderer expresses as `None`. Above it
+/// the same buffers are used the other way round: the scene renders **larger** than the
+/// window and the quad squeezes it down, which is supersampling. It costs fill rate
+/// instead of saving it, so it is opt-in and bounded — `2.0` is already four times the
+/// pixels of the window.
+pub const MAX_SCALE: f32 = 2.0;
+
+/// The scale that means "identity", expressed as `None` by the renderer.
+pub const UNITY_SCALE: f32 = 1.0;
 
 /// Four vertices of a clip-space quad: position and UV.
 ///
@@ -112,7 +117,8 @@ impl Upscaler {
     /// Creates the low-resolution target for a `target_width`x`target_height` window.
     ///
     /// `scale` is clamped to [`MIN_SCALE`]..=[`MAX_SCALE`]; the renderer only constructs
-    /// one when the requested scale is below `1.0`.
+    /// one when the requested scale is not `1.0`. Acima de `1.0` o alvo é **maior** que a
+    /// janela e o passe final reduz — supersampling.
     pub fn new(
         gl: &glow::Context,
         target_width: u32,
@@ -383,11 +389,12 @@ impl Upscaler {
 
 /// Clamps a scale into the supported range, treating a bad value as "no upscaling".
 ///
-/// `NaN` and negatives fall back to `1.0` rather than to [`MIN_SCALE`]: a caller who
-/// passed nonsense gets a normal frame, not a blurry one they did not ask for.
+/// `NaN` and negatives fall back to `1.0` rather than to either end: a caller who passed
+/// nonsense gets a normal frame, not a blurry one they did not ask for. Com o teto acima
+/// de `1.0`, cair em [`MAX_SCALE`] seria supersampling dobrado — o oposto de "normal".
 pub fn sanitise_scale(scale: f32) -> f32 {
     if !scale.is_finite() || scale <= 0.0 {
-        return MAX_SCALE;
+        return UNITY_SCALE;
     }
     scale.clamp(MIN_SCALE, MAX_SCALE)
 }
@@ -414,17 +421,19 @@ mod tests {
         assert_eq!(sanitise_scale(1.0), 1.0);
         assert_eq!(sanitise_scale(0.25), 0.25);
         assert_eq!(sanitise_scale(0.01), MIN_SCALE);
+        assert_eq!(sanitise_scale(1.25), 1.25);
         assert_eq!(sanitise_scale(2.0), MAX_SCALE);
+        assert_eq!(sanitise_scale(4.0), MAX_SCALE);
     }
 
     #[test]
     fn a_nonsense_scale_means_no_upscaling() {
-        // Not `MIN_SCALE`: a caller who passed garbage should get a normal frame rather
-        // than the blurriest one the engine can produce.
-        assert_eq!(sanitise_scale(f32::NAN), MAX_SCALE);
-        assert_eq!(sanitise_scale(f32::INFINITY), MAX_SCALE);
-        assert_eq!(sanitise_scale(-1.0), MAX_SCALE);
-        assert_eq!(sanitise_scale(0.0), MAX_SCALE);
+        // Not `MIN_SCALE`, and not `MAX_SCALE` either: a caller who passed garbage should
+        // get a normal frame, not the blurriest one nor four times the fill rate.
+        assert_eq!(sanitise_scale(f32::NAN), UNITY_SCALE);
+        assert_eq!(sanitise_scale(f32::INFINITY), UNITY_SCALE);
+        assert_eq!(sanitise_scale(-1.0), UNITY_SCALE);
+        assert_eq!(sanitise_scale(0.0), UNITY_SCALE);
     }
 
     #[test]
@@ -435,6 +444,9 @@ mod tests {
         // A tiny window at the minimum scale would round to zero without the clamp.
         assert_eq!(scaled_size(3, 2, 0.25), (1, 1));
         assert_eq!(scaled_size(1, 1, 0.25), (1, 1));
+        // E para cima: 640x480 a 1,25 é exatamente 800x600.
+        assert_eq!(scaled_size(640, 480, 1.25), (800, 600));
+        assert_eq!(scaled_size(640, 480, 2.0), (1280, 960));
     }
 
     #[test]

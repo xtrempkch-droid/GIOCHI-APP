@@ -29,6 +29,11 @@ struct Opcoes {
     quadros: Option<u32>,
     semente: u64,
     fps: u32,
+    /// Supersampling: fração das dimensões da janela usada como alvo de render.
+    ///
+    /// `1.0` desenha na resolução da janela. Acima disso o quadro sai **maior** que a
+    /// tela e é reduzido no passe final — mais nitidez de borda ao custo de fill rate.
+    escala: f32,
     json: bool,
     ajuda: bool,
     versao: bool,
@@ -43,6 +48,10 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
         quadros: None,
         semente: 20261106,
         fps: ALVO_FPS,
+        // Padrão 1,25 por pedido do dono do projeto: num painel 640×480 isso é
+        // exatamente **800×600** de alvo, e o jogo é leve o bastante para pagar.
+        // `--escala 1` volta ao desenho nativo.
+        escala: 1.25,
         json: false,
         ajuda: false,
         versao: false,
@@ -52,6 +61,17 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
         match argv[i].as_str() {
             "--quadro" => {
                 o.quadro = Some(argv.get(i + 1).ok_or("--quadro sem caminho")?.clone());
+                i += 2;
+            }
+            "--escala" => {
+                let valor = argv.get(i + 1).ok_or("--escala sem valor")?;
+                let escala: f32 = valor
+                    .parse()
+                    .map_err(|_| format!("--escala espera um número, veio {valor:?}"))?;
+                if !(0.25..=2.0).contains(&escala) {
+                    return Err(format!("--escala {escala} fora da faixa 0.25..=2.0"));
+                }
+                o.escala = escala;
                 i += 2;
             }
             "--tamanho" => {
@@ -158,11 +178,15 @@ Uso:
   giochi-cobrinha --teclas a,down,left    entrada simulada
   giochi-cobrinha --quadros 150           desenhar N quadros e sair
   giochi-cobrinha --fps-teto 75           limite configurável: 1 a 75
+  giochi-cobrinha --escala 1.25           supersampling (640x480 -> alvo 800x600)
+  giochi-cobrinha --escala 1              desenha na resolução da tela
   giochi-cobrinha --semente N             semente determinística
   giochi-cobrinha --json                  saída de máquina
   giochi-cobrinha --versao
 
-GIOCHI_GL_VERSION=2 solicita GLES 2.0; o padrão solicita GLES 3.0 com fallback."
+GIOCHI_GL_VERSION=2 solicita GLES 2.0; o padrão solicita GLES 3.0 com fallback.
+--escala aceita 0.25 a 2.0; abaixo de 1 reduz (mais FPS) e acima supersampleia
+(mais nitidez). O padrão 1.25 num painel 640x480 desenha em 800x600."
     );
 }
 
@@ -236,9 +260,15 @@ fn direcao_gulosa(jogo: &Jogo) -> Option<Direcao> {
 
 fn gravar_quadro(
     render: &RenderContext3D,
+    tamanho_janela: (u32, u32),
     caminho: &str,
 ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-    let (largura, altura) = render.drawable_size();
+    // O tamanho é o da **janela**, não o de `render.drawable_size()`: com escala de
+    // render o drawable é o alvo intermediário (800x600 num painel 640x480), e o
+    // `read_pixels` apresenta o quadro no framebuffer padrão antes de ler. Pedir 800x600
+    // de uma janela de 640x480 lia uma região fora da tela — o BMP saía maior que o
+    // apresentado, e a comparação com outra escala virava comparação de tamanhos.
+    let (largura, altura) = tamanho_janela;
     let mut pixels = render.read_pixels(largura, altura)?;
     let pitch = largura as usize * 4;
     for y in 0..altura as usize / 2 {
@@ -345,7 +375,21 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         };
     render.set_light(DirectionalLight::sun());
     let (largura, altura) = janela.drawable_size();
+    // A escala é pedida **antes** do primeiro `resize`: é ele quem constrói o alvo, e
+    // `render_size()` só responde o tamanho real depois disso. Na primeira versão a
+    // mensagem dizia "640x480 → 640x480" com a escala já pedida, e um log que não muda
+    // é indistinguível de uma opção ignorada.
+    if (opcoes.escala - 1.0).abs() > f32::EPSILON {
+        render.set_render_scale(Some(opcoes.escala));
+    }
     render.resize(largura, altura);
+    if render.render_scale().is_some() {
+        let (rw, rh) = render.render_size();
+        eprintln!(
+            "cobrinha: escala {:.2} — desenhando em {rw}x{rh} e apresentando em {largura}x{altura}",
+            opcoes.escala
+        );
+    }
     let mut cena = Cena3D::nova(&mut render, rotacao)?;
 
     if !opcoes.json {
@@ -398,7 +442,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
 
     if let Some(caminho) = &opcoes.quadro {
         desenhar_quadro(&mut render, &janela, &mut cena, &jogo, 0.5, 0.4)?;
-        let (w, h) = gravar_quadro(&render, caminho)?;
+        let (w, h) = gravar_quadro(&render, (largura, altura), caminho)?;
         render.end_frame(&janela);
         let erro_gl = render.take_gl_error();
         if erro_gl != 0 {
@@ -568,6 +612,30 @@ mod testes {
         assert!(opcoes(vec!["--tamanho".into(), "0x480".into()]).is_err());
         let opcoes = opcoes(vec!["--tamanho".into(), "800x600".into()]).unwrap();
         assert_eq!(opcoes.tamanho, Some((800, 600)));
+    }
+
+    #[test]
+    fn a_escala_de_render_tem_padrao_e_faixa() {
+        // O padrão é 1,25 porque num painel 640x480 isso dá **exatamente** 800x600 de
+        // alvo — o número que o dono do projeto pediu. Um padrão diferente disso muda o
+        // custo de todo mundo em silêncio.
+        let padrao = opcoes(Vec::new()).unwrap();
+        assert!((padrao.escala - 1.25).abs() < f32::EPSILON);
+        assert_eq!(
+            giochi_engine_3d::render3d::scaled_size(640, 480, padrao.escala),
+            (800, 600)
+        );
+
+        assert!(opcoes(vec!["--escala".into()]).is_err(), "faltou o valor");
+        assert!(opcoes(vec!["--escala".into(), "abc".into()]).is_err());
+        // Fora da faixa: 0 travaria o alvo em 1 px por causa do clamp, e 4 dobra o
+        // trabalho duas vezes sem o jogador saber de onde veio a queda de FPS.
+        assert!(opcoes(vec!["--escala".into(), "0".into()]).is_err());
+        assert!(opcoes(vec!["--escala".into(), "0.1".into()]).is_err());
+        assert!(opcoes(vec!["--escala".into(), "4".into()]).is_err());
+
+        let nativa = opcoes(vec!["--escala".into(), "1".into()]).unwrap();
+        assert!((nativa.escala - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

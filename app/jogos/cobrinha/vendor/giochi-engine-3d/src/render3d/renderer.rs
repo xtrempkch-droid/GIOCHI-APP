@@ -276,7 +276,9 @@ impl RenderContext3D {
     /// Takes effect on the next [`RenderContext3D::begin_frame`].
     pub fn set_render_scale(&mut self, scale: Option<f32>) {
         let scale = scale.map(crate::render3d::upscale::sanitise_scale);
-        let scale = scale.filter(|value| *value < crate::render3d::upscale::MAX_SCALE);
+        // `1.0` é identidade, não um alvo do mesmo tamanho: filtrar por `!= 1.0` e **não**
+        // por `< MAX_SCALE` mantém `< 1.0` (redução) e abre `> 1.0` (supersampling).
+        let scale = scale.filter(|value| *value != crate::render3d::upscale::UNITY_SCALE);
         if scale == self.render_scale {
             return;
         }
