@@ -16,12 +16,12 @@ O que existe hoje, verificado:
 
 | Item | Estado |
 | --- | --- |
-| apps em `apps.json` | **6**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) + `cobrinha` (image) |
+| apps em `apps.json` | **10**: `forge`, `store`, `painel`, `loja` (host) + `launcher`, `launcher-teste`, `launcher-star-dust`, `cobrinha`, `neon-drift`, `giochi-defender` (image) |
 | jogos | **3**: `cobrinha`, `neon-drift` e `giochi-defender` — Rust + GIOCHI-ENGINE-3D/SDL2 |
-| `validate-app.mjs --all` | 8 apps válidos (1 em scaffold) |
-| `tests/run-all.mjs` | 189/189 JS |
+| `validate-app.mjs --all` | 10 apps válidos (1 em scaffold) |
+| `tests/run-all.mjs` | 199/199 JS |
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
-| `compilar-launcher.sh --testes` | 223/223 Rust |
+| `compilar-launcher.sh --testes` | 229/229 Rust (o Star Dust tem 240: 107 core + 133 ui-sdl) |
 | `compilar-loja.sh --testes` | 116/116 Rust |
 
 **Catálogo ausente não vira catálogo inventado.** Sem `index.json` (o normal numa
