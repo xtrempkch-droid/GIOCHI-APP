@@ -1,3 +1,146 @@
+## Modos, mapas e armas (10/11/2026)
+
+Pedido do dono: **"3 modos de dificuldade onde o modo atual com a câmera mais
+longe (75%) é o médio, o mais difícil é esse modo atual porém com a velocidade
+levemente aumentada, e o mais fácil a distância entre a câmera e o objeto
+defendido é o dobro; 3 mapas diferentes com objetos diferentes; mais armas"**.
+
+### Modos: a câmera é o modo, e ela arrasta o campo de spawn junto
+
+`src/gameplay/modo.rs` é uma tabela de três linhas. O que o jogador sente primeiro
+é **quanto do campo ele vê**:
+
+| Modo | Câmera | Velocidade | Intervalo | O que é |
+| --- | --- | --- | --- | --- |
+| Fácil | **18,00** (2×) | 0,90 | 1,25 | o dobro da distância, cubos mais lentos |
+| Médio | **15,75** (1,75×) | 1,00 | 1,00 | 75 % mais longe — **padrão** |
+| Difícil | **9,00** (1×) | **1,15** | 1,00 | a câmera de sempre, cubos 15 % mais rápidos |
+
+O difícil **não** mexe no intervalo, e isso é medido: a primeira versão mexia nos
+dois (0,90 de intervalo + 1,15 de velocidade) e o piloto perdeu **5 de 5** sem
+vencer uma onda — a mesma "dificuldade injusta" que o 3b rejeitou. Com só a
+velocidade, o difícil fica em 3/20 vitórias contra 7/20 do mesmo modo a 1,00: o
+"levemente" é exatamente isso, e não uma segunda alavanca escondida.
+
+#### O teto de zoom tinha de virar campo
+
+`OrbitalCamera::distance` era presa em `DISTANCIA_MAXIMA = 15`, e o modo fácil
+pede **18**. Sem mexer nisso, o modo não faria o que promete e não haveria erro
+nenhum — a câmera pararia em 15. O teto virou `distancia_maxima` por câmera, e
+`teto()` saneia `NaN` (o `--distancia` escreve no campo direto).
+
+#### E o campo de spawn tinha de seguir a câmera
+
+A casca do 1b é `15..20` e a câmera de referência fica a 9: tudo nasce à frente.
+Com a câmera a 18, a mesma casca a **envolveria** — metade dos cubos nasceria
+atrás do jogador, e o sintoma seria "os cubos aparecem do nada no meio da tela".
+
+`src/gameplay/campo.rs` deriva a casca da distância: `raio_min = max(distância +
+6, 15)`, e a faixa vertical cresce na mesma proporção. Em `9` isso devolve
+**exatamente** os números do 1b, e há teste comparando os quatro.
+
+A velocidade **não** acompanha o campo, de propósito: com o campo maior o cubo
+demora mais para chegar, e é isso que faz uma arena grande ser mais fácil. A
+primeira versão escalava a velocidade para manter o tempo de viagem e o resultado
+era um modo fácil que só mudava o tamanho aparente.
+
+### Medido: o piloto automático nos três modos
+
+Quatro bases de semente (`0x0DEFE17E + {0, 50k, 100k, 150k}`), 5 partidas cada,
+arma pulsar:
+
+| Modo | Vitórias | Vidas no fim | Tempo médio |
+| --- | --- | --- | --- |
+| Fácil | **20/20** | **4,8** | 42,7 s |
+| Médio | **12/20** | **2,8** | 36,1 s |
+| Difícil | **3/20** | **0,2** | 34,5 s |
+
+A ordem é a pedida, nas duas colunas. E o médio a 2,8 vidas é **o mesmo número do
+balanço de 3b** — o médio é, de fato, a partida que já existia.
+
+**O difícil no mesmo lugar, com velocidade 1,00:** 7/20 vitórias e 1,0 vida. Ou
+seja, os 15 % custam 4 vitórias em 20 — mensurável e não brutal.
+
+#### O instrumento tem um viés declarado
+
+O piloto mede **pressão**, não visão: ele sempre sabe onde tudo está e mira com
+uma tolerância **angular** (`TOLERANCIA = 0,10 rad`). Com a câmera mais longe o
+cubo ocupa menos ângulo, então o piloto **erra mais** — o que significa que ele
+*penaliza* exatamente o que o modo fácil faz. A ordenação acima sai certa apesar
+disso; um humano tende a se beneficiar mais da câmera aberta do que o piloto.
+
+Rodado no **X35H** com o mesmo comando, o balanceamento sai idêntico ao do PC
+(`2/5 · 34,3 s · 0,4 vidas · 37,3 %` para o difícil na semente padrão) — a
+simulação é de passo fixo e não lê relógio.
+
+### Mapas: três objetos defendidos, o mesmo caminho de desenho
+
+`src/gameplay/mapa.rs`:
+
+| `--mapa` | Objeto | Cenário |
+| --- | --- | --- |
+| `asteroide` (padrão) | icosaedro distorcido do 1b | seis pedaços de rocha à deriva |
+| `estacao` | núcleo metálico | anel de 24 segmentos com quatro travessas, painéis solares, mastro |
+| `lua` | esfera subdividida duas vezes | seis crateras achatadas, oito pedriscos de poeira |
+
+Três decisões que vieram de medição:
+
+1. **Todo objeto cabe na esfera de colisão de 2,5.** Um mapa cujo objeto passasse
+   disso teria cubos atravessando a geometria antes de contar dano. `raio_externo`
+   existe e é testado nos três.
+2. **Cenário novo não cria chamada nova** (a regra herdada do `neon-drift`): cada
+   mapa tem no máximo **três peças**, uma por cor, e um anel de 28 caixas é
+   **uma** malha depois de `juntar`.
+3. **Pedra é icosaedro, não cubo.** Um cubo de 0,5 a três unidades da câmera
+   parece um inimigo, e o jogador atiraria nele sem entender por que não conta.
+
+Trocar de mapa em tempo de execução reconstrói a arena e libera a anterior
+(`trocar_mapa`): medido em ciclo completo, a contagem de malhas **não cresce**
+(`9 → 9 → 8 → 9`) e no fim sobram **0 malhas e 0 shaders**.
+
+### Armas: três, e a de área não tem caminho próprio
+
+| `--arma` | Cadência | Alvos | Área | Pontos |
+| --- | --- | --- | --- | --- |
+| `pulsar` (padrão) | 0,15 s | 1 | — | 100 |
+| `leque` | 0,45 s | 3 | cone de 0,16 rad | 80 |
+| `morteiro` | 0,70 s | 8 | explosão de 3,2 m | 120 |
+
+O pulso é a arma do 2a com os **mesmos números** — há teste comparando com as
+constantes, para trocar de arma não mudar a partida que foi medida.
+
+`Weapon::disparar` devolve **todos** os atingidos e é o único caminho de tiro; o
+`atirar` antigo é um invólucro que devolve o primeiro. Um caminho por arma seriam
+três lugares para a `FOLGA_DE_MIRA` divergir.
+
+Trocar de arma **não zera o cooldown** (`Weapon::trocar`): zerar puniria o jogador
+por escolher — ele apertaria o gatilho e nada sairia por 0,7 s, sem sinal nenhum.
+
+Seleção: `1`/`2`/`3` no teclado e `Q` para ciclar; a arma aparece na HUD (`ARMA
+MORTEIRO` no rodapé) porque cadência e número de alvos são invisíveis até o
+próximo tiro.
+
+### Dois defeitos que a medição no aparelho expôs
+
+1. **`--arma` não chegava ao jogo.** O log anunciava `arma: LEQUE` e o jogo
+   atirava com o pulso: a arma do laço era `Weapon::new()` e o `--arma` só entrava
+   na transição Menu→Jogando. O `+100` no placar foi o que denunciou.
+2. **A arma de área abatia sem pontuar.** O laço chamava `partida.atirar`, que
+   devolve só o primeiro — os outros dois cubos do leque saíam do pool **sem
+   ponto, sem `+` e sem som**. Agora o laço usa `disparar` e itera.
+
+Medido no X35H, um disparo com três cubos plantados no eixo:
+
+```text
+pulsar    1 abate
+leque     3 abates
+morteiro  2 abates   (o terceiro está a 5 m do impacto; o raio é 3,2)
+```
+
+E a distância da câmera, em pixels de rocha no quadro do aparelho: **5.869** no
+fácil contra **25.734** no difícil — 4,4×, que é o quadrado da razão de
+distâncias (2² = 4).
+
 # Estado — GIOCHI DEFENDER
 
 ## Correção pós-plano: o jogo não recebia botão nenhum

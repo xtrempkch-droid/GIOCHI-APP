@@ -26,7 +26,7 @@ use giochi_engine::input::gamepad::{
     BUTTON_DPAD_UP, BUTTON_EAST, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH, BUTTON_START,
 };
 use giochi_engine::input::keyboard::{
-    KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_SPACE, KEY_UP, KEY_W,
+    KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_Q, KEY_RIGHT, KEY_S, KEY_SPACE, KEY_UP, KEY_W,
 };
 use giochi_engine::input::mouse::MOUSE_LEFT;
 use giochi_engine::input::Input;
@@ -44,9 +44,11 @@ use giochi_defender::bench::Benchmark;
 use giochi_defender::diag::{self, Diag};
 use giochi_defender::gameplay::arena::{self, Arena};
 use giochi_defender::gameplay::camera::OrbitalCamera;
+use giochi_defender::gameplay::mapa::Mapa;
+use giochi_defender::gameplay::modo::Modo;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
 use giochi_defender::gameplay::tremor::Tremor;
-use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
+use giochi_defender::gameplay::weapon::{Arma, Weapon, ARMAS};
 use giochi_defender::input_evdev::{ButtonsMap, EvdevInput};
 use giochi_defender::screens::{self, Acao, Menu, Resultado, Tela};
 use giochi_defender::state::{cota_da_onda, GameState, WAVES_TOTAIS};
@@ -77,6 +79,12 @@ const KEY_ENTER: giochi_engine::input::keyboard::KeyCode = 13;
 const KEY_BACKSPACE: giochi_engine::input::keyboard::KeyCode = 8;
 /// `SDLK_r`.
 const KEY_R: giochi_engine::input::keyboard::KeyCode = 114;
+/// `SDLK_1`, `SDLK_2` e `SDLK_3` — escolha direta de arma.
+const KEY_1: giochi_engine::input::keyboard::KeyCode = 49;
+/// Ver [`KEY_1`].
+const KEY_2: giochi_engine::input::keyboard::KeyCode = 50;
+/// Ver [`KEY_1`].
+const KEY_3: giochi_engine::input::keyboard::KeyCode = 51;
 
 /// Giro do teclado, em radianos por segundo.
 const TAXA_TECLADO: f32 = 1.8;
@@ -118,7 +126,7 @@ fn executar(diag: Diag) -> Result<()> {
     // O balanceamento não abre janela nem toca em GL: é a simulação sozinha com
     // um piloto automático. Sai antes de qualquer recurso ser criado.
     if diag.balanceamento {
-        return relatorio_de_balanceamento(diag.semente);
+        return relatorio_de_balanceamento(diag.semente, diag.modo, diag.arma);
     }
     if let Some(segundos) = diag.espiar_input {
         return espiar_input(segundos);
@@ -226,7 +234,7 @@ fn executar(diag: Diag) -> Result<()> {
         ..GlState::default()
     });
 
-    let arena = Arena::new(&mut render)?;
+    let mut arena = Arena::com_mapa(&mut render, diag.mapa)?;
     let inimigos = Inimigos::new(&mut render)?;
     // A mira nasce com o tamanho **pedido**, e o primeiro quadro a reconstrói com
     // o drawable real. Não é desperdício: no console o painel tem 640×480 e o
@@ -236,16 +244,24 @@ fn executar(diag: Diag) -> Result<()> {
     let (largura_inicial, altura_inicial) = diag.tela.unwrap_or((LARGURA, ALTURA));
     let mut mira = MiraGl::new(&mut render, (largura_inicial, altura_inicial))?;
     let mut hud_gl = HudGl::new(&mut render)?;
-    let mut camera = OrbitalCamera::new();
+    let mut camera = OrbitalCamera::com_modo(diag.modo);
     let mut tremor = Tremor::novo();
     if diag.tremor {
         tremor.sacudir_dano();
     }
     aplicar_preset(&mut camera, &diag);
     let mut estado = GameState::new();
-    let mut partida = Partida::new(diag.semente);
+    let mut partida = Partida::com_modo(diag.semente, diag.modo);
     let mut hud_estado = Hud::new();
-    let mut menu = Menu::novo();
+    let mut menu = Menu::com_escolhas(diag.modo, diag.mapa, diag.arma);
+    log::info!(
+        "modo: {} ({}) · mapa: {} ({}) · arma: {}",
+        diag.modo.nome(),
+        diag.modo.descricao(),
+        diag.mapa.nome(),
+        diag.mapa.descricao(),
+        ARMAS[diag.arma % ARMAS.len()].nome
+    );
     let mut tela = match diag.tela_inicial() {
         diag::TelaInicial::Menu => Tela::Menu,
         diag::TelaInicial::Jogo => Tela::Jogando,
@@ -347,7 +363,7 @@ fn executar(diag: Diag) -> Result<()> {
         &janela,
         &mut render,
         &mut entrada,
-        &arena,
+        &mut arena,
         &inimigos,
         &mut mira,
         &mut hud_gl,
@@ -567,11 +583,19 @@ fn espiar_input(segundos: f32) -> Result<()> {
 /// Uma semente só responde "é ganhável nesta partida"; cinco respondem "é
 /// ganhável". A diferença importa porque o spawn é sorteado: uma partida fácil
 /// por acaso esconderia uma dificuldade injusta.
-fn relatorio_de_balanceamento(semente: u64) -> Result<()> {
+fn relatorio_de_balanceamento(semente: u64, modo: Modo, arma: usize) -> Result<()> {
     const PARTIDAS: u64 = 5;
     const LIMITE: f32 = 240.0;
 
+    let arma_escolhida = ARMAS[arma % ARMAS.len()];
     println!("GIOCHI DEFENDER — balanceamento com piloto automático");
+    println!(
+        "modo: {} ({}) · camera a {:.2} · arma: {}",
+        modo.nome(),
+        modo.descricao(),
+        modo.distancia_da_camera(),
+        arma_escolhida.nome
+    );
     println!(
         "limites do piloto: giro {:.1} rad/s, reacao {:.0} ms, tolerancia {:.0} mrad",
         giochi_defender::gameplay::piloto::GIRO_POR_SEGUNDO,
@@ -587,7 +611,7 @@ fn relatorio_de_balanceamento(semente: u64) -> Result<()> {
     let mut soma_precisao = 0.0;
     for i in 0..PARTIDAS {
         let s = semente.wrapping_add(i);
-        let r = balancear(s, LIMITE);
+        let r = balancear(s, LIMITE, modo, arma_escolhida);
         if r.venceu {
             vitorias += 1;
         }
@@ -646,13 +670,20 @@ impl Relatorio {
 /// O piloto gira `GIRO_POR_SEGUNDO` por segundo, então ele **não** é um `atan2`
 /// instantâneo: mirar num cubo do outro lado do asteroide custa tempo, que é o
 /// custo real do jogador.
-fn balancear(semente: u64, limite_de_segundos: f32) -> Relatorio {
+fn balancear(
+    semente: u64,
+    limite_de_segundos: f32,
+    modo: Modo,
+    arma_escolhida: &'static Arma,
+) -> Relatorio {
     use giochi_defender::gameplay::piloto::{self, Ameaca};
 
     let mut estado = GameState::new();
-    let mut partida = Partida::new(semente);
-    let mut arma = Weapon::new();
-    let mut camera = OrbitalCamera::new();
+    let mut partida = Partida::com_modo(semente, modo);
+    let mut arma = Weapon::com_arma(arma_escolhida);
+    // A câmera é a **do modo**: medir o fácil com a câmera do difícil mediria
+    // outro jogo, e é justamente a distância que o modo muda.
+    let mut camera = OrbitalCamera::com_modo(modo);
     let mut relatorio = Relatorio::default();
     let dt = 1.0 / 60.0;
     let mut tempo: f32 = 0.0;
@@ -711,7 +742,7 @@ fn balancear(semente: u64, limite_de_segundos: f32) -> Relatorio {
                 match resultado {
                     Some(_) => {
                         relatorio.abates += 1;
-                        estado.pontuar(PONTOS_POR_ABATE);
+                        estado.pontuar(arma.pontos());
                         estado.registrou_abate();
                     }
                     None => relatorio.erros += 1,
@@ -1091,6 +1122,43 @@ fn direcao_da_camera(camera: &Camera3D) -> Vec3 {
     Vec3::new(frente.x / tamanho, frente.y / tamanho, frente.z / tamanho)
 }
 
+/// Aplica ao jogo as escolhas feitas no menu.
+///
+/// O modo muda **duas** coisas que precisam andar juntas: a distância da câmera
+/// (o que o jogador vê) e o campo de spawn (onde os cubos nascem). Mudar só a
+/// câmera poria os cubos nascendo dentro dela — o modo fácil tem a câmera a 18 e
+/// a casca antiga ia até 20.
+fn aplicar_escolhas_do_menu(menu: &Menu, camera: &mut OrbitalCamera, partida: &mut Partida) {
+    partida.definir_modo(menu.modo);
+    camera.distancia_maxima = camera.distancia_maxima.max(menu.modo.distancia_da_camera());
+    // A distância é **reposicionada**, não só o teto. Só aumentar (a primeira
+    // versão) deixava a câmera em 18 ao voltar do fácil para o difícil, com o
+    // campo do difícil em `15..20` — ou seja, a câmera dentro da casca, que é o
+    // defeito que o `Campo` existe para evitar.
+    camera.distance = menu.modo.distancia_da_camera();
+}
+
+/// Reconstrói a arena para outro mapa, liberando as malhas do anterior.
+///
+/// Construir antes de liberar, e não `destruir` e depois `criar`: se a criação
+/// falhar, o jogo continua com o mapa antigo em vez de ficar com uma arena vazia
+/// e um erro no meio do laço.
+fn trocar_mapa(arena: &mut Arena, render: &mut RenderContext3D, mapa: Mapa) {
+    match Arena::com_mapa(render, mapa) {
+        Ok(nova) => {
+            let antiga = std::mem::replace(arena, nova);
+            antiga.destruir(render);
+            log::info!(
+                "mapa: {} ({}) · {} malha(s) na engine",
+                mapa.nome(),
+                mapa.descricao(),
+                render.mesh_count()
+            );
+        }
+        Err(erro) => log::warn!("não consegui trocar para o mapa {}: {erro}", mapa.nome()),
+    }
+}
+
 /// Traduz o gamepad do **SDL** para o vocabulário do mapa de botões.
 ///
 /// É a fonte de reserva: só responde quando o evdev não achou dispositivo
@@ -1116,6 +1184,8 @@ fn controles_do_sdl(entrada: &Input) -> giochi_defender::input_evdev::Controles 
         volume_menos: false,
         cima_apertou: false,
         baixo_apertou: false,
+        esquerda_apertou: false,
+        direita_apertou: false,
         confirmar_apertou: false,
         voltar_apertou: false,
         menu_apertou: false,
@@ -1129,7 +1199,7 @@ fn laco(
     janela: &Window,
     render: &mut RenderContext3D,
     entrada: &mut Input,
-    arena: &Arena,
+    arena: &mut Arena,
     inimigos: &Inimigos,
     mira: &mut MiraGl,
     hud_gl: &mut HudGl,
@@ -1148,7 +1218,10 @@ fn laco(
     let mut relogio = FrameClock::new();
     let mut laco = GameLoop::new();
     let mut quadros: u64 = 0;
-    let mut arma = Weapon::new();
+    // A arma vem do `--arma` já na abertura: começar sempre com o pulso faria o
+    // diagnóstico anunciar "arma: LEQUE" e medir o pulso — o log mentiria sobre o
+    // que foi medido.
+    let mut arma = Weapon::com_arma(ARMAS[diag.arma % ARMAS.len()]);
     let mut mira_estado = Mira::new();
     // `--demo-hud` acende os três efeitos na abertura. Sem uma bancada, provar
     // que o `+100` sobe exigiria acertar um cubo com o dedo no aparelho.
@@ -1156,7 +1229,7 @@ fn laco(
         // Um pouco acima e à esquerda do centro, que é onde um cubo em frente
         // cairia com a câmera na posição inicial.
         let (w, h) = janela.drawable_size();
-        hud_estado.abateu(w as f32 * 0.42, h as f32 * 0.46, PONTOS_POR_ABATE);
+        hud_estado.abateu(w as f32 * 0.42, h as f32 * 0.46, arma.pontos());
         hud_estado.levou_dano();
         hud_estado.anunciar_onda(2);
     }
@@ -1271,6 +1344,41 @@ fn laco(
             if entrada.key_pressed(KEY_DOWN) || entrada.key_pressed(KEY_S) || pad.baixo_apertou {
                 menu.mover(true);
             }
+            // `←`/`→` mexem no item em foco: modo, mapa. `ajustar` devolve `true`
+            // só quando algo mudou, e é essa resposta que decide se a câmera e a
+            // cena têm de ser refeitas — comparar os valores de fora deixaria o
+            // mapa desatualizado no primeiro `if` esquecido.
+            let esquerda = entrada.key_pressed(KEY_LEFT) || pad.esquerda_apertou;
+            let direita = entrada.key_pressed(KEY_RIGHT) || pad.direita_apertou;
+            if (esquerda || direita) && menu.ajustar(direita) {
+                aplicar_escolhas_do_menu(menu, camera, partida);
+                if arena.mapa() != menu.mapa {
+                    trocar_mapa(arena, render, menu.mapa);
+                }
+                log::info!(
+                    "menu: modo {} · mapa {} · arma {}",
+                    menu.modo.nome(),
+                    menu.mapa.nome(),
+                    menu.nome_da_arma()
+                );
+            }
+        }
+        // A arma se troca **em jogo**: é onde o jogador descobre que precisa de
+        // outra, e obrigá-lo a voltar ao menu custaria a partida.
+        if *tela == Tela::Jogando {
+            if entrada.key_pressed(KEY_1) {
+                arma.trocar_indice(0);
+            }
+            if entrada.key_pressed(KEY_2) {
+                arma.trocar_indice(1);
+            }
+            if entrada.key_pressed(KEY_3) {
+                arma.trocar_indice(2);
+            }
+            if entrada.key_pressed(KEY_Q) {
+                arma.proxima();
+                log::info!("arma: {} ({})", arma.arma.nome, arma.arma.descricao());
+            }
         }
         if reiniciar {
             acao = Some(Acao::Reiniciar);
@@ -1314,7 +1422,18 @@ fn laco(
                         &mut mira_estado,
                     );
                     abates = 0;
-                    log::info!("partida iniciada");
+                    // A arma escolhida no menu (ou trocada no `--arma`) entra na
+                    // partida; o `reiniciar_partida` só zera o cooldown.
+                    arma.trocar(menu.arma_escolhida());
+                    partida.definir_modo(menu.modo);
+                    camera.distancia_maxima =
+                        camera.distancia_maxima.max(menu.modo.distancia_da_camera());
+                    log::info!(
+                        "partida iniciada: modo {} · mapa {} · arma {}",
+                        menu.modo.nome(),
+                        arena.mapa().nome(),
+                        arma.arma.nome
+                    );
                 }
                 log::info!("tela: {:?} -> {:?}", *tela, nova);
                 *tela = nova;
@@ -1330,20 +1449,32 @@ fn laco(
                 // `--atirar` mantém o gatilho apertado pelo mesmo caminho da
                 // tecla: não há um segundo laço de tiro só para o diagnóstico.
                 || diag.atirar);
+        // O campo de spawn segue a câmera **de verdade**, não a do modo: o
+        // jogador pode dar zoom (até 15 no difícil, 18 no fácil) e a casca fixa
+        // de `15..20` ficaria em cima do olho. É uma conta de floats por quadro.
+        partida.definir_campo(giochi_defender::gameplay::campo::Campo::para_distancia(
+            camera.distancia_segura(),
+        ));
+
         if atirar && !estado.acabou() {
             let origem = camera3d.position;
             let direcao = direcao_da_camera(&camera3d);
             let pronta_antes = arma.pronta();
-            let resultado = partida.atirar(&mut arma, origem, direcao);
+            // `disparar` e não `atirar`: uma arma de área pode abater vários
+            // cubos num clique, e o `atirar` devolve só o primeiro — os outros
+            // morreriam **sem ponto, sem `+` e sem som**. Cada um custa o seu
+            // `reagir_ao_abate`, que é o caminho único de HUD/som/tremor.
+            let atingidos = partida.disparar(&mut arma, origem, direcao);
             // O som é do **disparo**, não do acerto: sai mesmo quando o tiro
             // passa longe. Mas só quando a cadência deixou atirar — o gatilho
             // apertado não pode virar metralhadora de som.
             if pronta_antes {
                 sons.tocar(Som::Tiro);
             }
-            if let Some(atingido) = resultado {
+            let pontos = arma.pontos();
+            for atingido in &atingidos {
                 abates += 1;
-                estado.pontuar(PONTOS_POR_ABATE);
+                estado.pontuar(pontos);
                 // A cota da onda é quem decide a vitória; sem isto `wave` nunca
                 // saía de 1 e a tela de vitória era inalcançável.
                 if let Some(onda) = estado.registrou_abate() {
@@ -1360,12 +1491,13 @@ fn laco(
                         camera: &camera3d,
                         tela: (largura, altura),
                         posicao: atingido.posicao,
-                        pontos: PONTOS_POR_ABATE,
+                        pontos,
                     },
                 );
                 log::info!(
-                    "abate {}: +{PONTOS_POR_ABATE} (score {}), {:.1} m",
+                    "abate {}: +{} (score {}), {:.1} m",
                     abates,
+                    pontos,
                     estado.score,
                     atingido.distancia
                 );
@@ -1428,7 +1560,12 @@ fn laco(
             // corrente — cada uma desenha o que faz sentido ali.
             let cena = match *tela {
                 Tela::Menu => hud::menu(menu, hud::Tela::new(largura, altura)),
-                Tela::Jogando => hud::cena(estado, hud_estado, hud::Tela::new(largura, altura)),
+                Tela::Jogando => hud::cena(
+                    estado,
+                    hud_estado,
+                    hud::Tela::new(largura, altura),
+                    arma.arma.nome,
+                ),
                 Tela::Fim { venceu } => hud::fim(venceu, estado, hud::Tela::new(largura, altura)),
             };
             hud_gl.desenhar(render, cena, (largura, altura))?;

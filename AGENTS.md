@@ -1079,7 +1079,7 @@ painel: testar 480p ou 600p exigia o hardware na mão. Agora
 `giochi-<nome> --tamanho 800x600 --quadro /tmp/x.bmp` funciona nos três, com a
 mesma flag do launcher.
 
-#### O que continua sendo afirmação
+### O que continua sendo afirmação
 
 **Nenhum aparelho de 600p foi tocado.** Tudo acima é medição de renderizador com
 painel simulado. O que muda num aparelho real não é o layout — é o driver, o
@@ -5792,3 +5792,68 @@ drm=3`, jogo abre `3 dispositivo(s) de entrada`, CPU `542 -> 660` ticks em 3 s,
 `/run/giochi/launcher-parado` e deixam o aparelho sem interface. A receita de
 recuperação é a do §23 — apagar a flag, matar o órfão e matar o `giochi-init`,
 que o `inittab` respawna com a cota zerada.
+
+## 40. GIOCHI Defender: modos, mapas e armas (10/11/2026)
+
+### Três pedidos, e o que cada medidor pegou
+
+Pedido do dono em 10/11/2026: três modos de dificuldade (fácil = câmera no dobro,
+médio = câmera 75 % mais longe, difícil = a câmera de sempre com a velocidade
+levemente aumentada), três mapas com objetos diferentes e mais armas.
+
+| Peça | Onde |
+| --- | --- |
+| modos | `src/gameplay/modo.rs` — câmera, velocidade e intervalo como **fatores** |
+| campo de spawn derivado da câmera | `src/gameplay/campo.rs` |
+| mapas | `src/gameplay/mapa.rs` — asteroide, estação, lua |
+| armas | `src/gameplay/weapon.rs` — `ARMAS`, `disparar` multi-alvo |
+
+Três armadilhas medidas, e todas valem além deste jogo:
+
+1. **A câmera arrasta o campo de spawn.** A casca do 1b é `15..20` e a câmera de
+   referência fica a 9 — tudo nasce à frente. Com a câmera do modo fácil em 18 a
+   mesma casca a **envolveria** e metade dos cubos nasceria atrás do jogador. Hoje
+   a casca vem de `Campo::para_distancia`, e em 9 devolve exatamente os números
+   antigos (testado).
+2. **O teto de zoom era global.** `DISTANCIA_MAXIMA = 15` prendia a câmera do modo
+   fácil em 15 quando ela pedia 18 — o modo não faria o que promete e não haveria
+   erro nenhum. O teto virou campo por câmera.
+3. **`--arma` anunciado e não aplicado.** O log dizia `arma: LEQUE` e o jogo
+   atirava com o pulso: a arma do laço era `Weapon::new()` e o `--arma` só entrava
+   na transição Menu→Jogando. O `+100` no placar denunciou. Regra de sempre: **um
+   valor lido no log de abertura não prova que o laço o usa.**
+
+E um defeito que só a arma de área tornou visível: o laço chamava
+`partida.atirar`, que devolve **um** — os outros dois cubos do leque morriam sem
+ponto, sem `+` e sem som. Agora é `disparar` + iteração. A assinatura "devolve o
+primeiro" é uma armadilha quando o resto do efeito já aconteceu: o `disparar` mata
+todos e o `atirar` esconde os que não voltaram.
+
+#### Medido (20 partidas por modo, piloto automático)
+
+```text
+fácil     20/20 vitórias · 4,8 vidas · câmera 18,00
+médio     12/20 vitórias · 2,8 vidas · câmera 15,75   ← o balanço do 3b
+difícil    3/20 vitórias · 0,2 vidas · câmera  9,00
+difícil com velocidade 1,00 (mesma câmera): 7/20 e 1,0 vida
+```
+
+O difícil **não** mexe no intervalo: com intervalo ×0,90 *e* velocidade ×1,15 o
+piloto perdeu 5 de 5 sem vencer uma onda. O viés do instrumento está declarado no
+`PROGRESS.md`: a tolerância de mira do piloto é **angular**, então ele pune a
+câmera longe — o que é justamente o que o modo fácil faz. A ordenação sai certa
+apesar disso.
+
+#### No X35H
+
+```text
+balanceamento  idêntico ao do PC (2/5 · 34,3 s · 0,4 vidas · 37,3 %, mesma semente)
+mapas          asteroide 85 cores · estacao 68 · lua 247, 0,00 % de preto nos três
+armas          1 disparo com 3 alvos: pulsar 1 · leque 3 · morteiro 2
+câmera         pixels de rocha: 5.869 no fácil contra 25.734 no difícil (4,4×, ≈ 2²)
+troca de mapa  9 → 9 → 8 → 9 malhas; no fim 0 malhas e 0 shaders
+```
+
+O `estacao` e o `lua` têm menos cores que o asteroide porque são lisos: a rocha
+facetada tem uma normal por face e o gradiente do `phong` dá um tom por triângulo.
+

@@ -11,9 +11,11 @@
 //! cena de verdade (com pausa e menu) chega no bloco 3a, e até lá o nome honesto
 //! é `Partida`.
 
+use crate::gameplay::campo::Campo;
 use crate::gameplay::collision::sphere_aabb_intersect;
 use crate::gameplay::dificuldade;
 use crate::gameplay::enemy_pool::{EnemyPool, CAPACIDADE};
+use crate::gameplay::modo::Modo;
 use crate::gameplay::weapon::{Atingido, Weapon};
 use crate::state::GameState;
 use crate::utils::procedural_mesh::generate_cube;
@@ -63,6 +65,10 @@ pub struct Partida {
     game_over_avisado: bool,
     game_over: bool,
     derrotas: u32,
+    /// Onde os cubos nascem — derivado da câmera, ver [`Campo`].
+    campo: Campo,
+    /// Modo de dificuldade em vigor.
+    modo: Modo,
 }
 
 impl Partida {
@@ -75,7 +81,46 @@ impl Partida {
             game_over_avisado: false,
             game_over: false,
             derrotas: 0,
+            campo: Campo::padrao(),
+            modo: Modo::default(),
         }
+    }
+
+    /// Partida com o campo e o modo do jogo.
+    ///
+    /// Os dois juntos e não separados porque um depende do outro: o campo vem da
+    /// distância da câmera, que é a do modo. Receber só um deles deixaria a
+    /// partida com cubos nascendo dentro da câmera no modo fácil.
+    pub fn com_modo(semente: u64, modo: Modo) -> Self {
+        let mut partida = Self::new(semente);
+        partida.definir_modo(modo);
+        partida
+    }
+
+    /// Troca o modo, recalculando o campo.
+    pub fn definir_modo(&mut self, modo: Modo) {
+        self.modo = modo;
+        self.campo = Campo::para_distancia(modo.distancia_da_camera());
+    }
+
+    /// Troca o campo sem mexer no modo.
+    ///
+    /// O laço chama isto a cada quadro com a distância **real** da câmera: o
+    /// jogador pode dar zoom, e a casca tem de continuar à frente do olho. Se só
+    /// o modo definisse o campo, dar zoom para 15 no modo difícil poria o olho
+    /// exatamente sobre a casca de `15..20`.
+    pub fn definir_campo(&mut self, campo: Campo) {
+        self.campo = campo;
+    }
+
+    /// Modo em vigor.
+    pub fn modo(&self) -> Modo {
+        self.modo
+    }
+
+    /// Campo de spawn em vigor.
+    pub fn campo(&self) -> Campo {
+        self.campo
     }
 
     /// Avança a simulação por `dt` segundos.
@@ -106,9 +151,9 @@ impl Partida {
             return;
         }
 
-        // A dificuldade vem da **onda atual**, não de uma constante: era isso
-        // que fazia a onda 3 jogar igual à 1.
-        let onda = dificuldade::da_onda(estado.wave);
+        // A dificuldade vem da **onda atual** e do modo, não de uma constante: era
+        // isso que fazia a onda 3 jogar igual à 1.
+        let onda = dificuldade::da_onda(estado.wave).com_modo(self.modo);
         self.desde_ultimo_spawn += dt;
         while self.desde_ultimo_spawn >= onda.intervalo {
             self.desde_ultimo_spawn -= onda.intervalo;
@@ -141,11 +186,13 @@ impl Partida {
         self.mover_e_colidir(dt, estado);
     }
 
-    /// Sorteia um ponto na casca `RAIO_SPAWN_MIN..RAIO_SPAWN_MAX`, na faixa do
-    /// horizonte.
+    /// Sorteia um ponto na casca do campo, na faixa do horizonte.
+    ///
+    /// Os raios vêm de [`Partida::campo`] e não das constantes: no modo fácil a
+    /// câmera está a 18 e a casca fixa de `15..20` a envolveria.
     fn posicao_de_spawn(&mut self) -> Vec3 {
-        let raio = self.sorteio.faixa(RAIO_SPAWN_MIN, RAIO_SPAWN_MAX);
-        let altura = self.sorteio.faixa(-ALTURA_SPAWN, ALTURA_SPAWN);
+        let raio = self.sorteio.faixa(self.campo.raio_min, self.campo.raio_max);
+        let altura = self.sorteio.faixa(-self.campo.altura, self.campo.altura);
         let angulo = self.sorteio.faixa(0.0, std::f32::consts::TAU);
         let anel = (raio * raio - altura * altura).max(0.0).sqrt();
         Vec3::new(anel * angulo.cos(), altura, anel * angulo.sin())
@@ -196,7 +243,8 @@ impl Partida {
             }
             let posicao = self.posicao_de_spawn();
             let variacao = self.sorteio.faixa(0.0, 1.0);
-            if self.pool.spawn(posicao, VELOCIDADE, variacao).is_some() {
+            let velocidade = VELOCIDADE * self.modo.fator_velocidade();
+            if self.pool.spawn(posicao, velocidade, variacao).is_some() {
                 criados += 1;
             }
         }
@@ -250,6 +298,18 @@ impl Partida {
             return None;
         }
         arma.atirar(origem, direcao, &mut self.pool)
+    }
+
+    /// Dispara e devolve **todos** os cubos abatidos.
+    ///
+    /// O pulso devolve no máximo um; o leque até três; o morteiro leva o que
+    /// estiver perto do impacto. A partida só empresta o pool: quem decide o que
+    /// a arma faz é a arma.
+    pub fn disparar(&mut self, arma: &mut Weapon, origem: Vec3, direcao: Vec3) -> Vec<Atingido> {
+        if self.game_over {
+            return Vec::new();
+        }
+        arma.disparar(origem, direcao, &mut self.pool)
     }
 
     /// Reinício de partida.
@@ -575,5 +635,83 @@ mod tests {
         assert_eq!(estado.lives, 0);
         assert!(partida.derrotas() >= VIDAS_INICIAIS as u32);
         assert!(partida.game_over_avisado);
+    }
+
+    #[test]
+    fn a_arma_de_area_abate_varios_numa_chamada() {
+        // O caminho do jogo é `disparar`, não `atirar`: com o `atirar`, dois dos
+        // três cubos do leque morriam **sem ponto e sem som** — o pool os
+        // removia e o placar não via. Medido no aparelho antes da correção.
+        let (mut partida, _estado) = partida();
+        let mut postos = 0;
+        // Negativo: a câmera inicial olha de `+Z` para `-Z`, então o que está à
+        // frente tem `z` menor que o da origem.
+        for z in [-8.0f32, -9.0, -10.0] {
+            if partida.plantar(Vec3::new(0.0, 0.0, z), 0.5).is_some() {
+                postos += 1;
+            }
+        }
+        assert_eq!(postos, 3);
+        let mut leque = Weapon::com_arma(&crate::gameplay::weapon::LEQUE);
+        let atingidos = partida.disparar(&mut leque, Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(atingidos.len(), 3, "o leque devia abater os três");
+        assert_eq!(partida.inimigos(), 0);
+        assert_eq!(partida.derrotas(), 0, "abate não é derrota");
+    }
+
+    #[test]
+    fn o_pulso_continua_abatendo_um_por_disparo() {
+        let (mut partida, _estado) = partida();
+        for z in [-8.0f32, -9.0, -10.0] {
+            partida.plantar(Vec3::new(0.0, 0.0, z), 0.5);
+        }
+        let mut pulso = Weapon::new();
+        let atingidos = partida.disparar(&mut pulso, Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(atingidos.len(), 1, "o pulso é de um alvo");
+        assert_eq!(partida.inimigos(), 2);
+    }
+
+    #[test]
+    fn o_campo_do_modo_facil_afasta_o_spawn_da_camera() {
+        // O defeito que isto impede: a câmera do modo fácil fica a 18 e a casca
+        // fixa do 1b ia até 20 — metade dos cubos nasceria atrás do jogador.
+        for modo in crate::gameplay::modo::Modo::todos() {
+            let partida = Partida::com_modo(1, modo);
+            let campo = partida.campo();
+            assert!(
+                campo.raio_min > modo.distancia_da_camera() + 5.0,
+                "{}: casca em {:.1} com câmera a {:.1}",
+                modo.nome(),
+                campo.raio_min,
+                modo.distancia_da_camera()
+            );
+        }
+        // E o difícil é exatamente o campo do bloco 1b.
+        let dificil = Partida::com_modo(1, crate::gameplay::modo::Modo::Dificil);
+        assert_eq!(dificil.campo(), crate::gameplay::campo::Campo::padrao());
+    }
+
+    #[test]
+    fn o_campo_acompanha_o_zoom_e_nao_so_o_modo() {
+        // O jogador pode dar zoom: no modo difícil o teto é 15, e a casca do
+        // difícil é `15..20`. Com o olho em 15 e a casca em 15, o cubo nasceria
+        // **em cima da câmera**. O laço chama `definir_campo` com a distância
+        // real; este teste fixa a conta que ele usa.
+        use crate::gameplay::campo::Campo;
+        use crate::gameplay::modo::Modo;
+
+        let mut partida = Partida::com_modo(1, Modo::Dificil);
+        assert_eq!(partida.campo(), Campo::padrao());
+
+        for distancia in [5.0f32, 9.0, 12.0, 15.0, 18.0] {
+            partida.definir_campo(Campo::para_distancia(distancia));
+            assert!(
+                partida.campo().raio_min > distancia,
+                "câmera a {distancia}: casca em {:.1}",
+                partida.campo().raio_min
+            );
+        }
+        // E o modo não foi tocado: quem manda no campo agora é a câmera.
+        assert_eq!(partida.modo(), Modo::Dificil);
     }
 }

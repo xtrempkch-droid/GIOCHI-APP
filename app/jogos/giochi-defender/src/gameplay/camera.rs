@@ -46,6 +46,13 @@ pub struct OrbitalCamera {
     pub pitch: f32,
     /// Distância até o alvo, em unidades de mundo.
     pub distance: f32,
+    /// Teto de afastamento, em unidades.
+    ///
+    /// O modo fácil pede a câmera ao **dobro** da distância (18), e o teto fixo
+    /// de 15 do bloco 1a a prenderia em 15 — o modo não faria o que promete e
+    /// ninguém veria erro nenhum. O limite virou campo para o modo poder estendê-lo
+    /// sem afrouxar o do modo difícil.
+    pub distancia_maxima: f32,
     /// Ponto observado — o centro do asteroide.
     pub target: Vec3,
 }
@@ -59,8 +66,23 @@ impl OrbitalCamera {
         Self {
             yaw: 0.0,
             pitch: graus_para_radianos(22.0),
-            distance: 9.0,
+            distance: crate::gameplay::modo::DISTANCIA_DE_REFERENCIA,
+            distancia_maxima: DISTANCIA_MAXIMA,
             target: Vec3::ZERO,
+        }
+    }
+
+    /// Câmera com a distância e o teto de um modo de dificuldade.
+    ///
+    /// O teto é `máximo(distância do modo, DISTANCIA_MAXIMA)`: o modo fácil
+    /// permite afastar até 18, o difícil continua preso em 15 — mas nenhum dos
+    /// dois impede o jogador de **aproximar** se quiser.
+    pub fn com_modo(modo: crate::gameplay::modo::Modo) -> Self {
+        let distancia = modo.distancia_da_camera();
+        Self {
+            distance: distancia,
+            distancia_maxima: distancia.max(DISTANCIA_MAXIMA),
+            ..Self::new()
         }
     }
 
@@ -113,7 +135,7 @@ impl OrbitalCamera {
         self.distance = clamp(
             self.distance - passos * PASSO_ZOOM,
             DISTANCIA_MINIMA,
-            DISTANCIA_MAXIMA,
+            self.teto(),
         );
     }
 
@@ -122,7 +144,20 @@ impl OrbitalCamera {
     /// O campo é público — o `--teclas` e os testes escrevem nele direto —, então
     /// a validação acontece na leitura, não só na escrita.
     pub fn distancia_segura(&self) -> f32 {
-        clamp(self.distance, DISTANCIA_MINIMA, DISTANCIA_MAXIMA)
+        clamp(self.distance, DISTANCIA_MINIMA, self.teto())
+    }
+
+    /// Teto de afastamento, já saneado.
+    ///
+    /// O campo é público e o `--distancia` escreve nele; um teto `NaN` faria o
+    /// `clamp` devolver `NaN` e a matriz de visão deixaria de existir — quadro
+    /// preto sem erro.
+    pub fn teto(&self) -> f32 {
+        if self.distancia_maxima.is_finite() && self.distancia_maxima >= DISTANCIA_MINIMA {
+            self.distancia_maxima
+        } else {
+            DISTANCIA_MAXIMA
+        }
     }
 
     /// Inclinação já presa ao intervalo válido.
@@ -393,5 +428,69 @@ mod tests {
     fn sem_tamanho_o_aspecto_fica_com_o_renderer() {
         let camera = OrbitalCamera::new().camera(0, 0);
         assert_eq!(camera.aspect, 0.0);
+    }
+
+    #[test]
+    fn o_modo_facil_consegue_afastar_ate_o_dobro() {
+        // O defeito que este teste impede: com o teto fixo de 15, o modo fácil
+        // pedia 18 e a câmera ficava presa — o modo não fazia o que promete.
+        let facil = OrbitalCamera::com_modo(crate::gameplay::modo::Modo::Facil);
+        assert_eq!(facil.distance, 18.0);
+        assert_eq!(facil.distancia_segura(), 18.0);
+        assert!(facil.teto() >= 18.0);
+
+        let medio = OrbitalCamera::com_modo(crate::gameplay::modo::Modo::Medio);
+        assert_eq!(medio.distancia_segura(), 15.75);
+
+        let dificil = OrbitalCamera::com_modo(crate::gameplay::modo::Modo::Dificil);
+        assert_eq!(dificil.distancia_segura(), 9.0);
+        assert_eq!(dificil.teto(), DISTANCIA_MAXIMA);
+    }
+
+    #[test]
+    fn nenhum_modo_impede_o_jogador_de_aproximar() {
+        // Aproximar é escolha do jogador — e no modo fácil é justamente o que ele
+        // faria se quisesse dificultar. O que o modo define é o **teto**.
+        for modo in crate::gameplay::modo::Modo::todos() {
+            let mut camera = OrbitalCamera::com_modo(modo);
+            camera.zoom(1000.0);
+            assert_eq!(camera.distance, DISTANCIA_MINIMA, "{}", modo.nome());
+            camera.zoom(-1000.0);
+            assert_eq!(
+                camera.distance,
+                camera.teto(),
+                "{}: afastar para além do teto",
+                modo.nome()
+            );
+        }
+    }
+
+    #[test]
+    fn teto_invalido_nao_produz_nan() {
+        // `--distancia` e testes escrevem no campo direto; um `NaN` ali faria a
+        // matriz de visão deixar de existir e o quadro sairia preto sem erro.
+        let mut camera = OrbitalCamera::new();
+        camera.distancia_maxima = f32::NAN;
+        assert!(camera.distancia_segura().is_finite());
+        assert_eq!(camera.teto(), DISTANCIA_MAXIMA);
+        camera.distancia_maxima = 1.0;
+        assert_eq!(camera.teto(), DISTANCIA_MAXIMA, "teto abaixo do mínimo");
+    }
+
+    #[test]
+    fn a_camera_de_qualquer_modo_olha_para_o_centro() {
+        // Um teto novo não pode quebrar o `look_at`: a 18 unidades o olho ainda
+        // tem de estar na direção certa.
+        for modo in crate::gameplay::modo::Modo::todos() {
+            let camera = OrbitalCamera::com_modo(modo);
+            let olho = camera.olho();
+            let distancia = (olho.x * olho.x + olho.y * olho.y + olho.z * olho.z).sqrt();
+            assert!(
+                (distancia - camera.distance).abs() < 1e-4,
+                "{}: olho a {distancia}",
+                modo.nome()
+            );
+            assert!(camera.camera(640, 480).view_matrix().is_ok());
+        }
     }
 }

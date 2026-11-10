@@ -247,6 +247,10 @@ pub struct Controles {
     /// Ver [`Controles::cima_apertou`].
     pub baixo_apertou: bool,
     /// Ver [`Controles::cima_apertou`].
+    pub esquerda_apertou: bool,
+    /// Ver [`Controles::cima_apertou`].
+    pub direita_apertou: bool,
+    /// Ver [`Controles::cima_apertou`].
     pub confirmar_apertou: bool,
     /// Ver [`Controles::cima_apertou`].
     pub voltar_apertou: bool,
@@ -267,6 +271,8 @@ impl Controles {
     pub fn com_bordas(&mut self, anterior: &Controles) {
         self.cima_apertou = self.cima && !anterior.cima;
         self.baixo_apertou = self.baixo && !anterior.baixo;
+        self.esquerda_apertou = self.esquerda && !anterior.esquerda;
+        self.direita_apertou = self.direita && !anterior.direita;
         self.confirmar_apertou = self.confirmar && !anterior.confirmar;
         self.voltar_apertou = self.voltar && !anterior.voltar;
         self.menu_apertou = self.menu && !anterior.menu;
@@ -421,6 +427,8 @@ impl EvdevInput {
             // Bordas preenchidas abaixo.
             cima_apertou: false,
             baixo_apertou: false,
+            esquerda_apertou: false,
+            direita_apertou: false,
             confirmar_apertou: false,
             voltar_apertou: false,
             menu_apertou: false,

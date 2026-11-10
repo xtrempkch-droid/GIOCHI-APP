@@ -20,6 +20,17 @@
 //! estrela ficaria com o brilho dependendo da face que aponta para a câmera — o
 //! céu cintilaria ao girar.
 //!
+//! ## Três mapas, um caminho de desenho
+//!
+//! O objeto defendido vem de [`Mapa`](crate::gameplay::mapa::Mapa): a rocha do
+//! 1b, uma estação com anel e painéis ou uma lua craterada. Cada mapa traz as
+//! próprias peças e cores, e a arena só sabe criar malha e desenhar — um quarto
+//! mapa não toca neste arquivo.
+//!
+//! As estrelas são as mesmas nos três: o que muda é a [`Mapa::tinta_das_estrelas`],
+//! aplicada na cor de cada faixa. Um céu por mapa custaria três malhas novas para
+//! dizer a mesma coisa.
+//!
 //! ## Iluminação do bloco 1c
 //!
 //! A rocha e os cubos usam o shader `phong` com uma luz direcional **vinda do
@@ -28,7 +39,8 @@
 //! Com o `phong` a direção, a cor, o ambiente e o especular são do jogo, e o que
 //! muda entre a rocha e o cubo é a dureza do brilho — rocha fosca, metal quente.
 
-use crate::utils::procedural_mesh::{generate_icosphere, generate_starfield};
+use crate::gameplay::mapa::Mapa;
+use crate::utils::procedural_mesh::generate_starfield;
 use giochi_engine_3d::math3d::{Camera3D, Color3D, Transform3D, Vec3};
 use giochi_engine_3d::render3d::{DirectionalLight, MeshHandle, RenderContext3D, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
@@ -71,24 +83,45 @@ struct FaixaEstelar {
     cor: Color3D,
 }
 
-/// Asteroide + céu, com os recursos de GPU que eles usam.
+/// Uma peça do objeto defendido já na GPU.
+#[derive(Debug, Clone, Copy)]
+struct PecaNaGpu {
+    malha: MeshHandle,
+    cor: Color3D,
+}
+
+/// Objeto defendido + céu, com os recursos de GPU que eles usam.
 pub struct Arena {
-    asteroide: MeshHandle,
+    /// Peças do mapa: corpo, detalhe e acento — no máximo três.
+    corpo: Vec<PecaNaGpu>,
     estrelas: Vec<FaixaEstelar>,
-    shader_asteroide: ShaderHandle,
+    shader_objeto: ShaderHandle,
     shader_estrelas: ShaderHandle,
+    /// Qual mapa está em cena.
+    mapa: Mapa,
 }
 
 impl Arena {
-    /// Cria malhas e shaders.
-    ///
-    /// Dois shaders e não um: o asteroide usa `flat` (o facetado aparece pelo
-    /// termo de Lambert fixo do shader) e as estrelas usam `phong`, que é o único
-    /// que respeita `ambient` — é o que as deixa com brilho constante.
+    /// Cria malhas e shaders para o mapa padrão — a rocha do bloco 1b.
     pub fn new(render: &mut RenderContext3D) -> Result3D<Self> {
-        let malha = generate_icosphere(1, RAIO_ASTEROIDE, DISTORCAO);
-        let asteroide = render.create_mesh(&malha.vertices, &malha.indices)?;
-        let shader_asteroide = render.create_builtin_shader(BuiltinShader::Phong)?;
+        Self::com_mapa(render, Mapa::Asteroide)
+    }
+
+    /// Cria malhas e shaders para `mapa`.
+    ///
+    /// Dois shaders e não um por peça: todas as peças do mapa usam `phong`, que é
+    /// o único que respeita `ambient` — é o que mantém as estrelas com brilho
+    /// constante ao girar e o que permite a cor por peça.
+    pub fn com_mapa(render: &mut RenderContext3D, mapa: Mapa) -> Result3D<Self> {
+        let mut corpo = Vec::new();
+        for parte in mapa.partes() {
+            let malha = render.create_mesh(&parte.malha.vertices, &parte.malha.indices)?;
+            corpo.push(PecaNaGpu {
+                malha,
+                cor: parte.cor,
+            });
+        }
+        let shader_objeto = render.create_builtin_shader(BuiltinShader::Phong)?;
         let shader_estrelas = render.create_builtin_shader(BuiltinShader::Phong)?;
 
         let mut estrelas = Vec::with_capacity(FAIXAS.len());
@@ -109,25 +142,31 @@ impl Arena {
         }
 
         Ok(Self {
-            asteroide,
+            corpo,
             estrelas,
-            shader_asteroide,
+            shader_objeto,
             shader_estrelas,
+            mapa,
         })
     }
 
-    /// Raio nominal do asteroide — o que o bloco 1b vai usar como esfera de
+    /// Qual mapa está em cena.
+    pub fn mapa(&self) -> Mapa {
+        self.mapa
+    }
+
+    /// Raio nominal do objeto defendido — o que o bloco 1b usa como esfera de
     /// colisão.
     pub fn raio(&self) -> f32 {
         RAIO_ASTEROIDE
     }
 
-    /// Raio **externo** da malha, já com a distorção.
+    /// Raio **externo** da silhueta, já com a distorção do mapa.
     ///
-    /// Um inimigo que encosta aqui já tocou a rocha; usar o raio nominal deixaria
+    /// Um inimigo que encosta aqui já tocou o objeto; usar o raio nominal deixaria
     /// as pontas atravessarem o cubo antes de contar o dano.
     pub fn raio_externo(&self) -> f32 {
-        RAIO_ASTEROIDE * (1.0 + DISTORCAO)
+        self.mapa.raio_externo()
     }
 
     /// Quantas estrelas o céu tem, somando as faixas.
@@ -135,29 +174,37 @@ impl Arena {
         FAIXAS.iter().map(|(quantidade, _, _)| quantidade).sum()
     }
 
-    /// Desenha o céu e o asteroide.
+    /// Desenha o céu e o objeto defendido.
     pub fn desenhar(&self, render: &mut RenderContext3D, camera: &Camera3D) -> Result3D<()> {
         // Céu primeiro e sem teste de profundidade útil: as estrelas estão a 120
         // unidades, atrás de tudo, e o teste normal já as ordena.
         render.set_light(luz_emissiva());
+        let tinta = self.mapa.tinta_das_estrelas();
         for faixa in &self.estrelas {
             render.draw_mesh_colored(
                 faixa.malha,
                 self.shader_estrelas,
                 &Transform3D::IDENTITY,
                 camera,
-                faixa.cor,
+                Color3D::new(
+                    faixa.cor.r * tinta.r,
+                    faixa.cor.g * tinta.g,
+                    faixa.cor.b * tinta.b,
+                    1.0,
+                ),
             )?;
         }
 
         render.set_light(luz_do_asteroide());
-        render.draw_mesh_colored(
-            self.asteroide,
-            self.shader_asteroide,
-            &Transform3D::IDENTITY,
-            camera,
-            COR_ASTEROIDE,
-        )?;
+        for peca in &self.corpo {
+            render.draw_mesh_colored(
+                peca.malha,
+                self.shader_objeto,
+                &Transform3D::IDENTITY,
+                camera,
+                peca.cor,
+            )?;
+        }
 
         Ok(())
     }
@@ -170,8 +217,10 @@ impl Arena {
         for faixa in self.estrelas {
             render.destroy_mesh(faixa.malha);
         }
-        render.destroy_mesh(self.asteroide);
-        render.destroy_shader(self.shader_asteroide);
+        for peca in self.corpo {
+            render.destroy_mesh(peca.malha);
+        }
+        render.destroy_shader(self.shader_objeto);
         render.destroy_shader(self.shader_estrelas);
     }
 }

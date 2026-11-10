@@ -232,7 +232,12 @@ mod tests {
         // Uma chamada por cor é o que faz a HUD caber em poucos desenhos; sem a
         // batelada, cada célula de glifo seria uma chamada.
         let tela = Tela::new(640, 480);
-        let cena = hud::cena(&crate::state::GameState::new(), &hud::Hud::new(), tela);
+        let cena = hud::cena(
+            &crate::state::GameState::new(),
+            &hud::Hud::new(),
+            tela,
+            crate::gameplay::weapon::PULSAR.nome,
+        );
         let lotes = lotes(&cena, tela);
         let celulas: usize = cena
             .textos

@@ -49,6 +49,7 @@ cargo run --release
 - **teclas de volume** — mudam o `Master` do ALSA (o volume do sistema) em
   passos de 5 %, e o valor persiste em `/user/.config/giochi/volume`.
 - **direcional / WASD** — orbita a câmera e navega o menu
+- **`1` / `2` / `3`** — escolhe a arma (pulsar, leque, morteiro); **`Q`** cicla
 - **`A` / `Enter` / `Espaço`** — confirma (no menu e no fim)
 - **`B` do controle / `Backspace`** — volta: do jogo ao menu, do fim ao menu
 - **`R`** — recomeça a partida, do jogo ou do fim
@@ -60,6 +61,34 @@ handhelds usam driver próprio, e o SDL os mapeia por um GUID nulo
 (`Bus=0000 Vendor=0000 Product=0000`) sem garantia de qual botão é qual. Os nomes
 vêm do `/etc/giochi/buttons.map` do sistema, porque o mesmo símbolo lógico (`a`)
 aponta para `BTN_EAST` no R35S e `BTN_SOUTH` no X55.
+
+## Modos, mapas e armas
+
+```bash
+giochi-defender --modo facil      # camera no dobro da distancia, cubos 10% mais lentos
+giochi-defender --modo medio      # camera 75% mais longe (padrao)
+giochi-defender --modo dificil    # a camera de sempre, cubos 15% mais rapidos
+giochi-defender --mapa estacao    # asteroide (padrao) | estacao | lua
+giochi-defender --arma leque      # pulsar (padrao) | leque | morteiro
+```
+
+No aparelho as mesmas escolhas ficam no menu: `MODO` e `MAPA` respondem ao `←`/`→`
+e o `A` inicia. A arma se troca em jogo, com `1`/`2`/`3` no teclado — é onde o
+jogador descobre que precisa de outra.
+
+| Modo | Câmera | Vitórias do piloto | Vidas |
+| --- | --- | --- | --- |
+| fácil | 18,00 | 20/20 | 4,8 |
+| médio | 15,75 | 12/20 | 2,8 |
+| difícil | 9,00 | 3/20 | 0,2 |
+
+Medido com 20 partidas por modo. O médio reproduz o balanço do bloco 3b.
+
+| Arma | Cadência | Alvos | Pontos |
+| --- | --- | --- | --- |
+| pulsar | 0,15 s | 1 | 100 |
+| leque | 0,45 s | 3 (cone) | 80 |
+| morteiro | 0,70 s | 8 (raio de 3,2 m) | 120 |
 
 O evdev é **autoritativo quando acha dispositivo**. O gamepad do SDL fica como
 reserva para quando não há `/dev/input` utilizável (PC sem controle), e nesse caso
@@ -306,7 +335,7 @@ cargo test
 cargo doc --no-deps
 ```
 
-286 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+330 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
 layout da HUD, a síntese de som, o tremor, as **transições de tela** e a
 **dificuldade por onda** são
 testados sem abrir janela, e a captura headless (`--quadro`) é o que prova o

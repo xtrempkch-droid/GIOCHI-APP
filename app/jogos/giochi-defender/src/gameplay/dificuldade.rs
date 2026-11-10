@@ -21,6 +21,9 @@
 //! capacidade — e é ele que impede alguém de "só baixar o intervalo" e achar que
 //! aumentou a dificuldade.
 
+use crate::gameplay::campo::Campo;
+use crate::gameplay::modo::Modo;
+
 /// Parâmetros de uma onda.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Onda {
@@ -65,6 +68,39 @@ pub fn da_onda(numero: u32) -> Onda {
         intervalo,
         velocidade,
         por_vez,
+    }
+}
+
+impl Onda {
+    /// Ajusta a onda ao **campo** de spawn: velocidade proporcional ao trajeto.
+    ///
+    /// Um cubo da casca até o objeto percorre `raio_min - raio_de_colisao`. Se a
+    /// casca cresce 60 % e a velocidade não, a viagem leva 60 % mais tempo e o
+    /// modo fácil vira "modo lento" — o jogador vê a ameaça por oito segundos sem
+    /// pressão nenhuma. O fator de [`Campo`] mantém a **duração da viagem**, que é
+    /// o que a medição de balanceamento fixou.
+    ///
+    /// O teto de velocidade acompanha na mesma proporção: sem isso, a onda 3
+    /// estouraria o `VELOCIDADE_MAXIMA` só porque o campo é maior, e o cubo
+    /// chegaria antes de o jogador girar a câmera.
+    pub fn com_campo(self, campo: Campo) -> Self {
+        let fator = campo.fator_velocidade();
+        Self {
+            velocidade: (self.velocidade * fator).min(VELOCIDADE_MAXIMA * fator),
+            ..self
+        }
+    }
+
+    /// Ajusta a onda ao **modo** de dificuldade.
+    ///
+    /// Os dois fatores entram juntos: velocidade sozinha mudaria a ocupação do
+    /// pool em vez da dificuldade, e é a razão entre eles que o jogador sente.
+    pub fn com_modo(self, modo: Modo) -> Self {
+        Self {
+            velocidade: self.velocidade * modo.fator_velocidade(),
+            intervalo: (self.intervalo * modo.fator_intervalo()).max(INTERVALO_MINIMO),
+            ..self
+        }
     }
 }
 

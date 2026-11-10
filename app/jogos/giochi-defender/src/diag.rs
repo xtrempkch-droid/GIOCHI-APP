@@ -103,6 +103,13 @@ fn codigo_da_tecla_nome() -> impl Iterator<Item = (&'static str, u32)> {
         ("esc", 27),
         ("up", 1_073_741_906),
         ("down", 1_073_741_905),
+        ("left", 1_073_741_904),
+        ("right", 1_073_741_903),
+        // `1`, `2` e `3`: escolha direta de arma.
+        ("1", 49),
+        ("2", 50),
+        ("3", 51),
+        ("q", 113),
         ("enter", 13),
         ("space", 32),
         ("volup", 0x4000_0080),
@@ -152,6 +159,12 @@ pub struct Diag {
     pub pitch_graus: Option<f32>,
     /// Distância inicial.
     pub distancia: Option<f32>,
+    /// Modo de dificuldade.
+    pub modo: crate::gameplay::modo::Modo,
+    /// Mapa (qual objeto se defende).
+    pub mapa: crate::gameplay::mapa::Mapa,
+    /// Arma inicial, como índice de [`crate::gameplay::weapon::ARMAS`].
+    pub arma: usize,
     /// Segundos de simulação antes do primeiro quadro.
     pub simular: Option<f32>,
     /// Semente do sorteio de posições.
@@ -211,6 +224,9 @@ impl Default for Diag {
             yaw_graus: None,
             pitch_graus: None,
             distancia: None,
+            modo: crate::gameplay::modo::Modo::default(),
+            mapa: crate::gameplay::mapa::Mapa::default(),
+            arma: 0,
             simular: None,
             semente: SEMENTE_PADRAO,
             inimigos: None,
@@ -355,6 +371,24 @@ impl Diag {
                 "--yaw" => diag.yaw_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--pitch" => diag.pitch_graus = Some(real(&mut argumentos, embutido, &nome)?),
                 "--distancia" => diag.distancia = Some(real(&mut argumentos, embutido, &nome)?),
+                "--modo" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.modo = crate::gameplay::modo::Modo::parse(&valor).ok_or_else(|| {
+                        anyhow::anyhow!("--modo {valor:?}: use facil, medio ou dificil")
+                    })?;
+                }
+                "--mapa" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.mapa = crate::gameplay::mapa::Mapa::parse(&valor).ok_or_else(|| {
+                        anyhow::anyhow!("--mapa {valor:?}: use asteroide, estacao ou lua")
+                    })?;
+                }
+                "--arma" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.arma = crate::screens::arma_por_id(&valor).ok_or_else(|| {
+                        anyhow::anyhow!("--arma {valor:?}: use pulsar, leque ou morteiro")
+                    })?;
+                }
                 "--simular" => diag.simular = Some(real(&mut argumentos, embutido, &nome)?),
                 "--semente" => diag.semente = inteiro(&mut argumentos, embutido, &nome)?,
                 "--inimigos" => {

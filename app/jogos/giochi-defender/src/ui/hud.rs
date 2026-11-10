@@ -339,21 +339,22 @@ pub fn menu(menu: &crate::screens::Menu, tela: Tela) -> Cena {
     cena.textos.push(titulo);
     cena.textos.push(subtitulo);
 
-    // Itens, com um marcador no que está em foco.
+    // Itens, com um marcador no que está em foco. Quatro linhas e não duas: o
+    // modo e o mapa são escolhidos aqui, porque no aparelho não há linha de
+    // comando e um menu só com INICIAR obrigaria a aceitar o padrão para sempre.
     let esc_item = escala(tela) * 1.3;
     let vao = esc_item * crate::ui::font::ALTURA as f32 * 1.9;
-    let base = tela.altura * 0.58;
-    for (i, item) in [
-        crate::screens::ItemMenu::Iniciar,
-        crate::screens::ItemMenu::Sair,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let base = tela.altura * 0.52;
+    for (i, item) in crate::screens::ItemMenu::todos().into_iter().enumerate() {
         let em_foco = item == menu.item;
         let y = base + i as f32 * vao;
+        let linha = match item {
+            crate::screens::ItemMenu::Modo => format!("{}/ {}", item.rotulo(), menu.modo.nome()),
+            crate::screens::ItemMenu::Mapa => format!("{}/ {}", item.rotulo(), menu.mapa.nome()),
+            _ => item.rotulo().to_string(),
+        };
         let rotulo = Texto {
-            conteudo: item.rotulo().to_string(),
+            conteudo: linha,
             x: 0.0,
             y,
             escala: esc_item,
@@ -374,12 +375,49 @@ pub fn menu(menu: &crate::screens::Menu, tela: Tela) -> Cena {
                 h: lado,
                 cor: COR_DESTAQUE,
             });
+            // Setas dos dois lados quando o item aceita `←`/`→`: sem elas o
+            // jogador não descobre que dá para mudar sem apertar tudo.
+            if item.ajustavel() {
+                for (lado_x, seta) in [
+                    (rotulo.x - lado * 5.0, "<"),
+                    (rotulo.x + rotulo.largura() + lado * 2.8, ">"),
+                ] {
+                    cena.textos.push(Texto {
+                        conteudo: seta.to_string(),
+                        x: lado_x.round(),
+                        y: rotulo.y,
+                        escala: esc_item,
+                        cor: COR_DESTAQUE,
+                    });
+                }
+            }
         }
         cena.textos.push(rotulo);
     }
 
+    // A descrição do modo em foco: "camera 2x mais longe" é a diferença que o
+    // jogador precisa para escolher, e ela não cabe na linha do item.
+    if menu.item.ajustavel() {
+        let detalhe = match menu.item {
+            crate::screens::ItemMenu::Modo => menu.modo.descricao(),
+            crate::screens::ItemMenu::Mapa => menu.mapa.descricao(),
+            _ => "",
+        };
+        let texto = Texto {
+            conteudo: detalhe.to_string(),
+            x: 0.0,
+            y: base + 4.0 * vao,
+            escala: escala(tela) * 0.9,
+            cor: COR_TEXTO,
+        };
+        cena.textos.push(Texto {
+            x: ((tela.largura - texto.largura()) * 0.5).round(),
+            ..texto
+        });
+    }
+
     let dica = Texto {
-        conteudo: "A CONFIRMA   B SAI".to_string(),
+        conteudo: "A CONFIRMA   B SAI   ARROWS TROCAM".to_string(),
         x: 0.0,
         y: tela.altura - margem(tela) - escala(tela) * crate::ui::font::ALTURA as f32,
         escala: escala(tela) * 0.8,
@@ -469,9 +507,29 @@ pub fn fim(venceu: bool, estado: &GameState, tela: Tela) -> Cena {
 }
 
 /// Monta a cena inteira da HUD para um quadro.
-pub fn cena(estado: &GameState, hud: &Hud, tela: Tela) -> Cena {
+pub fn cena(estado: &GameState, hud: &Hud, tela: Tela, arma: &str) -> Cena {
     let mut cena = fixos(estado, tela);
+    cena.juntar(arma_na_tela(arma, tela));
     cena.juntar(efeitos(estado, hud, tela));
+    cena
+}
+
+/// O nome da arma na mão, no rodapé da esquerda.
+///
+/// Sem isto o jogador troca de arma e não tem como saber em qual está: a cadência
+/// e o número de alvos são invisíveis até o próximo tiro, e um `+80` em vez de
+/// `+100` no placar é a única pista — tarde demais.
+pub fn arma_na_tela(arma: &str, tela: Tela) -> Cena {
+    let esc = escala(tela);
+    let mut cena = Cena::default();
+    let texto = Texto {
+        conteudo: format!("ARMA {arma}"),
+        x: margem(tela),
+        y: tela.altura - margem(tela) - crate::ui::font::ALTURA as f32 * esc,
+        escala: esc,
+        cor: COR_DESTAQUE,
+    };
+    cena.textos.push(texto);
     cena
 }
 
@@ -702,7 +760,7 @@ mod tests {
     fn a_hud_cabe_na_tela_em_todos_os_paineis() {
         for (w, h) in TELAS {
             let tela = Tela::new(w, h);
-            let cena = cena(&estado_com(999_999, 5, 3), &Hud::new(), tela);
+            let cena = cena(&estado_com(999_999, 5, 3), &Hud::new(), tela, "PULSAR");
             for t in &cena.textos {
                 let (x, y, l, a) = t.caixa();
                 assert!(
@@ -819,7 +877,7 @@ mod tests {
         let mut hud = Hud::new();
         hud.anunciar_fim(false);
         hud.abateu(100.0, 100.0, 100);
-        let cena = cena(&estado_com(1_200, 2, 3), &hud, tela);
+        let cena = cena(&estado_com(1_200, 2, 3), &hud, tela, "PULSAR");
         assert!(!cena.textos.is_empty());
         for t in &cena.textos {
             for c in t.conteudo.chars() {
@@ -1030,6 +1088,74 @@ mod tests {
         assert!(
             altura_da_letra >= 10.0,
             "letra de {altura_da_letra} px em 480p"
+        );
+    }
+
+    #[test]
+    fn o_menu_mostra_o_modo_e_o_mapa_com_o_valor() {
+        // Um menu que diz só "MODO" não informa nada: o jogador precisa ver
+        // **qual** modo está escolhido para saber o que o `←`/`→` muda.
+        let tela = Tela::new(640, 480);
+        let escolhas = crate::screens::Menu::novo();
+        let cena = menu(&escolhas, tela);
+        let textos: Vec<&str> = cena.textos.iter().map(|t| t.conteudo.as_str()).collect();
+        assert!(
+            textos
+                .iter()
+                .any(|t| t.starts_with("MODO")
+                    && t.contains(crate::gameplay::modo::Modo::Medio.nome())),
+            "o menu não mostra o modo em vigor: {textos:?}"
+        );
+        assert!(
+            textos.iter().any(|t| t.starts_with("MAPA")
+                && t.contains(crate::gameplay::mapa::Mapa::Asteroide.nome())),
+            "o menu não mostra o mapa em vigor: {textos:?}"
+        );
+    }
+
+    #[test]
+    fn o_menu_mostra_as_setas_so_no_item_ajustavel() {
+        // As setas são o convite para apertar `←`/`→`; num item sem valor elas
+        // prometeriam uma ação que não existe.
+        let tela = Tela::new(640, 480);
+        let mut escolhas = crate::screens::Menu::novo();
+        let iniciar = menu(&escolhas, tela);
+        assert!(
+            !iniciar.textos.iter().any(|t| t.conteudo == ">"),
+            "INICIAR não é ajustável e não pode ter setas"
+        );
+
+        escolhas.item = crate::screens::ItemMenu::Modo;
+        let modo = menu(&escolhas, tela);
+        assert_eq!(
+            modo.textos.iter().filter(|t| t.conteudo == ">").count(),
+            1,
+            "o modo em foco precisa das duas setas"
+        );
+        assert!(modo.textos.iter().any(|t| t.conteudo == "<"));
+        // E a descrição do modo aparece: é a diferença que o jogador precisa ver.
+        assert!(
+            modo.textos
+                .iter()
+                .any(|t| t.conteudo == crate::gameplay::modo::Modo::Medio.descricao()),
+            "falta a descrição do modo"
+        );
+    }
+
+    #[test]
+    fn a_hud_mostra_a_arma_na_mao() {
+        // Sem isto o jogador troca de arma e não tem como saber em qual está: a
+        // cadência e o número de alvos são invisíveis até o próximo tiro.
+        let tela = Tela::new(640, 480);
+        let cena = cena(
+            &crate::state::GameState::new(),
+            &Hud::new(),
+            tela,
+            "MORTEIRO",
+        );
+        assert!(
+            cena.textos.iter().any(|t| t.conteudo.contains("MORTEIRO")),
+            "a HUD não mostra a arma"
         );
     }
 }

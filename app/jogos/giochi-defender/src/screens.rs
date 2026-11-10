@@ -20,6 +20,9 @@
 //! segundo de uma partida "nova". [`Reinicio`] é a lista **completa** do que
 //! volta ao início, num lugar só.
 
+use crate::gameplay::mapa::Mapa;
+use crate::gameplay::modo::Modo;
+use crate::gameplay::weapon::{indice_da_arma, ARMAS};
 use crate::state::GameState;
 
 /// Onde o jogo está.
@@ -83,11 +86,19 @@ pub enum Resultado {
 }
 
 /// Item do menu em foco.
+///
+/// Quatro itens, e dois deles são **ajustáveis** (`←`/`→`): o modo e o mapa. Um
+/// menu que só tivesse `INICIAR` obrigaria a escolher tudo por linha de comando —
+/// e o aparelho não tem linha de comando.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ItemMenu {
     /// Começar a partida.
     #[default]
     Iniciar,
+    /// Dificuldade: fácil, médio, difícil.
+    Modo,
+    /// Qual cenário defender.
+    Mapa,
     /// Fechar o jogo.
     Sair,
 }
@@ -97,23 +108,43 @@ impl ItemMenu {
     pub fn rotulo(self) -> &'static str {
         match self {
             ItemMenu::Iniciar => "INICIAR",
+            ItemMenu::Modo => "MODO",
+            ItemMenu::Mapa => "MAPA",
             ItemMenu::Sair => "SAIR",
         }
     }
 
+    /// Todos, na ordem do menu.
+    pub fn todos() -> [ItemMenu; 4] {
+        [
+            ItemMenu::Iniciar,
+            ItemMenu::Modo,
+            ItemMenu::Mapa,
+            ItemMenu::Sair,
+        ]
+    }
+
+    /// Este item aceita `←`/`→`?
+    ///
+    /// A distinção é a mesma de `settings_ajustavel` no launcher: linha com valor
+    /// as setas ajustam; linha sem valor elas são só navegação. Sem isso o
+    /// jogador aperta `→` em `SAIR` esperando alguma coisa.
+    pub fn ajustavel(self) -> bool {
+        matches!(self, ItemMenu::Modo | ItemMenu::Mapa)
+    }
+
     /// Próximo item, dando a volta.
     pub fn proximo(self) -> Self {
-        match self {
-            ItemMenu::Iniciar => ItemMenu::Sair,
-            ItemMenu::Sair => ItemMenu::Iniciar,
-        }
+        let todos = Self::todos();
+        let atual = todos.iter().position(|item| *item == self).unwrap_or(0);
+        todos[(atual + 1) % todos.len()]
     }
 
     /// Item anterior, dando a volta.
     pub fn anterior(self) -> Self {
-        // Dois itens: anterior é o mesmo que próximo. Não é preguiça — com dois
-        // elementos, emendar a lista é a única definição que não trava.
-        self.proximo()
+        let todos = Self::todos();
+        let atual = todos.iter().position(|item| *item == self).unwrap_or(0);
+        todos[(atual + todos.len() - 1) % todos.len()]
     }
 }
 
@@ -158,17 +189,33 @@ pub fn inicial() -> Tela {
     Tela::Menu
 }
 
-/// Item do menu em foco — o menu não guarda estado próprio além disto.
+/// Item do menu em foco e as duas escolhas que ele guarda.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Menu {
     /// Item em foco.
     pub item: ItemMenu,
+    /// Dificuldade escolhida.
+    pub modo: Modo,
+    /// Mapa escolhido.
+    pub mapa: Mapa,
+    /// Arma escolhida, como índice de [`ARMAS`].
+    pub arma: usize,
 }
 
 impl Menu {
     /// Menu novo, com `INICIAR` em foco.
     pub fn novo() -> Self {
         Self::default()
+    }
+
+    /// Menu com as escolhas já feitas — o caminho do `--modo`, `--mapa` e `--arma`.
+    pub fn com_escolhas(modo: Modo, mapa: Mapa, arma: usize) -> Self {
+        Self {
+            item: ItemMenu::default(),
+            modo,
+            mapa,
+            arma: arma % ARMAS.len(),
+        }
     }
 
     /// Move o foco.
@@ -180,13 +227,65 @@ impl Menu {
         };
     }
 
+    /// `←`/`→` no item em foco.
+    ///
+    /// Devolve `true` quando **algo mudou** — é o que permite ao chamador saber se
+    /// tem de reconstruir a cena (o mapa) ou a câmera (o modo). Devolver `()` e
+    /// deixar o laço comparar os valores funcionaria, mas um `if` esquecido
+    /// deixaria o mapa desatualizado sem nenhum erro.
+    pub fn ajustar(&mut self, para_direita: bool) -> bool {
+        let antes = (self.modo, self.mapa, self.arma);
+        match self.item {
+            ItemMenu::Modo => {
+                self.modo = if para_direita {
+                    self.modo.proximo()
+                } else {
+                    self.modo.anterior()
+                };
+            }
+            ItemMenu::Mapa => {
+                self.mapa = if para_direita {
+                    self.mapa.proximo()
+                } else {
+                    self.mapa.anterior()
+                };
+            }
+            ItemMenu::Iniciar | ItemMenu::Sair => return false,
+        }
+        antes != (self.modo, self.mapa, self.arma)
+    }
+
+    /// Troca a arma da partida, dando a volta.
+    pub fn trocar_arma(&mut self) {
+        self.arma = (self.arma + 1) % ARMAS.len();
+    }
+
+    /// Nome da arma escolhida.
+    pub fn nome_da_arma(&self) -> &'static str {
+        ARMAS[self.arma % ARMAS.len()].nome
+    }
+
     /// Ação do `A`, resolvida pelo item em foco.
     pub fn confirmar(&self) -> Resultado {
         match self.item {
             ItemMenu::Iniciar => Resultado::Vai(Tela::Jogando),
             ItemMenu::Sair => Resultado::Sair,
+            // `A` num item ajustável não começa nada: quem escolhe é o `←`/`→`.
+            // Devolver `Jogando` aqui faria o jogador entrar na partida sem querer
+            // ao confirmar o modo.
+            ItemMenu::Modo | ItemMenu::Mapa => Resultado::Fica,
         }
     }
+
+    /// Arma escolhida, lida de volta pela tabela.
+    pub fn arma_escolhida(&self) -> &'static crate::gameplay::weapon::Arma {
+        ARMAS[self.arma % ARMAS.len()]
+    }
+}
+
+/// Índice da arma a partir do identificador, para a linha de comando.
+pub fn arma_por_id(id: &str) -> Option<usize> {
+    indice_da_arma(id)
 }
 
 #[cfg(test)]
@@ -205,10 +304,22 @@ mod tests {
     #[test]
     fn o_foco_do_menu_da_a_volta() {
         let mut menu = Menu::novo();
-        menu.mover(true);
-        assert_eq!(menu.item, ItemMenu::Sair);
-        menu.mover(true);
-        assert_eq!(menu.item, ItemMenu::Iniciar, "dois itens, dá a volta");
+        let mut vistos = vec![menu.item];
+        for _ in 0..ItemMenu::todos().len() {
+            menu.mover(true);
+            vistos.push(menu.item);
+        }
+        assert_eq!(
+            vistos,
+            vec![
+                ItemMenu::Iniciar,
+                ItemMenu::Modo,
+                ItemMenu::Mapa,
+                ItemMenu::Sair,
+                ItemMenu::Iniciar,
+            ],
+            "a lista percorre os quatro e volta ao começo"
+        );
         menu.mover(false);
         assert_eq!(menu.item, ItemMenu::Sair, "para cima também dá a volta");
     }
@@ -217,12 +328,79 @@ mod tests {
     fn o_a_do_menu_respeita_o_item_em_foco() {
         let mut menu = Menu::novo();
         assert_eq!(menu.confirmar(), Resultado::Vai(Tela::Jogando));
-        menu.mover(true);
+
+        // `A` num item ajustável **não** começa a partida: quem escolhe o modo é o
+        // `←`/`→`, e confirmar entraria no jogo sem o jogador querer.
+        for item in [ItemMenu::Modo, ItemMenu::Mapa] {
+            menu.item = item;
+            assert_eq!(menu.confirmar(), Resultado::Fica, "{}", item.rotulo());
+            assert!(item.ajustavel());
+        }
+
+        menu.item = ItemMenu::Sair;
         assert_eq!(
             menu.confirmar(),
             Resultado::Sair,
             "com SAIR em foco, o A fecha o jogo"
         );
+    }
+
+    #[test]
+    fn as_setas_ajustam_so_onde_ha_valor() {
+        // A mesma regra do launcher: linha com valor, as setas ajustam; linha sem
+        // valor, elas não fazem nada — e um `true` mentiroso faria o laço
+        // reconstruir a cena à toa.
+        let mut menu = Menu::novo();
+        for item in [ItemMenu::Iniciar, ItemMenu::Sair] {
+            menu.item = item;
+            assert!(!menu.ajustar(true), "{} não é ajustável", item.rotulo());
+        }
+
+        menu.item = ItemMenu::Modo;
+        assert!(menu.ajustar(true), "o modo muda com seta");
+        assert_eq!(menu.modo, Modo::Dificil);
+        assert!(menu.ajustar(false));
+        assert_eq!(menu.modo, Modo::Medio);
+
+        menu.item = ItemMenu::Mapa;
+        assert!(menu.ajustar(true));
+        assert_eq!(menu.mapa, Mapa::Estacao);
+        assert!(menu.ajustar(false));
+        assert_eq!(menu.mapa, Mapa::Asteroide);
+    }
+
+    #[test]
+    fn as_escolhas_do_menu_sobrevivem_ao_foco() {
+        // Andar pelo menu não pode desfazer a escolha: o jogador ajusta o modo,
+        // desce para o mapa e o modo tem de continuar onde estava.
+        let mut menu = Menu::novo();
+        menu.item = ItemMenu::Modo;
+        menu.ajustar(true);
+        menu.mover(true);
+        menu.mover(true);
+        assert_eq!(menu.modo, Modo::Dificil, "o modo voltou atrás sozinho");
+    }
+
+    #[test]
+    fn o_menu_aceita_as_escolhas_da_linha_de_comando() {
+        let menu = Menu::com_escolhas(Modo::Facil, Mapa::Lua, 2);
+        assert_eq!(menu.modo, Modo::Facil);
+        assert_eq!(menu.mapa, Mapa::Lua);
+        assert_eq!(menu.nome_da_arma(), "MORTEIRO");
+        // Índice fora da tabela dá a volta em vez de estourar.
+        assert_eq!(Menu::com_escolhas(Modo::Medio, Mapa::Lua, 9).arma, 0);
+    }
+
+    #[test]
+    fn a_arma_do_menu_percorre_as_tres() {
+        let mut menu = Menu::novo();
+        let mut vistos = vec![menu.nome_da_arma()];
+        for _ in 0..3 {
+            menu.trocar_arma();
+            vistos.push(menu.nome_da_arma());
+        }
+        assert_eq!(vistos, vec!["PULSAR", "LEQUE", "MORTEIRO", "PULSAR"]);
+        assert_eq!(menu.arma_escolhida().id, "pulsar");
     }
 
     #[test]

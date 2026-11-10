@@ -412,6 +412,134 @@ fn emitir_faces(posicoes: &[[f32; 3]], faces: &[[u32; 3]]) -> Malha {
     Malha { vertices, indices }
 }
 
+// ---------------------------------------------------------------------------
+// Composição: caixas em posição arbitrária e junção de malhas.
+//
+// Os três mapas do jogo são feitos de peças — anel, painel, cratera, mastro — e
+// cada peça é uma caixa. Montar cada uma com `generate_cube` e depois transladar
+// exigiria uma transformação por vértice no chamador; `caixa` faz isso uma vez e
+// `juntar` transforma N peças em **uma** chamada de desenho.
+// ---------------------------------------------------------------------------
+
+/// Caixa alinhada aos eixos, centrada em `centro`, com meia-extensão por eixo.
+///
+/// `generate_cube` só produz cubos centrados na origem; os mapas precisam de
+/// placas, mastros e anéis, que são caixas achatadas em posições diferentes.
+pub fn caixa(centro: [f32; 3], metade: [f32; 3]) -> Malha {
+    let m = [
+        metade[0].abs().max(f32::EPSILON),
+        metade[1].abs().max(f32::EPSILON),
+        metade[2].abs().max(f32::EPSILON),
+    ];
+    let mut vertices = Vec::with_capacity(36);
+    let mut indices = Vec::with_capacity(36);
+
+    // Mesma construção do cubo: para cada face, dois eixos `u` e `v` tais que
+    // `u × v = normal`, o que dá o sentido anti-horário visto de fora de uma vez.
+    let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+    ];
+
+    for (normal, u, v) in faces {
+        let deslocamento = [normal[0] * m[0], normal[1] * m[1], normal[2] * m[2]];
+        let cantos = [
+            [
+                centro[0] + deslocamento[0] - u[0] * m[0] - v[0] * m[1],
+                centro[1] + deslocamento[1] - u[1] * m[0] - v[1] * m[1],
+                centro[2] + deslocamento[2] - u[2] * m[0] - v[2] * m[1],
+            ],
+            [
+                centro[0] + deslocamento[0] + u[0] * m[0] - v[0] * m[1],
+                centro[1] + deslocamento[1] + u[1] * m[0] - v[1] * m[1],
+                centro[2] + deslocamento[2] + u[2] * m[0] - v[2] * m[1],
+            ],
+            [
+                centro[0] + deslocamento[0] + u[0] * m[0] + v[0] * m[1],
+                centro[1] + deslocamento[1] + u[1] * m[0] + v[1] * m[1],
+                centro[2] + deslocamento[2] + u[2] * m[0] + v[2] * m[1],
+            ],
+            [
+                centro[0] + deslocamento[0] - u[0] * m[0] + v[0] * m[1],
+                centro[1] + deslocamento[1] - u[1] * m[0] + v[1] * m[1],
+                centro[2] + deslocamento[2] - u[2] * m[0] + v[2] * m[1],
+            ],
+        ];
+        for triangulo in [[0u32, 1, 2], [0, 2, 3]] {
+            for indice in triangulo {
+                indices.push(vertices.len() as u32);
+                vertices.push(Vertex::flat(cantos[indice as usize], normal));
+            }
+        }
+    }
+
+    Malha { vertices, indices }
+}
+
+/// Translada todos os vértices. As normais não mudam.
+pub fn transladar(malha: &Malha, deslocamento: [f32; 3]) -> Malha {
+    let mut saida = malha.clone();
+    for vertice in &mut saida.vertices {
+        for (posicao, delta) in vertice.position.iter_mut().zip(deslocamento) {
+            *posicao += delta;
+        }
+    }
+    saida
+}
+
+/// Estica a malha por eixo e **recalcula as normais**.
+///
+/// Recalcular não é zelo: com escala não uniforme (achatar uma esfera para virar
+/// uma cratera, por exemplo) a normal antiga deixa de ser perpendicular à face, e
+/// o termo difuso do `phong` ilumina o lado errado — o objeto fica com uma
+/// mancha clara onde devia estar escuro, sem nenhum erro.
+pub fn esticar(malha: &Malha, fator: [f32; 3]) -> Malha {
+    let mut saida = malha.clone();
+    for vertice in &mut saida.vertices {
+        for (posicao, escala) in vertice.position.iter_mut().zip(fator) {
+            *posicao *= escala;
+        }
+    }
+    for triangulo in saida.indices.chunks_exact(3) {
+        let [a, b, c] = [
+            triangulo[0] as usize,
+            triangulo[1] as usize,
+            triangulo[2] as usize,
+        ];
+        let normal = normal_da_face(
+            saida.vertices[a].position,
+            saida.vertices[b].position,
+            saida.vertices[c].position,
+        );
+        for indice in [a, b, c] {
+            saida.vertices[indice].normal = normal;
+        }
+    }
+    saida
+}
+
+/// Junta várias malhas numa só, deslocando os índices.
+///
+/// É o que mantém a regra do projeto: **cenário novo não cria chamada nova**.
+/// Um anel de 24 caixas desenhado caixa por caixa custaria 24 chamadas; junto,
+/// custa uma — e cada peça continua com a normal da sua face.
+pub fn juntar(partes: &[Malha]) -> Malha {
+    let total_vertices: usize = partes.iter().map(|m| m.vertices.len()).sum();
+    let total_indices: usize = partes.iter().map(|m| m.indices.len()).sum();
+    let mut vertices = Vec::with_capacity(total_vertices);
+    let mut indices = Vec::with_capacity(total_indices);
+    for parte in partes {
+        let base = vertices.len() as u32;
+        vertices.extend_from_slice(&parte.vertices);
+        indices.extend(parte.indices.iter().map(|i| i + base));
+    }
+    Malha { vertices, indices }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
