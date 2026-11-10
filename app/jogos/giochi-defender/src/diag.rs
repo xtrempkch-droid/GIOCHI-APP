@@ -48,6 +48,8 @@ OPÇÕES:
     --tremor              Arma o tremor de dano na abertura, para capturar a
                           câmera sacudida sem esperar um cubo acertar.
     --sem-som             Não carrega nem toca som (para isolar o custo dele).
+    --volume N            Aplica N% no Master do ALSA pelo mesmo caminho das
+                          teclas de volume, imprime e sai (0 a 100).
     --testar-som          Toca os cinco efeitos em sequência e sai. Roda no
                           aparelho pelo SSH, onde não há como ouvir o PC.
     --atirar              Mantém o gatilho apertado (o cooldown faz a cadência).
@@ -96,6 +98,8 @@ pub struct Diag {
     pub som: bool,
     /// Tocar os cinco efeitos e sair.
     pub testar_som: bool,
+    /// Volume a aplicar no sistema e sair.
+    pub volume: Option<u8>,
     /// Quantos cubos plantar no eixo da câmera.
     pub alvo: Option<u32>,
     /// Tamanho pedido da janela.
@@ -130,6 +134,7 @@ impl Default for Diag {
             tremor: false,
             som: true,
             testar_som: false,
+            volume: None,
             demo_hud: false,
             atirar: false,
             alvo: None,
@@ -163,6 +168,14 @@ impl Diag {
                 "--demo-hud" => diag.demo_hud = true,
                 "--tremor" => diag.tremor = true,
                 "--sem-som" => diag.som = false,
+                "--volume" => {
+                    let valor = inteiro(&mut argumentos, embutido, &nome)?;
+                    if !(0..=100).contains(&valor) {
+                        anyhow::bail!("--volume espera 0 a 100, veio {valor}");
+                    }
+                    diag.volume = Some(valor as u8);
+                    diag.frames.get_or_insert(1);
+                }
                 "--testar-som" => {
                     diag.testar_som = true;
                     // Quem pede para testar o som não quer uma partida junto.
@@ -476,6 +489,24 @@ mod tests {
         // São camadas diferentes: tirar a mira não tira a HUD, e vice-versa.
         assert!(parse(&["--sem-mira"]).unwrap().hud);
         assert!(parse(&["--sem-hud"]).unwrap().mira);
+    }
+
+    #[test]
+    fn o_volume_e_lido_e_limitado() {
+        assert_eq!(parse(&[]).unwrap().volume, None);
+        assert_eq!(parse(&["--volume", "40"]).unwrap().volume, Some(40));
+        assert_eq!(parse(&["--volume", "0"]).unwrap().volume, Some(0));
+        assert_eq!(parse(&["--volume", "100"]).unwrap().volume, Some(100));
+        assert_eq!(parse(&["--volume=55"]).unwrap().volume, Some(55));
+        // Fora da faixa é erro, não prisão silenciosa: quem digita 150 quer
+        // outra coisa, e um aviso é mais útil que um 100 calado.
+        assert!(parse(&["--volume", "101"]).is_err());
+        assert!(parse(&["--volume", "-1"]).is_err());
+    }
+
+    #[test]
+    fn o_volume_sai_sozinho_quando_pedido() {
+        assert_eq!(parse(&["--volume", "40"]).unwrap().frames, Some(1));
     }
 
     #[test]

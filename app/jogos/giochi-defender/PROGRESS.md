@@ -354,6 +354,56 @@ amplitude passou a ser em unidades de mundo (0,22), e o teste
 `a_amplitude_virá_poucos_pixels_na_tela` converte para pixel nos dois painéis
 para o número não voltar a ser arbitrário.
 
+### Volume do sistema: acompanhava, mas as teclas não chegavam
+
+Pergunta do dono: *"som funcionando mas não sei se o volume está acompanhando o
+do sistema"*. **Acompanha, e sempre acompanhou** — o jogo nunca chamou
+`AudioSystem::set_volume`, então o mixer do SDL fica no máximo e quem escala a
+saída é o `Master` do ALSA, que **é** o volume do sistema.
+
+O que faltava era outra coisa, e é a que se sente jogando: **as teclas de volume
+não faziam nada durante a partida.** Quem as lê é o launcher, e ele fica em
+`fork`+`wait` enquanto o jogo roda — bloqueado, sem bombear eventos. O jogador
+não conseguia abaixar o som justamente quando estava jogando.
+
+Agora o jogo lê `SDLK_VOLUMEUP`/`VOLUMEDOWN` e mexe no **mesmo** `Master`, com
+passo de 5 % e persistência em `/user/.config/giochi/volume` — o mesmo arquivo
+que o launcher restaura no boot. Não há dois volumes para divergir.
+
+| Verificação | Resultado medido |
+| --- | --- |
+| O jogo mexe no Master de verdade | `--volume 40` → ALSA `102 [40%] [-57.00 dB]`; `--volume 100` → `255 [100%] [0,00 dB]` |
+| Persiste para o próximo boot | `/user/.config/giochi/volume` = `40` depois do comando |
+| Os limites saturam | de 98 % sobe para 100 %, de 3 % desce para 0 % (teste) |
+| Mixer que recusa não mente | o nível local fica no anterior e o controle desliga, com **um** aviso (teste) |
+| As constantes são as do SDL | teste compara com `sdl2::keyboard::Keycode::VOLUMEUP` |
+
+Duas medições que **falharam** e ficam registradas:
+
+- **No aparelho não há como pressionar a tecla.** O X35H não tem `/dev/uinput`
+  e não tem `python3`, então não há como sintetizar entrada. O caminho do volume
+  está medido ponta a ponta pelo `--volume`, que usa a **mesma** `Volume`; o que
+  falta provar é só "o SDL entrega `SDLK_VOLUMEUP` quando o botão é apertado", e
+  isso é do SDL.
+- **No PC o teste injetou a tecla e quem respondeu foi o desktop.** Com
+  `/dev/uinput` disponível, injetei `KEY_VOLUMEUP` três vezes: o `Master` do PC
+  foi de 57 % para **75 %** (o daemon do ambiente subiu o volume), e o jogo não
+  registrou nada — a janela não tinha foco, sem gerenciador de janelas. A
+  injeção funcionou; o destinatário era outro.
+
+### Por que `amixer` e não o FFI do launcher
+
+O launcher fala com a `libasound` por `dlopen` (643 linhas de FFI manual). Copiar
+aquilo para cá traria o mesmo poder e o mesmo custo de manutenção para **uma**
+função: subir e descer 5 %. O `amixer` existe na imagem, é chamado no **evento**
+(não por quadro) e a lógica de passo/limite/persistência fica atrás de um trait,
+testável sem placa de som.
+
+Limite declarado: onde não há `amixer` — o R35S não tem `libasound` e portanto
+não tem `amixer` — o controle degrada para "indisponível", avisa **uma vez** e o
+jogo segue. O som continua seguindo o volume do sistema; o que não funciona ali é
+a tecla dentro do jogo.
+
 ## Próximo bloco: 3a — telas de menu, vitória e derrota
 
 Hoje o fim de partida é um aviso sobre a cena; o `R` para reiniciar não existe e

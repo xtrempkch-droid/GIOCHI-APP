@@ -37,6 +37,7 @@ use giochi_engine_3d::render3d::{MeshHandle, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::RenderContext3D;
 
+use giochi_defender::audio::volume::{Alsa, Volume};
 use giochi_defender::audio::{Som, Sons};
 use giochi_defender::bench::Benchmark;
 use giochi_defender::diag::{self, Diag};
@@ -56,6 +57,17 @@ const LARGURA: u32 = 1280;
 const ALTURA: u32 = 720;
 /// Título da janela.
 const TITULO: &str = "GIOCHI DEFENDER";
+
+/// `SDLK_VOLUMEUP` do SDL2 (`0x4000_0080`).
+///
+/// Declarado aqui porque a engine exporta 15 teclas e não estas duas: o teclado
+/// dela é um conjunto mínimo por app, não o enum inteiro do SDL. O valor vem do
+/// `SDL_keycode.h` (`SDLK_SCANCODE_MASK | 0x80`), e o teste
+/// `as_teclas_de_volume_sao_as_do_sdl` confere contra o `sdl2` que está linkado —
+/// escrito à mão, ele poderia apodrecer em silêncio.
+const KEY_VOLUMEUP: giochi_engine::input::keyboard::KeyCode = 0x4000_0080;
+/// `SDLK_VOLUMEDOWN` do SDL2 (`0x4000_0081`).
+const KEY_VOLUMEDOWN: giochi_engine::input::keyboard::KeyCode = 0x4000_0081;
 
 /// Giro do teclado, em radianos por segundo.
 const TAXA_TECLADO: f32 = 1.8;
@@ -142,6 +154,22 @@ fn executar(diag: Diag) -> Result<()> {
     };
     if diag.testar_som {
         tocar_todos(&mut sons);
+    }
+    // O controle de volume do sistema: as teclas do aparelho durante o jogo
+    // (o launcher fica em `fork`+`wait` e não as lê) e o `--volume`.
+    let mut volume = Volume::novo(Alsa);
+    if !volume.disponivel() {
+        log::warn!(
+            "volume: sem controle (amixer ausente ou sem Master); \
+             o som segue o volume do sistema, mas as teclas não o alteram"
+        );
+    }
+    if let Some(alvo) = diag.volume {
+        let aplicado = volume.definir(alvo);
+        log::info!(
+            "volume: pedido {alvo}%, aplicado {aplicado}% ({} sistema antes)",
+            if volume.disponivel() { "com" } else { "sem" }
+        );
     }
 
     if diag.mouse_relativo {
@@ -269,6 +297,7 @@ fn executar(diag: Diag) -> Result<()> {
         &mut mira,
         &mut hud_gl,
         &mut sons,
+        &mut volume,
         &mut tremor,
         &mut camera,
         &mut partida,
@@ -661,6 +690,7 @@ fn laco(
     mira: &mut MiraGl,
     hud_gl: &mut HudGl,
     sons: &mut Sons,
+    volume: &mut Volume<Alsa>,
     tremor: &mut Tremor,
     camera: &mut OrbitalCamera,
     partida: &mut Partida,
@@ -772,6 +802,18 @@ fn laco(
             }
         }
 
+        // Teclas de volume: quem as lia era o launcher, que está bloqueado em
+        // `fork`+`wait` enquanto o jogo roda. Sem isto, o jogador não consegue
+        // abaixar o som justamente quando está jogando.
+        if entrada.key_pressed(KEY_VOLUMEUP) {
+            let nivel = volume.aumentar();
+            log::info!("volume: {nivel}% (tecla)");
+        }
+        if entrada.key_pressed(KEY_VOLUMEDOWN) {
+            let nivel = volume.diminuir();
+            log::info!("volume: {nivel}% (tecla)");
+        }
+
         let passos = laco.advance(delta);
         for _ in 0..passos {
             atualizar_camera(camera, entrada, laco.fixed_timestep());
@@ -874,4 +916,25 @@ fn laco(
         quadros as f32 * laco.fixed_timestep()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn as_teclas_de_volume_sao_as_do_sdl() {
+        // As duas constantes foram escritas à mão porque não são `const fn` no
+        // `sdl2`. Este teste é o que impede o literal de apodrecer: se o SDL
+        // mudar o valor, ele reprova aqui em vez de a tecla parar de funcionar
+        // no aparelho sem nenhum sinal.
+        assert_eq!(
+            KEY_VOLUMEUP,
+            sdl2::keyboard::Keycode::VOLUMEUP.into_i32() as u32
+        );
+        assert_eq!(
+            KEY_VOLUMEDOWN,
+            sdl2::keyboard::Keycode::VOLUMEDOWN.into_i32() as u32
+        );
+    }
 }

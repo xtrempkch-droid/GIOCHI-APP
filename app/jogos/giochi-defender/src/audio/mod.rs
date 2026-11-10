@@ -26,6 +26,8 @@
 //! Por isso o gerador produz estéreo entrelaçado e o teste
 //! `o_formato_bate_com_o_que_o_mixer_abriu` amarra as três constantes.
 
+pub mod volume;
+
 use giochi_engine::audio::sound::SAMPLE_RATE;
 use sdl2::mixer::Chunk;
 

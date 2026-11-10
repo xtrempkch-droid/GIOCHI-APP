@@ -41,6 +41,11 @@ cargo run --release
 - **botão esquerdo do mouse / `RB` / `A` do controle** — atira
 - **som** — cinco efeitos gerados em código: tiro, abate, dano, onda e fim. Não
   há `.wav` no pacote.
+- **teclas de volume** — mudam o `Master` do ALSA (o volume do sistema) em
+  passos de 5 %, e o valor persiste em `/user/.config/giochi/volume`.
+
+O som do jogo **segue o volume do sistema**: o jogo nunca mexe no próprio mixer,
+então quem escala a saída é o `Master` do ALSA.
 
 A HUD mostra **VIDA** (cinco marcadores que se apagam), **ONDA n/3** e
 **PONTOS** no topo. Cada abate nasce como `+100` no ponto do impacto, o dano no
@@ -90,6 +95,9 @@ SDL_VIDEODRIVER=offscreen cargo run -- --tremor --frames 5 --quadro /tmp/tremor.
 
 # toca os cinco efeitos e sai — é assim que se testa som no aparelho por SSH
 SDL_VIDEODRIVER=kmsdrm ./giochi-defender --testar-som
+
+# aplica 40% no Master do ALSA pelo mesmo caminho das teclas de volume
+SDL_VIDEODRIVER=kmsdrm ./giochi-defender --volume 40
 ```
 
 `--alvo N` planta N cubos no eixo da câmera a distâncias seguras (fora da esfera
