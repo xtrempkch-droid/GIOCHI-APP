@@ -43,6 +43,17 @@
       "slug": "launcher-teste"
     },
     {
+      "id": "launcher-star-dust",
+      "folder": "launcher-star-dust",
+      "slug": "launcher-star-dust",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "O launcher de producao MAIS a camada de efeitos do launcher-teste: brasas, brilho, varredura, vinheta, scanlines, halo do foco, rastro e borda pulsante. Efeito ligado por padrao (--sem-efeitos desliga) e, desligado, o quadro e identico byte a byte ao do launcher. Ver docs/star-dust.md.",
+      "role": "shell"
+    },
+    {
       "id": "cobrinha",
       "folder": "jogos/cobrinha",
       "runtime": "native",

@@ -6047,3 +6047,119 @@ interessa para caçar defeitos. O `launcher-teste` continua em
 | FPS do neon-drift no **X55/RK3566** | **não medido** desde §37 (36,8 no X35H) |
 | custo do supersampling em painel **60 Hz** | medido no X35H em 49,2 vs 49,3 fps; no R35S não |
 | saída do equilibrium **no jogo** | **não existe** — quem sai é o launcher; o exemplo da engine segue sem botão |
+
+## 42. Star Dust: o launcher com a camada de efeitos (10/11/2026)
+
+Pedido do dono: **"pega o app launcher, clona, dá o nome de launcher-star-dust e
+nessa versão aplica a melhoria visual do launcher-teste"**.
+
+`app/launcher-star-dust` é o **launcher de produção mais a camada de efeitos**.
+Mesma navegação, mesmo catálogo, mesma integração com o sistema — e oito efeitos
+desenhados por cima das telas.
+
+```bash
+bash scripts/compilar-launcher-arm64.sh --app launcher-star-dust --instalar
+bash scripts/verificar-star-dust.sh                     # 640x480
+bash scripts/verificar-star-dust.sh --tamanho 1280x720
+```
+
+### Ligado por padrão, ao contrário do launcher-teste
+
+No `launcher-teste` a camada é **opcional** porque aquele app existe para provar
+que o porte desenha 100 % igual — efeito por padrão destruiria a medida. Aqui o
+raciocínio se inverte: a camada **é** o motivo do app, então vem ligada, e
+`--sem-efeitos` (ou `GIOCHI_EFEITOS=0`) a desliga.
+
+Desligada, vale a propriedade que dá sentido ao clone: **o quadro é idêntico
+byte a byte ao do launcher de produção**. Medido em **640×480, 800×600,
+1280×720 e 720×1280 girado** — quatro tamanhos, com relógio, bateria e
+temperatura congelados nos dois lados. É uma das cinco verificações de
+`scripts/verificar-star-dust.sh`.
+
+### Três coisas mudaram, e nenhuma toca o desenho das telas
+
+1. **`efeitos.rs`** — a camada, vinda do `launcher-teste` sem mudança de lógica.
+2. **Quatro primitivas novas no `Painter`**: `fill_rects`, `fill_circles`, `line`
+   e `desenhos()`. Sem elas, 129 brasas + 11 brilhos seriam **140 chamadas ao
+   backend por quadro** — o mesmo defeito que o `launcher-teste` pagou com
+   +7,3 ms antes de lotear. Com as três primeiras, a camada inteira custa
+   **29 chamadas** (27 no `launcher-teste`, que mede a engine).
+
+   Com recorte ativo as três caem para uma por elemento: `fill_rects` recebe uma
+   cor para o lote e o `clip_rect` do canvas não é respeitado por todo driver, e
+   um efeito que ignorasse o recorte apareceria por cima do overlay que deveria
+   cobri-lo.
+
+3. **Cadência de animação própria** no laço. A UI redesenha só quando algo muda
+   (`dirty`), e um efeito animado muda sempre. Quem marca o quadro como sujo é
+   `App::tick`, com acumulador e `GIOCHI_EFEITOS_FPS` (padrão **30**). Não é 60
+   porque a diferença visual em brasas de 1–3 px é nula e o custo não: animação
+   é contínua, interação é que precisa de resposta imediata. Valor inválido cai
+   no padrão — número que não parseia não pode zerar a animação em silêncio.
+
+### Um defeito que só este app expôs
+
+A rajada de `rastro` estava ligada a **o estado mudar**, e não a uma tecla. No
+`launcher-teste` isso nunca apareceu porque lá a rajada só é chamada no caminho
+de `--teclas` — o laço daquele app não tem telemetria.
+
+Aqui o `App` tem: bateria, temperatura, "controle conectado", aviso de Wi-Fi.
+Medido: `rastro` sozinho custava **20 chamadas de desenho** num quadro em que
+ninguém tinha apertado nada, e o efeito perdia o significado ("algo aconteceu")
+virando ruído permanente.
+
+A correção é uma linha, `cmd.is_user_input()` — a mesma função que o modo sono
+usa desde 03/11 para separar "um dedo apertou" de "o sistema reportou". E o
+teste que a fixa está no script (`sem comando o rastro não aparece`), porque sem
+ele a guarda volta na primeira refatoração.
+
+### Medido no X35H (640×480, Mali-G52)
+
+```text
+instalado        /opt/giochi/apps/launcher-star-dust/bin/giochi-launcher-star-dust
+                 sha256 5e4e58ed…, conferido nas duas pontas
+quadro           640x480 · 2099 cores · luminância 31,1 · quase-preto 29,92 %
+camada inteira   29 chamadas de desenho · 129 brasas · 11 brilhos
+muda no quadro   59,70 % dos bytes — o mesmo número do PC
+```
+
+E a comparação que fecha o argumento:
+
+| | dentro de 12 níveis | byte a byte diferente |
+| --- | --- | --- |
+| **sem** efeitos, PC × aparelho | **98,10 %** | 2,99 % |
+| **com** efeitos, PC × aparelho | **98,15 %** | 2,97 % |
+
+A camada acrescenta **zero** divergência entre PC e aparelho — o resíduo de ~2 %
+é o `SDL2_ttf` **2.22** do aparelho contra **2.24** do PC (§24) mais texto de
+estado do sistema que difere por máquina. Se o efeito introduzisse desenho
+próprio dependente de GPU, este número teria caído.
+
+O catálogo do aparelho continua com **4 apps**: `launcher-star-dust` é
+`role: shell` e a colheita de instalados o descarta com o motivo na tela —
+
+```text
+fora: launcher-star-dust — role shell (declarado no apps.json): a cópia instalada não vira cartão
+```
+
+É o mecanismo do §26 aplicado a um **segundo** app shell, e não ao launcher por
+nome. Era a pergunta que o mecanismo devia responder e ninguém tinha testado.
+
+### `compilar-launcher-arm64.sh --app <nome>`
+
+O script deixou de ter o launcher escrito dentro. `--app` aceita `launcher`,
+`launcher-star-dust`, o caminho relativo ou o absoluto; o **nome do binário** sai
+do `Cargo.toml` e o **slug** do `metadata.json` — renomear o crate e esquecer o
+script instalaria o arquivo com o nome antigo, que é exatamente o que o
+`giochi-init` não procura. Duplicar o script faria a primeira correção de
+cross-compile chegar só numa das cópias.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| **FPS** do Star Dust no aparelho | **não medido** — o número reportado é chamada de desenho, não fps |
+| efeito com o controle na mão | **não exercitado** — a rajada foi medida por `--teclas` |
+| energia gasta a 30 Hz | **não medida** — o argumento da cadência é de desenho, não de watt |
+| painel 720×1280 **no aparelho** | **não medido** — os quatro tamanhos foram conferidos no PC; no aparelho, só 640×480 |
+| Star Dust substituindo o launcher no boot | **não feito, de propósito** — trocar quem sobe no boot é decisão de imagem |

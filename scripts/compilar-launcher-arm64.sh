@@ -6,6 +6,14 @@
 #   bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.4
 #   bash scripts/compilar-launcher-arm64.sh --host root@192.168.1.4
 #   bash scripts/compilar-launcher-arm64.sh --sem-texto   # força build sem glifos
+#   bash scripts/compilar-launcher-arm64.sh --app launcher-star-dust
+#
+# `--app` existe porque o Star Dust (o launcher com a camada de efeitos) é o
+# **mesmo crate com outro nome de binário**: mesma árvore de dependências, mesmo
+# sysroot, mesmo cache. Duplicar o script faria as duas cópias envelhecerem
+# diferente — a primeira a receber uma correção de cross-compile seria a única
+# corrigida. O nome do binário e o destino vêm do `Cargo.toml` e do
+# `metadata.json` do app, não de uma tabela paralela.
 #
 # Sem --host/--instalar, o aparelho é descoberto por `aparelho.sh procurar`
 # (o IP muda a cada boot).
@@ -36,7 +44,7 @@
 set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LAUNCHER="$RAIZ/app/launcher"
+APP_RELATIVO="app/launcher"
 ALVO="aarch64-unknown-linux-gnu"
 RAIZ_CACHE="${GIOCHI_ARM64_CACHE:-$HOME/.cache/giochi-arm64}"
 SYSROOT="$RAIZ_CACHE/sysroot"
@@ -82,6 +90,8 @@ PEDIU_INSTALAR=""
 FORCAR_TEXTO=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --app) [ $# -ge 2 ] || erro "--app precisa do caminho do app"
+      APP_RELATIVO="$2"; shift 2 ;;
     # O destino é **opcional**: `--instalar` sozinho descobre o aparelho, que é
     # o caso normal (o IP muda a cada boot). A primeira versão fazia
     # `INSTALAR="${2:-}"; shift 2` e, chamada só com `--instalar`, o `shift 2`
@@ -104,6 +114,32 @@ while [ $# -gt 0 ]; do
     *) erro "argumento desconhecido: $1" ;;
   esac
 done
+
+# Aceita as três formas: absoluto, `app/<nome>` e o nome solto. O nome solto é
+# o que a documentação usa (`--app launcher-star-dust`), e obrigar a escrever
+# `app/` seria uma armadilha de digitação sem ganho nenhum.
+case "$APP_RELATIVO" in
+  /*) LAUNCHER="$APP_RELATIVO" ;;
+  *)
+    if [ -d "$RAIZ/$APP_RELATIVO" ]; then
+      LAUNCHER="$RAIZ/$APP_RELATIVO"
+    else
+      LAUNCHER="$RAIZ/app/$APP_RELATIVO"
+    fi
+    ;;
+esac
+[ -f "$LAUNCHER/crates/ui-sdl/Cargo.toml" ] \
+  || erro "$LAUNCHER não parece um launcher (sem crates/ui-sdl/Cargo.toml)"
+
+# Nome do binário e slug saem do próprio app. Fixá-los aqui criaria uma segunda
+# verdade: renomear o crate e esquecer o script instala o arquivo com o nome
+# antigo, e o `giochi-init` procura o novo.
+BIN_NAME=$(sed -n 's/^name = "\(giochi-launcher[^"]*\)"/\1/p' \
+  "$LAUNCHER/crates/ui-sdl/Cargo.toml" | tail -1)
+[ -n "$BIN_NAME" ] || erro "não achei o nome do binário em $LAUNCHER/crates/ui-sdl/Cargo.toml"
+SLUG=$(sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' "$LAUNCHER/metadata.json" 2>/dev/null | head -1)
+[ -n "$SLUG" ] || SLUG=$(basename "$LAUNCHER")
+log "app: $LAUNCHER — binário $BIN_NAME, slug $SLUG"
 
 command -v cargo >/dev/null || erro "cargo não encontrado (https://rustup.rs)"
 command -v dpkg-deb >/dev/null || erro "dpkg-deb não encontrado"
@@ -300,19 +336,22 @@ fi
 
 cd "$LAUNCHER"
 # shellcheck disable=SC2086 # FEATURES é vazio ou uma flag; sem aspas de propósito.
-cargo build -p giochi-launcher --release --target "$ALVO" $FEATURES --offline
+cargo build -p "$BIN_NAME" --release --target "$ALVO" $FEATURES --offline
 
-BIN="$LAUNCHER/target/$ALVO/release/giochi-launcher"
+BIN="$LAUNCHER/target/$ALVO/release/$BIN_NAME"
 [ -f "$BIN" ] || erro "binário não gerado em $BIN"
 
-mkdir -p "$RAIZ/app/launcher/bin"
-cp "$BIN" "$RAIZ/app/launcher/bin/giochi-launcher"
-chmod +x "$RAIZ/app/launcher/bin/giochi-launcher"
-log "pronto: $RAIZ/app/launcher/bin/giochi-launcher ($(du -h "$BIN" | cut -f1))"
+mkdir -p "$LAUNCHER/bin"
+cp "$BIN" "$LAUNCHER/bin/$BIN_NAME"
+chmod +x "$LAUNCHER/bin/$BIN_NAME"
+log "pronto: $LAUNCHER/bin/$BIN_NAME ($(du -h "$BIN" | cut -f1))"
 
 # ── 6. instalar no aparelho ─────────────────────────────────
 if [ -n "$INSTALAR" ]; then
-  DESTINO="/opt/giochi/apps/launcher/bin"
+  # O caminho do aparelho segue a convenção do `Giochi System`: a pasta é o
+  # **slug**, não o nome do crate. `jogos/pacman` vira `/opt/giochi/apps/pacman`
+  # — e é essa a regra que o catálogo usa.
+  DESTINO="/opt/giochi/apps/$SLUG/bin"
   # O dropbear/openssh do aparelho avisa sobre criptografia pós-quântica a cada
   # conexão. O aviso vai para stderr e polui a saída do script inteiro.
   filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
@@ -320,9 +359,9 @@ if [ -n "$INSTALAR" ]; then
   log "instalando em $INSTALAR:$DESTINO"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "$BIN" "$INSTALAR:$DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
+    "$BIN" "$INSTALAR:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" \
-    "chmod +x $DESTINO/giochi-launcher && ls -la $DESTINO/giochi-launcher" 2>&1 | filtrar_ruido
+    "chmod +x $DESTINO/$BIN_NAME && ls -la $DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
   # **Perguntar ao aparelho**, não afirmar. A mensagem dizia sempre "o inittab
   # não inicia o giochi-init", verdade na imagem do X55 de 03/11 e **falsa** nas
   # de 04/11 e na do R35S — onde o `::respawn:` existe e a interface sobe sozinha.

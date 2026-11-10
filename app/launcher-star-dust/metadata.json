@@ -1,0 +1,11 @@
+{
+  "title": "Giochi Star Dust",
+  "slug": "launcher-star-dust",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "entrypoint": "bin/giochi-launcher-star-dust",
+  "license": "Proprietary",
+  "category": "Sistema"
+}

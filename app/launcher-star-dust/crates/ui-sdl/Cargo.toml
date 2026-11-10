@@ -1,0 +1,31 @@
+[package]
+name = "giochi-launcher-star-dust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Star Dust: o launcher do Giochi com a camada de efeitos do launcher-teste"
+
+[[bin]]
+name = "giochi-launcher-star-dust"
+path = "src/main.rs"
+
+[dependencies]
+giochi-launcher-core = { path = "../core" }
+
+# SDL2 sem wrapper extra: o desenho é feito com primitivas do SDL_Renderer.
+# Sem `image`, sem `gfx`: ícones são vetoriais desenhados por nós, não PNG.
+sdl2 = { version = "0.37" }
+serde_json = "1"
+
+[features]
+# `texto` é o padrão; o mixer ALSA não precisa de feature: ele é resolvido com
+# `dlopen` em tempo de execução (ver `volume.rs`), então o mesmo binário serve no
+# aparelho que tem `libasound` e no que não tem.
+default = ["texto"]
+# Puxa `sdl2/ttf`, que exige `libSDL2_ttf` no link.
+#
+# Existe porque `libSDL2_ttf` não está em todo alvo: o aparelho do Giochi tem
+# SDL2 2.28.5 e **não** tem SDL2_ttf nem freetype. Com `--no-default-features`
+# o launcher linka só contra `libSDL2` e desenha tudo menos os glifos.
+texto = ["sdl2/ttf"]
