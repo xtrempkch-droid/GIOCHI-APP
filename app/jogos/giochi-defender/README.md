@@ -56,10 +56,14 @@ cargo run --release
 - **`R1`** — atira
 
 O controle é lido de **`/dev/input`**, não pela API de gamepad do SDL: os
-handhelds usam driver próprio e não têm entrada no `SDL_GameControllerDB`, então
-no PC qualquer controle funciona e no aparelho nenhum funcionaria. Os nomes dos
-botões vêm do `/etc/giochi/buttons.map` do sistema, porque o mesmo símbolo lógico
-(`a`) aponta para `BTN_EAST` no R35S e `BTN_SOUTH` no X55.
+handhelds usam driver próprio, e o SDL os mapeia por um GUID nulo
+(`Bus=0000 Vendor=0000 Product=0000`) sem garantia de qual botão é qual. Os nomes
+vêm do `/etc/giochi/buttons.map` do sistema, porque o mesmo símbolo lógico (`a`)
+aponta para `BTN_EAST` no R35S e `BTN_SOUTH` no X55.
+
+O evdev é **autoritativo quando acha dispositivo**. O gamepad do SDL fica como
+reserva para quando não há `/dev/input` utilizável (PC sem controle), e nesse caso
+as bordas são derivadas do nível.
 
 O som do jogo **segue o volume do sistema**: o jogo nunca mexe no próprio mixer,
 então quem escala a saída é o `Master` do ALSA.

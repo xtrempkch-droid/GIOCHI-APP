@@ -34,6 +34,14 @@ O mapa é do sistema e o tradutor é do app, e isso não é detalhe: no R35S
 `a = BTN_EAST` (0x131) e no X55 `a = BTN_SOUTH` (0x130). Fixar `BTN_SOUTH` como
 "confirmar" trocaria A por B num dos dois aparelhos, **em silêncio**.
 
+O evdev é **autoritativo quando acha dispositivo**: o mapa é o do sistema, que
+sabe que `a` é `BTN_EAST` aqui e `BTN_SOUTH` no X55. O gamepad do SDL virou
+**reserva**, e só responde quando o evdev não achou nada (PC sem controle) — aí as
+bordas são derivadas do nível, porque o SDL não tem o conceito de "apertou neste
+quadro". A primeira versão somava as duas fontes; medido depois, o SDL mapeia o
+`r36s_Gamepad` por um **GUID nulo** (`Bus=0000 Vendor=0000 Product=0000`), então
+ele existe e pode disparar a ação errada junto com a certa.
+
 | Verificação | Resultado medido |
 | --- | --- |
 | Abre os dispositivos | **3**: `rk817_int Headphones`, `gpio-keys-vol`, `r36s_Gamepad` |
@@ -43,6 +51,29 @@ O mapa é do sistema e o tradutor é do app, e isso não é detalhe: no R35S
 | direcional no menu | move o foco; `a` no SAIR encerra o jogo |
 | `r` atira | **3 abates** com `--alvo 3` |
 | Desenha no R35S | menu 640×480, 83 cores, 0,00 % de preto |
+
+### A armadilha que quase virou prova
+
+A primeira medição no aparelho mostrou `tela inicial: Jogando` e eu quase registrei
+isso como "o `A` injetado funcionou". **Não era.** `--quadro` faz
+`diag.tela_inicial()` pressupor jogo (`diag.rs`: `quadro.is_some() => Jogo`), então
+a tela inicial já nascia em `Jogando` e o botão não tinha nada a ver com isso.
+
+O que separa as duas coisas é uma linha de log que só existe na transição:
+
+```text
+tela inicial: Menu              <- o estado, que pode vir de flag
+partida iniciada
+tela: Menu -> Jogando           <- a transição, que só input produz
+```
+
+Medido no R35S com `--tela-inicial menu --frames 600 --quadro`, e o `BTN_EAST`
+escrito no FIFO aos 3 s: as três linhas acima, nessa ordem, e
+**9,0 % dos pixels** diferentes do menu no quadro final.
+
+É a mesma família do `--teclas` que imprimia estado sem ter mudado nada (§39 do
+`AGENTS.md`): **ferramenta de diagnóstico precisa de um valor que só o efeito
+produz.**
 
 ### Como isso foi provado sem dedo no aparelho
 
@@ -55,6 +86,20 @@ E o caminho de **parsing real** foi exercitado no PC por um FIFO que recebe
 canal → mapa → borda → `tela: Menu -> Jogando`. O kernel é o único substituído.
 `GIOCHI_INPUT_DIR` existe para isso (no PC o usuário não está no grupo `input` e
 `/dev/input/event*` é `660 root:input`).
+
+### O ciclo completo, pelo launcher, no aparelho
+
+Era este o cenário do relato — e é onde ele congelava:
+
+```text
+1901 ppid=1802 drm=0  giochi-launcher-teste     <- soltou o DRM
+1908 ppid=1901 drm=3  giochi-defender           <- o jogo é o dono
+log do jogo: controle: 3 dispositivo(s) de entrada, 19 símbolo(s) no mapa
+cpu: 542 -> 660 ticks em 3 s                    <- desenhando, não bloqueado
+kill -9 no jogo → launcher volta com drm=3 (opengles2)
+```
+
+Antes da correção, o mesmo cenário terminava em `tela inicial: Menu` para sempre.
 
 ### Outra coisa que apareceu: o app estava `scaffold`
 

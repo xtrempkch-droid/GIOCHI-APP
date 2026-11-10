@@ -22,7 +22,8 @@ use giochi_engine::audio::AudioSystem;
 use giochi_engine::core::game_loop::GameLoop;
 use giochi_engine::core::time::FrameClock;
 use giochi_engine::input::gamepad::{
-    AXIS_RIGHT_X, AXIS_RIGHT_Y, BUTTON_EAST, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH,
+    AXIS_RIGHT_X, AXIS_RIGHT_Y, BUTTON_DPAD_DOWN, BUTTON_DPAD_LEFT, BUTTON_DPAD_RIGHT,
+    BUTTON_DPAD_UP, BUTTON_EAST, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH, BUTTON_START,
 };
 use giochi_engine::input::keyboard::{
     KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_SPACE, KEY_UP, KEY_W,
@@ -850,6 +851,7 @@ fn atualizar_camera(
     camera: &mut OrbitalCamera,
     entrada: &Input,
     pad: giochi_defender::input_evdev::Controles,
+    analogico: (f32, f32),
     dt: f32,
 ) {
     let delta = entrada.mouse().delta();
@@ -887,12 +889,8 @@ fn atualizar_camera(
         yaw += 1.0;
     }
 
-    let (analogico_x, analogico_y) = com_zona_morta(
-        entrada.gamepad().axis(AXIS_RIGHT_X),
-        entrada.gamepad().axis(AXIS_RIGHT_Y),
-    );
-    yaw += analogico_x * (TAXA_ANALOGICO / TAXA_TECLADO);
-    pitch += analogico_y * (TAXA_ANALOGICO / TAXA_TECLADO);
+    yaw += analogico.0 * (TAXA_ANALOGICO / TAXA_TECLADO);
+    pitch += analogico.1 * (TAXA_ANALOGICO / TAXA_TECLADO);
 
     if yaw != 0.0 || pitch != 0.0 {
         camera.girar(yaw * TAXA_TECLADO * dt, pitch * TAXA_TECLADO * dt);
@@ -1093,6 +1091,37 @@ fn direcao_da_camera(camera: &Camera3D) -> Vec3 {
     Vec3::new(frente.x / tamanho, frente.y / tamanho, frente.z / tamanho)
 }
 
+/// Traduz o gamepad do **SDL** para o vocabulário do mapa de botões.
+///
+/// É a fonte de reserva: só responde quando o evdev não achou dispositivo
+/// nenhum, que é o caso de um PC sem controle. Nos handhelds ela não serve —
+/// o `r36s_Gamepad` do R35S tem GUID `0000/0000/0000` e o SDL o mapeia por um
+/// caminho genérico; o `/etc/giochi/buttons.map` é que diz qual código é qual.
+///
+/// Só devolve **nível**: as bordas saem de [`Controles::com_bordas`], porque o
+/// SDL não tem o conceito de "apertou neste quadro".
+fn controles_do_sdl(entrada: &Input) -> giochi_defender::input_evdev::Controles {
+    let pad = entrada.gamepad();
+    let apertado = |botao| pad.is_down(botao);
+    giochi_defender::input_evdev::Controles {
+        cima: apertado(BUTTON_DPAD_UP),
+        baixo: apertado(BUTTON_DPAD_DOWN),
+        esquerda: apertado(BUTTON_DPAD_LEFT),
+        direita: apertado(BUTTON_DPAD_RIGHT),
+        confirmar: apertado(BUTTON_SOUTH),
+        voltar: apertado(BUTTON_EAST),
+        atirar: apertado(BUTTON_RIGHT_SHOULDER) || apertado(BUTTON_SOUTH),
+        menu: apertado(BUTTON_START),
+        volume_mais: false,
+        volume_menos: false,
+        cima_apertou: false,
+        baixo_apertou: false,
+        confirmar_apertou: false,
+        voltar_apertou: false,
+        menu_apertou: false,
+    }
+}
+
 /// O laço principal.
 #[allow(clippy::too_many_arguments)]
 fn laco(
@@ -1142,6 +1171,9 @@ fn laco(
     // deixaria o trabalho de preparação de fora justamente no primeiro quadro de
     // cada rajada.
     let mut inicio_anterior: Option<Instant> = None;
+    // Nível do quadro anterior **da fonte de reserva**. Só o SDL precisa disto:
+    // ele entrega nível e a borda tem de ser derivada. O evdev calcula as dele.
+    let mut pad_anterior = giochi_defender::input_evdev::Controles::default();
 
     loop {
         let inicio = Instant::now();
@@ -1168,11 +1200,38 @@ fn laco(
         }
         entrada.update(&eventos);
 
-        // O controle é lido aqui, uma vez por quadro, e mesclado com o SDL: no
-        // PC vale o teclado/mouse/SDL-gamepad, no aparelho vale o evdev. As duas
-        // fontes somam em vez de competir.
+        // O controle é lido de `/dev/input` uma vez por quadro. Ele é
+        // **autoritativo quando existe**: o mapa é o do sistema, que sabe que
+        // `a` é `BTN_EAST` neste aparelho e `BTN_SOUTH` no outro. O gamepad do
+        // SDL só responde quando o evdev não achou nada (PC sem controle), e
+        // nesse caso as bordas são derivadas aqui, porque o SDL entrega nível.
+        //
+        // Somar as duas fontes foi a primeira versão e é o erro que este
+        // aparelho cobra: o SDL mapeia o `r36s_Gamepad` por um GUID nulo, então
+        // ele existe e pode disparar a ação **errada** ao mesmo tempo que o
+        // evdev dispara a certa.
         controle.poll();
-        let pad = controle.controles();
+        let pad = if controle.ativo() {
+            controle.controles()
+        } else {
+            let mut reserva = controles_do_sdl(entrada);
+            reserva.com_bordas(&pad_anterior);
+            pad_anterior = reserva;
+            reserva
+        };
+        let analogico = if controle.ativo() {
+            // O analógico não é lido por evdev (normalizar exige `absinfo` por
+            // ioctl) e o eixo que o SDL entrega neste aparelho não foi medido.
+            // Devolver zero é declarar a ausência; ler um eixo não conferido
+            // faria a câmera derivar sozinha, e o sintoma seria "o jogo gira
+            // sozinho", que manda procurar defeito em outro lugar.
+            (0.0, 0.0)
+        } else {
+            com_zona_morta(
+                entrada.gamepad().axis(AXIS_RIGHT_X),
+                entrada.gamepad().axis(AXIS_RIGHT_Y),
+            )
+        };
 
         if pediu_sair || entrada.key_pressed(KEY_ESCAPE) {
             break;
@@ -1200,9 +1259,9 @@ fn laco(
             || entrada.key_pressed(KEY_ENTER)
             || pad.confirmar_apertou
             || (*tela != Tela::Jogando && entrada.key_pressed(KEY_A));
-        // `B` do controle (botão leste) e `Backspace`/`Esc` no teclado: o
-        // aparelho não tem teclado, então o leste é o caminho real do jogador.
-        let voltar = entrada.key_pressed(KEY_BACKSPACE) || entrada.gamepad().is_down(BUTTON_EAST);
+        // `B` do controle e `Backspace` no teclado: o aparelho não tem teclado,
+        // então o `b` do mapa é o caminho real do jogador.
+        let voltar = entrada.key_pressed(KEY_BACKSPACE) || pad.voltar;
         let reiniciar = entrada.key_pressed(KEY_R);
         let mut acao = None;
         if *tela == Tela::Menu {
@@ -1266,8 +1325,6 @@ fn laco(
         // raio usa a câmera que o jogador está vendo, e não a de 16 ms atrás.
         let atirar = *tela == Tela::Jogando
             && (entrada.mouse_down(MOUSE_LEFT)
-                || entrada.gamepad().is_down(BUTTON_RIGHT_SHOULDER)
-                || entrada.gamepad().is_down(BUTTON_SOUTH)
                 || pad.atirar
                 || pad.confirmar
                 // `--atirar` mantém o gatilho apertado pelo mesmo caminho da
@@ -1335,7 +1392,7 @@ fn laco(
             0
         };
         for _ in 0..passos {
-            atualizar_camera(camera, entrada, pad, laco.fixed_timestep());
+            atualizar_camera(camera, entrada, pad, analogico, laco.fixed_timestep());
             arma.atualizar(laco.fixed_timestep());
             mira_estado.atualizar(laco.fixed_timestep());
             hud_estado.atualizar(laco.fixed_timestep());

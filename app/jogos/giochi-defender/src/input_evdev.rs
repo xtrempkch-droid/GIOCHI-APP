@@ -258,6 +258,21 @@ pub struct Controles {
     pub volume_menos: bool,
 }
 
+impl Controles {
+    /// Recalcula as bordas comparando com o quadro anterior.
+    ///
+    /// O leitor evdev chama isto por quadro. A **fonte de reserva** (o gamepad do
+    /// SDL) também precisa, senão o menu rola sozinho enquanto o botão fica
+    /// apertado: o SDL só entrega nível.
+    pub fn com_bordas(&mut self, anterior: &Controles) {
+        self.cima_apertou = self.cima && !anterior.cima;
+        self.baixo_apertou = self.baixo && !anterior.baixo;
+        self.confirmar_apertou = self.confirmar && !anterior.confirmar;
+        self.voltar_apertou = self.voltar && !anterior.voltar;
+        self.menu_apertou = self.menu && !anterior.menu;
+    }
+}
+
 /// Leitor de todos os `/dev/input/event*`.
 pub struct EvdevInput {
     rx: Receiver<Ev>,
@@ -341,6 +356,16 @@ impl EvdevInput {
     }
 
     /// Quantos dispositivos foram abertos.
+    /// O evdev achou algum controle.
+    ///
+    /// Quando **não** acha — num PC sem controle, ou com `/dev/input`
+    /// inacessível — quem responde é a fonte de reserva (o gamepad do SDL).
+    /// Quando acha, o mapa do **sistema** é autoritativo: é ele que sabe que
+    /// `a` é `BTN_EAST` neste aparelho e `BTN_SOUTH` no outro.
+    pub fn ativo(&self) -> bool {
+        self.dispositivos > 0
+    }
+
     pub fn dispositivos(&self) -> usize {
         self.dispositivos
     }
@@ -400,13 +425,7 @@ impl EvdevInput {
             voltar_apertou: false,
             menu_apertou: false,
         };
-        let a = self.anterior;
-        let b = self.atual;
-        self.atual.cima_apertou = b.cima && !a.cima;
-        self.atual.baixo_apertou = b.baixo && !a.baixo;
-        self.atual.confirmar_apertou = b.confirmar && !a.confirmar;
-        self.atual.voltar_apertou = b.voltar && !a.voltar;
-        self.atual.menu_apertou = b.menu && !a.menu;
+        self.atual.com_bordas(&self.anterior);
     }
 
     /// Estado do quadro.
@@ -625,5 +644,40 @@ axis_x_max = 1023
         assert!(!c.cima);
         assert!(!c.atirar);
         assert!(!c.confirmar_apertou, "borda não pode nascer apertada");
+    }
+
+    /// A reserva é o gamepad do SDL, que **só entrega nível**. Sem derivar a
+    /// borda, o menu rolaria sozinho enquanto o direcional estivesse apertado —
+    /// e no PC, onde é a única fonte, isso seria o comportamento normal.
+    #[test]
+    fn a_fonte_de_reserva_deriva_a_borda_do_nivel() {
+        let solto = Controles::default();
+        let mut apertado = Controles {
+            cima: true,
+            confirmar: true,
+            ..Controles::default()
+        };
+        apertado.com_bordas(&solto);
+        assert!(apertado.cima_apertou, "0 -> 1 é borda");
+        assert!(apertado.confirmar_apertou);
+
+        // Segundo quadro com o botão ainda apertado: o nível continua, a borda
+        // não. É o que impede o menu de rolar a 60 passos por segundo.
+        let mut segurando = apertado;
+        segurando.com_bordas(&apertado);
+        assert!(segurando.cima, "o nível tem de continuar");
+        assert!(!segurando.cima_apertou, "segurar não é apertar de novo");
+        assert!(!segurando.confirmar_apertou);
+    }
+
+    /// O `ativo()` decide **quem manda**. Ele não pode responder "sim" só porque
+    /// o módulo existe: num PC sem controle aberto, o evdev fica vazio e a
+    /// reserva é a única fonte. Errar isso é o jogo não responder no PC ou
+    /// responder duas vezes no aparelho.
+    #[test]
+    fn sem_dispositivo_o_evdev_se_declara_inativo() {
+        let leitor = EvdevInput::abrir(Path::new("/nao/existe"), ButtonsMap::padrao());
+        assert!(!leitor.ativo());
+        assert_eq!(leitor.dispositivos(), 0);
     }
 }

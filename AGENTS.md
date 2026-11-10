@@ -5740,15 +5740,50 @@ cargo clippy -D warnings           zero
 X35H (640x480, Mali-G52)           49,3 fps com 15 cubos · trabalho 4,14 ms (20 %)
                                    mira 0,19 ms · HUD 0,54 ms · som 0,06 ms
 NEEDED do binário                  5 (SDL2, SDL2_mixer, libgcc_s, libm, libc)
-validate-app --all                 9 apps (2 em scaffold)
+validate-app --all                 9 apps (1 em scaffold)
 tests/run-all.mjs                  199/199 JS
+cargo test (defender)              286/286 · clippy -D warnings limpo
 ```
+
+### O jogo congelava no aparelho: entrada por SDL gamepad
+
+Relato do dono depois do áudio: *"quando vou jogar ele congela e não abre"*.
+**Não congelava** — abria, desenhava o menu e ficava ali. O jogo lia o controle
+por `entrada.gamepad()` (API de gamepad do SDL), e o `r36s_Gamepad` do R35S é
+mapeado pelo SDL com **GUID nulo** (`Bus=0000 Vendor=0000 Product=0000`): o SDL
+"conhece" o controle, mas o mapa não é o do sistema. O `/etc/giochi/buttons.map`
+é que diz qual código é `a`, `b` e `start` — e `a` é `BTN_EAST` no R35S e
+`BTN_SOUTH` no X55.
+
+A decisão já estava no §12; o launcher e o `neon-drift` a aplicam. Faltava aqui.
+
+`src/input_evdev.rs` lê `/dev/input/event*` e é **autoritativo quando acha
+dispositivo**; o gamepad do SDL virou reserva (PC sem controle) e, nesse caso,
+deriva a borda do nível. Somar as duas fontes foi a primeira versão e é errado
+por construção: duas fontes com mapas diferentes discordam em silêncio.
+
+Duas armadilhas que custaram esta rodada:
+
+1. **`--quadro` já começa em Jogo.** `diag.tela_inicial()` pressupõe jogo quando
+   há `--quadro`/`--alvo`/`--simular`, então o log `tela inicial: Jogando` **não
+   prova** que um botão foi apertado. A linha que prova é `tela: Menu -> Jogando`,
+   que só existe na transição. Medir o estado em vez da transição é a mesma
+   família do `--teclas` que imprimia estado sem ter mudado.
+2. **`--teclas` e o FIFO não substituem o mapa do sistema.** O teste de parsing no
+   PC usa `GIOCHI_INPUT_DIR` apontando para um FIFO de `input_event` de 24 bytes;
+   ele exercita thread→canal→mapa→borda, mas o kernel é o único substituído. No
+   aparelho, o mapa certo é o do `/etc/giochi/`, e os 19 símbolos do R35S são
+   traduzidos sem nenhum desconhecido.
+
+Medido no R35S pelo launcher: `1901 launcher-teste drm=0` / `1908 giochi-defender
+drm=3`, jogo abre `3 dispositivo(s) de entrada`, CPU `542 -> 660` ticks em 3 s,
+`kill -9` no jogo devolve o launcher com `drm=3`.
 
 ### O que continua sendo afirmação
 
 | Alegação | Estado |
 | --- | --- |
-| botão físico no aparelho | **não exercitado** — transições provadas por eventos SDL injetados |
+| botão físico no aparelho | **não exercitado** — a cadeia vai até o `input_event`, sem dedo; o mapa é o real do R35S |
 | som **ouvido** | o mixer carrega, toca e está a 100 %; se sai som é do alto-falante |
 | FPS no R35S | **não medido** — só o X35H nesta rodada |
 | balanceamento contra pessoa | o piloto tem limites, mas não se distrai |
