@@ -44,6 +44,7 @@ use giochi_defender::gameplay::camera::OrbitalCamera;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
 use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
 use giochi_defender::state::{GameState, WAVES_TOTAIS};
+use giochi_defender::ui::hud::{self, Hud};
 use giochi_defender::ui::reticle::{self, Mira};
 use giochi_defender::utils::math::{graus_para_radianos, radianos_para_graus};
 
@@ -151,10 +152,12 @@ fn executar(diag: Diag) -> Result<()> {
     // de redimensionamento sem nunca rodar em produção.
     let (largura_inicial, altura_inicial) = diag.tela.unwrap_or((LARGURA, ALTURA));
     let mut mira = MiraGl::new(&mut render, (largura_inicial, altura_inicial))?;
+    let mut hud_gl = HudGl::new(&mut render)?;
     let mut camera = OrbitalCamera::new();
     aplicar_preset(&mut camera, &diag);
     let mut estado = GameState::new();
     let mut partida = Partida::new(diag.semente);
+    let mut hud_estado = Hud::new();
 
     // `--alvo N`: cubos parados no eixo da câmera. É a bancada de tiro — sem
     // ela, provar que o tiro mata dependeria de o sorteio cair na linha de mira.
@@ -203,7 +206,14 @@ fn executar(diag: Diag) -> Result<()> {
     // captura headless só mostraria a arena vazia, e a simulação de inimigos
     // ficaria sem nenhuma prova que não dependesse de alguém olhar a tela.
     if let Some(segundos) = diag.simular.filter(|valor| *valor > 0.0) {
+        // O clarão de dano é acendido pela **mesma** regra do laço (mudança em
+        // `derrotas`), e não por um caminho só do diagnóstico: sem isso a captura
+        // depois de `--simular` mostraria uma HUD que nunca levou dano.
+        let derrotas_antes = partida.derrotas();
         partida.atualizar(segundos, &mut estado);
+        if partida.derrotas() > derrotas_antes {
+            hud_estado.levou_dano();
+        }
         log::info!(
             "simulados {segundos:.1}s: {} inimigo(s) no ar, {} vida(s), {} derrota(s)",
             partida.inimigos(),
@@ -239,12 +249,15 @@ fn executar(diag: Diag) -> Result<()> {
         &arena,
         &inimigos,
         &mut mira,
+        &mut hud_gl,
         &mut camera,
         &mut partida,
         &mut estado,
+        &mut hud_estado,
         &diag,
     );
 
+    hud_gl.destruir(&mut render);
     mira.destruir(&mut render);
     inimigos.destruir(&mut render);
     arena.destruir(&mut render);
@@ -442,6 +455,93 @@ impl MiraGl {
     }
 }
 
+/// Desenha a HUD: uma malha (o quad unitário) e uma chamada por cor.
+///
+/// ## Por que instanciado e não uma malha por quadro
+///
+/// A HUD de um quadro tem centenas de quadriláteros — cada célula acesa de cada
+/// glifo é um. Reconstruir a malha a cada quadro custaria subir centenas de KB de
+/// vértice por quadro para desenhar a mesma coisa; instanciar manda **uma**
+/// matriz por quadrilátero e reusa a geometria. O `neon-drift` mediu a diferença
+/// na mesma engine: o halo desenhado por contorno custava +6,9 ms e por faixas
+/// preenchidas custou +0,4 ms.
+///
+/// A cor é uniforme por desenho, então a HUD inteira sai em um punhado de
+/// chamadas — uma por cor distinta (com o alfa quantizado em [`hud_lotes`]).
+struct HudGl {
+    quad: MeshHandle,
+    shader: ShaderHandle,
+    /// Matrizes reaproveitadas entre quadros: `draw_instanced` recebe uma fatia,
+    /// então não há razão para alocar um vetor por lote por quadro.
+    lotes: Vec<giochi_defender::ui::Lote>,
+}
+
+impl HudGl {
+    fn new(render: &mut RenderContext3D) -> Result<Self> {
+        let malha = giochi_defender::ui::quad_da_hud();
+        let quad = render.create_mesh(&malha.vertices, &malha.indices)?;
+        let shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
+        Ok(Self {
+            quad,
+            shader,
+            lotes: Vec::new(),
+        })
+    }
+
+    /// Monta os lotes do quadro e desenha.
+    fn desenhar(
+        &mut self,
+        render: &mut RenderContext3D,
+        estado: &GameState,
+        hud_estado: &Hud,
+        tela: (u32, u32),
+    ) -> Result<()> {
+        let tela = hud::Tela::new(tela.0, tela.1);
+        let cena = hud::cena(estado, hud_estado, tela);
+        let lotes = giochi_defender::ui::lotes(&cena, tela);
+
+        let camera = giochi_defender::ui::camera((tela.largura as u32, tela.altura as u32));
+        // Luz emissiva: a HUD não é um objeto do mundo e não pode escurecer
+        // conforme a orientação da câmera.
+        render.set_light(arena::luz_do_hud());
+        for lote in &lotes {
+            let cor = Color3D::new(lote.cor[0], lote.cor[1], lote.cor[2], lote.cor[3]);
+            render.draw_instanced(self.quad, self.shader, &lote.matrizes, &camera, cor)?;
+        }
+        self.lotes = lotes;
+        Ok(())
+    }
+
+    /// Quantas chamadas de desenho a HUD custou no último quadro.
+    fn chamadas(&self) -> usize {
+        self.lotes.len()
+    }
+
+    fn destruir(self, render: &mut RenderContext3D) {
+        render.destroy_mesh(self.quad);
+        render.destroy_shader(self.shader);
+    }
+}
+
+/// Projeta um ponto do mundo em pixels da tela.
+///
+/// Devolve o **centro** do quadro quando a projeção não existe (ponto atrás da
+/// câmera, matriz degenerada): um `+100` no meio da tela é errado, mas um `+100`
+/// em `NaN` some para sempre e ninguém descobre por quê.
+fn projetar(camera: &Camera3D, ponto: Vec3, tela: (u32, u32)) -> (f32, f32) {
+    let (largura, altura) = (tela.0 as f32, tela.1 as f32);
+    let matriz = match camera.view_projection() {
+        Ok(matriz) => matriz,
+        Err(_) => return (largura * 0.5, altura * 0.5),
+    };
+    match matriz.project_point(ponto) {
+        Some(ndc) if ndc.x.is_finite() && ndc.y.is_finite() => {
+            ((ndc.x + 1.0) * 0.5 * largura, (1.0 - ndc.y) * 0.5 * altura)
+        }
+        _ => (largura * 0.5, altura * 0.5),
+    }
+}
+
 /// Direção "para frente" da câmera, a partir da posição e do alvo.
 ///
 /// É a linha do raio: o centro da tela corresponde exatamente a esta direção,
@@ -469,9 +569,11 @@ fn laco(
     arena: &Arena,
     inimigos: &Inimigos,
     mira: &mut MiraGl,
+    hud_gl: &mut HudGl,
     camera: &mut OrbitalCamera,
     partida: &mut Partida,
     estado: &mut GameState,
+    hud_estado: &mut Hud,
     diag: &Diag,
 ) -> Result<()> {
     let mut relogio = FrameClock::new();
@@ -479,6 +581,16 @@ fn laco(
     let mut quadros: u64 = 0;
     let mut arma = Weapon::new();
     let mut mira_estado = Mira::new();
+    // `--demo-hud` acende os três efeitos na abertura. Sem uma bancada, provar
+    // que o `+100` sobe exigiria acertar um cubo com o dedo no aparelho.
+    if diag.demo_hud {
+        // Um pouco acima e à esquerda do centro, que é onde um cubo em frente
+        // cairia com a câmera na posição inicial.
+        let (w, h) = janela.drawable_size();
+        hud_estado.abateu(w as f32 * 0.42, h as f32 * 0.46, PONTOS_POR_ABATE);
+        hud_estado.levou_dano();
+        hud_estado.anunciar_onda(2);
+    }
     let mut abates: u32 = 0;
     let mut benchmark = Benchmark::new();
     // `--benchmark N` implica rodar N quadros, sem o teto de 60 Hz: medir o
@@ -538,6 +650,10 @@ fn laco(
                 abates += 1;
                 estado.pontuar(PONTOS_POR_ABATE);
                 mira_estado.acertou();
+                // O `+100` nasce onde o tiro bateu, projetado com a **mesma**
+                // câmera do desenho deste quadro.
+                let (px, py) = projetar(&camera3d, atingido.posicao, (largura, altura));
+                hud_estado.abateu(px, py, PONTOS_POR_ABATE);
                 log::info!(
                     "abate {}: +{PONTOS_POR_ABATE} (score {}), {:.1} m",
                     abates,
@@ -552,7 +668,18 @@ fn laco(
             atualizar_camera(camera, entrada, laco.fixed_timestep());
             arma.atualizar(laco.fixed_timestep());
             mira_estado.atualizar(laco.fixed_timestep());
+            hud_estado.atualizar(laco.fixed_timestep());
+            let derrotas_antes = partida.derrotas();
             partida.atualizar(laco.fixed_timestep(), estado);
+            if partida.derrotas() > derrotas_antes {
+                hud_estado.levou_dano();
+            }
+        }
+
+        // A onda e o fim são anunciados pelo **estado**, uma vez por mudança.
+        hud_estado.anunciar_onda(estado.wave);
+        if estado.acabou() || estado.venceu() {
+            hud_estado.anunciar_fim(estado.venceu());
         }
 
         render.begin_frame(janela);
@@ -561,6 +688,9 @@ fn laco(
         if diag.mira {
             mira.ajustar(render, (largura, altura));
             mira.desenhar(render, mira_estado, (largura, altura))?;
+        }
+        if diag.hud {
+            hud_gl.desenhar(render, estado, hud_estado, (largura, altura))?;
         }
 
         // A captura tem de acontecer ANTES da troca de buffers: depois do
@@ -574,6 +704,13 @@ fn laco(
             let pixels = render.read_pixels(largura, altura)?;
             diag::escrever_bmp(std::path::Path::new(caminho), largura, altura, &pixels)?;
             log::info!("quadro gravado em '{caminho}' ({largura}x{altura})");
+            if diag.hud {
+                log::info!(
+                    "hud: {} chamada(s) de desenho, {} efeito(s) vivo(s)",
+                    hud_gl.chamadas(),
+                    hud_estado.flutuantes()
+                );
+            }
         }
 
         // Trabalho de submissão: do começo do desenho até antes da troca de

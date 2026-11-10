@@ -318,6 +318,35 @@ pub fn generate_cube(tamanho: f32) -> Malha {
     Malha { vertices, indices }
 }
 
+/// Quadrilátero unitário de 1×1 no plano XY, centrado na origem, de frente para
+/// `+Z`.
+///
+/// É a geometria de **todas** as instâncias da HUD: uma célula de glifo, um
+/// marcador de vida e uma faixa do clarão são o mesmo quad com matrizes
+/// diferentes. Ter um quad só é o que faz o texto inteiro sair em uma chamada.
+///
+/// O sentido dos cantos é anti-horário visto de `+Z`, que é o lado para onde a
+/// câmera do HUD olha — o contrário faria tudo sumir com o descarte de faces
+/// ligado, e sem erro nenhum (foi assim que o anel da mira desapareceu).
+pub fn quad_unitario() -> Malha {
+    const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
+    let cantos = [
+        [-0.5, -0.5, 0.0],
+        [0.5, -0.5, 0.0],
+        [0.5, 0.5, 0.0],
+        [-0.5, 0.5, 0.0],
+    ];
+    let mut vertices = Vec::with_capacity(6);
+    let mut indices = Vec::with_capacity(6);
+    for triangulo in [[0u32, 1, 2], [0, 2, 3]] {
+        for indice in triangulo {
+            indices.push(vertices.len() as u32);
+            vertices.push(Vertex::flat(cantos[indice as usize], NORMAL));
+        }
+    }
+    Malha { vertices, indices }
+}
+
 /// Campo de estrelas: `quantidade` cubos minúsculos numa casca esférica.
 ///
 /// Uma malha só, e não um `MeshHandle` por estrela: 500 desenhos custariam 500

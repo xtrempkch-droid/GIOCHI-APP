@@ -42,6 +42,9 @@ OPÇÕES:
                           cada um (imprime fps, p50/p95/p99 e o pior quadro).
     --sem-mouse-relativo  Não prende o cursor.
     --sem-mira            Não desenha a mira (para isolar o que ela muda).
+    --sem-hud             Não desenha a HUD (vida, onda, pontos, efeitos).
+    --demo-hud            Liga os efeitos da HUD na abertura (+100, clarão de
+                          dano e aviso de onda), para capturar sem jogar.
     --atirar              Mantém o gatilho apertado (o cooldown faz a cadência).
     --alvo N              Planta N cubos parados no eixo da câmera, para o tiro
                           do centro da tela ter alvo certo.
@@ -76,6 +79,10 @@ pub struct Diag {
     pub benchmark: Option<u64>,
     /// Desenhar a mira.
     pub mira: bool,
+    /// Desenhar a HUD.
+    pub hud: bool,
+    /// Ligar os efeitos da HUD na abertura, sem jogar.
+    pub demo_hud: bool,
     /// Manter o gatilho apertado.
     pub atirar: bool,
     /// Quantos cubos plantar no eixo da câmera.
@@ -108,6 +115,8 @@ impl Default for Diag {
             inimigos: None,
             benchmark: None,
             mira: true,
+            hud: true,
+            demo_hud: false,
             atirar: false,
             alvo: None,
             tela: None,
@@ -136,6 +145,8 @@ impl Diag {
                 "-h" | "--ajuda" | "--help" => diag.ajuda = true,
                 "--sem-mouse-relativo" => diag.mouse_relativo = false,
                 "--sem-mira" => diag.mira = false,
+                "--sem-hud" => diag.hud = false,
+                "--demo-hud" => diag.demo_hud = true,
                 "--atirar" => diag.atirar = true,
                 "--alvo" => diag.alvo = Some(inteiro(&mut argumentos, embutido, &nome)? as u32),
                 "--tela" => {
@@ -435,6 +446,21 @@ mod tests {
     fn desligar_a_mira_e_uma_flag_so() {
         assert!(parse(&[]).unwrap().mira);
         assert!(!parse(&["--sem-mira"]).unwrap().mira);
+    }
+
+    #[test]
+    fn a_hud_liga_por_padrao_e_desliga_com_uma_flag() {
+        assert!(parse(&[]).unwrap().hud);
+        assert!(!parse(&["--sem-hud"]).unwrap().hud);
+        // São camadas diferentes: tirar a mira não tira a HUD, e vice-versa.
+        assert!(parse(&["--sem-mira"]).unwrap().hud);
+        assert!(parse(&["--sem-hud"]).unwrap().mira);
+    }
+
+    #[test]
+    fn a_demo_da_hud_e_opt_in() {
+        assert!(!parse(&[]).unwrap().demo_hud);
+        assert!(parse(&["--demo-hud"]).unwrap().demo_hud);
     }
 
     #[test]

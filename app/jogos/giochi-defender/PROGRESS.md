@@ -1,17 +1,17 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 2a — Arma: raycast + mira + abate
-Data: 2026-11-09
+## Último bloco concluído: 2b — HUD: vida, onda, pontos e efeitos
+Data: 2026-11-10
 
 Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão),
-**1c** (polimento e performance) e **2a** (arma e mira). Dia 1 fechado, dia 2
-começado.
+**1c** (polimento e performance), **2a** (arma e mira) e **2b** (HUD). Dia 1
+fechado, dia 2 em andamento.
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **159/159** em x86_64
+- [x] `cargo test` — **193/193** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com
@@ -228,21 +228,89 @@ Medido: 122 cores, luminância média 70,8, **0,00 %** de quase preto, 997 px de
 cubos, 220 px de mira avermelhada. Duas execuções dão o **mesmo md5** — a capa
 é reproduzível.
 
-## Próximo bloco: 2b — HUD 2D: vida, score, wave, efeitos
+## Desvios do plano no 2b
 
-O jogo hoje não mostra **nada** além da cena: vida, placar e wave só existem no
-log. O 2b desenha a HUD na câmera de 90° que o 2a já montou (`ui::camera_hud`),
-com texto do `SDL2_ttf` da engine, e anima o `+100` de cada abate.
+- **Texto por bitmap, não `SDL2_ttf`.** O plano pedia o `SDL2_ttf` da engine. Ele
+  existe na imagem dos dois aparelhos, mas: (a) o `ttf::init` do SDL não pode ser
+  chamado duas vezes — o launcher já pagou caro por isso (§12 do AGENTS.md); (b)
+  exige uma fonte em arquivo no pacote, com a licença dela; (c) desenhar glifo
+  pelo caminho 2D do SDL exigiria um segundo renderer na mesma janela, que o
+  ADR-037 proíbe. A fonte de 5×7 em dados custa 300 linhas, não pede arquivo,
+  não pede licença e é nítida em qualquer DPI. O custo é não ter acento nem
+  minúscula — e a HUD deste jogo é toda em caixa alta.
+- **O fim de jogo é um aviso sobre a cena, não uma cena.** A cena de derrota com
+  "R para reiniciar" é o 3a. Aqui entra só o texto, porque sem ele o jogador
+  perdia e a tela ficava igual.
 
+
+## Bloco 2b — a HUD, medida no X35H
+
+A HUD é uma fonte de 5×7 **em dados** (`ui/font.rs`) desenhada como
+quadriláteros instanciados sobre a câmera de 90° do 2a. Nenhuma dependência nova:
+sem `SDL2_ttf`, sem arquivo de fonte, sem licença de fonte — o mesmo motivo que
+fez o `neon-drift` e o `cobrinha` desenharem o placar em pontos.
+
+| Verificação | Resultado medido |
+| --- | --- |
+| A HUD aparece no aparelho | **83 cores**, 0,00 % de quase preto, texto ciano legível em 640×480 |
+| Custo no X35H | 3,28 → **3,82 ms** (16 % → 19 % do intervalo): **0,54 ms** de HUD |
+| FPS | **49,3**, igual a antes: o teto segue sendo o painel |
+| Chamadas de desenho | **2** com a HUD normal, 4 com clarão, 7 com o fim de jogo |
+| Os três blocos do topo | medidos a 640×480, 800×600 e 1280×720 sem se tocarem (folga ≥ uma letra) |
+| Marcadores de vida | **14×14 px** em 640×480, um por vida, apagados conforme se perde |
+| O `+100` nasce no abate | projetado com a mesma câmera do quadro; sobe e desbota em 0,9 s |
+| Clarão de dano | quatro faixas de borda, afinando em 0,45 s — medido no BMP do PC |
+| Fim de jogo | `FIM DE JOGO` + placar, medido num quadro de 45 s de simulação |
+| Fonte completa | todo texto da HUD passa por `font::glifo` em teste: letra ausente é falha de build, não buraco na tela |
+
+A capa continua sendo um quadro do jogo — agora **com a HUD dentro**, que é o
+estado real a partir deste bloco: 133 cores, luminância média 73,7, 0,00 % de
+quase preto. O comando está no README e `--frames 45` (em vez de 2) é o que
+deixa o `+100` do primeiro abate expirar e mostra a cena com placar em vez de
+com o texto flutuante por cima do centro.
+
+### Três defeitos que só a medição pegou
+
+1. **O quadrilátero saía com metade do tamanho.** `matriz_de_pixels` usava
+   `PROFUNDIDADE` como escala, mas com `fov` de 90° a altura visível é
+   `2·PROFUNDIDADE` — medido: marcadores pedidos com 14 px saíam com **7**, e as
+   células dos glifos com metade do lado (o texto continuava legível porque as
+   *posições* estavam certas, só a célula encolhia). O teste
+   `um_retangulo_de_pixels_ocupa_os_mesmos_pixels` projeta os cantos do quad com
+   a câmera real e exige o retângulo pedido; revertendo o fator 2, ele reprova.
+2. **O aviso de fim era invisível.** O laço chamava `anunciar_fim` a cada quadro
+   enquanto a partida estava acabada, e recriar o aviso zerava a idade: a
+   animação de entrada nunca passava de alfa 0. O jogador perdia e a tela não
+   dizia nada. Agora é idempotente, com teste que chama três vezes e exige o
+   texto opaco.
+3. **Escala pela altura quebrava o retrato.** A 720×1280 a letra ia a 37 px e o
+   bloco das vidas terminava em x=448 enquanto o `ONDA` começava em 237. A HUD
+   passou a escalar pelo **menor lado**; o teste de sobreposição roda nos quatro
+   tamanhos e exige folga de uma letra, não só ausência de cruzamento.
+
+### O que a HUD não faz (de propósito)
+
+- **Não guarda placar nem vidas.** Os números vêm do `GameState` a cada quadro.
+  Duplicá-los criaria dois lugares para envelhecer diferente.
+- **Não desenha glifo por chamada.** Cada célula acesa é uma instância; a HUD
+  inteira sai em 2 chamadas porque a cor é uniforme por desenho e o alfa é
+  quantizado em 8 degraus.
+- **Não inventa sons nem números flutuantes de dano.** Áudio é o 2c.
+
+## Próximo bloco: 2c — áudio e resposta ao dano
+
+Falta som: tiro, abate, dano e fim de jogo. A engine entrega `AudioSystem`
+(`SDL2_mixer`) e o `NEEDED` do binário já o carrega; os arquivos serão gerados
+em código, como todo o resto dos assets — nenhum `.wav` no pacote.
 
 ## Bloqueios / pendências
 
 - **ARM64 testado** desde o 1c: o binário roda no X35H por KMSDRM e a medição
   está na seção do 1c. O que continua sem número no aparelho é só o custo de
   GPU sem vblank, e isso é limitação do driver (ver abaixo).
-- **O tiro existe desde o 2a**, mas ainda não há **feedback na tela**: o abate
-  aparece no log e no estado, não na HUD. É a entrega do 2b, junto com vida e
-  wave.
+- **O feedback na tela existe desde o 2b**: vida, onda, pontos, `+100`, clarão
+  de dano e o aviso de fim. O que falta é **som** (2c) e as telas de menu/derrota
+  como cena (3a) — hoje o fim é um aviso sobre a cena, não uma cena.
 - **`libSDL2_mixer` era o risco, e não é.** O `NEEDED` do binário lista
   `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é usado, e
   biblioteca ausente é falha de **carga** (o processo não sobe), não de áudio.
@@ -280,14 +348,17 @@ com texto do `SDL2_ttf` da engine, e anima o `+100` de cada abate.
 - **X35H, 15 cubos em GLES 3**: 49,3 fps, trabalho 2,40 ms (12 %).
 - **X35H, 15 cubos + mira (2a)**: 49,3 fps, trabalho 3,04 → **3,23 ms** (12 % →
   13 %). A mira custa **0,19 ms**, ou 0,9 % do intervalo.
+- **X35H, 15 cubos + HUD (2b)**: 49,3 fps, trabalho 3,28 → **3,82 ms** (16 % →
+  19 %). A HUD custa **0,54 ms** e sai em **2 chamadas** de desenho — 4 com o
+  clarão de dano, 7 com o aviso de fim.
 - **PC (Radeon RX 580, 1280×720, `offscreen`)**: 15 cubos, 0,05 ms de intervalo —
   sem vblank o número é limite superior de CPU e não serve como FPS do jogo.
 - **Simulação (sem GL)**: 0,28 µs por quadro com 15 cubos — 0,00 % do orçamento.
 - Geração de malha, uma vez na abertura: asteroide 82,8 µs (80 triângulos), céu
   de 500 estrelas 535,1 µs (6.000 triângulos), mira ~17 µs (86 triângulos,
   reconstruída uma vez na partida).
-- Chamadas de desenho por quadro: 4 da arena + até 15 dos cubos + 1 da mira =
-  **20**, dentro do envelope do R5.
+- Chamadas de desenho por quadro: 4 da arena + até 15 dos cubos + 1 da mira +
+  até 7 da HUD = **27**, dentro do envelope do R5.
 
 - Custo de desenho do 1a: **4 chamadas** por quadro (3 faixas de estrelas +
   asteroide) e 19.800 vértices de céu + 240 do asteroide. Cabe folgado no
@@ -333,4 +404,14 @@ com texto do `SDL2_ttf` da engine, e anima o `+100` de cada abate.
    profundidade ~0,96 e fica **atrás** da cena.
 10. **A mira é reconstruída uma vez, não por quadro.** A geometria depende só do
     tamanho da tela; refazer a cada quadro custaria a malha inteira por nada.
+11. **A HUD é instanciada, não reconstruída.** Uma malha de 2 triângulos e uma
+    matriz por quadrilátero: o texto inteiro de um quadro são centenas de
+    instâncias em uma chamada por cor. Refazer a malha por quadro subiria
+    centenas de KB de vértice para desenhar a mesma coisa.
+12. **O alfa é quantizado em 8 degraus.** É o que impede oito `+100` desbotando
+    em instantes diferentes de virarem oito chamadas de desenho. A diferença de
+    alfa entre degraus (12 %) é invisível num efeito de 0,9 s a 60 Hz.
+13. **A escala da HUD vem do menor lado da tela**, não da altura. Num painel
+    retrato (720×1280) escalar pela altura dava letra de 37 px e os três blocos
+    do topo se cruzavam.
 
