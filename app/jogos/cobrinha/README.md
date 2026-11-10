@@ -8,6 +8,12 @@ Esse snapshot corresponde ao commit
 `50f6857dedb8eab00f15dee5e759e530f9bf518a`; atualizações da equipe da engine não
 alteram esta cópia automaticamente.
 
+**Esta cópia tem uma alteração local, e está declarada aqui para não se perder
+numa resincronização:** `render3d/upscale.rs` e `render3d/renderer.rs` foram
+estendidos para permitir **supersampling** (`MAX_SCALE` 1,0 → 2,0, com
+`UNITY_SCALE` como identidade). O motivo e as medidas estão em
+[Resolução](#resolução-800600-de-alvo-num-painel-de-640480).
+
 O desenho tem limite rígido configurável de **1 a 75 FPS** (padrão: 75); o
 núcleo também limita o ritmo a 75. A simulação usa passo fixo, independente da
 frequência de desenho. O jogo solicita GLES 3.0 por padrão e tenta GLES 2.0 se
