@@ -22,10 +22,10 @@ use giochi_engine::audio::AudioSystem;
 use giochi_engine::core::game_loop::GameLoop;
 use giochi_engine::core::time::FrameClock;
 use giochi_engine::input::gamepad::{
-    AXIS_RIGHT_X, AXIS_RIGHT_Y, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH,
+    AXIS_RIGHT_X, AXIS_RIGHT_Y, BUTTON_EAST, BUTTON_RIGHT_SHOULDER, BUTTON_SOUTH,
 };
 use giochi_engine::input::keyboard::{
-    KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_UP, KEY_W,
+    KEY_A, KEY_D, KEY_DOWN, KEY_ESCAPE, KEY_LEFT, KEY_RIGHT, KEY_S, KEY_SPACE, KEY_UP, KEY_W,
 };
 use giochi_engine::input::mouse::MOUSE_LEFT;
 use giochi_engine::input::Input;
@@ -46,7 +46,8 @@ use giochi_defender::gameplay::camera::OrbitalCamera;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
 use giochi_defender::gameplay::tremor::Tremor;
 use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
-use giochi_defender::state::{GameState, WAVES_TOTAIS};
+use giochi_defender::screens::{self, Acao, Menu, Resultado, Tela};
+use giochi_defender::state::{cota_da_onda, GameState, WAVES_TOTAIS};
 use giochi_defender::ui::hud::{self, Hud};
 use giochi_defender::ui::reticle::{self, Mira};
 use giochi_defender::utils::math::{graus_para_radianos, radianos_para_graus};
@@ -68,6 +69,12 @@ const TITULO: &str = "GIOCHI DEFENDER";
 const KEY_VOLUMEUP: giochi_engine::input::keyboard::KeyCode = 0x4000_0080;
 /// `SDLK_VOLUMEDOWN` do SDL2 (`0x4000_0081`).
 const KEY_VOLUMEDOWN: giochi_engine::input::keyboard::KeyCode = 0x4000_0081;
+/// `SDLK_RETURN`. A engine exporta 15 teclas e não esta; o valor é o do SDL.
+const KEY_ENTER: giochi_engine::input::keyboard::KeyCode = 13;
+/// `SDLK_BACKSPACE`.
+const KEY_BACKSPACE: giochi_engine::input::keyboard::KeyCode = 8;
+/// `SDLK_r`.
+const KEY_R: giochi_engine::input::keyboard::KeyCode = 114;
 
 /// Giro do teclado, em radianos por segundo.
 const TAXA_TECLADO: f32 = 1.8;
@@ -204,6 +211,20 @@ fn executar(diag: Diag) -> Result<()> {
     let mut estado = GameState::new();
     let mut partida = Partida::new(diag.semente);
     let mut hud_estado = Hud::new();
+    let mut menu = Menu::novo();
+    let mut tela = match diag.tela_inicial() {
+        diag::TelaInicial::Menu => Tela::Menu,
+        diag::TelaInicial::Jogo => Tela::Jogando,
+        diag::TelaInicial::Vitoria => {
+            estado.wave = WAVES_TOTAIS + 1;
+            Tela::Fim { venceu: true }
+        }
+        diag::TelaInicial::Derrota => {
+            estado.lives = 0;
+            Tela::Fim { venceu: false }
+        }
+    };
+    log::info!("tela inicial: {tela:?}");
 
     // `--alvo N`: cubos parados no eixo da câmera. É a bancada de tiro — sem
     // ela, provar que o tiro mata dependeria de o sorteio cair na linha de mira.
@@ -303,6 +324,8 @@ fn executar(diag: Diag) -> Result<()> {
         &mut partida,
         &mut estado,
         &mut hud_estado,
+        &mut menu,
+        &mut tela,
         &diag,
     );
 
@@ -356,6 +379,73 @@ fn iniciar_audio(plataforma: &Platform) -> AudioSystem {
             AudioSystem::silent()
         }
     }
+}
+
+/// Empurra uma tecla na fila do SDL, como se viesse do teclado.
+///
+/// Usa o `EventSender` do próprio SDL, então o evento percorre o caminho de
+/// produção inteiro: fila do SDL → `poll_events` da engine → `Input` →
+/// `key_pressed`. Um atalho que marcasse o estado direto testaria a minha
+/// suposição, não o jogo — e o `--teclas` existe justamente para não ter
+/// suposição.
+fn injetar_tecla(plataforma: &Platform, nome: &str) -> Result<()> {
+    let Some(codigo) = diag::codigo_da_tecla(nome) else {
+        bail!("--teclas: '{nome}' não é uma tecla conhecida");
+    };
+    // `from_i32` devolve `Option`: um código que o SDL não reconhece viraria
+    // uma tecla "válida" e sem efeito, e o diagnóstico mentiria.
+    let tecla = sdl2::keyboard::Keycode::from_i32(codigo as i32)
+        .ok_or_else(|| anyhow::anyhow!("--teclas: código {codigo} não é tecla do SDL"))?;
+    for eh_descida in [true, false] {
+        let evento = if eh_descida {
+            sdl2::event::Event::KeyDown {
+                timestamp: 0,
+                window_id: 0,
+                keycode: Some(tecla),
+                scancode: None,
+                keymod: sdl2::keyboard::Mod::NOMOD,
+                repeat: false,
+            }
+        } else {
+            sdl2::event::Event::KeyUp {
+                timestamp: 0,
+                window_id: 0,
+                keycode: Some(tecla),
+                scancode: None,
+                keymod: sdl2::keyboard::Mod::NOMOD,
+                repeat: false,
+            }
+        };
+        // `Platform::push_event` da engine já embrulha o `SDL_PushEvent` — a
+        // fachada existe, e é ela que mantém a fila coerente com o
+        // `poll_events` do mesmo objeto.
+        plataforma
+            .push_event(evento)
+            .map_err(|erro| anyhow::anyhow!("não consegui injetar '{nome}': {erro}"))?;
+    }
+    Ok(())
+}
+
+/// Recomeça a partida do zero.
+///
+/// A lista é o que **volta ao início**, e ela é maior do que parece: além do
+/// placar e das vidas, o pool de cubos, o temporizador de spawn, o sorteio, a
+/// cadência da arma, os efeitos da HUD e o tremor. Zerar só o placar deixaria a
+/// segunda partida começando com os cubos da primeira no ar.
+fn reiniciar_partida(
+    partida: &mut Partida,
+    estado: &mut GameState,
+    hud_estado: &mut Hud,
+    tremor: &mut Tremor,
+    arma: &mut Weapon,
+    mira_estado: &mut Mira,
+) {
+    estado.reiniciar();
+    partida.limpar();
+    hud_estado.limpar();
+    *tremor = Tremor::novo();
+    *arma = Weapon::new();
+    *mira_estado = Mira::new();
 }
 
 /// Tudo o que um dano no asteroide provoca, num lugar só.
@@ -608,15 +698,17 @@ impl HudGl {
     }
 
     /// Monta os lotes do quadro e desenha.
+    ///
+    /// A `cena` vem pronta porque **qual** cena depende da tela do jogo: menu,
+    /// partida e fim desenham coisas diferentes, e a escolha pertence ao laço
+    /// (que sabe onde está), não ao desenhista.
     fn desenhar(
         &mut self,
         render: &mut RenderContext3D,
-        estado: &GameState,
-        hud_estado: &Hud,
+        cena: hud::Cena,
         tela: (u32, u32),
     ) -> Result<()> {
         let tela = hud::Tela::new(tela.0, tela.1);
-        let cena = hud::cena(estado, hud_estado, tela);
         let lotes = giochi_defender::ui::lotes(&cena, tela);
 
         let camera = giochi_defender::ui::camera((tela.largura as u32, tela.altura as u32));
@@ -696,6 +788,8 @@ fn laco(
     partida: &mut Partida,
     estado: &mut GameState,
     hud_estado: &mut Hud,
+    menu: &mut Menu,
+    tela: &mut Tela,
     diag: &Diag,
 ) -> Result<()> {
     let mut relogio = FrameClock::new();
@@ -727,6 +821,13 @@ fn laco(
 
     loop {
         let inicio = Instant::now();
+        // `--teclas`: uma tecla por quadro, injetada na fila do SDL **antes** do
+        // `poll_events` deste quadro. Um comando por quadro garante que
+        // `key_pressed` (borda) veja cada um separadamente.
+        if let Some(nome) = diag.teclas.get(quadros as usize) {
+            injetar_tecla(plataforma, nome)?;
+            log::info!("--teclas: quadro {quadros} -> '{nome}'");
+        }
         if diag.benchmark.is_some() {
             if let Some(anterior) = inicio_anterior {
                 benchmark.registrar(inicio.duration_since(anterior));
@@ -757,14 +858,86 @@ fn laco(
         let (largura, altura) = janela.drawable_size();
         let camera3d: Camera3D = camera.camera_com_tremor(largura, altura, tremor.deslocamento());
 
+        // ── Entrada de tela ─────────────────────────────────────
+        // A ação é resolvida pela tela atual e a transição vem de
+        // `screens::processar`, que é pura e testada. O laço não decide nada.
+        // `Enter`/`Espaço` confirmam em qualquer tela. O `A` **só** fora da
+        // partida: em jogo ele orbita a câmera para a esquerda, e reaproveitá-lo
+        // como "confirmar" faria o jogador recomeçar a partida ao girar a câmera
+        // quando as vidas acabam.
+        let confirmar = entrada.key_pressed(KEY_SPACE)
+            || entrada.key_pressed(KEY_ENTER)
+            || (*tela != Tela::Jogando && entrada.key_pressed(KEY_A));
+        // `B` do controle (botão leste) e `Backspace`/`Esc` no teclado: o
+        // aparelho não tem teclado, então o leste é o caminho real do jogador.
+        let voltar = entrada.key_pressed(KEY_BACKSPACE) || entrada.gamepad().is_down(BUTTON_EAST);
+        let reiniciar = entrada.key_pressed(KEY_R);
+        let mut acao = None;
+        if *tela == Tela::Menu {
+            if entrada.key_pressed(KEY_UP) || entrada.key_pressed(KEY_W) {
+                menu.mover(false);
+            }
+            if entrada.key_pressed(KEY_DOWN) || entrada.key_pressed(KEY_S) {
+                menu.mover(true);
+            }
+        }
+        if reiniciar {
+            acao = Some(Acao::Reiniciar);
+        } else if confirmar {
+            acao = Some(Acao::Confirmar);
+        } else if voltar {
+            acao = Some(Acao::Voltar);
+        }
+        // O mouse também confirma no menu, e o gatilho do controle também: no
+        // aparelho não há teclado, e um menu que só responde a `Enter` seria
+        // inoperável no X35H.
+        if acao.is_none()
+            && *tela != Tela::Jogando
+            && (entrada.mouse_down(MOUSE_LEFT) || entrada.gamepad().is_down(BUTTON_SOUTH))
+        {
+            acao = Some(Acao::Confirmar);
+        }
+        // Sem tecla nenhuma a tela pode mudar mesmo assim (a partida acaba
+        // sozinha), então o `processar` roda **todo** quadro.
+        let acao = acao.unwrap_or(Acao::Nenhuma);
+
+        // No menu, o `A` respeita o item em foco (INICIAR ou SAIR); no resto, a
+        // regra é a de `screens::processar`.
+        let resultado = if *tela == Tela::Menu && acao == Acao::Confirmar {
+            menu.confirmar()
+        } else {
+            screens::processar(*tela, acao, estado)
+        };
+        match resultado {
+            Resultado::Sair => break,
+            Resultado::Fica => {}
+            Resultado::Vai(nova) => {
+                if nova == Tela::Jogando && *tela != Tela::Jogando {
+                    reiniciar_partida(
+                        partida,
+                        estado,
+                        hud_estado,
+                        tremor,
+                        &mut arma,
+                        &mut mira_estado,
+                    );
+                    abates = 0;
+                    log::info!("partida iniciada");
+                }
+                log::info!("tela: {:?} -> {:?}", *tela, nova);
+                *tela = nova;
+            }
+        }
+
         // O tiro é resolvido **antes** de a simulação andar este quadro: assim o
         // raio usa a câmera que o jogador está vendo, e não a de 16 ms atrás.
-        let atirar = entrada.mouse_down(MOUSE_LEFT)
-            || entrada.gamepad().is_down(BUTTON_RIGHT_SHOULDER)
-            || entrada.gamepad().is_down(BUTTON_SOUTH)
-            // `--atirar` mantém o gatilho apertado pelo mesmo caminho da tecla:
-            // não há um segundo laço de tiro só para o diagnóstico.
-            || diag.atirar;
+        let atirar = *tela == Tela::Jogando
+            && (entrada.mouse_down(MOUSE_LEFT)
+                || entrada.gamepad().is_down(BUTTON_RIGHT_SHOULDER)
+                || entrada.gamepad().is_down(BUTTON_SOUTH)
+                // `--atirar` mantém o gatilho apertado pelo mesmo caminho da
+                // tecla: não há um segundo laço de tiro só para o diagnóstico.
+                || diag.atirar);
         if atirar && !estado.acabou() {
             let origem = camera3d.position;
             let direcao = direcao_da_camera(&camera3d);
@@ -779,6 +952,11 @@ fn laco(
             if let Some(atingido) = resultado {
                 abates += 1;
                 estado.pontuar(PONTOS_POR_ABATE);
+                // A cota da onda é quem decide a vitória; sem isto `wave` nunca
+                // saía de 1 e a tela de vitória era inalcançável.
+                if let Some(onda) = estado.registrou_abate() {
+                    log::info!("onda {onda} começou ({} abates)", cota_da_onda(onda));
+                }
                 // O `+100` nasce onde o tiro bateu, projetado com a **mesma**
                 // câmera do desenho deste quadro.
                 reagir_ao_abate(
@@ -814,7 +992,13 @@ fn laco(
             log::info!("volume: {nivel}% (tecla)");
         }
 
-        let passos = laco.advance(delta);
+        // Pular o `advance` já congela o acumulador: ele só cresce dentro dele,
+        // então o tempo do menu não é despejado quando a partida começa.
+        let passos = if tela.simula() {
+            laco.advance(delta)
+        } else {
+            0
+        };
         for _ in 0..passos {
             atualizar_camera(camera, entrada, laco.fixed_timestep());
             arma.atualizar(laco.fixed_timestep());
@@ -842,12 +1026,20 @@ fn laco(
         render.begin_frame(janela);
         arena.desenhar(render, &camera3d)?;
         inimigos.desenhar(render, partida, &camera3d)?;
-        if diag.mira {
+        // A mira é do jogo: no menu e no fim ela apontaria para lugar nenhum.
+        if diag.mira && *tela == Tela::Jogando {
             mira.ajustar(render, (largura, altura));
             mira.desenhar(render, mira_estado, (largura, altura))?;
         }
         if diag.hud {
-            hud_gl.desenhar(render, estado, hud_estado, (largura, altura))?;
+            // Uma cena por tela: o menu não mostra vida e o fim não mostra onda
+            // corrente — cada uma desenha o que faz sentido ali.
+            let cena = match *tela {
+                Tela::Menu => hud::menu(menu, hud::Tela::new(largura, altura)),
+                Tela::Jogando => hud::cena(estado, hud_estado, hud::Tela::new(largura, altura)),
+                Tela::Fim { venceu } => hud::fim(venceu, estado, hud::Tela::new(largura, altura)),
+            };
+            hud_gl.desenhar(render, cena, (largura, altura))?;
         }
 
         // A captura tem de acontecer ANTES da troca de buffers: depois do

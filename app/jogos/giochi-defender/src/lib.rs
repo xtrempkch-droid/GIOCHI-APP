@@ -11,6 +11,7 @@ pub mod audio;
 pub mod bench;
 pub mod diag;
 pub mod gameplay;
+pub mod screens;
 pub mod state;
 pub mod ui;
 pub mod utils;

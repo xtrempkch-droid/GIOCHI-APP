@@ -1,17 +1,17 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 2c — áudio sintetizado e tremor de câmera
+## Último bloco concluído: 3a — telas de menu, vitória e derrota
 Data: 2026-11-10
 
 Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão),
-**1c** (polimento e performance), **2a** (arma e mira), **2b** (HUD) e **2c**
-(áudio e resposta ao dano). **Dia 2 do plano fechado.**
+**1c** (polimento e performance), **2a** (arma e mira), **2b** (HUD), **2c**
+(áudio e resposta ao dano) e **3a** (telas e reinício). **Dia 3 começado.**
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **220/220** em x86_64
+- [x] `cargo test` — **254/254** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com
@@ -404,11 +404,65 @@ não tem `amixer` — o controle degrada para "indisponível", avisa **uma vez**
 jogo segue. O som continua seguindo o volume do sistema; o que não funciona ali é
 a tecla dentro do jogo.
 
-## Próximo bloco: 3a — telas de menu, vitória e derrota
+## Bloco 3a — telas, reinício e a vitória que não existia
 
-Hoje o fim de partida é um aviso sobre a cena; o `R` para reiniciar não existe e
-não há menu inicial. O 3a transforma isso em cenas (`Screen::Menu`, `Play`,
-`GameOver`, `Victory`) com transição e reinício de verdade.
+O jogo abria jogando e terminava com um aviso que sumia. Agora há três telas
+explícitas e uma função pura que decide a transição.
+
+| Verificação | Resultado medido no X35H |
+| --- | --- |
+| Menu inicial | desenha título, `INICIAR`/`SAIR` e o marcador de foco — 83 cores |
+| `A` no menu começa a partida | `tela: Menu -> Jogando`, com `partida iniciada` |
+| `↓` + `A` no `SAIR` fecha o jogo | parou no quadro 2 de 30 (saiu cedo, não esperou os quadros) |
+| `B` do controle volta ao menu | `tela: Jogando -> Menu` |
+| `R` no fim recomeça | `tela: Fim { venceu: false } -> Jogando` |
+| Perder sem tocar em nada | `tela: Jogando -> Fim { venceu: false }` **sozinho** |
+| `A` durante a partida **não** recomeça | zero transições — em jogo ele orbita a câmera |
+| Custo | 49,3 fps, trabalho 4,72 ms — igual ao 2c |
+
+### A vitória era inalcançável
+
+Achado ao ligar a tela de vitória: **`state.wave` nunca era escrito em jogo**.
+O `venceu()` existia, o teste dele passava, e nenhum caminho chegava lá — a HUD
+mostrava `ONDA 1/3` para sempre e a tela de vitória seria código morto.
+
+Agora a onda avança por **cota de abates** (`cota_da_onda`: 8 na primeira, +4 por
+onda), com `GameState::registrou_abate() -> Option<u32>`. O `Option` importa: é o
+que permite o som e o aviso dispararem **na virada** sem o chamador repetir a
+condição.
+
+### O que o `R` precisava, e não era só o placar
+
+`reiniciar_partida` devolve ao início **sete** coisas: estado, pool de cubos,
+temporizador de spawn, sorteio, cadência da arma, efeitos da HUD e tremor. Zerar
+só o placar deixaria a segunda partida começando com os cubos da primeira no ar —
+e a vida cairia no primeiro segundo de um jogo "novo".
+
+### `--teclas`: o diagnóstico que prova o caminho real
+
+`--teclas a`, `--teclas down,a`, `--teclas backspace` empurram eventos na fila do
+**SDL**, que percorrem o caminho inteiro: fila → `poll_events` da engine →
+`Input` → `key_pressed`. Um atalho que marcasse o estado direto testaria a minha
+suposição, não o jogo.
+
+Foi ele que pegou dois defeitos reais:
+
+1. **o `A` não estava mapeado como confirmação** — o menu imprimia `tela inicial:
+   Menu` e não saía do lugar. Sem o teste, a primeira coisa que o dono diria é
+   "apertei A e nada aconteceu".
+2. **a transição para o fim só acontecia com input** — quem perdesse e tirasse a
+   mão do controle ficaria olhando a cena com zero vidas. Corrigido com
+   `Acao::Nenhuma`, e o `processar` passou a rodar **todo** quadro.
+
+### Duas decisões de tecla
+
+- **`A` confirma só fora da partida.** Em jogo ele orbita a câmera para a
+  esquerda; reaproveitá-lo faria o jogador recomeçar a partida ao girar a câmera
+  no instante em que as vidas acabam.
+- **`B` é o botão leste do controle**, não uma tecla do teclado: no aparelho não
+  há teclado, e o caminho que o jogador usa é o do controle.
+
+## Próximo bloco: 3b — progressão e dificuldade
 
 ## Bloqueios / pendências
 
@@ -419,8 +473,10 @@ não há menu inicial. O 3a transforma isso em cenas (`Screen::Menu`, `Play`,
   ninguém**: o que está provado é que os cinco `Chunk` carregam no `rk817`, que
   `play` responde OK e que o mixer está a 100 % com o alto-falante ligado. Se
   sai som do alto-falante é a única coisa que o software não mede aqui.
-- **O fim de partida ainda é um aviso sobre a cena**, não uma cena: não há `R`
-  para reiniciar nem menu inicial. É o 3a.
+- **As telas existem desde o 3a**, mas **ninguém tocou no controle**: as
+  transições foram provadas pelo `--teclas`, que injeta eventos SDL de verdade,
+  e não por dedo no aparelho. A diferença que resta é o `code_for` do controle
+  (`BTN_SOUTH`/`BTN_EAST`), que o launcher já exercitou e este jogo não.
 - **`libSDL2_mixer` era o risco, e não é.** O `NEEDED` do binário lista
   `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é usado, e
   biblioteca ausente é falha de **carga** (o processo não sobe), não de áudio.
@@ -461,6 +517,9 @@ não há menu inicial. O 3a transforma isso em cenas (`Screen::Menu`, `Play`,
 - **X35H, 15 cubos + HUD (2b)**: 49,3 fps, trabalho 3,28 → **3,82 ms** (16 % →
   19 %). A HUD custa **0,54 ms** e sai em **2 chamadas** de desenho — 4 com o
   clarão de dano, 7 com o aviso de fim.
+- **X35H, 15 cubos + telas (3a)**: 49,3 fps, trabalho **4,72 ms** (23 %) — as
+  telas custam o mesmo que a HUD: 4 chamadas de desenho contra 2 da partida, e
+  nenhuma delas por quadro.
 - **X35H, 15 cubos + tiro contínuo + som (2c)**: 49,3 fps, trabalho **4,58 ms**
   (23 %); com `--sem-som`, 4,52 ms (22 %). O áudio custa **0,06 ms** — dentro do
   ruído, porque só é chamado no evento. O `p99` sobe de 21,1 para 24,1 ms: a
@@ -538,4 +597,12 @@ não há menu inicial. O 3a transforma isso em cenas (`Screen::Menu`, `Play`,
 16. **A novidade do anúncio é decidida em um lugar só.** `anunciar_onda` e
     `anunciar_fim` devolvem `bool`, e o laço toca o som por esse retorno em vez
     de repetir a condição — duas cópias da regra envelheceriam diferente.
+17. **A tela é um valor, não uma condição.** `Tela::{Menu, Jogando, Fim}` com
+    `screens::processar(tela, acao, estado)` puro e testado; o laço pergunta
+    "onde estou" e "o que fazer com esta tecla" em vez de aninhar `if`s.
+18. **`Acao::Nenhuma` roda todo quadro.** A partida termina sozinha; sem essa
+    ação a tela de fim só aparecia quando o jogador apertava alguma coisa.
+19. **O diagnóstico de teclado injeta eventos no SDL**, não no estado. Um atalho
+    que marcasse `estado` direto testaria a suposição de quem escreveu o teste,
+    não o caminho que o jogador usa.
 

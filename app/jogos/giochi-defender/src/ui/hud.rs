@@ -296,6 +296,178 @@ impl Hud {
     }
 }
 
+/// Cena do **menu** inicial: título, itens e a dica de comando.
+///
+/// Desenhada sobre a arena (a cena 3D continua), então o fundo escuro atrás do
+/// bloco é o que dá contraste para o texto — não há tela preta aqui.
+pub fn menu(menu: &crate::screens::Menu, tela: Tela) -> Cena {
+    let esc = escala(tela) * 2.0;
+    let mut cena = Cena::default();
+
+    let titulo = Texto {
+        conteudo: "GIOCHI DEFENDER".to_string(),
+        x: 0.0,
+        y: tela.altura * 0.24,
+        escala: esc,
+        cor: COR_DESTAQUE,
+    };
+    let titulo = Texto {
+        x: ((tela.largura - titulo.largura()) * 0.5).round(),
+        ..titulo
+    };
+    let subtitulo = Texto {
+        conteudo: "DEFENDA O ASTEROIDE".to_string(),
+        x: 0.0,
+        y: titulo.base() + esc * 0.9,
+        escala: escala(tela),
+        cor: COR_TEXTO,
+    };
+    let subtitulo = Texto {
+        x: ((tela.largura - subtitulo.largura()) * 0.5).round(),
+        ..subtitulo
+    };
+
+    let altura_do_bloco = titulo.altura() + esc * 0.9 + subtitulo.altura();
+    let folga = esc * 2.4;
+    cena.retangulos.push(Retangulo {
+        x: titulo.x - folga,
+        y: titulo.y - folga * 0.7,
+        w: titulo.largura() + 2.0 * folga,
+        h: altura_do_bloco + folga * 1.4,
+        cor: [0.02, 0.03, 0.06, 0.74],
+    });
+    cena.textos.push(titulo);
+    cena.textos.push(subtitulo);
+
+    // Itens, com um marcador no que está em foco.
+    let esc_item = escala(tela) * 1.3;
+    let vao = esc_item * crate::ui::font::ALTURA as f32 * 1.9;
+    let base = tela.altura * 0.58;
+    for (i, item) in [
+        crate::screens::ItemMenu::Iniciar,
+        crate::screens::ItemMenu::Sair,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let em_foco = item == menu.item;
+        let y = base + i as f32 * vao;
+        let rotulo = Texto {
+            conteudo: item.rotulo().to_string(),
+            x: 0.0,
+            y,
+            escala: esc_item,
+            cor: if em_foco { COR_DESTAQUE } else { COR_APAGADA },
+        };
+        let rotulo = Texto {
+            x: ((tela.largura - rotulo.largura()) * 0.5).round(),
+            ..rotulo
+        };
+        if em_foco {
+            // Marcador à esquerda do rótulo: a cor sozinha não distingue para
+            // quem não vê cor, e o marcador é um retângulo de graça.
+            let lado = esc_item * 3.0;
+            cena.retangulos.push(Retangulo {
+                x: rotulo.x - lado * 1.8,
+                y: rotulo.y + (rotulo.altura() - lado) * 0.5,
+                w: lado,
+                h: lado,
+                cor: COR_DESTAQUE,
+            });
+        }
+        cena.textos.push(rotulo);
+    }
+
+    let dica = Texto {
+        conteudo: "A CONFIRMA   B SAI".to_string(),
+        x: 0.0,
+        y: tela.altura - margem(tela) - escala(tela) * crate::ui::font::ALTURA as f32,
+        escala: escala(tela) * 0.8,
+        cor: COR_APAGADA,
+    };
+    cena.textos.push(Texto {
+        x: ((tela.largura - dica.largura()) * 0.5).round(),
+        ..dica
+    });
+
+    cena
+}
+
+/// Cena do **fim de partida**: o resultado, o placar e o que fazer agora.
+///
+/// Diferente do aviso do 2b, esta tela **não some**: ela é o lugar onde o jogador
+/// decide recomeçar ou sair, e um texto que expira deixaria a tela em silêncio.
+pub fn fim(venceu: bool, estado: &GameState, tela: Tela) -> Cena {
+    let esc = escala(tela);
+    let mut cena = Cena::default();
+
+    let titulo = Texto {
+        conteudo: if venceu { "VITORIA" } else { "FIM DE JOGO" }.to_string(),
+        x: 0.0,
+        y: tela.altura * 0.34,
+        escala: esc * 2.2,
+        cor: if venceu { COR_DESTAQUE } else { COR_ALERTA },
+    };
+    let titulo = Texto {
+        x: ((tela.largura - titulo.largura()) * 0.5).round(),
+        ..titulo
+    };
+
+    let folga = esc * 4.0;
+    let bloco = Retangulo {
+        x: titulo.x - folga,
+        y: titulo.y - folga * 0.6,
+        w: titulo.largura() + 2.0 * folga,
+        h: esc * crate::ui::font::ALTURA as f32 * 6.4,
+        cor: [0.02, 0.03, 0.06, 0.80],
+    };
+    let topo_do_texto = titulo.base();
+    cena.retangulos.push(bloco);
+    cena.textos.push(titulo);
+
+    let placar = Texto {
+        conteudo: format!("PONTOS {:06}", estado.score.min(999_999)),
+        x: 0.0,
+        y: topo_do_texto + esc * 1.2,
+        escala: esc * 1.2,
+        cor: COR_TEXTO,
+    };
+    cena.textos.push(Texto {
+        x: ((tela.largura - placar.largura()) * 0.5).round(),
+        ..placar
+    });
+
+    let onda = Texto {
+        conteudo: format!(
+            "ONDA {}/{}",
+            estado.wave.min(crate::state::WAVES_TOTAIS),
+            crate::state::WAVES_TOTAIS
+        ),
+        x: 0.0,
+        y: topo_do_texto + esc * 3.4,
+        escala: esc,
+        cor: COR_APAGADA,
+    };
+    cena.textos.push(Texto {
+        x: ((tela.largura - onda.largura()) * 0.5).round(),
+        ..onda
+    });
+
+    let dica = Texto {
+        conteudo: "A OU R RECOMECA   B MENU".to_string(),
+        x: 0.0,
+        y: tela.altura - margem(tela) - esc * crate::ui::font::ALTURA as f32,
+        escala: esc * 0.8,
+        cor: COR_APAGADA,
+    };
+    cena.textos.push(Texto {
+        x: ((tela.largura - dica.largura()) * 0.5).round(),
+        ..dica
+    });
+
+    cena
+}
+
 /// Monta a cena inteira da HUD para um quadro.
 pub fn cena(estado: &GameState, hud: &Hud, tela: Tela) -> Cena {
     let mut cena = fixos(estado, tela);
@@ -517,6 +689,7 @@ mod tests {
             lives,
             wave,
             paused: false,
+            abates_na_onda: 0,
         }
     }
 

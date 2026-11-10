@@ -50,6 +50,15 @@ OPÇÕES:
     --sem-som             Não carrega nem toca som (para isolar o custo dele).
     --volume N            Aplica N% no Master do ALSA pelo mesmo caminho das
                           teclas de volume, imprime e sai (0 a 100).
+    --menu                Abre no menu inicial (o padrão interativo).
+    --sem-menu            Vai direto para a partida (o padrão quando há
+                          --simular, --alvo, --atirar, --inimigos, --benchmark
+                          ou --quadro, que pressupõem jogo).
+    --tela-inicial NOME   menu | jogo | vitoria | derrota. As duas últimas
+                          começam com o estado já resolvido, para capturar.
+    --teclas LISTA        Empurra teclas na fila do SDL, uma por quadro, antes
+                          de desenhar (ex.: `a`, `down,a`, `r`). É o que permite
+                          provar que o menu e o reinício respondem sem dedo.
     --testar-som          Toca os cinco efeitos em sequência e sai. Roda no
                           aparelho pelo SSH, onde não há como ouvir o PC.
     --atirar              Mantém o gatilho apertado (o cooldown faz a cadência).
@@ -60,6 +69,66 @@ OPÇÕES:
                           testa a reconstrução da mira.
     -h, --ajuda           Esta mensagem.
 ";
+
+/// Teclas que o `--teclas` aceita, e o código SDL de cada uma.
+///
+/// A lista é fechada de propósito: um nome com erro de digitação engolido faria
+/// o diagnóstico "não fazer nada" e parecer que o jogo não responde.
+pub fn teclas_conhecidas() -> Vec<&'static str> {
+    codigo_da_tecla_nome()
+        .map(|(nome, _)| nome)
+        .collect::<Vec<_>>()
+}
+
+/// Nome → código SDL.
+pub fn codigo_da_tecla(nome: &str) -> Option<u32> {
+    codigo_da_tecla_nome()
+        .find(|(n, _)| *n == nome)
+        .map(|(_, codigo)| codigo)
+}
+
+fn codigo_da_tecla_nome() -> impl Iterator<Item = (&'static str, u32)> {
+    [
+        ("a", 97u32),
+        ("b", 98),
+        ("r", 114),
+        ("backspace", 8),
+        ("esc", 27),
+        ("up", 1_073_741_906),
+        ("down", 1_073_741_905),
+        ("enter", 13),
+        ("space", 32),
+        ("volup", 0x4000_0080),
+        ("voldown", 0x4000_0081),
+    ]
+    .into_iter()
+}
+
+/// Onde a execução começa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelaInicial {
+    /// Menu inicial.
+    Menu,
+    /// Direto na partida.
+    Jogo,
+    /// Na tela de vitória, com o estado resolvido.
+    Vitoria,
+    /// Na tela de derrota, com o estado resolvido.
+    Derrota,
+}
+
+impl TelaInicial {
+    /// Interpreta o nome, sem diferenciar maiúsculas.
+    pub fn parse(nome: &str) -> Option<Self> {
+        Some(match nome.trim().to_ascii_lowercase().as_str() {
+            "menu" => TelaInicial::Menu,
+            "jogo" | "jogando" | "play" => TelaInicial::Jogo,
+            "vitoria" | "vitória" | "victory" => TelaInicial::Vitoria,
+            "derrota" | "fim" | "gameover" | "game-over" => TelaInicial::Derrota,
+            _ => return None,
+        })
+    }
+}
 
 /// O que a linha de comando pediu.
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +169,10 @@ pub struct Diag {
     pub testar_som: bool,
     /// Volume a aplicar no sistema e sair.
     pub volume: Option<u8>,
+    /// Tela inicial forçada.
+    pub tela_inicial: Option<TelaInicial>,
+    /// Teclas a injetar, uma por quadro.
+    pub teclas: Vec<String>,
     /// Quantos cubos plantar no eixo da câmera.
     pub alvo: Option<u32>,
     /// Tamanho pedido da janela.
@@ -135,6 +208,8 @@ impl Default for Diag {
             som: true,
             testar_som: false,
             volume: None,
+            tela_inicial: None,
+            teclas: Vec::new(),
             demo_hud: false,
             atirar: false,
             alvo: None,
@@ -145,6 +220,29 @@ impl Default for Diag {
 }
 
 impl Diag {
+    /// A tela em que a execução começa.
+    ///
+    /// Uma flag explícita vence. Sem ela, qualquer diagnóstico que **pressupõe
+    /// uma partida em andamento** começa jogando: sem isso `--alvo 3 --atirar`
+    /// abriria o menu e não atiraria em nada, e todas as capturas do 2a/2b
+    /// passariam a mostrar o título.
+    pub fn tela_inicial(&self) -> TelaInicial {
+        if let Some(tela) = self.tela_inicial {
+            return tela;
+        }
+        let pressupoe_jogo = self.simular.is_some()
+            || self.alvo.is_some()
+            || self.atirar
+            || self.inimigos.is_some()
+            || self.benchmark.is_some()
+            || self.quadro.is_some();
+        if pressupoe_jogo {
+            TelaInicial::Jogo
+        } else {
+            TelaInicial::Menu
+        }
+    }
+
     /// Interpreta os argumentos.
     ///
     /// Argumento desconhecido é **erro**, não aviso: um `--frames=3oo` engolido
@@ -167,6 +265,35 @@ impl Diag {
                 "--sem-hud" => diag.hud = false,
                 "--demo-hud" => diag.demo_hud = true,
                 "--tremor" => diag.tremor = true,
+                "--teclas" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.teclas = valor
+                        .split(',')
+                        .map(|t| t.trim().to_ascii_lowercase())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                    if diag
+                        .teclas
+                        .iter()
+                        .any(|t| !teclas_conhecidas().contains(&t.as_str()))
+                    {
+                        anyhow::bail!(
+                            "--teclas não conhece alguma tecla de '{valor}'; \
+                             use: {}",
+                            teclas_conhecidas().join(", ")
+                        );
+                    }
+                }
+                "--menu" => diag.tela_inicial = Some(TelaInicial::Menu),
+                "--sem-menu" => diag.tela_inicial = Some(TelaInicial::Jogo),
+                "--tela-inicial" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    diag.tela_inicial = Some(TelaInicial::parse(&valor).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--tela-inicial espera menu|jogo|vitoria|derrota, veio '{valor}'"
+                        )
+                    })?);
+                }
                 "--sem-som" => diag.som = false,
                 "--volume" => {
                     let valor = inteiro(&mut argumentos, embutido, &nome)?;
@@ -489,6 +616,71 @@ mod tests {
         // São camadas diferentes: tirar a mira não tira a HUD, e vice-versa.
         assert!(parse(&["--sem-mira"]).unwrap().hud);
         assert!(parse(&["--sem-hud"]).unwrap().mira);
+    }
+
+    #[test]
+    fn a_tela_inicial_vem_do_que_o_comando_pressupoe() {
+        // Sem nada: menu, que é o certo para quem abre o jogo.
+        assert_eq!(parse(&[]).unwrap().tela_inicial(), TelaInicial::Menu);
+        // Qualquer diagnóstico de partida começa jogando.
+        for args in [
+            vec!["--quadro", "/tmp/a.bmp"],
+            vec!["--alvo", "2"],
+            vec!["--atirar"],
+            vec!["--simular", "3"],
+            vec!["--inimigos", "5"],
+            vec!["--benchmark", "60"],
+        ] {
+            assert_eq!(
+                parse(&args).unwrap().tela_inicial(),
+                TelaInicial::Jogo,
+                "{args:?} tinha de começar jogando"
+            );
+        }
+        // E uma flag explícita vence tudo.
+        assert_eq!(
+            parse(&["--alvo", "2", "--menu"]).unwrap().tela_inicial(),
+            TelaInicial::Menu
+        );
+    }
+
+    #[test]
+    fn as_teclas_do_diagnostico_sao_lidas_e_conferidas() {
+        let diag = parse(&["--teclas", "down,a,r"]).unwrap();
+        assert_eq!(diag.teclas, vec!["down", "a", "r"]);
+        assert!(parse(&["--teclas", ""]).unwrap().teclas.is_empty());
+        // Nome desconhecido é erro: engolir faria o diagnóstico "não fazer nada".
+        assert!(parse(&["--teclas", "aa"]).is_err());
+        assert!(parse(&["--teclas", "a,ZZZ"]).is_err());
+    }
+
+    #[test]
+    fn os_codigos_de_tecla_batem_com_o_sdl() {
+        // Os números foram escritos à mão; este teste impede que apodreçam.
+        use sdl2::keyboard::Keycode;
+        assert_eq!(codigo_da_tecla("a"), Some(Keycode::A.into_i32() as u32));
+        assert_eq!(codigo_da_tecla("r"), Some(Keycode::R.into_i32() as u32));
+        assert_eq!(codigo_da_tecla("up"), Some(Keycode::UP.into_i32() as u32));
+        assert_eq!(
+            codigo_da_tecla("voldown"),
+            Some(Keycode::VOLUMEDOWN.into_i32() as u32)
+        );
+        assert_eq!(codigo_da_tecla("inexistente"), None);
+    }
+
+    #[test]
+    fn as_telas_de_captura_sao_lidas() {
+        for (nome, esperado) in [
+            ("menu", TelaInicial::Menu),
+            ("jogo", TelaInicial::Jogo),
+            ("vitoria", TelaInicial::Vitoria),
+            ("derrota", TelaInicial::Derrota),
+            ("GAMEOVER", TelaInicial::Derrota),
+        ] {
+            assert_eq!(TelaInicial::parse(nome), Some(esperado), "'{nome}'");
+        }
+        assert_eq!(TelaInicial::parse("qualquer"), None);
+        assert!(parse(&["--tela-inicial", "xxx"]).is_err());
     }
 
     #[test]

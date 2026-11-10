@@ -8,19 +8,19 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Dia 2 do plano fechado (blocos 1a, 1b, 1c, 2a, 2b e 2c)** — arena com
-iluminação direcional, câmera orbital, inimigos voando para o centro, dano no
-asteroide, **tiro** com mira no centro da tela, **HUD** (vida, onda, pontos,
-`+100`, clarão de dano, aviso de fim), **som sintetizado** em cinco efeitos e
-**tremor de câmera** quando o asteroide leva dano.
+**Blocos 1a, 1b, 1c, 2a, 2b, 2c e 3a fechados** — arena com iluminação
+direcional, câmera orbital, inimigos voando para o centro, **tiro** com mira no
+centro da tela, **HUD** (vida, onda, pontos, `+100`, clarão de dano), **som
+sintetizado** em cinco efeitos, **tremor de câmera** no dano, e **telas** de
+menu, vitória e derrota com reinício.
 
-O que ainda **não** existe são as telas de menu, vitória e derrota como cena
-(3a) — hoje o fim é um aviso sobre a cena e não há `R` para reiniciar. O plano
-dos nove blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
+O jogo tem começo, meio e fim: `INICIAR` no menu, ondas por cota de abates
+(8, 12, 16), vitória ao cumprir as três, e `R` para recomeçar. O plano dos nove
+blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
 [`IDEAS.md`](IDEAS.md).
 
 Medido no aparelho (X35H, 640×480, Mali-G52): **49,3 fps com 15 cubos**, com
-4,58 ms de trabalho por quadro — o teto é o painel, não o jogo. A mira custa
+4,72 ms de trabalho por quadro — o teto é o painel, não o jogo. A mira custa
 **0,19 ms** e **220 px** nos três tamanhos testados; a HUD custa **0,54 ms** e
 sai em **2 chamadas** de desenho. O áudio custa **0,06 ms** por quadro (só é
 chamado no evento) e **não pediu biblioteca nova**: o `NEEDED` continua com as
@@ -43,6 +43,9 @@ cargo run --release
   há `.wav` no pacote.
 - **teclas de volume** — mudam o `Master` do ALSA (o volume do sistema) em
   passos de 5 %, e o valor persiste em `/user/.config/giochi/volume`.
+- **`A` / `Enter` / `Espaço`** — confirma (no menu e no fim)
+- **`B` do controle / `Backspace`** — volta: do jogo ao menu, do fim ao menu
+- **`R`** — recomeça a partida, do jogo ou do fim
 
 O som do jogo **segue o volume do sistema**: o jogo nunca mexe no próprio mixer,
 então quem escala a saída é o `Master` do ALSA.
@@ -98,6 +101,14 @@ SDL_VIDEODRIVER=kmsdrm ./giochi-defender --testar-som
 
 # aplica 40% no Master do ALSA pelo mesmo caminho das teclas de volume
 SDL_VIDEODRIVER=kmsdrm ./giochi-defender --volume 40
+
+# as quatro telas, cada uma sem tocar no controle
+SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial menu --frames 3 --quadro /tmp/m.bmp
+SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial vitoria --frames 3 --quadro /tmp/v.bmp
+
+# as transições de verdade: eventos vão para a fila do SDL, não para o estado
+SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial menu --teclas a --frames 8
+SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial derrota --teclas r --frames 8
 ```
 
 `--alvo N` planta N cubos no eixo da câmera a distâncias seguras (fora da esfera
@@ -174,6 +185,7 @@ src/
 │   └── weapon.rs        cadência, raio de tiro e escolha do alvo
 ├── audio.rs             cinco efeitos sintetizados + carga no mixer
 ├── gameplay/tremor.rs   tremor de câmera (translação determinística)
+├── screens.rs           as telas (menu, jogo, fim) e as transições puras
 ├── ui/
 │   ├── mod.rs           câmera da HUD, matriz de pixel e batelada por cor
 │   ├── font.rs          fonte 5x7 em dados (sem arquivo, sem licença)
@@ -264,9 +276,14 @@ cargo test
 cargo doc --no-deps
 ```
 
-220 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
-layout da HUD, a síntese de som e o tremor são testados sem abrir janela, e a
-captura headless (`--quadro`) é o que prova o desenho.
+254 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+layout da HUD, a síntese de som, o tremor e as **transições de tela** são
+testados sem abrir janela, e a captura headless (`--quadro`) é o que prova o
+desenho.
+
+`--teclas` empurra eventos na fila do **SDL**, então uma tecla percorre o caminho
+de produção inteiro (fila → `poll_events` → `Input` → `key_pressed`). Foi ele que
+pegou o `A` não mapeado no menu e a transição de fim que só acontecia com input.
 
 Dois testes merecem nome, porque cada um pega um defeito que já aconteceu:
 `um_retangulo_de_pixels_ocupa_os_mesmos_pixels` (a escala errada por um fator 2
