@@ -17,7 +17,7 @@ O que existe hoje, verificado:
 | Item | Estado |
 | --- | --- |
 | apps em `apps.json` | **6**: `forge`, `store`, `painel`, `loja` (host) + `launcher` (image) + `cobrinha` (image) |
-| jogos | **2**: `cobrinha` e `neon-drift` — Rust + GIOCHI-ENGINE-3D/SDL2, passo fixo com teto de 75 fps |
+| jogos | **3**: `cobrinha`, `neon-drift` e `giochi-defender` — Rust + GIOCHI-ENGINE-3D/SDL2 |
 | `validate-app.mjs --all` | 8 apps válidos (1 em scaffold) |
 | `tests/run-all.mjs` | 189/189 JS |
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
@@ -5645,3 +5645,115 @@ engine upstream                       3785a33 (phase-18) · crate 3D idêntico a
 X35H (aarch64, KMSDRM)                5 mapas · salto idêntico ao PC ·
                                       desenhos = contador da engine · fps 36,7–36,8
 ```
+
+## 39. GIOCHI Defender: os nove blocos, e o que cada medidor pegou (10/11/2026)
+
+Jogo novo em `app/jogos/giochi-defender`, escrito do zero sobre a engine
+vendorizada. **Nove blocos fechados** — 1a a 3c —, com commit por bloco e gates
+verdes em todos. O detalhe está no `PROGRESS.md` do próprio app; aqui fica o que
+serve para os outros jogos deste repositório.
+
+### O medidor é o que transforma "parece" em número
+
+O bloco 3b não escolheu a dificuldade por intuição: escreveu um **piloto
+automático** com limites humanos (2,4 rad/s de giro, 220 ms de reação, 100 mrad
+de tolerância) e mediu três progressões em cinco sementes cada.
+
+| Progressão | Resultado |
+| --- | --- |
+| 0,78/onda, 1/1/2 cubos | 5/5 vitórias, **5,0 vidas** — sem pressão |
+| 0,62/onda, 1/2/3 cubos | **0/5 vitórias** — injusto |
+| 0,72/onda, 1/2/3 cubos | **4/5, 2,8 vidas** — ganhável e não trivial |
+
+O número que decide é o de **vidas**: 5,0 quer dizer "não havia perigo"; 0,0 quer
+dizer "não há o que fazer". E o resultado é **idêntico no PC e no X35H**, porque
+o piloto é determinístico — o que faz dele um teste de regressão de balanceamento.
+
+**Vale para os outros jogos:** um piloto com limites declarados mede dificuldade
+melhor que qualquer opinião, e roda sem GL em 30 s.
+
+### Quatro defeitos que só a ferramenta certa pegaria
+
+1. **HUD com metade do tamanho** — faltava o fator 2 da projeção (`fov` 90° cobre
+   `2·PROFUNDIDADE`). Marcador pedido com 14 px saía com **7**, e o texto
+   continuava legível porque as posições estavam certas. O teste projeta os
+   cantos com a câmera real.
+2. **Aviso de fim invisível** — `anunciar_fim` era chamado a cada quadro e
+   recriar o aviso zerava a idade: a entrada nunca passava de alfa 0.
+3. **Tremor angular não aparece** — a câmera orbita o alvo, então girar em volta
+   dele mantém o sujeito **centrado**: **1,14 px** medidos em 720p com 1,2°.
+   Translação do olho e do alvo juntos: **10,3 px**.
+4. **O mesmo evento em dois caminhos** — HUD, som e tremor estavam dentro do laço
+   e o `--simular` ficou com cópia só do clarão: 3 danos e `som: 0 efeito(s)`.
+   Hoje `reagir_ao_dano`/`reagir_ao_abate` são a porta única.
+
+### `--teclas`: injetar no SDL, não no estado
+
+`--teclas a` empurra `Event::KeyDown/KeyUp` na fila do **SDL** via
+`Platform::push_event`, então a tecla percorre o caminho de produção: fila →
+`poll_events` → `Input` → `key_pressed`. Um atalho que marcasse o estado testaria
+a suposição de quem escreveu o teste.
+
+Foi ele que pegou o `A` não mapeado no menu e a transição de fim que só acontecia
+com input (quem perde e tira a mão do controle via a cena com zero vidas).
+
+### Som sem arquivo, e o que a engine não tinha
+
+Cinco efeitos sintetizados em código. `Mix_QuickLoad_RAW` exige as amostras no
+formato que o mixer abriu (`S16LSB`, estéreo, 44 100 Hz) e **não converte**, então
+o formato virou contrato com teste.
+
+`AudioSystem::load_sound` só aceitava caminho de arquivo — reportado à equipe da
+engine, e o caminho hoje é `Chunk::from_raw_buffer` direto (a engine leaka o
+`Sdl2MixerContext` de propósito, então o dispositivo já está aberto). O `NEEDED`
+do binário **não ganhou biblioteca**.
+
+### A engine 0.3.1 fechou a correção pedida
+
+O snapshot carregava uma remenda de manifesto: `giochi-engine-3d` declarava
+`giochi-engine` sem `default-features = false`, a unificação ligava o
+`sdl2-bundled` e o cross-compile caía no cmake.
+
+A engine resolveu em `cd94ce6` (0.3.1), encaminhando os dois features do SDL2 e
+guardando a resolução num `scripts/check-features.sh`. O vendor foi re-extraído
+desse commit e hoje é **idêntico à extração oficial** — `diff -rq` contra
+`git archive cd94ce6` dá zero, e a remenda saiu.
+
+### Pacote e ciclo completo
+
+```text
+empacotar  -> 2.271.232 bytes, sha256 66a122fd…
+verificar com a chave DO APARELHO -> ok
+instalar-pacote -> /user/apps/giochi-defender
+catálogo republicado -> 4 apps
+launcher --lancar -> 12729 giochi-defender, ppid=12720 (launcher)
+```
+
+Em `/user/apps` e não `/opt`: o pacote veio pela loja e não faz parte da imagem
+assinada.
+
+### Números
+
+```text
+cargo test                         272/272 (x86_64)
+cargo clippy -D warnings           zero
+X35H (640x480, Mali-G52)           49,3 fps com 15 cubos · trabalho 4,14 ms (20 %)
+                                   mira 0,19 ms · HUD 0,54 ms · som 0,06 ms
+NEEDED do binário                  5 (SDL2, SDL2_mixer, libgcc_s, libm, libc)
+validate-app --all                 9 apps (2 em scaffold)
+tests/run-all.mjs                  199/199 JS
+```
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| botão físico no aparelho | **não exercitado** — transições provadas por eventos SDL injetados |
+| som **ouvido** | o mixer carrega, toca e está a 100 %; se sai som é do alto-falante |
+| FPS no R35S | **não medido** — só o X35H nesta rodada |
+| balanceamento contra pessoa | o piloto tem limites, mas não se distrai |
+
+**E a cota do supervisor é real:** cinco quedas em 60 s põem
+`/run/giochi/launcher-parado` e deixam o aparelho sem interface. A receita de
+recuperação é a do §23 — apagar a flag, matar o órfão e matar o `giochi-init`,
+que o `inittab` respawna com a cota zerada.
