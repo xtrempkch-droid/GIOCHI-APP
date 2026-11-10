@@ -101,6 +101,22 @@ kill -9 no jogo → launcher volta com drm=3 (opengles2)
 
 Antes da correção, o mesmo cenário terminava em `tela inicial: Menu` para sempre.
 
+E o gatilho também foi exercitado no aparelho, com o código real do mapa
+(`r = BTN_TR`, 311) escrito no FIFO aos 3 s:
+
+```text
+alvos plantados no eixo da câmera: 3 de 3
+abate 1..3: +100 (score 300), 14.9 m / 17.4 m ...
+player damaged, lives: 4
+som: 480 efeito(s) tocado(s) na sessão
+500 quadros renderizados · drawable 640x480 · 8.3 s simulados
+```
+
+Ou seja: no R35S, sem dedo, o jogo recebe botão, atira, abate, toma dano, toca
+som e encerra limpo — 0 malhas e 0 shaders sobrando. O único substituído é o
+kernel (FIFO no lugar de `/dev/input/event2`); o mapa, o parser, o estado e o
+jogo são os de produção.
+
 ### Outra coisa que apareceu: o app estava `scaffold`
 
 O `apps.json` ainda dizia `scaffold`, e o gerador de catálogo **exclui scaffold**
@@ -119,7 +135,7 @@ Data: 2026-11-10
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **284/284** em x86_64
+- [x] `cargo test` — **286/286** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com

@@ -306,7 +306,7 @@ cargo test
 cargo doc --no-deps
 ```
 
-284 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+286 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
 layout da HUD, a síntese de som, o tremor, as **transições de tela** e a
 **dificuldade por onda** são
 testados sem abrir janela, e a captura headless (`--quadro`) é o que prova o
