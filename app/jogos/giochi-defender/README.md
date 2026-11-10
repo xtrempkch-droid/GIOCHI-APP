@@ -8,7 +8,7 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Blocos 1a, 1b, 1c, 2a, 2b, 2c, 3a e 3b fechados** — arena com iluminação
+**Os nove blocos do plano estão fechados (1a–3c)** — arena com iluminação
 direcional, câmera orbital, inimigos voando para o centro, **tiro** com mira no
 centro da tela, **HUD** (vida, onda, pontos, `+100`, clarão de dano), **som
 sintetizado** em cinco efeitos, **tremor de câmera** no dano, e **telas** de
@@ -17,7 +17,10 @@ menu, vitória e derrota com reinício.
 O jogo tem começo, meio e fim: `INICIAR` no menu, ondas por cota de abates
 (8, 12, 16), vitória ao cumprir as três, e `R` para recomeçar. Cada onda é mais
 dura que a anterior — spawn mais rápido, cubos mais velozes e mais de um por vez
-(1/2/3) —, e isso foi **medido** com um piloto automático, não estimado. O plano dos nove
+(1/2/3) —, e isso foi **medido** com um piloto automático, não estimado.
+
+O snapshot da engine em `vendor/` é o **0.3.1** (`cd94ce6`) e é idêntico à
+extração oficial — nenhuma correção local. O plano dos nove
 blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
 [`IDEAS.md`](IDEAS.md).
 
@@ -114,6 +117,10 @@ SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial derrota --teclas r --frame
 
 # o balanceamento: um piloto com limites humanos joga cinco partidas
 cargo run --release -- --balanceamento
+
+# empacotar como a loja entrega, e instalar no aparelho
+node ../../../scripts/empacotar.mjs app/jogos/giochi-defender
+bash ../../../scripts/aparelho.sh instalar-pacote ../../../dist/pacotes/giochi-defender.giochi
 ```
 
 `--alvo N` planta N cubos no eixo da câmera a distâncias seguras (fora da esfera

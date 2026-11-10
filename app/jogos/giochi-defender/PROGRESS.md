@@ -1,11 +1,12 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 3b — progressão de dificuldade, medida
+## Último bloco concluído: 3c — engine atualizada, pacote e ciclo completo
 Data: 2026-11-10
 
-Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão),
-**1c** (polimento e performance), **2a** (arma e mira), **2b** (HUD), **2c**
-(áudio e resposta ao dano), **3a** (telas e reinício) e **3b** (progressão).
+**Os nove blocos do plano estão fechados:** **1a** (arena e câmera), **1b**
+(inimigos e colisão), **1c** (polimento e performance), **2a** (arma e mira),
+**2b** (HUD), **2c** (áudio e resposta ao dano), **3a** (telas e reinício),
+**3b** (progressão medida) e **3c** (engine 0.3.1, pacote e ciclo completo).
 
 ## Gates validados
 
@@ -518,7 +519,85 @@ para chegar, o pool enche e o intervalo deixa de significar dificuldade — vira
 `break` silencioso. `a_onda_mais_dificil_ainda_cabe_no_pool` compara o pior caso
 geométrico com a capacidade e exige **folga de 25 %**: a onda 3 ocupa 8,7 de 15.
 
-## Próximo bloco: 3c — fechamento: engine atualizada e pacote
+## Bloco 3c — engine 0.3.1, pacote e o ciclo completo
+
+### A correção que eu tinha pedido à equipe da engine chegou
+
+O snapshot vendorizado carregava **uma correção de manifesto feita à mão**: o
+`giochi-engine-3d` declarava `giochi-engine` sem `default-features = false`, e a
+unificação de features ligava o `sdl2-bundled` mesmo com o jogo pedindo
+`sdl2-system` — o build caía no cmake e ignorava o pkg-config.
+
+A engine resolveu em **`cd94ce6` (0.3.1)**: o `giochi-engine-3d` encaminha os
+dois features do SDL2 explicitamente, com um `scripts/check-features.sh` que
+verifica a resolução no `cargo tree`. O vendor foi re-extraído desse commit e
+agora é **idêntico à extração oficial** (`diff -rq` vazio), sem nenhuma remenda.
+
+| Verificação | Resultado |
+| --- | --- |
+| Vendor idêntico ao commit | `diff -rq` contra `git archive cd94ce6`: **zero diferenças** |
+| `cargo build` / `test` com 0.3.1 | **272/272**, zero aviso |
+| Cross-compile **sem** remenda | aarch64 linkado, `PT_INTERP` presente |
+| `NEEDED` do binário | **5**, os mesmos de antes — a engine nova não pediu biblioteca |
+| Roda no X35H | menu desenhado, 640×480 |
+| Balanceamento no aparelho | **idêntico** ao do PC: 4/5, 2,8 vidas |
+
+### O pacote `.giochi` fecha o caminho da loja
+
+```text
+empacotar → 2.271.232 bytes, sha256 66a122fd…
+verificar com a chave DO APARELHO → ok
+aparelho.sh instalar-pacote → /user/apps/giochi-defender (3 arquivos)
+catálogo republicado → 4 apps
+launcher --lancar giochi-defender → jogo com ppid do launcher
+```
+
+O ciclo medido, lendo `/proc`:
+
+```text
+12720 ppid=12612  launcher-teste      (com DRM)
+12729 ppid=12720  giochi-defender     (com DRM, vindo de /user/apps)
+```
+
+`/user/apps` e não `/opt`: o pacote veio pela loja, então não faz parte da
+imagem assinada — é o que mantém válido o argumento de vender app GPL.
+
+**Verificar com a chave do aparelho e não com uma do PC** importa: na rodada do
+§24 o `instalar-pacote` recusou um pacote que o aparelho aceitava, porque as duas
+pontas usavam chaves de gerações diferentes. Aqui as duas concordam.
+
+### O que o aparelho cobrou de novo
+
+**A cota do supervisor acabou durante o teste** — cinco quedas em 60 s puseram
+`/run/giochi/launcher-parado` (`motivo=quedas_repetidas`, `quedas=5`) e o
+aparelho ficou com um launcher órfão (`ppid=1`, `drm=0`). Recuperado pela
+receita do AGENTS.md §23: apagar a flag, matar o órfão e matar o `giochi-init`,
+que o `inittab` respawna com a cota zerada. Medido depois: launcher **13419**,
+`ppid=13411`, `drm=6`.
+
+É o custo de testar lançamento num aparelho onde o supervisor é o dono do
+processo — e o motivo de o `aparelho.sh` preferir esperar o respawn a forçar.
+
+## Fim do plano: o que existe e o que não existe
+
+| Entregue | Onde |
+| --- | --- |
+| Jogo com começo, meio e fim | menu, 3 ondas medidas, vitória e derrota |
+| Arma com mira, cadência e abate | raycast, 0,15 s, `+100` no ponto do impacto |
+| HUD completa | vida, onda, pontos, clarão, aviso, telas |
+| Som sem arquivo | 5 efeitos sintetizados, sem biblioteca nova no `NEEDED` |
+| Tremor de câmera | translação determinística, 10,3 px medidos |
+| Dificuldade medida | piloto automático com limites humanos, 4/5 vitórias |
+| Engine 0.3.1 | vendor idêntico ao oficial, sem remenda |
+| Pacote e instalação | `.giochi` assinado, instalado em `/user/apps` |
+| Performance no X35H | **49,3 fps** com 15 cubos — o teto é o painel |
+
+| Não entregue, e está declarado | Por quê |
+| --- | --- |
+| Teste com dedo no controle | as transições foram provadas por eventos SDL injetados |
+| Som **ouvido** por alguém | o mixer carrega e toca; se sai som é do alto-falante |
+| FPS no R35S | o jogo roda no X35H; o R35S não foi medido nesta rodada |
+| Balanceamento contra pessoa | o piloto tem limites declarados, mas não se distrai |
 
 ## Bloqueios / pendências
 
