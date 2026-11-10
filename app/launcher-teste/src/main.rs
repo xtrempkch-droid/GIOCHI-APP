@@ -383,7 +383,7 @@ fn principal() -> Result<(), String> {
     if !mapa.is_complete() {
         eprintln!("launcher-teste: aviso — o mapa de botões não está completo");
     }
-    let mut evdev = EvdevInput::open(Path::new("/dev/input"), mapa);
+    let mut evdev = EvdevInput::open(Path::new("/dev/input"), mapa.clone());
     eprintln!(
         "launcher-teste: {} dispositivo(s) de entrada",
         evdev.device_count()
@@ -415,11 +415,14 @@ fn principal() -> Result<(), String> {
             // aparece "funcionando" enquanto nada abre.
             drop(painter);
             match alvo {
-                Some(alvo) => {
-                    if let Err(e) = system::lancar(&alvo) {
-                        recado = Some(e);
+                Some(alvo) => match system::lancar_com_saida(&alvo, Some(&mapa)) {
+                    Ok(system::Lancamento::EncerradoAMao) => {
+                        recado =
+                            Some("jogo encerrado à mão (START+B por 1,5 s)".to_string());
                     }
-                }
+                    Ok(system::Lancamento::Terminou(_)) => {}
+                    Err(e) => recado = Some(e),
+                },
                 None => {
                     recado = Some(
                         "este app não está no catálogo: sem caminho para executar".to_string(),

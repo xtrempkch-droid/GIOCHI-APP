@@ -627,11 +627,15 @@ fn main() -> Result<(), String> {
 
             let mut recado: Option<String> = None;
             match alvo {
-                Some(alvo) => {
-                    if let Err(e) = system::lancar(&alvo) {
-                        recado = Some(e);
+                Some(alvo) => match system::lancar_com_saida(&alvo, Some(&map)) {
+                    Ok(system::Lancamento::EncerradoAMao) => {
+                        recado = Some(
+                            "jogo encerrado à mão (START+B por 1,5 s)".to_string(),
+                        );
                     }
-                }
+                    Ok(system::Lancamento::Terminou(_)) => {}
+                    Err(e) => recado = Some(e),
+                },
                 None => {
                     recado = Some(
                         "este app não está no catálogo do sistema: sem caminho para executar"

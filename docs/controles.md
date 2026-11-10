@@ -122,6 +122,57 @@ Casos de borda cobertos por teste:
 
 No PC os equivalentes de teclado são `[` e `]`.
 
+## 1c. Sair de um jogo que não tem saída: START + B no launcher
+
+Um jogo pode não ter como sair. O caso concreto é o `equilibrium`
+(`ball_balance`, da GIOCHI-ENGINE-3D): ele abre, roda — e o único jeito de parar
+é desligar o aparelho no botão, porque o launcher está em `fork`+`wait` e não lê
+mais nada nesse intervalo.
+
+A saída é do **launcher**, não de cada jogo: o defeito de um app não deveria
+custar uma recompilação de outro repositório, e a trava vale para o próximo jogo
+que esquecer o botão de sair.
+
+| Item | Valor |
+| --- | --- |
+| gesto | **START + B segurados** |
+| duração | **1,5 s** |
+| ação | `SIGKILL` no filho, aviso na tela, volta ao launcher |
+| combinação porque | START é pausa em quase todo jogo; B é o "voltar". Os dois juntos por 1,5 s não é toque perdido |
+
+`SIGKILL` e não `SIGTERM`: o SDL instala um handler que só posta `SDL_QUIT` na
+fila, e um jogo que não bombeia eventos segue vivo segurando o KMSDRM — já
+aconteceu com o launcher-teste. Um jogo que ignora `SIGTERM` não pode ser o que
+prende o aparelho.
+
+### Por que o vigia é uma thread
+
+`Command::status()` bloqueia o processo inteiro. Passou a ser `spawn` +
+`try_wait()` com uma thread lendo `/dev/input` a cada 30 ms: o estado do
+controle **continua** atualizando com o jogo na frente (cada descritor de evdev
+tem a sua própria fila, então dois leitores veem os mesmos eventos).
+
+Sem mapa de botões — ou num aparelho sem `start` no `/etc/giochi/buttons.map` —
+o launcher **avisa** e segue sem o gesto. Adivinhar o código seria pior que não
+oferecer a saída.
+
+### Como isso foi provado sem dedo
+
+O aparelho não tem `/dev/uinput`, e o pedido de prova não pode depender de
+alguém apertar botão. `GIOCHI_INPUT_DIR` aponta o leitor para um diretório com
+um **FIFO** chamado `event0`, e o teste
+`start_sozinho_nao_encerra_e_start_mais_b_encerra` escreve `input_event` de
+verdade (24 bytes: `timeval` + `type` + `code` + `value`) e mede o resultado:
+START sozinho por 1,8 s **não** dispara; START+B por 2 s **dispara**.
+
+A mutação que prova o teste: trocar
+`entrada.start_pressed() && entrada.frame().back` por `entrada.start_pressed()`
+faz o teste reprovar com *"START sozinho encerrou o jogo: é a tecla de pausa de
+quase todo jogo"*.
+
+O que continua sendo afirmação: **o dedo**. A cadeia FIFO → threads → mapa →
+gesto está exercitada; o botão físico do aparelho não foi apertado nesta rodada.
+
 ## 2. Botão de energia
 
 Não é botão de controle: é do PMIC (`rk805 pwrkey`), existe para ligar e
