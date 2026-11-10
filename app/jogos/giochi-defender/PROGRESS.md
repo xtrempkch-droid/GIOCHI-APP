@@ -1,17 +1,17 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 2b — HUD: vida, onda, pontos e efeitos
+## Último bloco concluído: 2c — áudio sintetizado e tremor de câmera
 Data: 2026-11-10
 
 Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão),
-**1c** (polimento e performance), **2a** (arma e mira) e **2b** (HUD). Dia 1
-fechado, dia 2 em andamento.
+**1c** (polimento e performance), **2a** (arma e mira), **2b** (HUD) e **2c**
+(áudio e resposta ao dano). **Dia 2 do plano fechado.**
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **193/193** em x86_64
+- [x] `cargo test` — **220/220** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com
@@ -297,20 +297,80 @@ com o texto flutuante por cima do centro.
   quantizado em 8 degraus.
 - **Não inventa sons nem números flutuantes de dano.** Áudio é o 2c.
 
-## Próximo bloco: 2c — áudio e resposta ao dano
+## Bloco 2c — som sintetizado e tremor, medidos no X35H
 
-Falta som: tiro, abate, dano e fim de jogo. A engine entrega `AudioSystem`
-(`SDL2_mixer`) e o `NEEDED` do binário já o carrega; os arquivos serão gerados
-em código, como todo o resto dos assets — nenhum `.wav` no pacote.
+Cinco efeitos gerados em código (`src/audio.rs`): tiro, abate, dano, onda e fim.
+Nenhum `.wav` no pacote, nenhuma biblioteca nova no `NEEDED`.
+
+| Verificação | Resultado medido |
+| --- | --- |
+| Os cinco efeitos carregam no aparelho | `som: 5 efeito(s) carregado(s) de código` |
+| Os cinco tocam | `--testar-som` → **5 efeito(s) tocado(s)**, `play` sem erro |
+| O caminho até o alto-falante está vivo | `amixer -c 0 sget Master` = **255/255 (100 %, 0,00 dB)**, `Internal Speakers` = **[on]**, codec `rk817` em `card 0` |
+| Custo por quadro | 4,52 → **4,58 ms** (22 % → 23 % do intervalo): **0,06 ms**, dentro do ruído |
+| FPS | **49,3**, igual: o teto segue sendo o painel |
+| Tremor medido em pixel | **10,3 px** de deslocamento do quadro em 720p, 2,8 % dos pixels mudando |
+| Tremor não acumula | olho e alvo transladam juntos; a direção de visão não muda (teste) |
+| Tremor não quebra o limite de pitch | matriz de visão válida nos dois extremos, com tremor de ±0,22 (teste) |
+
+### O que o som tem de diferente dos outros assets
+
+`Mix_QuickLoad_RAW` exige as amostras **no formato que o mixer abriu** —
+`AUDIO_S16LSB`, 2 canais, 44 100 Hz, que é o que a engine pede. Não há conversão
+depois, então o gerador produz estéreo entrelaçado e o teste
+`o_formato_bate_com_o_que_o_mixer_abriu` amarra as três constantes.
+
+`AudioSystem::load_sound` só aceita **caminho de arquivo**. Para tocar bytes em
+memória as saídas eram gravar um temporário em disco ou falar com o
+`sdl2::mixer` direto; a segunda não abre um segundo contexto, porque a engine
+**leaka** o `Sdl2MixerContext` de propósito. **É uma lacuna da engine, e vale
+reportar:** falta um `load_sound_from_bytes`. O `Cargo.toml` já depende do
+`sdl2` direto pelo mesmo motivo no mouse relativo.
+
+### O defeito que o `--simular` revelou: o mesmo evento em dois caminhos
+
+A primeira versão pôs as três consequências do dano — HUD, som e tremor — dentro
+do laço, e o `--simular` ficou com uma cópia só do clarão. Medido no aparelho:
+
+```text
+--simular 12  → 3 danos, "player damaged" três vezes, "som: 0 efeito(s)"
+```
+
+O diagnóstico mostrava o dano e o jogo ficava em silêncio. É a mesma família do
+`A — Jogar` do launcher: **a consequência estava escrita em dois lugares**, e um
+deles envelheceu. Agora `reagir_ao_dano` e `reagir_ao_abate` são as únicas portas,
+e os dois caminhos chamam a mesma função. Medido depois: `--simular 12` →
+**3 efeito(s) tocado(s)**.
+
+### O tremor: a primeira versão não aparecia
+
+Ele gemia `yaw`/`pitch`. Como a câmera orbita o alvo, girar em volta dele
+**mantém o asteroide centrado** e o quadro quase não muda — medido: o centroide
+da rocha andou **1,14 px** em 720p com 1,2° de tremor.
+
+Trocado por translação do olho **e** do alvo juntos: o quadro inteiro desliza, a
+direção de visão não muda e o efeito mede **10,3 px**, nove vezes mais. A
+amplitude passou a ser em unidades de mundo (0,22), e o teste
+`a_amplitude_virá_poucos_pixels_na_tela` converte para pixel nos dois painéis
+para o número não voltar a ser arbitrário.
+
+## Próximo bloco: 3a — telas de menu, vitória e derrota
+
+Hoje o fim de partida é um aviso sobre a cena; o `R` para reiniciar não existe e
+não há menu inicial. O 3a transforma isso em cenas (`Screen::Menu`, `Play`,
+`GameOver`, `Victory`) com transição e reinício de verdade.
 
 ## Bloqueios / pendências
 
 - **ARM64 testado** desde o 1c: o binário roda no X35H por KMSDRM e a medição
   está na seção do 1c. O que continua sem número no aparelho é só o custo de
   GPU sem vblank, e isso é limitação do driver (ver abaixo).
-- **O feedback na tela existe desde o 2b**: vida, onda, pontos, `+100`, clarão
-  de dano e o aviso de fim. O que falta é **som** (2c) e as telas de menu/derrota
-  como cena (3a) — hoje o fim é um aviso sobre a cena, não uma cena.
+- **Som e resposta ao dano existem desde o 2c**, mas **não foram ouvidos por
+  ninguém**: o que está provado é que os cinco `Chunk` carregam no `rk817`, que
+  `play` responde OK e que o mixer está a 100 % com o alto-falante ligado. Se
+  sai som do alto-falante é a única coisa que o software não mede aqui.
+- **O fim de partida ainda é um aviso sobre a cena**, não uma cena: não há `R`
+  para reiniciar nem menu inicial. É o 3a.
 - **`libSDL2_mixer` era o risco, e não é.** O `NEEDED` do binário lista
   `libSDL2_mixer-2.0.so.0` porque o `AudioSystem` da engine é usado, e
   biblioteca ausente é falha de **carga** (o processo não sobe), não de áudio.
@@ -351,6 +411,11 @@ em código, como todo o resto dos assets — nenhum `.wav` no pacote.
 - **X35H, 15 cubos + HUD (2b)**: 49,3 fps, trabalho 3,28 → **3,82 ms** (16 % →
   19 %). A HUD custa **0,54 ms** e sai em **2 chamadas** de desenho — 4 com o
   clarão de dano, 7 com o aviso de fim.
+- **X35H, 15 cubos + tiro contínuo + som (2c)**: 49,3 fps, trabalho **4,58 ms**
+  (23 %); com `--sem-som`, 4,52 ms (22 %). O áudio custa **0,06 ms** — dentro do
+  ruído, porque só é chamado no evento. O `p99` sobe de 21,1 para 24,1 ms: a
+  thread do mixer do `SDL_mixer` concorre com o quadro, e isso é visível no pior
+  caso mesmo com a mediana intacta.
 - **PC (Radeon RX 580, 1280×720, `offscreen`)**: 15 cubos, 0,05 ms de intervalo —
   sem vblank o número é limite superior de CPU e não serve como FPS do jogo.
 - **Simulação (sem GL)**: 0,28 µs por quadro com 15 cubos — 0,00 % do orçamento.
@@ -414,4 +479,13 @@ em código, como todo o resto dos assets — nenhum `.wav` no pacote.
 13. **A escala da HUD vem do menor lado da tela**, não da altura. Num painel
     retrato (720×1280) escalar pela altura dava letra de 37 px e os três blocos
     do topo se cruzavam.
+14. **O som é sintetizado e carregado por `from_raw_buffer`.** Nenhum arquivo,
+    nenhuma licença, e nenhuma biblioteca nova no `NEEDED`. O preço é o formato
+    do mixer virar contrato — amarrado por teste.
+15. **O tremor de câmera é translação, não giro.** Girar em volta do alvo
+    mantém o alvo centrado e o efeito não aparece (medido: 1,14 px contra
+    10,3 px). Olho e alvo andam juntos, então a direção de visão não muda.
+16. **A novidade do anúncio é decidida em um lugar só.** `anunciar_onda` e
+    `anunciar_fim` devolvem `bool`, e o laço toca o som por esse retorno em vez
+    de repetir a condição — duas cópias da regra envelheceriam diferente.
 

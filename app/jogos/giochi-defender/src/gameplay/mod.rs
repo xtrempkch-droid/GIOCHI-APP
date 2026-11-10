@@ -6,4 +6,5 @@ pub mod collision;
 pub mod enemy;
 pub mod enemy_pool;
 pub mod partida;
+pub mod tremor;
 pub mod weapon;

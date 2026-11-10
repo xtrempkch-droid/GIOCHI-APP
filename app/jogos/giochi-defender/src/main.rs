@@ -37,11 +37,13 @@ use giochi_engine_3d::render3d::{MeshHandle, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::RenderContext3D;
 
+use giochi_defender::audio::{Som, Sons};
 use giochi_defender::bench::Benchmark;
 use giochi_defender::diag::{self, Diag};
 use giochi_defender::gameplay::arena::{self, Arena};
 use giochi_defender::gameplay::camera::OrbitalCamera;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
+use giochi_defender::gameplay::tremor::Tremor;
 use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
 use giochi_defender::state::{GameState, WAVES_TOTAIS};
 use giochi_defender::ui::hud::{self, Hud};
@@ -129,6 +131,18 @@ fn executar(diag: Diag) -> Result<()> {
     let mut entrada = Input::new(&plataforma);
     // R6: áudio quebrado é silêncio com aviso, nunca `panic`.
     let audio = iniciar_audio(&plataforma);
+    // Os sons são sintetizados aqui e carregados por `from_raw_buffer`: o mixer
+    // já está aberto pela engine, e o `AudioSystem::load_sound` só aceita
+    // caminho de arquivo. Ver `src/audio.rs`.
+    let mut sons = if diag.som {
+        Sons::carregar(audio.is_available())
+    } else {
+        log::info!("som desligado por --sem-som");
+        Sons::mudo()
+    };
+    if diag.testar_som {
+        tocar_todos(&mut sons);
+    }
 
     if diag.mouse_relativo {
         prender_cursor(&plataforma);
@@ -154,6 +168,10 @@ fn executar(diag: Diag) -> Result<()> {
     let mut mira = MiraGl::new(&mut render, (largura_inicial, altura_inicial))?;
     let mut hud_gl = HudGl::new(&mut render)?;
     let mut camera = OrbitalCamera::new();
+    let mut tremor = Tremor::novo();
+    if diag.tremor {
+        tremor.sacudir_dano();
+    }
     aplicar_preset(&mut camera, &diag);
     let mut estado = GameState::new();
     let mut partida = Partida::new(diag.semente);
@@ -206,13 +224,13 @@ fn executar(diag: Diag) -> Result<()> {
     // captura headless só mostraria a arena vazia, e a simulação de inimigos
     // ficaria sem nenhuma prova que não dependesse de alguém olhar a tela.
     if let Some(segundos) = diag.simular.filter(|valor| *valor > 0.0) {
-        // O clarão de dano é acendido pela **mesma** regra do laço (mudança em
-        // `derrotas`), e não por um caminho só do diagnóstico: sem isso a captura
-        // depois de `--simular` mostraria uma HUD que nunca levou dano.
+        // As consequências do dano passam pela **mesma** função do laço: sem
+        // isso a captura depois de `--simular` mostraria uma HUD que nunca levou
+        // dano, e o `--testar-som` seria o único jeito de ouvir o som de dano.
         let derrotas_antes = partida.derrotas();
         partida.atualizar(segundos, &mut estado);
-        if partida.derrotas() > derrotas_antes {
-            hud_estado.levou_dano();
+        for _ in derrotas_antes..partida.derrotas() {
+            reagir_ao_dano(&mut hud_estado, &mut sons, &mut tremor);
         }
         log::info!(
             "simulados {segundos:.1}s: {} inimigo(s) no ar, {} vida(s), {} derrota(s)",
@@ -250,6 +268,8 @@ fn executar(diag: Diag) -> Result<()> {
         &inimigos,
         &mut mira,
         &mut hud_gl,
+        &mut sons,
+        &mut tremor,
         &mut camera,
         &mut partida,
         &mut estado,
@@ -269,6 +289,12 @@ fn executar(diag: Diag) -> Result<()> {
 
     // O áudio é solto depois do laço para o mixer não segurar o dispositivo
     // enquanto o processo termina.
+    log::info!(
+        "som: {} efeito(s) tocado(s) na sessão{}",
+        sons.tocados(),
+        if sons.esta_mudo() { " (mudo)" } else { "" }
+    );
+    drop(sons);
     drop(audio);
 
     resultado
@@ -301,6 +327,70 @@ fn iniciar_audio(plataforma: &Platform) -> AudioSystem {
             AudioSystem::silent()
         }
     }
+}
+
+/// Tudo o que um dano no asteroide provoca, num lugar só.
+///
+/// Existe porque o dano acontece em **dois** caminhos — o laço e o `--simular` —
+/// e a primeira versão pôs HUD, som e tremor em cada um. O `--simular` ficou sem
+/// som e sem tremor, e o sintoma foi "o diagnóstico mostra o dano mas não toca
+/// nada". Uma função para as três consequências torna a divergência impossível.
+fn reagir_ao_dano(hud_estado: &mut Hud, sons: &mut Sons, tremor: &mut Tremor) {
+    hud_estado.levou_dano();
+    sons.tocar(Som::Dano);
+    tremor.sacudir_dano();
+}
+
+/// Onde o abate aconteceu e com que câmera o desenho do quadro vai ser feito.
+///
+/// Agrupado porque são cinco valores que só fazem sentido juntos, e porque uma
+/// função de oito parâmetros posicionais é fácil de chamar na ordem errada — a
+/// troca de `tela` com `posicao` compilaria.
+struct AlvoDoAbate<'a> {
+    mira: &'a mut Mira,
+    camera: &'a Camera3D,
+    tela: (u32, u32),
+    posicao: Vec3,
+    pontos: u32,
+}
+
+/// Tudo o que um abate provoca. Ver [`reagir_ao_dano`].
+fn reagir_ao_abate(
+    hud_estado: &mut Hud,
+    sons: &mut Sons,
+    tremor: &mut Tremor,
+    alvo: AlvoDoAbate<'_>,
+) {
+    alvo.mira.acertou();
+    sons.tocar(Som::Abate);
+    tremor.sacudir_abate();
+    let (px, py) = projetar(alvo.camera, alvo.posicao, alvo.tela);
+    hud_estado.abateu(px, py, alvo.pontos);
+}
+
+/// Toca os cinco efeitos em sequência, com uma pausa entre eles.
+///
+/// Existe porque **ouvir** o som do aparelho não é possível por SSH, e sem um
+/// comando que toque cada efeito o diagnóstico no console vira suposição. Cada
+/// linha impressa é o que o mixer respondeu, e a pausa é o que permite distinguir
+/// um som do outro de fora.
+fn tocar_todos(sons: &mut Sons) {
+    if sons.esta_mudo() {
+        log::warn!("--testar-som: sem dispositivo de áudio; nada a tocar");
+        return;
+    }
+    for som in Som::TODOS {
+        let inicio = Instant::now();
+        sons.tocar(som);
+        log::info!(
+            "som '{}': {:.0} ms de amostra, {:.1} ms de chamada",
+            som.nome(),
+            som.duracao() * 1000.0,
+            inicio.elapsed().as_secs_f32() * 1000.0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(650));
+    }
+    log::info!("--testar-som: {} efeito(s) tocado(s)", sons.tocados());
 }
 
 /// Prende o cursor no centro da janela, para a câmera relativa.
@@ -570,6 +660,8 @@ fn laco(
     inimigos: &Inimigos,
     mira: &mut MiraGl,
     hud_gl: &mut HudGl,
+    sons: &mut Sons,
+    tremor: &mut Tremor,
     camera: &mut OrbitalCamera,
     partida: &mut Partida,
     estado: &mut GameState,
@@ -633,7 +725,7 @@ fn laco(
         };
 
         let (largura, altura) = janela.drawable_size();
-        let camera3d: Camera3D = camera.camera(largura, altura);
+        let camera3d: Camera3D = camera.camera_com_tremor(largura, altura, tremor.deslocamento());
 
         // O tiro é resolvido **antes** de a simulação andar este quadro: assim o
         // raio usa a câmera que o jogador está vendo, e não a de 16 ms atrás.
@@ -646,14 +738,31 @@ fn laco(
         if atirar && !estado.acabou() {
             let origem = camera3d.position;
             let direcao = direcao_da_camera(&camera3d);
-            if let Some(atingido) = partida.atirar(&mut arma, origem, direcao) {
+            let pronta_antes = arma.pronta();
+            let resultado = partida.atirar(&mut arma, origem, direcao);
+            // O som é do **disparo**, não do acerto: sai mesmo quando o tiro
+            // passa longe. Mas só quando a cadência deixou atirar — o gatilho
+            // apertado não pode virar metralhadora de som.
+            if pronta_antes {
+                sons.tocar(Som::Tiro);
+            }
+            if let Some(atingido) = resultado {
                 abates += 1;
                 estado.pontuar(PONTOS_POR_ABATE);
-                mira_estado.acertou();
                 // O `+100` nasce onde o tiro bateu, projetado com a **mesma**
                 // câmera do desenho deste quadro.
-                let (px, py) = projetar(&camera3d, atingido.posicao, (largura, altura));
-                hud_estado.abateu(px, py, PONTOS_POR_ABATE);
+                reagir_ao_abate(
+                    hud_estado,
+                    sons,
+                    tremor,
+                    AlvoDoAbate {
+                        mira: &mut mira_estado,
+                        camera: &camera3d,
+                        tela: (largura, altura),
+                        posicao: atingido.posicao,
+                        pontos: PONTOS_POR_ABATE,
+                    },
+                );
                 log::info!(
                     "abate {}: +{PONTOS_POR_ABATE} (score {}), {:.1} m",
                     abates,
@@ -669,17 +778,23 @@ fn laco(
             arma.atualizar(laco.fixed_timestep());
             mira_estado.atualizar(laco.fixed_timestep());
             hud_estado.atualizar(laco.fixed_timestep());
+            tremor.atualizar(laco.fixed_timestep());
             let derrotas_antes = partida.derrotas();
             partida.atualizar(laco.fixed_timestep(), estado);
             if partida.derrotas() > derrotas_antes {
-                hud_estado.levou_dano();
+                reagir_ao_dano(hud_estado, sons, tremor);
             }
         }
 
         // A onda e o fim são anunciados pelo **estado**, uma vez por mudança.
-        hud_estado.anunciar_onda(estado.wave);
-        if estado.acabou() || estado.venceu() {
-            hud_estado.anunciar_fim(estado.venceu());
+        // O `Hud` é quem decide se é novidade (o aviso é idempotente), então o
+        // som segue a mesma decisão em vez de repetir a condição — duas cópias
+        // da regra envelheceriam diferente.
+        if hud_estado.anunciar_onda(estado.wave) {
+            sons.tocar(Som::Onda);
+        }
+        if (estado.acabou() || estado.venceu()) && hud_estado.anunciar_fim(estado.venceu()) {
+            sons.tocar(Som::Fim);
         }
 
         render.begin_frame(janela);

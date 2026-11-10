@@ -223,10 +223,14 @@ impl Hud {
         self.dano = VIDA_DANO;
     }
 
-    /// Anuncia uma onda, uma vez por valor.
-    pub fn anunciar_onda(&mut self, onda: u32) {
+    /// Anuncia uma onda, uma vez por valor. Devolve `true` quando anunciou.
+    ///
+    /// O `bool` existe para o som: quem toca a fanfarra é o laço, e ele precisa
+    /// da **mesma** decisão de "é novidade" que o desenho. Repetir a condição
+    /// (`onda != anunciada`) no chamador criaria duas cópias da regra.
+    pub fn anunciar_onda(&mut self, onda: u32) -> bool {
         if onda == self.onda_anunciada {
-            return;
+            return false;
         }
         self.onda_anunciada = onda;
         self.aviso = Some(Aviso {
@@ -234,6 +238,7 @@ impl Hud {
             idade: 0.0,
             vida: VIDA_AVISO,
         });
+        true
     }
 
     /// Anuncia o fim da partida (vitória ou derrota).
@@ -242,10 +247,10 @@ impl Hud {
     /// enquanto a partida está acabada, e recriar o aviso a cada chamada zerava a
     /// idade — a animação de entrada nunca terminava e o aviso ficava com alfa 0,
     /// ou seja, invisível. O sintoma era "o jogo acaba e a tela não diz nada".
-    pub fn anunciar_fim(&mut self, venceu: bool) {
+    pub fn anunciar_fim(&mut self, venceu: bool) -> bool {
         let texto = if venceu { "VITORIA" } else { "FIM DE JOGO" };
         if self.aviso.as_ref().is_some_and(|a| a.texto == texto) {
-            return;
+            return false;
         }
         // Um aviso de fim não expira: quem decide voltar é o jogador, e a tela
         // não pode ficar em silêncio esperando.
@@ -254,6 +259,7 @@ impl Hud {
             idade: 0.0,
             vida: f32::INFINITY,
         });
+        true
     }
 
     /// Faz o tempo passar nos efeitos.
@@ -734,13 +740,13 @@ mod tests {
     fn o_aviso_de_onda_dispara_uma_vez_por_onda() {
         let tela = Tela::new(640, 480);
         let mut hud = Hud::new();
-        hud.anunciar_onda(1);
+        assert!(!hud.anunciar_onda(1));
         assert!(
             hud.aviso.is_none(),
             "a wave 1 é onde a partida começa; anunciá-la é ruído"
         );
 
-        hud.anunciar_onda(2);
+        assert!(hud.anunciar_onda(2), "a wave 2 é novidade");
         let cena = efeitos(&estado_com(0, 5, 2), &hud, tela);
         assert_eq!(cena.textos[0].conteudo, "ONDA 2");
         // Uma onda sem aviso de fim não mostra o placar: ele já está no canto.
@@ -749,15 +755,18 @@ mod tests {
         // Repetir a mesma onda não reanima o aviso.
         hud.atualizar(VIDA_AVISO);
         assert!(hud.aviso.is_none());
-        hud.anunciar_onda(2);
-        assert!(hud.aviso.is_none(), "wave repetida não anuncia de novo");
+        assert!(
+            !hud.anunciar_onda(2),
+            "wave repetida não anuncia de novo (nem toca som)"
+        );
+        assert!(hud.aviso.is_none());
     }
 
     #[test]
     fn o_aviso_de_fim_nao_expira_e_mostra_o_placar() {
         let tela = Tela::new(640, 480);
         let mut hud = Hud::new();
-        hud.anunciar_fim(false);
+        assert!(hud.anunciar_fim(false));
         hud.atualizar(60.0);
         let cena = efeitos(&estado_com(1_700, 0, 2), &hud, tela);
         assert_eq!(cena.textos[0].conteudo, "FIM DE JOGO");
@@ -772,10 +781,10 @@ mod tests {
         // passava de alfa 0 — o aviso existia e não aparecia.
         let tela = Tela::new(640, 480);
         let mut hud = Hud::new();
-        hud.anunciar_fim(false);
+        assert!(hud.anunciar_fim(false));
         hud.atualizar(0.5);
-        hud.anunciar_fim(false);
-        hud.anunciar_fim(false);
+        assert!(!hud.anunciar_fim(false), "o segundo anúncio não é novidade");
+        assert!(!hud.anunciar_fim(false));
         let cena = efeitos(&estado_com(100, 0, 1), &hud, tela);
         assert!(
             cena.textos[0].cor[3] > 0.9,
@@ -788,7 +797,7 @@ mod tests {
     fn a_vitoria_tem_texto_proprio() {
         let tela = Tela::new(640, 480);
         let mut hud = Hud::new();
-        hud.anunciar_fim(true);
+        assert!(hud.anunciar_fim(true));
         let cena = efeitos(&estado_com(3_000, 3, WAVES_TOTAIS + 1), &hud, tela);
         assert_eq!(cena.textos[0].conteudo, "VITORIA");
     }

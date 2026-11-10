@@ -8,20 +8,23 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Blocos 1a, 1b, 1c, 2a e 2b fechados** — arena com iluminação direcional,
-câmera orbital, inimigos voando para o centro, dano no asteroide, **tiro** com
-mira no centro da tela, e **HUD**: vida, onda, pontos, `+100` flutuando no
-abate, clarão de dano nas bordas e o aviso de fim de partida.
+**Dia 2 do plano fechado (blocos 1a, 1b, 1c, 2a, 2b e 2c)** — arena com
+iluminação direcional, câmera orbital, inimigos voando para o centro, dano no
+asteroide, **tiro** com mira no centro da tela, **HUD** (vida, onda, pontos,
+`+100`, clarão de dano, aviso de fim), **som sintetizado** em cinco efeitos e
+**tremor de câmera** quando o asteroide leva dano.
 
-O que ainda **não** existe é som (2c) e as telas de menu/derrota como cena (3a) —
-hoje o fim é um aviso sobre a cena. O plano dos nove blocos está em
-[`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
+O que ainda **não** existe são as telas de menu, vitória e derrota como cena
+(3a) — hoje o fim é um aviso sobre a cena e não há `R` para reiniciar. O plano
+dos nove blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
 [`IDEAS.md`](IDEAS.md).
 
 Medido no aparelho (X35H, 640×480, Mali-G52): **49,3 fps com 15 cubos**, com
-3,82 ms de trabalho por quadro — o teto é o painel, não o jogo. A mira custa
+4,58 ms de trabalho por quadro — o teto é o painel, não o jogo. A mira custa
 **0,19 ms** e **220 px** nos três tamanhos testados; a HUD custa **0,54 ms** e
-sai em **2 chamadas** de desenho.
+sai em **2 chamadas** de desenho. O áudio custa **0,06 ms** por quadro (só é
+chamado no evento) e **não pediu biblioteca nova**: o `NEEDED` continua com as
+mesmas cinco.
 
 Quadro do aparelho com a HUD em
 [`docs/imagens/giochi-defender-hud-x35h.png`](../../../docs/imagens/giochi-defender-hud-x35h.png),
@@ -36,6 +39,8 @@ cargo run --release
 
 - **mouse** — orbita a câmera
 - **botão esquerdo do mouse / `RB` / `A` do controle** — atira
+- **som** — cinco efeitos gerados em código: tiro, abate, dano, onda e fim. Não
+  há `.wav` no pacote.
 
 A HUD mostra **VIDA** (cinco marcadores que se apagam), **ONDA n/3** e
 **PONTOS** no topo. Cada abate nasce como `+100` no ponto do impacto, o dano no
@@ -79,6 +84,12 @@ SDL_VIDEODRIVER=offscreen cargo run -- --demo-hud --frames 3 --quadro /tmp/hud.b
 
 # a HUD de uma partida perdida, sem esperar 45 s na tela
 SDL_VIDEODRIVER=offscreen cargo run -- --simular 45 --frames 2 --quadro /tmp/fim.bmp
+
+# a câmera sacudida, sem esperar um cubo acertar o asteroide
+SDL_VIDEODRIVER=offscreen cargo run -- --tremor --frames 5 --quadro /tmp/tremor.bmp
+
+# toca os cinco efeitos e sai — é assim que se testa som no aparelho por SSH
+SDL_VIDEODRIVER=kmsdrm ./giochi-defender --testar-som
 ```
 
 `--alvo N` planta N cubos no eixo da câmera a distâncias seguras (fora da esfera
@@ -86,10 +97,11 @@ de colisão do asteroide — plantar dentro dele faria o cubo ser despawnado com
 dano) e `--atirar` mantém o gatilho apertado, com o cooldown dando a cadência.
 É o mesmo caminho `Partida::atirar` do laço de produção, não uma cópia.
 
-`--sem-mira` e `--sem-hud` tiram as duas camadas do desenho, cada uma por si —
+`--sem-mira`, `--sem-hud` e `--sem-som` tiram as três camadas, cada uma por si —
 é o que permite medir o custo de cada uma (a HUD custa 0,54 ms, a mira 0,19 ms
-no X35H). `--demo-hud` acende os três efeitos na abertura, porque provar que o
-`+100` sobe exigiria acertar um cubo com o dedo no aparelho.
+e o som 0,06 ms no X35H). `--demo-hud` acende os três efeitos da HUD na abertura
+e `--tremor` arma o tremor do dano, porque provar as duas coisas exigiria
+acertar (ou levar) um cubo com o dedo no aparelho.
 
 `--benchmark` imprime mediana, p50/p95/p99 e o pior quadro, além do **trabalho
 de submissão** e a fração que ele ocupa do intervalo — é essa fração que diz se
@@ -152,6 +164,8 @@ src/
 │   ├── enemy_pool.rs    pool fixo de 15
 │   ├── partida.rs       simulação (spawn, dano, tiro) e o desenho dos cubos
 │   └── weapon.rs        cadência, raio de tiro e escolha do alvo
+├── audio.rs             cinco efeitos sintetizados + carga no mixer
+├── gameplay/tremor.rs   tremor de câmera (translação determinística)
 ├── ui/
 │   ├── mod.rs           câmera da HUD, matriz de pixel e batelada por cor
 │   ├── font.rs          fonte 5x7 em dados (sem arquivo, sem licença)
@@ -164,6 +178,34 @@ src/
 └── benches/frame_time.rs  custo de simulação por quadro, sem GL
 vendor/                  snapshot da engine (NÃO editar)
 ```
+
+## Por que o som é sintetizado
+
+Mesma razão das malhas procedurais: um `.wav` é um binário no pacote, com licença
+para discutir e mais um caminho para faltar na imagem. `src/audio.rs` gera os
+cinco efeitos (senoides, quadradas e ruído determinístico) e os carrega por
+`Chunk::from_raw_buffer` — sem decodificador, sem arquivo.
+
+`Mix_QuickLoad_RAW` exige as amostras **no formato que o mixer abriu**
+(`AUDIO_S16LSB`, estéreo, 44 100 Hz), e não converte nada: por isso o formato é
+contrato e tem teste.
+
+`AudioSystem::load_sound` da engine só aceita caminho de arquivo. Falar com o
+`sdl2::mixer` direto funciona porque a engine **leaka** o `Sdl2MixerContext` de
+propósito, mantendo o dispositivo aberto. **Vale reportar à equipe da engine:**
+falta um `load_sound_from_bytes`. O `Cargo.toml` já depende do `sdl2` direto pelo
+mesmo motivo no mouse relativo.
+
+## Por que o tremor é translação e não giro
+
+A primeira versão gemia `yaw`/`pitch`, e a medição derrubou: a câmera orbita o
+alvo, então girar em volta dele mantém o asteroide **centrado** e o quadro quase
+não muda — **1,14 px** de deslocamento em 720p.
+
+Transladar o olho **e** o alvo juntos desloca o quadro inteiro sem girar: a
+direção de visão não muda e o efeito mede **10,3 px**. A amplitude é em unidades
+de mundo, e um teste a converte para pixel nos dois painéis para o número não
+voltar a ser arbitrário.
 
 ## Por que a HUD não usa `SDL2_ttf`
 
@@ -214,9 +256,9 @@ cargo test
 cargo doc --no-deps
 ```
 
-193 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira e o
-layout da HUD são testados sem abrir janela, e a captura headless (`--quadro`) é
-o que prova o desenho.
+220 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+layout da HUD, a síntese de som e o tremor são testados sem abrir janela, e a
+captura headless (`--quadro`) é o que prova o desenho.
 
 Dois testes merecem nome, porque cada um pega um defeito que já aconteceu:
 `um_retangulo_de_pixels_ocupa_os_mesmos_pixels` (a escala errada por um fator 2

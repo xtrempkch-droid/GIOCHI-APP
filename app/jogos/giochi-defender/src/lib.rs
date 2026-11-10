@@ -7,6 +7,7 @@
 //! janela: [`state`] e [`gameplay`] não importam `sdl2` nem `glow`. O binário
 //! (`src/main.rs`) é o único lugar que abre dispositivo e roda o laço.
 
+pub mod audio;
 pub mod bench;
 pub mod diag;
 pub mod gameplay;

@@ -135,16 +135,55 @@ impl OrbitalCamera {
     /// Passar `0, 0` deixa o aspecto em `0.0`, que na engine significa "pergunta
     /// ao renderer" — é o caminho para uma captura headless, onde não há janela.
     pub fn camera(&self, largura: u32, altura: u32) -> Camera3D {
+        self.camera_com_tremor(largura, altura, (0.0, 0.0))
+    }
+
+    /// Câmera com uma translação de tremor somada ao olho **e** ao alvo.
+    ///
+    /// Transladar os dois juntos é o que faz o quadro inteiro deslizar sem girar:
+    /// a direção de visão não muda, o enquadramento não muda, e o asteroide sai
+    /// do lugar junto com o fundo. Girar `yaw`/`pitch` em volta do alvo (a
+    /// primeira versão) mantém o asteroide **centrado** e o efeito quase não
+    /// aparece — medido: 1,14 px de deslocamento em 720p.
+    ///
+    /// O deslocamento entra numa **cópia**, não no estado: o tremor não acumula,
+    /// então dez danos seguidos não deixam a câmera deslocada quando ele acaba.
+    /// E `distance` não muda — tremer aproximando e afastando pareceria zoom.
+    pub fn camera_com_tremor(
+        &self,
+        largura: u32,
+        altura: u32,
+        deslocamento: (f32, f32),
+    ) -> Camera3D {
+        let (desloc_x, desloc_y) = deslocamento;
+        let desloc_x = if desloc_x.is_finite() { desloc_x } else { 0.0 };
+        let desloc_y = if desloc_y.is_finite() { desloc_y } else { 0.0 };
         let distancia = self.distancia_segura();
         let pitch = self.pitch_seguro();
+        let yaw = normalizar_angulo(self.yaw);
         let cos_pitch = pitch.cos();
         let olho = Vec3::new(
-            self.target.x + distancia * cos_pitch * self.yaw.sin(),
+            self.target.x + distancia * cos_pitch * yaw.sin(),
             self.target.y + distancia * pitch.sin(),
-            self.target.z + distancia * cos_pitch * self.yaw.cos(),
+            self.target.z + distancia * cos_pitch * yaw.cos(),
         );
 
-        let camera = Camera3D::from_parts(olho, self.target, Vec3::UP)
+        // Deslocamento perpendicular à linha de visão: `direita` no eixo X do
+        // mundo e `UP` no Y. O eixo Z do mundo fica de fora porque, com a câmera
+        // olhando para o alvo, deslocar em Z aproxima em vez de sacudir.
+        let direita = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+        let alvo = Vec3::new(
+            self.target.x + direita.x * desloc_x,
+            self.target.y + desloc_y,
+            self.target.z + direita.z * desloc_x,
+        );
+        let olho = Vec3::new(
+            olho.x + direita.x * desloc_x,
+            olho.y + desloc_y,
+            olho.z + direita.z * desloc_x,
+        );
+
+        let camera = Camera3D::from_parts(olho, alvo, Vec3::UP)
             // O céu das estrelas fica a ~120 unidades; o padrão de 1000 é folgado
             // e não custa precisão de profundidade em 16 bits, mas 400 deixa
             // margem para o asteroide e para os inimigos próximos.
@@ -264,6 +303,90 @@ mod tests {
         };
         assert_eq!(camera.distancia_segura(), DISTANCIA_MINIMA);
         assert!(camera.camera(640, 480).view_matrix().is_ok());
+    }
+
+    /// Distância entre dois pontos do mundo.
+    ///
+    /// `Vec3` da engine não implementa `Sub` nem tem `distance` (o `glam` por
+    /// baixo tem, mas a fachada expõe só `length`/`normalized`) — e converter
+    /// para `glam` num teste de câmera é ruído.
+    fn distancia(a: Vec3, b: Vec3) -> f32 {
+        let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    }
+
+    #[test]
+    fn o_tremor_mexe_a_camera_e_nao_o_estado() {
+        // O tremor entra numa **cópia**: `yaw`/`pitch` do estado não mudam, então
+        // dez danos seguidos não deixam a câmera torta quando o tremor acaba.
+        let base = OrbitalCamera::new();
+        let tremida = base.camera_com_tremor(640, 480, (0.2, -0.1));
+        assert_eq!(base, OrbitalCamera::new(), "o estado foi alterado");
+        assert!(
+            distancia(tremida.position, base.camera(640, 480).position) > 1e-2,
+            "o tremor não moveu a câmera"
+        );
+        // Olho e alvo andam juntos: a direção de visão não pode mudar, senão o
+        // tremor viraria um giro (e o alvo ficaria centrado, sem efeito).
+        let antes = base.camera(640, 480);
+        let direcao = |c: &Camera3D| {
+            let v = Vec3::new(
+                c.target.x - c.position.x,
+                c.target.y - c.position.y,
+                c.target.z - c.position.z,
+            );
+            v.normalized()
+        };
+        let d_antes = direcao(&antes);
+        let d_depois = direcao(&tremida);
+        assert!(
+            distancia(d_antes, d_depois) < 1e-5,
+            "o tremor girou a câmera em vez de transladar"
+        );
+        // A distância **ao alvo** não muda (ela muda em relação à origem, porque
+        // a translação move os dois): tremer aproximando seria zoom.
+        let d_base = distancia(antes.position, antes.target);
+        let d_tremida = distancia(tremida.position, tremida.target);
+        assert!(
+            (d_base - d_tremida).abs() < 1e-3,
+            "a distância ao alvo mudou: {d_base:.4} → {d_tremida:.4}"
+        );
+    }
+
+    #[test]
+    fn o_tremor_nao_quebra_o_limite_de_pitch() {
+        // A 80° o vetor UP fica paralelo à visão e o `look_at` não tem solução.
+        // Um tremor somado **depois** do limite produziria exatamente a matriz
+        // inválida que o limite existe para evitar.
+        let mut camera = OrbitalCamera::new();
+        for pitch in [PITCH_MINIMO, PITCH_MAXIMO] {
+            camera.pitch = pitch;
+            for deslocamento in [(0.22, 0.22), (-0.22, -0.22), (0.0, 0.22)] {
+                let com_tremor = camera.camera_com_tremor(640, 480, deslocamento);
+                assert!(
+                    com_tremor.view_matrix().is_ok(),
+                    "tremor {deslocamento:?} a {pitch} invalidadou a matriz de visão"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tremor_com_valor_invalido_e_ignorado() {
+        let base = OrbitalCamera::new();
+        let referencia = base.camera(640, 480).position;
+        for ruim in [
+            (f32::NAN, 0.0),
+            (0.0, f32::NAN),
+            (f32::INFINITY, f32::NEG_INFINITY),
+        ] {
+            let camera = base.camera_com_tremor(640, 480, ruim);
+            assert!(
+                distancia(camera.position, referencia) < 1e-6,
+                "tremor {ruim:?} mexeu na câmera"
+            );
+            assert!(camera.view_matrix().is_ok());
+        }
     }
 
     #[test]

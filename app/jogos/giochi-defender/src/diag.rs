@@ -45,6 +45,11 @@ OPÇÕES:
     --sem-hud             Não desenha a HUD (vida, onda, pontos, efeitos).
     --demo-hud            Liga os efeitos da HUD na abertura (+100, clarão de
                           dano e aviso de onda), para capturar sem jogar.
+    --tremor              Arma o tremor de dano na abertura, para capturar a
+                          câmera sacudida sem esperar um cubo acertar.
+    --sem-som             Não carrega nem toca som (para isolar o custo dele).
+    --testar-som          Toca os cinco efeitos em sequência e sai. Roda no
+                          aparelho pelo SSH, onde não há como ouvir o PC.
     --atirar              Mantém o gatilho apertado (o cooldown faz a cadência).
     --alvo N              Planta N cubos parados no eixo da câmera, para o tiro
                           do centro da tela ter alvo certo.
@@ -85,6 +90,12 @@ pub struct Diag {
     pub demo_hud: bool,
     /// Manter o gatilho apertado.
     pub atirar: bool,
+    /// Armar o tremor de dano na abertura.
+    pub tremor: bool,
+    /// Carregar e tocar som.
+    pub som: bool,
+    /// Tocar os cinco efeitos e sair.
+    pub testar_som: bool,
     /// Quantos cubos plantar no eixo da câmera.
     pub alvo: Option<u32>,
     /// Tamanho pedido da janela.
@@ -116,6 +127,9 @@ impl Default for Diag {
             benchmark: None,
             mira: true,
             hud: true,
+            tremor: false,
+            som: true,
+            testar_som: false,
             demo_hud: false,
             atirar: false,
             alvo: None,
@@ -147,6 +161,13 @@ impl Diag {
                 "--sem-mira" => diag.mira = false,
                 "--sem-hud" => diag.hud = false,
                 "--demo-hud" => diag.demo_hud = true,
+                "--tremor" => diag.tremor = true,
+                "--sem-som" => diag.som = false,
+                "--testar-som" => {
+                    diag.testar_som = true;
+                    // Quem pede para testar o som não quer uma partida junto.
+                    diag.frames.get_or_insert(1);
+                }
                 "--atirar" => diag.atirar = true,
                 "--alvo" => diag.alvo = Some(inteiro(&mut argumentos, embutido, &nome)? as u32),
                 "--tela" => {
@@ -455,6 +476,30 @@ mod tests {
         // São camadas diferentes: tirar a mira não tira a HUD, e vice-versa.
         assert!(parse(&["--sem-mira"]).unwrap().hud);
         assert!(parse(&["--sem-hud"]).unwrap().mira);
+    }
+
+    #[test]
+    fn o_tremor_e_opt_in() {
+        assert!(!parse(&[]).unwrap().tremor);
+        assert!(parse(&["--tremor"]).unwrap().tremor);
+    }
+
+    #[test]
+    fn o_som_liga_por_padrao_e_desliga_com_uma_flag() {
+        assert!(parse(&[]).unwrap().som);
+        assert!(!parse(&["--sem-som"]).unwrap().som);
+    }
+
+    #[test]
+    fn testar_o_som_nao_abre_uma_partida() {
+        let diag = parse(&["--testar-som"]).unwrap();
+        assert!(diag.testar_som);
+        assert_eq!(diag.frames, Some(1), "o teste de som tem de sair sozinho");
+        // Pedir quadros explicitamente não é atropelado pela flag.
+        assert_eq!(
+            parse(&["--testar-som", "--frames", "5"]).unwrap().frames,
+            Some(5)
+        );
     }
 
     #[test]
