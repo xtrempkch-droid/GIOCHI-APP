@@ -11,6 +11,7 @@
 
 pub mod carro;
 pub mod corrida;
+pub mod dificuldade;
 pub mod drift;
 pub mod fonte;
 pub mod hud;
@@ -22,6 +23,7 @@ pub mod relogio;
 
 pub use carro::{Carro, Entrada, Evento as EventoCarro};
 pub use corrida::{Corrida, Desfecho, Evento, Fase, CONTAGEM, TEMPO_LIMITE, VOLTAS};
+pub use dificuldade::Dificuldade;
 pub use drift::Drift;
 pub use ia::Adversario;
 pub use mapa::{Cenario, Mapa};

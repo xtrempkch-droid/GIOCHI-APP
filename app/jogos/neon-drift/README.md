@@ -113,7 +113,7 @@ vezes a mesma coisa.
 | `avenida` (padrão) | 962 m, tudo plano | 0 m | 3 | cidade noturna: arcos de neon, passarelas, outdoors |
 | `boavista` | 1 309 m, 2 voltas | **74 m** | 4 | serra: paredão de pedra, mata, guarda-corpo, cidade lá embaixo |
 | `circuito` | **2 081 m** (o dobro da avenida) | 0 m | 5 | autódromo: barreiras, torres de luz, arquibancada, **3 rampas** |
-| `porto` | 1 030 m, **3 voltas** | 0 m | 3 | cais: contêineres, guindastes, mar com reflexos |
+| `porto` | **1 193 m**, **3 voltas** | 0 m | 3 | cais: contêineres, guindastes, mar com reflexos |
 | `salar` | **2 188 m** | 0 m | 2 | planície de sal: pista larga, montanhas, **1 rampa** na reta de 500 m |
 
 O mapa é **dado**, não código (`crates/core/src/mapa.rs`): pontos de controle,
@@ -133,6 +133,145 @@ pequeno, um trecho de túnel e uma reta longa onde o nitro vale. Onde a avenida
 é plana de propósito, aqui a altura da pista é **real** e entra na física — a
 gravidade puxa o carro na descida e o segura na subida (ver
 [Relevo](#relevo-a-gravidade-entrou-na-física)).
+
+### A largada: o fecho do laço usava a corda, não a tangente
+
+Defeito relatado no aparelho: *"no mapa porto a posição do carrinho está
+invertida, somente nesse mapa e somente o carro do player"*. Não era desenho —
+era o carro **nascendo virado para trás**.
+
+A pista é uma Catmull-Rom fechada, e a amostra que fecha o laço recebia como
+direção o vetor `primeiro − anterior`, a **corda** entre o último ponto e o
+primeiro. A tangente da spline em `t = 0` é `0,5·(p₂ − p₀)` e é a mesma no fim
+do último segmento; a corda, ao contrário, é quase perpendicular à pista perto
+da linha — e no porto apontava para o lado oposto, porque o traçado voltava
+pelo mesmo trecho da reta em sentido contrário.
+
+Duas correções, as duas medidas:
+
+1. **fecho usa a tangente** (`pista.rs`): `amostras[0].direcao` em vez da corda;
+2. **o porto ganhou volta pela rua de trás** (`mapa.rs`), em vez de descer e
+   subir pela mesma reta.
+
+O número que prova é o cosseno entre a direção 3 m antes e 3 m depois da linha:
+
+| mapa | antes | depois |
+| --- | --- | --- |
+| avenida | 1,000 | 1,000 |
+| **porto** | **−1,000** | **0,992** |
+| salar | 0,997 | 0,997 |
+| boavista | 0,251 | 0,251 |
+| circuito | −0,765 | −0,765 |
+
+`boavista` e `circuito` têm grampo na linha **por desenho** (a pista fecha em
+"V" ali) e não apresentam o sintoma: o rumo inicial do carro vem de
+`direcao_em(3,0)`, o trecho **depois** da linha, em `Corrida::com_mapa_e_config`
+e em `reiniciar`. Duas tentativas de fechar esses dois "por dentro" criaram
+quinas de 1,5–1,6 m e foram revertidas — o teste de raio mínimo
+(`> 3,0 m`) reprovou as duas, que é o que ele existe para fazer.
+
+Três testes fixam a regra: `a_direcao_e_continua_na_linha_de_largada_do_porto`
+(cos > 0,9), `o_carro_nasce_encarando_o_trecho_depois_da_linha` (todos os mapas)
+e o `#[ignore] imprime_direcao_na_linha_de_largada`, que é a ferramenta que
+mede a tabela acima.
+
+### A frase do título: desenha certo, e é a mesma nos dois lados
+
+O relato incluía *"bug na frase «mapa porto noturno»"*. A frase é
+`format!("MAPA  {}", mapa.nome.to_uppercase())` = `MAPA  PORTO NOTURNO`, e ela
+**desenha inteira**: no X35H a linha ocupa x 230..409, y 160..170 — as mesmas
+coordenadas do quadro gerado no PC —, a largura bate com
+`fonte::largura_texto` (19 caracteres × 6 − 1 = 113 unidades, × 1,6 = 180,8 px)
+e `todo_nome_de_mapa_tem_glifo` garante que cada letra existe na fonte 5×7.
+
+O que existe é **build antiga no aparelho**: a instalação medida em
+`/user/apps/neon-drift` era `2ecac141…`, de antes dos quatro modos de
+dificuldade (era `9f0db73d…` uma rodada antes disso). Uma
+tela que não muda e um binário velho são indistinguíveis de fora; o sha256 nas
+duas pontas é o que separa os dois casos.
+
+## Quatro dificuldades
+
+O modo é **dado**, não código (`crates/core/src/dificuldade.rs`), e mexe em duas
+coisas ao mesmo tempo — o ritmo dos adversários e, no mais difícil, o seu:
+
+| `--dificuldade` | Adversários | Carro do jogador | O que se sente |
+| --- | --- | --- | --- |
+| `facil` | **×0,88** | ×1,00 | dá para errar a curva e ainda ganhar |
+| `normal` (padrão) | ×1,00 | ×1,00 | a corrida balanceada de sempre |
+| `dificil` | ×1,08 | ×1,00 | metade das freadas vira ultrapassagem perdida |
+| `desafiante` | **×1,10** | **×0,95** | os outros andam mais e o seu carro anda **5 % menos** |
+
+O `desafiante` é o pedido literal do dono do projeto: *"no modo desafiante o
+carro do usuário será 5% mais lento que os outros carros"*. O fator do jogador
+é `0,95` e entra no **teto** de velocidade (`Carro::teto`), não no motor — senão
+o nitro emprestaria velocidade que o carro não sustenta e o limite virava
+sugestão.
+
+`fator_ia` é um campo **separado** de `habilidade`: a habilidade é clampada em
+`0,72..=0,98` no construtor do adversário, então encostar a dificuldade nela
+faria o difícil não ser mais difícil que o normal — o clamp comeria a diferença
+em silêncio.
+
+### Medido: a folga na linha de chegada
+
+`--json` passou a expor `dificuldade`, `posicao` e `gap` (metros entre o melhor
+adversário e o jogador; negativo = o jogador lidera). `posicao` sozinha não
+serve: com o piloto ao volante ela é `1` nos quatro modos, e "1º" não distingue
+ganhar por 500 m de ganhar por 100.
+
+```bash
+giochi-neon-drift --mapa avenida --dificuldade desafiante --tela corrida \
+                  --piloto --passos 4000 --quadros 1 --json --sem-som
+```
+
+| `--mapa avenida` | fácil | normal | difícil | desafiante |
+| --- | --- | --- | --- | --- |
+| folga do jogador | **−511,8 m** | −327,1 m | −213,4 m | **−158,5 m** |
+| tempo de prova | 41,5 s | 41,5 s | 41,5 s | **42,0 s** |
+
+| `--mapa porto` (3 voltas) | fácil | normal | difícil | desafiante |
+| --- | --- | --- | --- | --- |
+| folga do jogador | −754,7 m | −397,9 m | −140,7 m | **−71,9 m** |
+
+Duas leituras que saem daí:
+
+1. **o tempo do jogador quase não muda** (41,5 → 42,0 s): dificuldade muda quem
+   está à frente, não a física dele — exceto o desafiante, que muda o carro;
+2. **a folga cai monotonicamente**, e o desafiante continua **ganhável** (71,9 m
+   no porto ≈ 1,8 s a 40 m/s). Modo difícil que não se vence é modo quebrado.
+
+Os números são **idênticos no PC e no X35H**, valor por valor, porque a física
+roda em passo fixo e não lê relógio. É o que permite tratar um diagnóstico de PC
+como diagnóstico de aparelho.
+
+O teste que fixa isso é `a_dificuldade_aproxima_os_adversarios_de_verdade`
+(`piloto.rs`): corre a prova nos quatro modos e exige que a folga caia, que a
+queda do fácil ao desafiante passe de 100 m e que o desafiante siga acima do
+piso de 1 s. Reverter o `fator_ia` reprova.
+
+`o_carro_do_desafiante_anda_menos_que_o_do_normal` mede a outra metade na
+**reta de teste a 300 m**: 14 s acelerando, razão de velocidade 0,95 ±0,02. A
+primeira versão rodava na avenida e devolvia **103,2 %** — o desafiante, mais
+lento, escapava da batida que o normal levava, e o teste media colisão com o
+sinal trocado.
+
+### Na tela
+
+O título mostra o mapa **e** a dificuldade, com uma linha dizendo o que muda —
+um modo que só se alcança por `--dificuldade` não existe para quem joga no
+aparelho, e "desafiante" sem explicação faz o jogador sentir o carro lento e
+chamar de bug:
+
+```text
+MAPA  PORTO NOTURNO
+DESAFIANTE  ADVERSARIOS 10% MAIS RAPIDOS E VOCE 5% MAIS LENTO
+ESQ/DIR  MAPA   CIMA/BAIXO  DIFICULDADE
+```
+
+Medido no X35H (640×480): a linha do mapa ocupa x 230..409 e a da dificuldade
+x 75..564 — **as duas cabem** e o mesmo par de coordenadas sai no PC. Trocar é
+na **vertical** no título (`←`/`→` continuam sendo o mapa).
 
 ## Texturas
 
@@ -439,6 +578,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--piloto` | o piloto artificial dirige durante os `--passos` |
 | `--tela corrida` | força uma tela |
 | `--mapa porto` | escolhe o mapa (`avenida`, `boavista`, `circuito`, `porto`, `salar`) |
+| `--dificuldade desafiante` | escolhe o modo (`facil`, `normal`, `dificil`, `desafiante`) |
 | `--em 1240` | posiciona o carro em `s = 1240 m` já a 48 m/s — é como se cai **em cima** de uma rampa sem dirigir até ela |
 | `--so asfalto_t` | desenha **uma** malha só (nome da malha; `GIOCHI_SEM` usa o nome da textura) |
 | `--so mundo` | desenha toda a geometria estática e mais nada |
@@ -450,7 +590,7 @@ recusa `--fps-teto` fora de 1..75.
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--texturas t.bmp` | grava as 7 texturas lado a lado, **sem abrir janela** — o molde para pintar |
-| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `malhas`, `vertices`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando` e a contagem de cada tipo de partícula. `desenhos`, `malhas` e `vertices` vêm do `frame_counters()` da engine |
+| `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `malhas`, `vertices`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando`, `dificuldade`, `posicao`, `gap` e a contagem de cada tipo de partícula. `desenhos`, `malhas` e `vertices` vêm do `frame_counters()` da engine |
 
 `GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não

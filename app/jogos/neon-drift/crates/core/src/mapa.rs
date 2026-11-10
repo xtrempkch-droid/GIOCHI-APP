@@ -409,11 +409,30 @@ pub const PORTO: Mapa = Mapa {
         // ── volta subindo pelo meio do cais ────────────────────
         Ponto::new(140.0, 170.0),
         Ponto::new(95.0, 195.0),
-        Ponto::new(35.0, 150.0),
-        Ponto::new(0.0, 80.0),
+        Ponto::new(45.0, 150.0),
+        // ── a rua de trás e o retorno pela ponta do cais ───────
+        //
+        // Esta é a correção de um defeito real: a versão anterior voltava por
+        // `(35, 150) → (0, 80) → (0, 0)`, ou seja, percorria **de novo** o
+        // mesmo trecho da reta de largada, em sentido contrário. O resultado era
+        // um cúspide de 180° exatamente na linha: o jogador nascia 3 m antes
+        // dela olhando para trás e a corrida começava com o carro "de ré".
+        //
+        // Agora a volta desce pela rua de trás (`x ≈ 30`), contorna um
+        // contêiner em `z ≈ −80` e sobe para encarar a linha no **mesmo
+        // sentido** da reta (+Z). O raio do retorno é o que a
+        // `cada_mapa_constroi_uma_pista_com_comprimento_utilizavel` exige: a
+        // primeira tentativa fechava com uma quina de 1,6 m.
+        Ponto::new(34.0, 95.0),
+        Ponto::new(30.0, 30.0),
+        Ponto::new(26.0, -30.0),
+        Ponto::new(10.0, -80.0),
+        Ponto::new(-8.0, -70.0),
+        Ponto::new(-6.0, -20.0),
     ],
     larguras: &[
-        13.0, 11.0, 10.0, 10.0, 10.0, 9.0, 9.0, 9.0, 10.0, 11.0, 19.0, 11.0, 12.0,
+        13.0, 11.0, 10.0, 10.0, 9.0, 9.0, 9.0, 9.0, 10.0, 11.0, 19.0, 11.0, 12.0, 12.0, 13.0,
+        13.0, 13.0, 13.0,
     ],
     tuneis: &[],
     relevo: &[],
@@ -714,5 +733,78 @@ mod testes {
         let a = pista.direcao_em(s);
         let b = pista.direcao_em(s + janela);
         a.ponto(b).clamp(-1.0, 1.0).acos()
+    }
+
+    /// A direção da pista tem de ser **contínua na linha de largada**.
+    ///
+    /// Era o defeito relatado no `porto`: o laço voltava pelo mesmo trecho da
+    /// reta, em sentido contrário, e a pista fazia 180° exatamente na linha. Como
+    /// o carro nascia 3 m antes dela, o jogador começava olhando para trás.
+    ///
+    /// O piso de `0,9` é "menos de 26° em 6 m" — o que um grampo declarado no
+    /// traçado não é. `boavista` e `circuito` medem menos que isso hoje, e é uma
+    /// característica **do traçado** (grampo na linha), não do fechamento: o rumo
+    /// inicial do carro vem de `direcao_em(3.0)`, então eles não têm o sintoma.
+    /// Este teste guarda o mapa que **foi** corrigido.
+    #[test]
+    fn a_direcao_e_continua_na_linha_de_largada_do_porto() {
+        let pista = PORTO.pista();
+        let l = pista.comprimento();
+        let antes = pista.direcao_em(l - 3.0);
+        let depois = pista.direcao_em(3.0);
+        let cosseno = antes.x * depois.x + antes.z * depois.z;
+        assert!(
+            cosseno > 0.9,
+            "porto: cos {cosseno:.3} entre a chegada e a saída da linha — a pista \
+             dobra na largada e o carro nasce virado"
+        );
+    }
+
+    /// O carro do jogador nasce **encarando a corrida**, em todos os mapas.
+    ///
+    /// É o invariante que o sintoma pedia: não importa o que o trecho de
+    /// fechamento faz, o rumo inicial tem de ser o do trecho que vem depois da
+    /// linha.
+    #[test]
+    fn o_carro_nasce_encarando_o_trecho_depois_da_linha() {
+        for mapa in TODOS {
+            let pista = mapa.pista();
+            let corrida = crate::Corrida::com_mapa(mapa);
+            let rumo = pista.direcao_em(3.0);
+            let esperado = rumo.x.atan2(rumo.z);
+            let mut diferenca = (corrida.carro.angulo - esperado).abs();
+            while diferenca > std::f32::consts::PI {
+                diferenca = (diferenca - std::f32::consts::TAU).abs();
+            }
+            assert!(
+                diferenca < 0.02,
+                "{}: o carro nasce {:.1}° fora do rumo da pista",
+                mapa.nome,
+                diferenca.to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn imprime_direcao_na_linha_de_largada() {
+        for mapa in TODOS {
+            let pista = Pista::do_mapa(mapa);
+            let l = pista.comprimento();
+            let antes = pista.direcao_em(l - 3.0);
+            let na_linha = pista.direcao_em(0.0);
+            let depois = pista.direcao_em(3.0);
+            let cosseno = antes.x * depois.x + antes.z * depois.z;
+            println!(
+                "{}: antes=({:.2},{:.2}) linha=({:.2},{:.2}) depois=({:.2},{:.2}) cos={:.3}",
+                mapa.nome, antes.x, antes.z, na_linha.x, na_linha.z, depois.x, depois.z, cosseno
+            );
+            print!("    ");
+            for d in [-60.0f32, -30.0, -10.0, -3.0, 0.0, 3.0, 10.0, 30.0, 60.0] {
+                let v = pista.direcao_em(l + d);
+                print!("[{d:+.0}]({:.2},{:.2}) ", v.x, v.z);
+            }
+            println!();
+        }
     }
 }

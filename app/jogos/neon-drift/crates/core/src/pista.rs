@@ -285,10 +285,24 @@ impl Pista {
             }
         }
 
-        // Fecha o laço: a última amostra aponta de volta para a primeira.
+        // Fecha o laço: a última amostra é **o mesmo ponto** que a primeira, e
+        // por isso tem de ter a mesma direção dela.
+        //
+        // Aqui morava um defeito que estragava a linha de largada de todo mapa:
+        // a direção era a **corda** entre a última amostra e a primeira —
+        // `primeiro - anterior` —, que num laço fechado é quase perpendicular à
+        // pista. Como `direcao_em` interpola da última amostra para a primeira,
+        // os primeiros metros de cada volta saíam torcidos, e no `porto` a corda
+        // apontava para o lado oposto (cos = −1,000): o carro do jogador nascia
+        // 3 m antes da linha olhando para trás.
+        //
+        // A tangente correta é a da spline no fim do último segmento, e ela é
+        // **idêntica** à do começo do primeiro por construção da Catmull-Rom
+        // (`0,5·(p₂−p₀)` nos dois casos). Usar a da primeira amostra é dizer isso
+        // uma vez só, em vez de recalcular e poder divergir.
         let primeiro = amostras[0].centro;
+        let direcao = amostras[0].direcao;
         acumulado += anterior.distancia(primeiro);
-        let direcao = primeiro.menos(anterior).normalizado();
         let meia_largura = amostras.last().map(|a| a.meia_largura).unwrap_or(9.0);
         amostras.push(Amostra {
             s: acumulado,

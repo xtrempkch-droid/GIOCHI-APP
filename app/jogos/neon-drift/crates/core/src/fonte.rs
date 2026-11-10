@@ -247,4 +247,39 @@ mod testes {
             );
         }
     }
+
+    #[test]
+    fn todo_nome_de_mapa_tem_glifo() {
+        // O HUD do título mostra `MAPA {nome}`, e um caractere sem glifo vira
+        // espaço **em silêncio** — a frase sai com um buraco e ninguém sabe por
+        // quê. "Porto Noturno" é o nome mais longo, então é o que mais sofre.
+        for mapa in crate::mapa::TODOS {
+            let linha = format!("MAPA  {}", mapa.nome.to_uppercase());
+            let faltando: String = linha
+                .chars()
+                .filter(|c| *c != ' ' && glifo(*c).is_none())
+                .collect();
+            assert!(
+                faltando.is_empty(),
+                "{}: sem glifo para {faltando:?} em {linha:?}",
+                mapa.nome
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn imprime_frase_do_mapa() {
+        let linha = format!("MAPA  {}", crate::mapa::PORTO.nome.to_uppercase());
+        let mut grade = [[false; 200]; 7];
+        for [x, y] in pontos(&linha) {
+            if (0..200).contains(&(x as usize)) && (0..7).contains(&(y as usize)) {
+                grade[y as usize][x as usize] = true;
+            }
+        }
+        for linha in grade {
+            println!("{}", linha.iter().map(|p| if *p { '#' } else { '.' }).collect::<String>());
+        }
+        println!("largura={}", largura_texto(&format!("MAPA  {}", crate::mapa::PORTO.nome.to_uppercase())));
+    }
 }

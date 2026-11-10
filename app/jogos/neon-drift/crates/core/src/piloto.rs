@@ -273,6 +273,57 @@ mod testes {
         );
     }
 
+    /// Corre uma prova inteira com o piloto e devolve quantos metros o jogador
+    /// terminou à frente do melhor adversário.
+    fn folga_com_dificuldade(d: crate::dificuldade::Dificuldade) -> f32 {
+        let mut c = Corrida::com_mapa_e_dificuldade(&crate::mapa::AVENIDA, d);
+        c.comecar();
+        for _ in 0..(150.0 * 75.0) as u32 {
+            let entrada = entrada(&c);
+            c.passo(&entrada, 1.0 / 75.0);
+            if c.terminou() {
+                break;
+            }
+        }
+        assert_eq!(c.fase, Fase::Resultado, "a corrida não terminou em {d:?}");
+        let melhor = c
+            .adversarios
+            .iter()
+            .map(|a| a.progresso(&c.pista))
+            .fold(0.0f32, f32::max);
+        c.total_voltas as f32 * c.pista.comprimento() - melhor
+    }
+
+    #[test]
+    fn a_dificuldade_aproxima_os_adversarios_de_verdade() {
+        // O campo `fator_ia` e a tabela dos quatro modos podem estar certos e a
+        // corrida não sentir nada: a IA tem habilidade, oscilação e alvo
+        // próprios, e um fator que não chegue ao alvo é decoração. Esta é a
+        // medida que o jogador sente — a folga na linha de chegada.
+        use crate::dificuldade::Dificuldade;
+        let facil = folga_com_dificuldade(Dificuldade::Facil);
+        let normal = folga_com_dificuldade(Dificuldade::Normal);
+        let dificil = folga_com_dificuldade(Dificuldade::Dificil);
+        let desafiante = folga_com_dificuldade(Dificuldade::Desafiante);
+        assert!(
+            facil > normal && normal > dificil && dificil > desafiante,
+            "a folga não cai com a dificuldade: fácil {facil:.0} m, normal \
+             {normal:.0} m, difícil {dificil:.0} m, desafiante {desafiante:.0} m"
+        );
+        assert!(
+            facil - desafiante > 100.0,
+            "do fácil para o desafiante a folga só caiu {:.0} m: o modo não muda a corrida",
+            facil - desafiante
+        );
+        // E o desafiante continua **ganhável** — o piso é o mesmo do teste de
+        // balanceamento (1 s a 40 m/s). Modo difícil que não se vence é modo
+        // quebrado, não desafio.
+        assert!(
+            desafiante > 40.0,
+            "o desafiante ganha por só {desafiante:.0} m: abaixo do piso de 1 s"
+        );
+    }
+
     #[test]
     fn o_piloto_freia_antes_da_curva_e_nao_dentro_dela() {
         // Medir a velocidade máxima "90 m antes" não diz nada: é a velocidade de

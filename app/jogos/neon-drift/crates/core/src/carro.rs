@@ -204,6 +204,13 @@ pub struct Carro {
     pub indice_pista: Option<usize>,
     /// Posição na volta, em metros.
     pub s: f32,
+    /// Limite de velocidade, como **fração** do teto (`1,0` = sem limite).
+    ///
+    /// Existe para o modo `desafiante`, em que o carro do jogador é 5 % mais
+    /// lento que os adversários. Fingir isso mexendo só na IA deixaria o
+    /// velocímetro da tela mostrando 223 km/h enquanto o carro entrega 212 — e o
+    /// jogador culparia a pista.
+    pub limitador: f32,
 }
 
 impl Carro {
@@ -226,8 +233,19 @@ impl Carro {
             raspando: false,
             impacto: 0.0,
             indice_pista: None,
+            limitador: 1.0,
             s: 0.0,
         }
+    }
+
+    /// Teto de velocidade com o limitador em vigor.
+    ///
+    /// `nitro` escolhe entre o topo normal e o do nitro; o limitador entra nos
+    /// dois, porque um nitro que passasse do teto limitado daria ao jogador a
+    /// velocidade que o resto do carro não sustenta.
+    pub fn teto(&self, nitro: bool) -> f32 {
+        let base = if nitro { VEL_NITRO_MAX } else { VEL_MAX };
+        base * self.limitador.clamp(0.5, 1.0)
     }
 
     /// Coloca o carro na pista, em `s`, deslocado `lateral` metros.
@@ -318,7 +336,7 @@ impl Carro {
         let vel = self.velocidade;
 
         // ── motor, freio e arrasto ────────────────────────────────
-        let vel_topo = if nitro_ativo { VEL_NITRO_MAX } else { VEL_MAX };
+        let vel_topo = self.teto(nitro_ativo);
         // A força do motor cai a zero **no** topo: é isso que faz a velocidade
         // máxima ser um limite de verdade, e não um número que o carro
         // ultrapassa em silêncio.
@@ -403,7 +421,7 @@ impl Carro {
         let consumo = (resistencias * dt).min(nova.abs());
         nova -= consumo * nova.signum();
 
-        self.velocidade = nova.clamp(-8.0, VEL_NITRO_MAX);
+        self.velocidade = nova.clamp(-8.0, self.teto(true));
 
         // ── direção ───────────────────────────────────────────────
         // Aderência: 1 no asfalto com o carro assentado, ~0,3 com o freio de mão.

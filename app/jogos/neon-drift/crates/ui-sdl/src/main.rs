@@ -36,6 +36,7 @@ use giochi_engine_3d::context::{self, GlesVersion};
 use giochi_engine_3d::RenderContext3D;
 use giochi_neon_drift_core::carro::Entrada;
 use giochi_neon_drift_core::corrida::{Corrida, Evento, Fase};
+use giochi_neon_drift_core::dificuldade::Dificuldade;
 use giochi_neon_drift_core::relogio::{ALVO_FPS, MAX_FPS, TIQUE};
 use giochi_neon_drift_core::{hud, Relogio};
 use sdl2::event::Event;
@@ -66,6 +67,8 @@ struct Opcoes {
     piloto: bool,
     so: Option<String>,
     mapa: Option<String>,
+    /// Modo de dificuldade por id (`facil`, `normal`, `dificil`, `desafiante`).
+    dificuldade: Option<String>,
     sem_vsync: bool,
     escala: f32,
     ajuda: bool,
@@ -90,6 +93,7 @@ impl Default for Opcoes {
             piloto: false,
             so: None,
             mapa: None,
+            dificuldade: None,
             sem_vsync: std::env::var_os("GIOCHI_VSYNC").is_some_and(|v| v == "0"),
             escala: std::env::var("GIOCHI_ESCALA")
                 .ok()
@@ -207,6 +211,10 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
                 o.mapa = Some(argv.get(i + 1).ok_or("--mapa sem nome")?.clone());
                 i += 2;
             }
+            "--dificuldade" => {
+                o.dificuldade = Some(argv.get(i + 1).ok_or("--dificuldade sem nome")?.clone());
+                i += 2;
+            }
             "--so" => {
                 o.so = Some(argv.get(i + 1).ok_or("--so sem nome de malha")?.clone());
                 i += 1;
@@ -274,8 +282,18 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D, render: &RenderContext3D) -> St
     let contadores = render.frame_counters();
     let s = corrida.carro.pos;
     let (cx, cy, cz, fov) = cena.camera();
+    // Quanto o melhor adversário está à frente do jogador, em metros (negativo =
+    // o jogador lidera). Existe porque `--dificuldade` sem número mensurável é
+    // fé: `posicao` vale 1 nas quatro dificuldades com o piloto ao volante, e
+    // "1º" não distingue ganhar por 200 m de ganhar por 2.
+    let rival = corrida
+        .adversarios
+        .iter()
+        .map(|a| a.progresso(&corrida.pista))
+        .fold(f32::NEG_INFINITY, f32::max);
+    let gap = rival - corrida.progresso_jogador();
     format!(
-        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2},\"nitro\":{:.1},\"nitro_usando\":{},\"derrapando\":{},\"malhas\":{},\"vertices\":{}",
+        "\"velocidade\":{:.1},\"volta\":{},\"posicao\":{},\"tempo\":{:.2},\"drift\":{},\"s\":{:.1},\"x\":{:.1},\"z\":{:.1},\"altitude\":{:.2},\"cam\":[{:.1},{:.1},{:.1}],\"fov\":{:.2},\"mapa\":\"{}\",\"dificuldade\":\"{}\",\"gap\":{:.1},\"posicao\":{},\"rendendo\":{},\"impacto\":{:.2},\"fragmentos\":{},\"largou\":{},\"progresso\":{:.1},\"no_ar\":{},\"v_vertical\":{:.2},\"altura_solo\":{:.2},\"nitro\":{:.1},\"nitro_usando\":{},\"derrapando\":{},\"malhas\":{},\"vertices\":{}",
         corrida.carro.velocidade,
         corrida.volta,
         corrida.posicao,
@@ -290,6 +308,9 @@ fn diagnostico(corrida: &Corrida, cena: &Cena3D, render: &RenderContext3D) -> St
         cz,
         fov,
         corrida.mapa.id,
+        corrida.dificuldade.id(),
+        gap,
+        corrida.posicao,
         corrida.carro.raspando,
         corrida.carro.impacto,
         cena.fragmentos(),
@@ -622,7 +643,26 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         },
         None => giochi_neon_drift_core::mapa::PADRAO,
     };
-    let mut corrida = Corrida::com_mapa(mapa);
+    let dificuldade = match &o.dificuldade {
+        Some(id) => match Dificuldade::parse(id) {
+            Some(d) => d,
+            None => {
+                let nomes: Vec<&str> = Dificuldade::todos().iter().map(|d| d.id()).collect();
+                return Err(
+                    format!("--dificuldade '{id}' não existe (use: {})", nomes.join(", ")).into(),
+                );
+            }
+        },
+        None => Dificuldade::Normal,
+    };
+    let mut corrida = Corrida::com_mapa_e_dificuldade(mapa, dificuldade);
+    eprintln!(
+        "neon-drift: dificuldade {} ({}) — jogador {:.0}%, adversários {:.0}%",
+        dificuldade.nome(),
+        dificuldade.descricao(),
+        dificuldade.fator_jogador() * 100.0,
+        dificuldade.fator_ia() * 100.0
+    );
     if let Some(em) = o.em {
         // `--em` implica corrida em andamento: posicionar na tela de título
         // mediria a pista errada.
@@ -729,6 +769,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
     let mut sair = false;
     // Último `trocar_mapa` visto, para trocar só na borda.
     let mut ultima_troca = 0i32;
+    let mut ultima_dificuldade = 0i32;
     let mut relogio = Relogio::com_ritmo(TIQUE, o.fps);
 
     // Quadro único: captura e sai, sem laço de eventos.
@@ -810,6 +851,34 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             0
         };
         ultima_troca = acoes.trocar_mapa;
+        // Dificuldade: mesma regra de borda, e o mapa em vigor é preservado.
+        let troca_dif = if acoes.trocar_dificuldade != ultima_dificuldade {
+            acoes.trocar_dificuldade
+        } else {
+            0
+        };
+        ultima_dificuldade = acoes.trocar_dificuldade;
+        if troca_dif != 0 && corrida.fase == Fase::Titulo {
+            let mut nova = corrida.dificuldade;
+            for _ in 0..troca_dif.abs() {
+                nova = if troca_dif > 0 {
+                    nova.proxima()
+                } else {
+                    nova.anterior()
+                };
+            }
+            if nova != corrida.dificuldade {
+                corrida.definir_dificuldade(nova);
+                if !o.json {
+                    eprintln!(
+                        "neon-drift: dificuldade {} ({})",
+                        nova.nome(),
+                        nova.descricao()
+                    );
+                }
+            }
+        }
+
         if troca != 0 && corrida.fase == Fase::Titulo {
             let total = giochi_neon_drift_core::mapa::TODOS.len() as i32;
             let atual = indice_mapa as i32;
@@ -817,7 +886,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
             if novo != indice_mapa {
                 indice_mapa = novo;
                 let mapa = giochi_neon_drift_core::mapa::TODOS[novo];
-                corrida = Corrida::com_mapa(mapa);
+                corrida = Corrida::com_mapa_e_dificuldade(mapa, corrida.dificuldade);
                 render.release_all();
                 // `release_all` leva o buffer de instâncias junto. Sem recriar,
                 // o mundo novo desenha carros e partículas **empilhados na

@@ -49,6 +49,11 @@ pub struct Acoes {
     /// esquerda/direita está livre — e é onde o jogador procura o mapa, não na
     /// linha de comando de um aparelho sem teclado.
     pub trocar_mapa: i32,
+    /// Pedido de troca de dificuldade, `-1` ou `+1`; `0` é "nada".
+    ///
+    /// Só no título, e nas **verticais**: as horizontais já são o mapa, e no
+    /// aparelho não há tecla para mais nada.
+    pub trocar_dificuldade: i32,
     /// Reiniciar (tela de resultado).
     pub reiniciar: bool,
     /// Sair do jogo.
@@ -113,9 +118,23 @@ pub fn combinar(bits: u32, teclas: &Teclas, fase: Fase) -> (Entrada, Acoes) {
         0
     };
 
+    let trocar_dificuldade = if fase == Fase::Titulo {
+        let mut passo = 0;
+        if teclas.cima || bits & evdev::ACELERAR != 0 {
+            passo -= 1;
+        }
+        if teclas.baixo || bits & evdev::FREAR != 0 {
+            passo += 1;
+        }
+        passo
+    } else {
+        0
+    };
+
     let acoes = Acoes {
         comecar: confirmar && fase == Fase::Titulo,
         trocar_mapa,
+        trocar_dificuldade,
         reiniciar: confirmar && fase == Fase::Resultado,
         sair,
     };

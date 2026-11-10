@@ -51,6 +51,13 @@ pub struct Adversario {
     pub habilidade: f32,
     /// Índice de cor na paleta (o desenho escolhe).
     pub cor: usize,
+    /// Multiplicador da velocidade-alvo imposto pela dificuldade.
+    ///
+    /// Fica **aqui** e não dentro de `habilidade` porque `habilidade` é
+    /// clampada em `0,72..=0,98` no construtor: um modo que passasse de 0,98
+    /// seria silenciosamente cortado, e o "difícil" não seria mais difícil que o
+    /// "normal".
+    pub fator: f32,
 }
 
 impl Adversario {
@@ -65,7 +72,21 @@ impl Adversario {
             fase,
             habilidade: habilidade.clamp(0.72, 0.98),
             cor,
+            fator: 1.0,
         }
+    }
+
+    /// Ajusta o multiplicador de dificuldade, preso a uma faixa sã.
+    ///
+    /// `0,5..=1,5` cobre os quatro modos com folga e recusa um valor absurdo
+    /// vindo de configuração errada — que deixaria os adversários parados ou
+    /// teletransportando.
+    pub fn definir_fator(&mut self, fator: f32) {
+        self.fator = if fator.is_finite() {
+            fator.clamp(0.5, 1.5)
+        } else {
+            1.0
+        };
     }
 
     /// Avança a IA um passo.
@@ -85,7 +106,7 @@ impl Adversario {
         // Curva forte reduz o alvo até ~55 % da base. O `.max` existe para o
         // carro nunca parar dentro da curva por causa da conta.
         let fator_curva = (1.0 - curvatura / 0.06 * 0.45).clamp(0.55, 1.0);
-        let alvo = (VEL_BASE * self.habilidade * fator_curva).max(12.0);
+        let alvo = (VEL_BASE * self.habilidade * self.fator * fator_curva).max(12.0);
 
         let diferenca = alvo - self.velocidade;
         let aceleracao = if diferenca > 0.0 { ACEL } else { ACEL * 2.4 };

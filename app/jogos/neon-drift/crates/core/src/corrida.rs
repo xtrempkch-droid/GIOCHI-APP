@@ -88,6 +88,8 @@ pub struct Corrida {
     pub carro: Carro,
     /// Adversários.
     pub adversarios: Vec<Adversario>,
+    /// Dificuldade em vigor.
+    pub dificuldade: crate::dificuldade::Dificuldade,
     /// Pontuação de drift.
     pub drift: Drift,
     /// Tela atual.
@@ -156,6 +158,16 @@ impl Corrida {
         Self::com_mapa_e_config(mapa, mapa.voltas, mapa.tempo_limite)
     }
 
+    /// Partida nova num mapa, com uma dificuldade escolhida.
+    pub fn com_mapa_e_dificuldade(
+        mapa: &'static crate::mapa::Mapa,
+        dificuldade: crate::dificuldade::Dificuldade,
+    ) -> Self {
+        let mut corrida = Self::com_mapa(mapa);
+        corrida.definir_dificuldade(dificuldade);
+        corrida
+    }
+
     /// Partida nova com número de voltas e tempo limite escolhidos (teste).
     pub fn com_config(voltas: u32, tempo_limite: f32) -> Self {
         Self::com_mapa_e_config(crate::mapa::PADRAO, voltas, tempo_limite)
@@ -178,6 +190,19 @@ impl Corrida {
         // largada já reportava `s=961,99`.
         let largada_s = (pista.comprimento() - 3.0).max(0.0);
         carro.posicionar(&pista, largada_s, -3.0);
+        // ... mas o **rumo** vem do outro lado da linha.
+        //
+        // `posicionar` põe o carro na direção do trecho onde ele está — que é o
+        // de fechamento da volta. Num mapa cujo laço chega à linha fazendo um
+        // grampo, esse trecho aponta para o lado oposto do que a corrida segue,
+        // e o jogador começava olhando para trás. No `porto` isso era exatamente
+        // 180° (medido: cos = −1,000), e o sintoma era "o carro do player está
+        // de ré".
+        //
+        // A largada é 3 m antes da linha; o que o jogador vai dirigir é o que
+        // vem **depois** dela. É essa direção que o carro tem de encarar.
+        let rumo = pista.direcao_em(3.0);
+        carro.angulo = rumo.x.atan2(rumo.z);
 
         // Largada em grade: o jogador atrás, três adversários à frente e ao
         // lado. A vantagem é de metros, não de uma volta.
@@ -200,6 +225,7 @@ impl Corrida {
         let comprimento = pista.comprimento();
         let mut corrida = Self {
             mapa,
+            dificuldade: crate::dificuldade::Dificuldade::default(),
             pista,
             carro,
             adversarios,
@@ -230,10 +256,27 @@ impl Corrida {
         self.fase = Fase::Correndo;
     }
 
+    /// Aplica uma dificuldade: fator da IA e limitador do carro do jogador.
+    ///
+    /// As duas coisas juntas e num método só porque **uma sozinha mente**: baixar
+    /// o teto do jogador sem nada mais faria o velocímetro prometer o que o carro
+    /// não entrega, e subir a IA sem tocar no jogador deixaria a corrida mais
+    /// difícil sem que ele soubesse por quê. O `--dificuldade` e o menu chamam
+    /// este método, e mais nada escreve nos dois fatores.
+    pub fn definir_dificuldade(&mut self, dificuldade: crate::dificuldade::Dificuldade) {
+        self.dificuldade = dificuldade;
+        self.carro.limitador = dificuldade.fator_jogador();
+        for adversario in &mut self.adversarios {
+            adversario.definir_fator(dificuldade.fator_ia());
+        }
+    }
+
     /// Reinicia a corrida mantendo o número de voltas e o tempo limite.
     pub fn reiniciar(&mut self) {
         let largada_s = (self.pista.comprimento() - 3.0).max(0.0);
         self.carro.posicionar(&self.pista, largada_s, -3.0);
+        let rumo = self.pista.direcao_em(3.0);
+        self.carro.angulo = rumo.x.atan2(rumo.z);
         self.carro.nitro = 100.0;
         self.drift.reiniciar();
         self.volta = 1;
@@ -759,5 +802,57 @@ mod testes {
         for a in &c.adversarios {
             assert!(!a.nome.is_empty());
         }
+    }
+
+    #[test]
+    fn a_dificuldade_mexe_na_ia_e_no_teto_do_jogador() {
+        use crate::dificuldade::Dificuldade;
+        let mut corrida = Corrida::com_mapa(&crate::mapa::AVENIDA);
+        assert_eq!(corrida.carro.limitador, 1.0, "o padrão não limita ninguém");
+        assert!(corrida.adversarios.iter().all(|a| a.fator == 1.0));
+
+        corrida.definir_dificuldade(Dificuldade::Desafiante);
+        assert_eq!(corrida.carro.teto(false), crate::carro::VEL_MAX * 0.95);
+        assert_eq!(corrida.carro.teto(true), crate::carro::VEL_NITRO_MAX * 0.95);
+        for a in &corrida.adversarios {
+            assert_eq!(a.fator, Dificuldade::Desafiante.fator_ia());
+        }
+
+        // E voltar para o normal desfaz as duas coisas.
+        corrida.definir_dificuldade(Dificuldade::Normal);
+        assert_eq!(corrida.carro.teto(false), crate::carro::VEL_MAX);
+        assert!(corrida.adversarios.iter().all(|a| a.fator == 1.0));
+    }
+
+    #[test]
+    fn o_carro_do_desafiante_anda_menos_que_o_do_normal() {
+        // A prova física, e não só a do campo: dois carros iguais, acelerando
+        // do repouso pelo mesmo tempo, com o mesmo limitador de dificuldade.
+        //
+        // Na **reta de teste a 300 m**, não no circuito: as pontas da
+        // Catmull-Rom curvam (é a lição registrada em `carro_na_reta`), e a
+        // primeira versão deste teste, na avenida, devolvia **103,2 %** — o
+        // desafiante, mais lento, escapava da batida que o normal levava. O que
+        // se media ali era colisão com sinal trocado.
+        use crate::dificuldade::Dificuldade;
+        let pista = crate::pista::pista_de_teste();
+        let mut normal = Carro::novo(Ponto::ZERO, 0.0);
+        normal.posicionar(&pista, 300.0, 0.0);
+        let mut desafiante = normal.clone();
+        desafiante.limitador = Dificuldade::Desafiante.fator_jogador();
+
+        let dt = 1.0 / 75.0;
+        for _ in 0..(14.0 / dt) as u32 {
+            normal.passo(&Entrada::acelerando(), &pista, dt);
+            desafiante.passo(&Entrada::acelerando(), &pista, dt);
+        }
+        let razao = desafiante.velocidade / normal.velocidade;
+        assert!(
+            (razao - 0.95).abs() < 0.02,
+            "o desafiante andou {:.1}% do normal (esperado ~95%): {:.2} contra {:.2} m/s",
+            razao * 100.0,
+            desafiante.velocidade,
+            normal.velocidade
+        );
     }
 }

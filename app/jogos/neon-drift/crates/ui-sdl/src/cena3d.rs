@@ -1186,7 +1186,15 @@ impl Cena3D {
         let altura = projeto.1 as f32;
 
         match corrida.fase {
-            Fase::Titulo => self.hud_titulo(render, inst, &camera, largura, altura, corrida.mapa)?,
+            Fase::Titulo => self.hud_titulo(
+                render,
+                inst,
+                &camera,
+                largura,
+                altura,
+                corrida.mapa,
+                corrida.dificuldade,
+            )?,
             Fase::Correndo => self.hud_corrida(render, inst, &camera, corrida, largura, altura)?,
             Fase::Resultado => self.hud_resultado(render, inst, &camera, corrida, largura, altura)?,
         }
@@ -1208,6 +1216,7 @@ impl Cena3D {
         largura: f32,
         altura: f32,
         mapa: &giochi_neon_drift_core::mapa::Mapa,
+        dificuldade: giochi_neon_drift_core::dificuldade::Dificuldade,
     ) -> Result<(), Box<dyn Error>> {
         let escala = (largura / 200.0).clamp(2.0, 5.0);
         let titulo = fonte::largura_texto(NOME) as f32 * escala;
@@ -1249,11 +1258,32 @@ impl Cena3D {
             Color3D::new(0.55, 1.0, 0.75, 1.0),
         )?;
 
+        // A dificuldade fica ao lado do mapa pela mesma razão dele: o que só se
+        // alcança por `--dificuldade` não existe para quem joga no aparelho.
+        // E "desafiante" precisa dizer **por que** é difícil, senão o jogador
+        // sente o carro lento e chama de bug.
+        let modo = format!(
+            "{}  {}",
+            dificuldade.nome().to_uppercase(),
+            dificuldade.descricao().to_uppercase()
+        );
+        let w = fonte::largura_texto(&modo) as f32 * (escala * 0.42);
+        self.texto(
+            render,
+            inst,
+            camera,
+            &modo,
+            (largura - w) * 0.5,
+            altura * 0.20 + escala * 27.0,
+            escala * 0.42,
+            Color3D::new(0.95, 0.72, 1.0, 1.0),
+        )?;
+
         let linhas = [
             "WASD OU SETAS  VIRAR",
             "ESPACO  FREIO DE MAO",
             "SHIFT  NITRO",
-            "ESQ/DIR  TROCAR MAPA",
+            "ESQ/DIR  MAPA   CIMA/BAIXO  DIFICULDADE",
             "ENTER  JOGAR",
         ];
         let escala_corpo = (escala * 0.62).clamp(1.6, 3.4);
