@@ -3,8 +3,10 @@
 pub mod arena;
 pub mod camera;
 pub mod collision;
+pub mod dificuldade;
 pub mod enemy;
 pub mod enemy_pool;
 pub mod partida;
+pub mod piloto;
 pub mod tremor;
 pub mod weapon;

@@ -1,17 +1,17 @@
 # Estado — GIOCHI DEFENDER
 
-## Último bloco concluído: 3a — telas de menu, vitória e derrota
+## Último bloco concluído: 3b — progressão de dificuldade, medida
 Data: 2026-11-10
 
 Blocos fechados: **1a** (arena e câmera), **1b** (inimigos e colisão),
 **1c** (polimento e performance), **2a** (arma e mira), **2b** (HUD), **2c**
-(áudio e resposta ao dano) e **3a** (telas e reinício). **Dia 3 começado.**
+(áudio e resposta ao dano), **3a** (telas e reinício) e **3b** (progressão).
 
 ## Gates validados
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **254/254** em x86_64
+- [x] `cargo test` — **272/272** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com
@@ -462,7 +462,63 @@ Foi ele que pegou dois defeitos reais:
 - **`B` é o botão leste do controle**, não uma tecla do teclado: no aparelho não
   há teclado, e o caminho que o jogador usa é o do controle.
 
-## Próximo bloco: 3b — progressão e dificuldade
+## Bloco 3b — a dificuldade existe, e foi medida
+
+Até o 3a a onda 3 jogava **igual** à onda 1: o spawn era constante (`2,0 s`,
+`3,0 m/s`) e a única coisa que crescia era a cota de abates. Agora cada onda tem
+intervalo, velocidade e quantos cubos nascem por vez — e os três números foram
+escolhidos por medição, não por intuição.
+
+| Onda | Intervalo | Velocidade | Por vez |
+| --- | --- | --- | --- |
+| 1 | 2,00 s | 3,00 m/s | 1 |
+| 2 | 1,44 s | 3,54 m/s | 2 |
+| 3 | 1,04 s | 4,18 m/s | 3 |
+
+### O piloto automático é o instrumento
+
+`src/gameplay/piloto.rs` joga a partida sozinho **com limites humanos**: giro de
+2,4 rad/s (uma volta em 2,6 s), 220 ms de tempo de reação e 100 mrad de
+tolerância de mira. Sem esses limites ele seria melhor que qualquer pessoa e
+mediria uma dificuldade que ninguém encontra.
+
+`--balanceamento` roda cinco sementes e imprime a tabela. É sem GL e sem janela,
+então roda por SSH e dentro de teste.
+
+### Três tentativas, três números
+
+| Progressão | Resultado medido |
+| --- | --- |
+| 0,78 por onda, 1/1/2 cubos | **5/5 vitórias, 5,0 vidas** — o piloto nunca foi tocado; fácil demais |
+| 0,62 por onda, 1/2/3 cubos | **0/5 vitórias** — morria na onda 3; duro demais |
+| **0,72 por onda, 1/2/3 cubos** | **4/5 vitórias, 2,8 vidas, 34,5 s** — ganhável e não trivial |
+
+O número que decide é o de vidas: 5,0 quer dizer "não havia pressão nenhuma";
+0,0 quer dizer "não há o que fazer". 2,8 quer dizer que cada onda cobra.
+
+### Dois defeitos que o piloto pegou nele mesmo
+
+1. **O `pitch` estava com o sinal invertido.** `camera.pitch` é a elevação do
+   *olho* acima do alvo — levantar o olho faz a câmera olhar mais para **baixo**.
+   A primeira versão somava o erro direto e o piloto subia até o limite de 80°
+   olhando para o chão: **0 abates em cinco partidas**, sem erro nenhum no log.
+   Dois testes de convergência falham se o sinal voltar a ser invertido.
+2. **O tempo de reação zerava a cada morte.** Eu rastreava o alvo pelo **índice**
+   na lista de vivos, e o índice muda quando qualquer cubo morre — então o
+   relógio nunca chegava aos 220 ms e o piloto nunca atirava. Agora o alvo é
+   rastreado pela posição.
+
+Os dois tinham o mesmo sintoma ("o piloto não atira") e causas diferentes; o que
+separou foi medir quantos abates e quantos erros, não olhar o código.
+
+### O teto do pool manda no intervalo
+
+O envelope do R5 é de 15 cubos. Se a onda 3 nascer mais rápido que o cubo leva
+para chegar, o pool enche e o intervalo deixa de significar dificuldade — vira
+`break` silencioso. `a_onda_mais_dificil_ainda_cabe_no_pool` compara o pior caso
+geométrico com a capacidade e exige **folga de 25 %**: a onda 3 ocupa 8,7 de 15.
+
+## Próximo bloco: 3c — fechamento: engine atualizada e pacote
 
 ## Bloqueios / pendências
 
@@ -473,6 +529,12 @@ Foi ele que pegou dois defeitos reais:
   ninguém**: o que está provado é que os cinco `Chunk` carregam no `rk817`, que
   `play` responde OK e que o mixer está a 100 % com o alto-falante ligado. Se
   sai som do alto-falante é a única coisa que o software não mede aqui.
+- **A dificuldade foi medida contra um piloto, não contra uma pessoa.** O piloto
+  tem limites declarados, mas é determinístico e nunca se distrai; um jogador
+  real deve ficar entre 4/5 e 2/5 vitórias. Se o dono jogar e achar fácil ou
+  injusto, os três números a mexer são `ENCOLHIMENTO_DO_INTERVALO`,
+  `CRESCIMENTO_DA_VELOCIDADE` e o `por_vez` — e o `--balanceamento` diz o efeito
+  em 30 s.
 - **As telas existem desde o 3a**, mas **ninguém tocou no controle**: as
   transições foram provadas pelo `--teclas`, que injeta eventos SDL de verdade,
   e não por dedo no aparelho. A diferença que resta é o `code_for` do controle

@@ -113,6 +113,12 @@ fn main() -> ExitCode {
 /// Abre dispositivo, janela e contexto, e roda até o ESC ou até o limite de
 /// quadros.
 fn executar(diag: Diag) -> Result<()> {
+    // O balanceamento não abre janela nem toca em GL: é a simulação sozinha com
+    // um piloto automático. Sai antes de qualquer recurso ser criado.
+    if diag.balanceamento {
+        return relatorio_de_balanceamento(diag.semente);
+    }
+
     let plataforma = Platform::new()?;
     log::info!(
         "GIOCHI DEFENDER boot — engine {} · vídeo '{}'",
@@ -424,6 +430,179 @@ fn injetar_tecla(plataforma: &Platform, nome: &str) -> Result<()> {
             .map_err(|erro| anyhow::anyhow!("não consegui injetar '{nome}': {erro}"))?;
     }
     Ok(())
+}
+
+/// Roda o balanceamento em várias sementes e imprime a tabela.
+///
+/// Uma semente só responde "é ganhável nesta partida"; cinco respondem "é
+/// ganhável". A diferença importa porque o spawn é sorteado: uma partida fácil
+/// por acaso esconderia uma dificuldade injusta.
+fn relatorio_de_balanceamento(semente: u64) -> Result<()> {
+    const PARTIDAS: u64 = 5;
+    const LIMITE: f32 = 240.0;
+
+    println!("GIOCHI DEFENDER — balanceamento com piloto automático");
+    println!(
+        "limites do piloto: giro {:.1} rad/s, reacao {:.0} ms, tolerancia {:.0} mrad",
+        giochi_defender::gameplay::piloto::GIRO_POR_SEGUNDO,
+        giochi_defender::gameplay::piloto::REACAO * 1000.0,
+        giochi_defender::gameplay::piloto::TOLERANCIA * 1000.0
+    );
+    println!();
+    println!("  #  semente   tempo   wave  vidas  abates  erros  precisao  resultado");
+
+    let mut vitorias = 0;
+    let mut soma_tempo = 0.0;
+    let mut soma_vidas = 0.0;
+    let mut soma_precisao = 0.0;
+    for i in 0..PARTIDAS {
+        let s = semente.wrapping_add(i);
+        let r = balancear(s, LIMITE);
+        if r.venceu {
+            vitorias += 1;
+        }
+        soma_tempo += r.segundos;
+        soma_vidas += r.vidas as f32;
+        soma_precisao += r.precisao();
+        println!(
+            "{:3}  {:#08x}  {:6.1}s  {:4}  {:5}  {:6}  {:5}  {:7.1}%  {}",
+            i + 1,
+            s,
+            r.segundos,
+            r.wave,
+            r.vidas,
+            r.abates,
+            r.erros,
+            r.precisao() * 100.0,
+            if r.venceu { "VITORIA" } else { "derrota" }
+        );
+    }
+    println!();
+    println!(
+        "resumo: {vitorias}/{PARTIDAS} vitorias · {:.1}s de media · {:.1} vidas · {:.1}% de precisao",
+        soma_tempo / PARTIDAS as f32,
+        soma_vidas / PARTIDAS as f32,
+        soma_precisao / PARTIDAS as f32 * 100.0
+    );
+    Ok(())
+}
+
+/// Relatório de uma partida jogada pelo piloto automático.
+#[derive(Debug, Default, Clone, Copy)]
+struct Relatorio {
+    segundos: f32,
+    abates: u32,
+    erros: u32,
+    vidas: i32,
+    wave: u32,
+    venceu: bool,
+}
+
+impl Relatorio {
+    fn precisao(&self) -> f32 {
+        let tiros = self.abates + self.erros;
+        if tiros == 0 {
+            return 0.0;
+        }
+        self.abates as f32 / tiros as f32
+    }
+}
+
+/// Joga a partida inteira com o [`piloto`] e devolve o que aconteceu.
+///
+/// Sem GL e sem janela: a simulação não precisa de nenhum dos dois, e é o que
+/// permite rodar o balanceamento dentro do `cargo test` e numa sessão SSH.
+///
+/// O piloto gira `GIRO_POR_SEGUNDO` por segundo, então ele **não** é um `atan2`
+/// instantâneo: mirar num cubo do outro lado do asteroide custa tempo, que é o
+/// custo real do jogador.
+fn balancear(semente: u64, limite_de_segundos: f32) -> Relatorio {
+    use giochi_defender::gameplay::piloto::{self, Ameaca};
+
+    let mut estado = GameState::new();
+    let mut partida = Partida::new(semente);
+    let mut arma = Weapon::new();
+    let mut camera = OrbitalCamera::new();
+    let mut relatorio = Relatorio::default();
+    let dt = 1.0 / 60.0;
+    let mut tempo: f32 = 0.0;
+    let mut tempo_no_alvo: f32 = piloto::REACAO;
+    // O alvo é rastreado pela **posição**, não pelo índice na lista: o índice
+    // muda quando qualquer cubo morre, e a primeira versão zerava o tempo de
+    // reação a cada morte — o piloto nunca chegava a atirar (medido: 0 abates,
+    // 0 erros em cinco partidas).
+    let mut alvo_anterior: Option<giochi_engine_3d::math3d::Vec3> = None;
+
+    while tempo < limite_de_segundos {
+        let panorama = piloto::panorama_da_camera(&camera, tempo_no_alvo);
+        let ameacas: Vec<Ameaca> = partida
+            .pool()
+            .iter_alive()
+            .map(|(_, inimigo)| {
+                let p = inimigo.position;
+                Ameaca {
+                    posicao: p,
+                    distancia_ao_centro: (p.x * p.x + p.y * p.y + p.z * p.z).sqrt(),
+                }
+            })
+            .collect();
+
+        // O relógio do alvo zera quando o alvo **muda**: é o tempo de reação.
+        let escolhido = piloto::escolher_alvo(&panorama, &ameacas);
+        let posicao_escolhida = escolhido.map(|i| ameacas[i].posicao);
+        let mudou = match (posicao_escolhida, alvo_anterior) {
+            (Some(a), Some(b)) => {
+                let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
+                (dx * dx + dy * dy + dz * dz).sqrt() > 0.5
+            }
+            (None, None) => false,
+            _ => true,
+        };
+        if mudou {
+            tempo_no_alvo = 0.0;
+        }
+        alvo_anterior = posicao_escolhida;
+        tempo_no_alvo += dt;
+
+        let decisao = piloto::decidir(&panorama, &ameacas, dt);
+        camera.yaw += decisao.yaw;
+        camera.pitch = (camera.pitch + decisao.pitch).clamp(
+            giochi_defender::gameplay::camera::PITCH_MINIMO,
+            giochi_defender::gameplay::camera::PITCH_MAXIMO,
+        );
+
+        if decisao.atirar {
+            let camera3d = camera.camera(640, 480);
+            let origem = camera3d.position;
+            let direcao = direcao_da_camera(&camera3d);
+            let pronta = arma.pronta();
+            let resultado = partida.atirar(&mut arma, origem, direcao);
+            if pronta {
+                match resultado {
+                    Some(_) => {
+                        relatorio.abates += 1;
+                        estado.pontuar(PONTOS_POR_ABATE);
+                        estado.registrou_abate();
+                    }
+                    None => relatorio.erros += 1,
+                }
+            }
+        }
+
+        arma.atualizar(dt);
+        partida.atualizar(dt, &mut estado);
+        tempo += dt;
+
+        if estado.acabou() || estado.venceu() {
+            break;
+        }
+    }
+
+    relatorio.segundos = tempo;
+    relatorio.vidas = estado.lives;
+    relatorio.wave = estado.wave;
+    relatorio.venceu = estado.venceu();
+    relatorio
 }
 
 /// Recomeça a partida do zero.

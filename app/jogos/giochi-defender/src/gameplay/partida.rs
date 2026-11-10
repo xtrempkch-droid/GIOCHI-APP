@@ -12,6 +12,7 @@
 //! é `Partida`.
 
 use crate::gameplay::collision::sphere_aabb_intersect;
+use crate::gameplay::dificuldade;
 use crate::gameplay::enemy_pool::{EnemyPool, CAPACIDADE};
 use crate::gameplay::weapon::{Atingido, Weapon};
 use crate::state::GameState;
@@ -22,9 +23,13 @@ use giochi_engine_3d::render3d::{MeshHandle, RenderContext3D, ShaderHandle};
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::Result3D;
 
-/// De quanto em quanto tempo nasce um cubo (bloco 1b: um a cada 2 s).
+/// De quanto em quanto tempo nasce um cubo na **primeira** onda.
+///
+/// O valor por onda vem de [`crate::gameplay::dificuldade::da_onda`]; esta
+/// constante é o piso do bloco 1b, mantido porque é ele que a onda 1 usa e
+/// porque os testes do 1b comparam com ela.
 pub const INTERVALO_SPAWN: f32 = 2.0;
-/// Velocidade dos cubos, em unidades por segundo.
+/// Velocidade dos cubos na **primeira** onda, em unidades por segundo.
 pub const VELOCIDADE: f32 = 3.0;
 /// Raio mínimo de spawn.
 pub const RAIO_SPAWN_MIN: f32 = 15.0;
@@ -101,26 +106,36 @@ impl Partida {
             return;
         }
 
+        // A dificuldade vem da **onda atual**, não de uma constante: era isso
+        // que fazia a onda 3 jogar igual à 1.
+        let onda = dificuldade::da_onda(estado.wave);
         self.desde_ultimo_spawn += dt;
-        while self.desde_ultimo_spawn >= INTERVALO_SPAWN {
-            self.desde_ultimo_spawn -= INTERVALO_SPAWN;
-            if !self.pool.tem_espaco() {
-                // Pool cheio: o tempo fica acumulado e o próximo nasce assim que
-                // houver slot. Descartar o acumulado faria a onda "pular" um
-                // cubo por causa de uma morte no instante errado.
-                break;
+        while self.desde_ultimo_spawn >= onda.intervalo {
+            self.desde_ultimo_spawn -= onda.intervalo;
+            for _ in 0..onda.por_vez {
+                if !self.pool.tem_espaco() {
+                    // Pool cheio: o tempo fica acumulado e o próximo nasce
+                    // assim que houver slot. Descartar o acumulado faria a onda
+                    // "pular" um cubo por causa de uma morte no instante errado.
+                    break;
+                }
+                let posicao = self.posicao_de_spawn();
+                let variacao = self.sorteio.faixa(0.0, 1.0);
+                if self
+                    .pool
+                    .spawn(posicao, onda.velocidade, variacao)
+                    .is_none()
+                {
+                    break;
+                }
+                log::debug!(
+                    "inimigo em {:.1}, {:.1}, {:.1} a {:.1} m/s",
+                    posicao.x,
+                    posicao.y,
+                    posicao.z,
+                    onda.velocidade
+                );
             }
-            let posicao = self.posicao_de_spawn();
-            let variacao = self.sorteio.faixa(0.0, 1.0);
-            if self.pool.spawn(posicao, VELOCIDADE, variacao).is_none() {
-                break;
-            }
-            log::debug!(
-                "inimigo em {:.1}, {:.1}, {:.1}",
-                posicao.x,
-                posicao.y,
-                posicao.z
-            );
         }
 
         self.mover_e_colidir(dt, estado);

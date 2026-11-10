@@ -8,14 +8,16 @@ sobre EGL), ambas consumidas de um snapshot local em `vendor/`.
 
 ## Estado
 
-**Blocos 1a, 1b, 1c, 2a, 2b, 2c e 3a fechados** — arena com iluminação
+**Blocos 1a, 1b, 1c, 2a, 2b, 2c, 3a e 3b fechados** — arena com iluminação
 direcional, câmera orbital, inimigos voando para o centro, **tiro** com mira no
 centro da tela, **HUD** (vida, onda, pontos, `+100`, clarão de dano), **som
 sintetizado** em cinco efeitos, **tremor de câmera** no dano, e **telas** de
 menu, vitória e derrota com reinício.
 
 O jogo tem começo, meio e fim: `INICIAR` no menu, ondas por cota de abates
-(8, 12, 16), vitória ao cumprir as três, e `R` para recomeçar. O plano dos nove
+(8, 12, 16), vitória ao cumprir as três, e `R` para recomeçar. Cada onda é mais
+dura que a anterior — spawn mais rápido, cubos mais velozes e mais de um por vez
+(1/2/3) —, e isso foi **medido** com um piloto automático, não estimado. O plano dos nove
 blocos está em [`PROGRESS.md`](PROGRESS.md); ideias fora de escopo, em
 [`IDEAS.md`](IDEAS.md).
 
@@ -109,6 +111,9 @@ SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial vitoria --frames 3 --quadr
 # as transições de verdade: eventos vão para a fila do SDL, não para o estado
 SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial menu --teclas a --frames 8
 SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial derrota --teclas r --frames 8
+
+# o balanceamento: um piloto com limites humanos joga cinco partidas
+cargo run --release -- --balanceamento
 ```
 
 `--alvo N` planta N cubos no eixo da câmera a distâncias seguras (fora da esfera
@@ -186,6 +191,8 @@ src/
 ├── audio.rs             cinco efeitos sintetizados + carga no mixer
 ├── gameplay/tremor.rs   tremor de câmera (translação determinística)
 ├── screens.rs           as telas (menu, jogo, fim) e as transições puras
+├── gameplay/dificuldade.rs  intervalo, velocidade e cubos por onda
+├── gameplay/piloto.rs   jogador automático com limites humanos (mede a dificuldade)
 ├── ui/
 │   ├── mod.rs           câmera da HUD, matriz de pixel e batelada por cor
 │   ├── font.rs          fonte 5x7 em dados (sem arquivo, sem licença)
@@ -276,8 +283,9 @@ cargo test
 cargo doc --no-deps
 ```
 
-254 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
-layout da HUD, a síntese de som, o tremor e as **transições de tela** são
+272 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+layout da HUD, a síntese de som, o tremor, as **transições de tela** e a
+**dificuldade por onda** são
 testados sem abrir janela, e a captura headless (`--quadro`) é o que prova o
 desenho.
 

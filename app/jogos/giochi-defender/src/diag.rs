@@ -56,6 +56,9 @@ OPÇÕES:
                           ou --quadro, que pressupõem jogo).
     --tela-inicial NOME   menu | jogo | vitoria | derrota. As duas últimas
                           começam com o estado já resolvido, para capturar.
+    --balanceamento       Um piloto automático (com limites humanos) joga a
+                          partida inteira e imprime o resultado: waves, vidas,
+                          tempo, abates e erros. Sem janela e sem GL.
     --teclas LISTA        Empurra teclas na fila do SDL, uma por quadro, antes
                           de desenhar (ex.: `a`, `down,a`, `r`). É o que permite
                           provar que o menu e o reinício respondem sem dedo.
@@ -173,6 +176,8 @@ pub struct Diag {
     pub tela_inicial: Option<TelaInicial>,
     /// Teclas a injetar, uma por quadro.
     pub teclas: Vec<String>,
+    /// Rodar o balanceamento com o piloto automático e sair.
+    pub balanceamento: bool,
     /// Quantos cubos plantar no eixo da câmera.
     pub alvo: Option<u32>,
     /// Tamanho pedido da janela.
@@ -210,6 +215,7 @@ impl Default for Diag {
             volume: None,
             tela_inicial: None,
             teclas: Vec::new(),
+            balanceamento: false,
             demo_hud: false,
             atirar: false,
             alvo: None,
@@ -284,6 +290,7 @@ impl Diag {
                         );
                     }
                 }
+                "--balanceamento" => diag.balanceamento = true,
                 "--menu" => diag.tela_inicial = Some(TelaInicial::Menu),
                 "--sem-menu" => diag.tela_inicial = Some(TelaInicial::Jogo),
                 "--tela-inicial" => {
@@ -642,6 +649,12 @@ mod tests {
             parse(&["--alvo", "2", "--menu"]).unwrap().tela_inicial(),
             TelaInicial::Menu
         );
+    }
+
+    #[test]
+    fn o_balanceamento_e_opt_in() {
+        assert!(!parse(&[]).unwrap().balanceamento);
+        assert!(parse(&["--balanceamento"]).unwrap().balanceamento);
     }
 
     #[test]
