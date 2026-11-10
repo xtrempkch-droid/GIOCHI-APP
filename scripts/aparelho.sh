@@ -54,6 +54,16 @@ LOG="/tmp/giochi.log"
 # o cliente DHCP pode ter entregue um IP fora do prefixo configurado.
 CANDIDATOS=(${GIOCHI_CANDIDATOS:-10.55.0.2})
 
+# Endereços que **aceitaram conexão e recusaram autenticação** na última
+# varredura. Vive no escopo global de propósito: `procurar` roda dentro de
+# `$(...)`, que é um subshell, e tudo que ele atribui morre com ele. Antes esta
+# variável só existia lá dentro e `cmd_procurar` a lia depois — com `set -u`,
+# `${#RECUSADOS[@]}` num array inexistente derrubava o próprio `procurar` com
+# `RECUSADOS: variável não associada`, escondendo o diagnóstico que ela existe
+# para dar. A comunicação entre os dois é por arquivo; este é o destino.
+RECUSADOS=()
+RECUSADOS_ARQUIVO=""
+
 # Opções do ssh: sem host key interativa (o IP muda, a chave seria outra) e com
 # timeout curto, porque o aparelho desliga e a conexão fica pendurada.
 #
@@ -139,9 +149,14 @@ procurar() {
   # outro: instalar a chave por senha, e `ssh-keygen -R <ip>` se o aviso for
   # de chave trocada.
   #
-  # `RECUSADOS` acumula esses endereços para a mensagem de erro poder dizer
-  # isso — o silêncio era o defeito, não a varredura.
-  RECUSADOS=()
+  # Os recusados vão para `$RECUSADOS_ARQUIVO` (um arquivo), e não para um
+  # array: `procurar` é chamado em `$(...)` e o que ele atribui não volta para
+  # o pai. O caminho do arquivo vem do pai e é herdado pelo subshell.
+  local recusados=${RECUSADOS_ARQUIVO:-}
+  if [ -z "$recusados" ]; then
+    recusados=$(mktemp)
+  fi
+  : > "$recusados"
 
   # Endereços conhecidos primeiro: o `usb0` tem IP fixo (10.55.0.2) e responde
   # em um segundo. Varrer a /24 inteira quando o aparelho está no cabo USB é
@@ -153,7 +168,7 @@ procurar() {
         printf '%s\n' "$ip"
         return 0
       fi
-      RECUSADOS+=("$ip")
+      printf '%s\n' "$ip" >> "$recusados"
     fi
   done
 
@@ -188,7 +203,7 @@ procurar() {
 
   if [ -z "$lista" ]; then
     if [ -s "$encontrados.recusados" ]; then
-      RECUSADOS+=($(sort -u "$encontrados.recusados"))
+      sort -u "$encontrados.recusados" >> "$recusados"
     fi
     rm -f "$encontrados.recusados"
     return 1
@@ -626,8 +641,17 @@ iniciar_launcher() {
 cmd_procurar() {
   titulo "procurando o aparelho na $SUBREDE.0/24"
   printf '  candidatos fixos tentados antes da varredura: %s\n' "${CANDIDATOS[*]}"
+  # O arquivo é criado **aqui**, no processo pai, e o caminho é herdado pelo
+  # subshell de `procurar`. Sem isso a lista de recusados não volta.
+  RECUSADOS_ARQUIVO=$(mktemp)
+  : > "$RECUSADOS_ARQUIVO"
   local lista
   if ! lista=$(procurar); then
+    RECUSADOS=()
+    while IFS= read -r ip_recusado; do
+      [ -n "$ip_recusado" ] && RECUSADOS+=("$ip_recusado")
+    done < "$RECUSADOS_ARQUIVO"
+    rm -f "$RECUSADOS_ARQUIVO"
     # A distinção importa: mandar conferir o cabo quando o aparelho está no
     # cabo custa uma sessão inteira de diagnóstico no lugar errado.
     if [ "${#RECUSADOS[@]}" -gt 0 ]; then
@@ -647,6 +671,7 @@ cmd_procurar() {
     printf '        GIOCHI_DEVICE=10.55.0.2 GIOCHI_SENHA=<senha> bash scripts/aparelho.sh procurar\n'
     exit 1
   fi
+  rm -f "$RECUSADOS_ARQUIVO"
   printf '%s\n' "$lista" | while read -r ip; do
     printf '  %s %s\n' "$(printf '%s' "$VERDE")$ip$(printf '%s' "$ZERA")" "$("${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$ip" 'uname -n' 2>/dev/null | sem_ruido)"
   done

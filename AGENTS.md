@@ -5857,3 +5857,193 @@ troca de mapa  9 → 9 → 8 → 9 malhas; no fim 0 malhas e 0 shaders
 O `estacao` e o `lua` têm menos cores que o asteroide porque são lisos: a rocha
 facetada tem uma normal por face e o gradiente do `phong` dá um tom por triângulo.
 
+
+## 41. Neon Drift: a largada, quatro dificuldades; cobrinha em 800×600 (10/11/2026)
+
+Quatro pedidos do dono em uma rodada: o bug do **porto** ("a posição do carrinho
+está invertida, somente nesse mapa e somente o carro do player"), **quatro modos
+de dificuldade** com o desafiante deixando o carro do jogador 5 % mais lento,
+o **equilibrium** sem forma de sair, o **cobrinha em 800×600**, e o launcher
+**instalado no aparelho** para caçar mais erros.
+
+### 1. O carro do porto nascia virado — e a causa eram duas
+
+Não era desenho: era a **direção na linha de largada**. A pista é uma
+Catmull-Rom fechada, e a amostra que fecha o laço recebia a **corda**
+(`primeiro − anterior`) como direção em vez da **tangente** da spline. A tangente
+em `t = 0` é `0,5·(p₂ − p₀)`, e é a mesma no fim do último segmento por
+construção; a corda é quase perpendicular perto da linha. No porto ela apontava
+para o lado **oposto**, porque o traçado original voltava pelo mesmo trecho da
+reta em sentido contrário.
+
+Duas correções: o fecho usa `amostras[0].direcao` (`pista.rs`) e o porto ganhou
+uma volta pela rua de trás (`mapa.rs`), em vez de descer e subir pela mesma reta.
+
+O número que prova é o cosseno entre a direção 3 m antes e 3 m depois da linha:
+
+| mapa | antes | depois |
+| --- | --- | --- |
+| avenida | 1,000 | 1,000 |
+| **porto** | **−1,000** | **0,992** |
+| salar | 0,997 | 0,997 |
+| boavista | 0,251 | 0,251 |
+| circuito | −0,765 | −0,765 |
+
+`boavista` e `circuito` têm grampo na linha **por desenho** e não apresentam o
+sintoma: o rumo inicial vem de `direcao_em(3,0)` — o trecho **depois** da linha —
+em `Corrida::com_mapa_e_config` e em `reiniciar`. Duas tentativas de fechar esses
+dois "por dentro" criaram quinas de **1,5–1,6 m** e foram revertidas: o teste de
+raio mínimo (`> 3,0 m`) reprovou as duas, que é o que ele existe para fazer.
+
+O porto passou de 1 030 m para **1 193 m** com o novo traçado, e a corrida de
+3 voltas fecha em **3 579 m** de progresso — o número que confirma que as três
+voltas são três.
+
+### 2. A frase "MAPA PORTO NOTURNO" desenha certo — e é igual nos dois lados
+
+O relato incluía *"bug na frase «mapa porto noturno»"*. A frase é
+`format!("MAPA  {}", mapa.nome.to_uppercase())`, e ela **desenha inteira**:
+
+| Medida | PC | X35H |
+| --- | --- | --- |
+| extensão da linha | x 230..409, y 160..170 | **idêntico** |
+| largura esperada | 19 × 6 − 1 = 113 unidades × 1,6 = 180,8 px | 180 px medidos |
+
+E `todo_nome_de_mapa_tem_glifo` garante que cada letra existe na fonte 5×7. A
+conclusão é **build antiga no aparelho** — a instalação medida era
+`2ecac141…`, de antes dos quatro modos. Uma tela que não muda e um binário velho
+são indistinguíveis de fora; o sha256 nas duas pontas é o que separa os dois
+casos.
+
+### 3. Quatro dificuldades, e a folga medida na chegada
+
+`crates/core/src/dificuldade.rs` declara os quatro modos; o fator de IA é campo
+**separado** de `habilidade` (que é clampada em `0,72..=0,98` — encostar a
+dificuldade nela faria o difícil não ser mais difícil que o normal) e o fator do
+jogador entra no **teto** de velocidade (`Carro::teto`), não no motor, senão o
+nitro emprestaria velocidade que o carro não sustenta.
+
+`--json` ganhou `dificuldade`, `posicao` e **`gap`** (metros entre o melhor
+adversário e o jogador). `posicao` sozinha não serve: com o piloto ao volante ela
+é `1` nos quatro modos, e "1º" não distingue ganhar por 500 m de ganhar por 100.
+
+| folga do jogador | fácil | normal | difícil | desafiante |
+| --- | --- | --- | --- | --- |
+| avenida (2 voltas) | **−511,8 m** | −327,1 m | −213,4 m | **−158,5 m** |
+| porto (3 voltas) | −754,7 m | −397,9 m | −140,7 m | **−71,9 m** |
+
+**Idênticos no PC e no X35H, valor por valor** — a física roda em passo fixo e
+não lê relógio. O desafiante continua ganhável (71,9 m ≈ 1,8 s no porto), e o
+tempo do jogador quase não muda (41,5 → 42,0 s na avenida): dificuldade muda
+quem está à frente, não a física dele — exceto o desafiante, que muda o carro.
+
+Dois testes fixam as duas metades: `a_dificuldade_aproxima_os_adversarios_de_verdade`
+(corre a prova nos quatro modos e exige folga monotônica, queda > 100 m do fácil
+ao desafiante e piso de 1 s) e `o_carro_do_desafiante_anda_menos_que_o_do_normal`.
+
+**O primeiro destes testes mediu colisão e chamou de física.** Ele rodava na
+avenida e devolvia **103,2 %** — o desafiante, mais lento, escapava da batida que
+o normal levava. Passou a usar a reta de teste a 300 m, com a lição do
+`carro_na_reta` já escrita ao lado: *física não se testa numa pista com curva a
+cada 50 m*.
+
+Na tela, o título mostra o mapa **e** a dificuldade com uma linha dizendo o que
+muda (`DESAFIANTE  ADVERSARIOS 10% MAIS RAPIDOS E VOCE 5% MAIS LENTO`), porque
+"desafiante" sem explicação faz o jogador sentir o carro lento e chamar de bug.
+Medido no X35H: a linha ocupa x 75..564 e cabe; trocar é na vertical no título.
+
+### 4. O equilibrium não tinha saída — agora o **launcher** oferece uma
+
+`ball_balance` (da GIOCHI-ENGINE-3D) sai por ESC, que o aparelho não tem. Com o
+launcher em `fork`+`wait`, o único caminho era desligar no botão.
+
+A saída é do **launcher**: **START + B segurados por 1,5 s** → `SIGKILL` no filho,
+aviso na tela, volta ao launcher. `SIGKILL` e não `SIGTERM` porque o SDL só posta
+`SDL_QUIT` na fila e um jogo que não bombeia eventos segue vivo com o KMSDRM —
+já aconteceu com o launcher-teste. Não foi escrito nada no repositório da engine.
+
+`Command::status()` virou `spawn` + `try_wait()` com uma thread lendo `/dev/input`
+a cada 30 ms (cada descritor de evdev tem fila própria, então dois leitores veem
+os mesmos eventos). Sem `start`/`b` no mapa, o launcher **avisa** e segue sem o
+gesto: adivinhar o código seria pior que não oferecer a saída.
+
+**Provado sem dedo**, porque o aparelho não tem `/dev/uinput`: `GIOCHI_INPUT_DIR`
+aponta para um diretório com um FIFO `event0`, e o teste escreve `input_event` de
+verdade (24 bytes). START sozinho por 1,8 s não dispara; START+B por 2 s dispara.
+A mutação que tira o `&& entrada.frame().back` reprova com *"START sozinho
+encerrou o jogo: é a tecla de pausa de quase todo jogo"*. **O dedo continua sendo
+afirmação.**
+
+### 5. Cobrinha: 800×600 de alvo num painel de 640×480
+
+Pedido literal: *"é um jogo leve, acho que por ele em 800×600 daria para manter
+acima dos 60 fps ou 45 pelo menos"* — e 640 × 1,25 = 800, exatamente.
+
+A engine vendorizada só sabia **reduzir**: `MAX_SCALE` era `1.0` e
+`set_render_scale` filtrava por `< MAX_SCALE`. Agora são `2.0`, existe
+`UNITY_SCALE = 1.0` como "sem escala" (filtro `!= 1.0`) e `sanitise_scale`
+devolve **1,0** para valor inválido — antes devolvia `MAX_SCALE`, que com o teto
+novo transformaria um `NaN` em supersampling dobrado. É a mesma decisão do
+`GIOCHI_GLES` (§16): valor inválido cai no **neutro**, não no extremo.
+
+```text
+--escala 1.0   49,3 fps    521 cores distintas
+--escala 1.25  49,2 fps  4 604 cores distintas     ← 13,41 % dos pixels diferentes
+```
+
+**Custo nenhum, ganho real.** O mesmo par no PC dá 517 → 4 552 cores com 13,46 %
+de pixels diferentes: aparelho e PC desenham o mesmo. A queda de 74,2 fps (09/11)
+para 49,3 aqui é do **display** — `atrasados` marca ~99 % dos quadros contra o
+orçamento de 13,3 ms e as duas escalas empatam, o mesmo efeito do §37.
+
+#### `--quadro` lia o alvo intermediário
+
+Com escala, `drawable_size()` é o **alvo** (800×600) e a captura gravava um BMP
+de 800×600 chamando `read_pixels` de uma janela de 640×480 — região fora da tela.
+Agora usa o tamanho da **janela**, e é isso que permite comparar duas escalas
+pixel a pixel; antes a comparação virava comparação de tamanhos.
+
+### 6. Dois defeitos de ferramenta, os dois silenciosos
+
+**(a) `aparelho.sh procurar` morria com `RECUSADOS: variável não associada`.**
+`procurar` roda em `$(…)`, que é subshell: o array `RECUSADOS` que ele montava
+morria com o subshell e `cmd_procurar` lia um array inexistente — com `set -u`,
+o erro derrubava justamente o diagnóstico que o array existe para dar. Agora a
+comunicação é por **arquivo** (caminho herdado do pai), e o caminho errado foi
+reproduzido em 6 linhas de shell antes de corrigir: a versão antiga imprime
+exatamente o erro que apareceu em campo.
+
+**(b) `compilar-launcher-arm64.sh --instalar` saía calado com código 1.**
+`INSTALAR="${2:-}"; shift 2` com um argumento só: o `shift 2` falha e `set -e`
+mata o script **sem imprimir nada**. O destino passou a ser opcional (sem
+argumento, descobre o aparelho), e `--host` sem valor agora tem mensagem. Um
+script de build que sai calado é indistinguível de um build que não rodou.
+
+### 7. Instalado no X35H, e medido
+
+```text
+launcher        738 784 B · /opt/giochi/apps/launcher/bin (é a build de PRODUÇÃO,
+                com o gesto START+B; o launcher-teste segue instalado à parte)
+                aparelho.sh verificar → 100,0 % contra a referência do PC, 0,00 % de preto
+cobrinha        87800fcf… · /opt/giochi/apps/cobrinha (800x600 de alvo)
+neon-drift      44e160d0… · /user/apps/neon-drift
+giochi-defender 77c75889… · /opt + /user (0.2.0, do §40)
+catálogo        4 apps: cobrinha, giochi-defender, neon-drift, equilibrio
+launcher        pid 7880, DRM master em card0
+neon-drift      5 mapas: 36,8 fps · 52 desenhos · GLES 3 com instancing
+```
+
+O `/opt/giochi/apps/launcher/bin/giochi-launcher` deixou de ser o **wrapper** que
+apontava para o launcher-teste (§33): o aparelho voltou a rodar o launcher de
+produção, que é o único com sono, brilho, volume, energia e Wi-Fi/BT — e é o que
+interessa para caçar defeitos. O `launcher-teste` continua em
+`/opt/giochi/apps/launcher-teste` para as comparações de desenho.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| START+B com o dedo no controle | **não exercitado** — a cadeia FIFO→threads→mapa→gesto está provada; o botão físico não |
+| FPS do neon-drift no **X55/RK3566** | **não medido** desde §37 (36,8 no X35H) |
+| custo do supersampling em painel **60 Hz** | medido no X35H em 49,2 vs 49,3 fps; no R35S não |
+| saída do equilibrium **no jogo** | **não existe** — quem sai é o launcher; o exemplo da engine segue sem botão |

@@ -78,13 +78,29 @@ resolver_aparelho() {
 }
 
 INSTALAR=""
+PEDIU_INSTALAR=""
 FORCAR_TEXTO=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --instalar) INSTALAR="${2:-}"; shift 2 ;;
+    # O destino é **opcional**: `--instalar` sozinho descobre o aparelho, que é
+    # o caso normal (o IP muda a cada boot). A primeira versão fazia
+    # `INSTALAR="${2:-}"; shift 2` e, chamada só com `--instalar`, o `shift 2`
+    # falhava com um argumento só — e `set -e` matava o script **sem imprimir
+    # nada**, com código 1. Um script de build que sai calado é indistinguível
+    # de um build que não rodou.
+    --instalar)
+      PEDIU_INSTALAR="sim"
+      if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then
+        INSTALAR="$2"; shift 2
+      else
+        shift
+      fi
+      ;;
     --com-texto) FORCAR_TEXTO="sim"; shift ;;
     --sem-texto) FORCAR_TEXTO="nao"; shift ;;
-    --host)     HOST_SSH="${2:-}"; shift 2 ;;
+    --host)
+      [ $# -ge 2 ] || erro "--host precisa de root@ip"
+      HOST_SSH="$2"; shift 2 ;;
     *) erro "argumento desconhecido: $1" ;;
   esac
 done
@@ -149,6 +165,12 @@ TEM_TEXTO_PEDIDO="$TEM_TEXTO"
 TEM_SOM=""
 if [ -z "$INSTALAR" ]; then
   resolver_aparelho
+fi
+# `--instalar` sem destino usa o aparelho descoberto — a forma que o
+# `aparelho.sh instalar` chama e a que a documentação manda usar.
+if [ -n "$PEDIU_INSTALAR" ] && [ -z "$INSTALAR" ]; then
+  [ -n "$HOST_SSH" ] || erro "não achei o aparelho; use --instalar root@ip"
+  INSTALAR="$HOST_SSH"
 fi
 if [ -n "$HOST_SSH" ] && ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
     -o ConnectTimeout=8 "$HOST_SSH" \
