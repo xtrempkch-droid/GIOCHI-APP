@@ -1,5 +1,67 @@
 # Estado — GIOCHI DEFENDER
 
+## Correção pós-plano: o jogo não recebia botão nenhum
+
+Relato do dono: *"quando vou jogar ele congela e não abre"*. **Não congelava: ele
+abria, desenhava o menu e ficava ali para sempre.**
+
+### A causa, medida
+
+O jogo lia o controle pela API de **gamepad do SDL**. Os handhelds usam driver
+próprio (`r36s_Gamepad`, `gpio-keys`) e não têm entrada no `SDL_GameControllerDB`,
+então no PC qualquer controle funciona e **no aparelho nenhum funciona**. Medido
+no R35S com o binário anterior:
+
+```text
+tela inicial: Menu        <- desenhou e parou aqui
+1104 ppid=1090 drm=6 giochi-defender     <- o jogo está rodando
+  1090 ppid=987  drm=0 giochi-launcher-teste   <- o launcher esperando em wait()
+```
+
+O launcher fica bloqueado em `fork`+`wait` esperando um jogo que nunca termina, e
+a tela não responde a botão nenhum. É "congelado" do ponto de vista de quem está
+com o aparelho na mão — e o `AGENTS.md` §12 já tinha a decisão escrita: **entrada
+por evdev, não por SDL gamepad**. O launcher e o `neon-drift` já faziam assim; o
+`neon-drift` loga `3 dispositivo(s) de entrada` no mesmo aparelho.
+
+### A correção
+
+`src/input_evdev.rs`: leitura de `/dev/input/event*` por thread, com o
+`buttons.map` do **sistema**. Cópia da decisão do launcher, não dependência —
+como o `rotate_rect` do `volley`.
+
+O mapa é do sistema e o tradutor é do app, e isso não é detalhe: no R35S
+`a = BTN_EAST` (0x131) e no X55 `a = BTN_SOUTH` (0x130). Fixar `BTN_SOUTH` como
+"confirmar" trocaria A por B num dos dois aparelhos, **em silêncio**.
+
+| Verificação | Resultado medido |
+| --- | --- |
+| Abre os dispositivos | **3**: `rk817_int Headphones`, `gpio-keys-vol`, `r36s_Gamepad` |
+| Traduz o mapa real do R35S | **19 símbolos**, **zero** desconhecidos |
+| `a` confirma | `tela: Menu -> Jogando` + `partida iniciada` |
+| `start` volta ao menu | `tela: Jogando -> Menu` |
+| direcional no menu | move o foco; `a` no SAIR encerra o jogo |
+| `r` atira | **3 abates** com `--alvo 3` |
+| Desenha no R35S | menu 640×480, 83 cores, 0,00 % de preto |
+
+### Como isso foi provado sem dedo no aparelho
+
+`--espiar-input SEG` lê `/dev/input` cru e imprime cada botão — é o que separa
+"o botão não chega" de "chega e o app ignora". No aparelho ele mostra os 3
+dispositivos e os 19 símbolos.
+
+E o caminho de **parsing real** foi exercitado no PC por um FIFO que recebe
+`struct input_event` de 24 bytes: `EV_KEY`/`BTN_EAST`/valor 1 → thread evdev →
+canal → mapa → borda → `tela: Menu -> Jogando`. O kernel é o único substituído.
+`GIOCHI_INPUT_DIR` existe para isso (no PC o usuário não está no grupo `input` e
+`/dev/input/event*` é `660 root:input`).
+
+### Outra coisa que apareceu: o app estava `scaffold`
+
+O `apps.json` ainda dizia `scaffold`, e o gerador de catálogo **exclui scaffold**
+— então o jogo não entrava no catálogo do aparelho e a correção parecia não
+funcionar. Agora é `ready`.
+
 ## Último bloco concluído: 3c — engine atualizada, pacote e ciclo completo
 Data: 2026-11-10
 
@@ -12,7 +74,7 @@ Data: 2026-11-10
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` — **272/272** em x86_64
+- [x] `cargo test` — **284/284** em x86_64
 - [x] `cargo build` (debug e release)
 - [x] `cargo doc --no-deps`
 - [x] `cargo build --release --target aarch64-unknown-linux-gnu` — **feito** com

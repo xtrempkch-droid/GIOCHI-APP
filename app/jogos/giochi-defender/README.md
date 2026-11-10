@@ -48,9 +48,18 @@ cargo run --release
   há `.wav` no pacote.
 - **teclas de volume** — mudam o `Master` do ALSA (o volume do sistema) em
   passos de 5 %, e o valor persiste em `/user/.config/giochi/volume`.
+- **direcional / WASD** — orbita a câmera e navega o menu
 - **`A` / `Enter` / `Espaço`** — confirma (no menu e no fim)
 - **`B` do controle / `Backspace`** — volta: do jogo ao menu, do fim ao menu
 - **`R`** — recomeça a partida, do jogo ou do fim
+- **`START`** — volta ao menu durante a partida
+- **`R1`** — atira
+
+O controle é lido de **`/dev/input`**, não pela API de gamepad do SDL: os
+handhelds usam driver próprio e não têm entrada no `SDL_GameControllerDB`, então
+no PC qualquer controle funciona e no aparelho nenhum funcionaria. Os nomes dos
+botões vêm do `/etc/giochi/buttons.map` do sistema, porque o mesmo símbolo lógico
+(`a`) aponta para `BTN_EAST` no R35S e `BTN_SOUTH` no X55.
 
 O som do jogo **segue o volume do sistema**: o jogo nunca mexe no próprio mixer,
 então quem escala a saída é o `Master` do ALSA.
@@ -117,6 +126,9 @@ SDL_VIDEODRIVER=offscreen cargo run -- --tela-inicial derrota --teclas r --frame
 
 # o balanceamento: um piloto com limites humanos joga cinco partidas
 cargo run --release -- --balanceamento
+
+# o que o controle manda: separa "o botão não chega" de "chega e o app ignora"
+./giochi-defender --espiar-input 15
 
 # empacotar como a loja entrega, e instalar no aparelho
 node ../../../scripts/empacotar.mjs app/jogos/giochi-defender
@@ -290,7 +302,7 @@ cargo test
 cargo doc --no-deps
 ```
 
-272 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
+284 testes. A geometria, a câmera, a colisão, a simulação, a arma, a mira, o
 layout da HUD, a síntese de som, o tremor, as **transições de tela** e a
 **dificuldade por onda** são
 testados sem abrir janela, e a captura headless (`--quadro`) é o que prova o

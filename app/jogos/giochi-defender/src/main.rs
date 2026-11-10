@@ -46,6 +46,7 @@ use giochi_defender::gameplay::camera::OrbitalCamera;
 use giochi_defender::gameplay::partida::{Inimigos, Partida};
 use giochi_defender::gameplay::tremor::Tremor;
 use giochi_defender::gameplay::weapon::{Weapon, PONTOS_POR_ABATE};
+use giochi_defender::input_evdev::{ButtonsMap, EvdevInput};
 use giochi_defender::screens::{self, Acao, Menu, Resultado, Tela};
 use giochi_defender::state::{cota_da_onda, GameState, WAVES_TOTAIS};
 use giochi_defender::ui::hud::{self, Hud};
@@ -118,6 +119,9 @@ fn executar(diag: Diag) -> Result<()> {
     if diag.balanceamento {
         return relatorio_de_balanceamento(diag.semente);
     }
+    if let Some(segundos) = diag.espiar_input {
+        return espiar_input(segundos);
+    }
 
     let plataforma = Platform::new()?;
     log::info!(
@@ -170,6 +174,29 @@ fn executar(diag: Diag) -> Result<()> {
     }
     // O controle de volume do sistema: as teclas do aparelho durante o jogo
     // (o launcher fica em `fork`+`wait` e não as lê) e o `--volume`.
+    // O controle é lido de `/dev/input`, **não** pela API de gamepad do SDL: os
+    // handhelds usam driver próprio e não têm entrada no `SDL_GameControllerDB`,
+    // então no PC qualquer controle funciona e no aparelho nenhum funciona. Sem
+    // isto o jogo abria, desenhava o menu e parava ali — o launcher esperava em
+    // `fork`+`wait` e o aparelho parecia travado.
+    // `GIOCHI_INPUT_DIR` existe porque no PC o usuário não está no grupo
+    // `input` e `/dev/input/event*` é 660 root:input — sem o override não há
+    // como exercitar este caminho fora do aparelho. Mesma ideia do
+    // `GIOCHI_CATALOGO`: um caminho, não uma segunda implementação.
+    let diretorio_entrada = std::env::var("GIOCHI_INPUT_DIR")
+        .unwrap_or_else(|_| giochi_defender::input_evdev::DIRETORIO_DE_ENTRADA.to_string());
+    let mut controle = if diag.evdev {
+        EvdevInput::abrir(
+            std::path::Path::new(&diretorio_entrada),
+            ButtonsMap::carregar(std::path::Path::new(
+                giochi_defender::input_evdev::MAPA_PADRAO,
+            )),
+        )
+    } else {
+        log::info!("controle: leitura de /dev/input desligada por --sem-evdev");
+        EvdevInput::abrir(std::path::Path::new("/nao/existe"), ButtonsMap::padrao())
+    };
+
     let mut volume = Volume::novo(Alsa);
     if !volume.disponivel() {
         log::warn!(
@@ -325,6 +352,7 @@ fn executar(diag: Diag) -> Result<()> {
         &mut hud_gl,
         &mut sons,
         &mut volume,
+        &mut controle,
         &mut tremor,
         &mut camera,
         &mut partida,
@@ -428,6 +456,107 @@ fn injetar_tecla(plataforma: &Platform, nome: &str) -> Result<()> {
         plataforma
             .push_event(evento)
             .map_err(|erro| anyhow::anyhow!("não consegui injetar '{nome}': {erro}"))?;
+    }
+    Ok(())
+}
+
+/// Lê `/dev/input` cru por `segundos` e imprime cada código recebido.
+///
+/// É o que separa **"o botão não chega"** de **"chega e o app ignora"** — a
+/// distinção que o launcher já aprendeu a fazer com `aparelho.sh input`. Sem
+/// ela, um botão que não responde manda procurar defeito no código quando o
+/// problema está no driver ou no mapa.
+///
+/// Não abre janela nem GL: roda por SSH, que é onde a pergunta aparece.
+fn espiar_input(segundos: f32) -> Result<()> {
+    use giochi_defender::input_evdev::{ButtonsMap, EvdevInput};
+
+    let mapa = ButtonsMap::carregar(std::path::Path::new(
+        giochi_defender::input_evdev::MAPA_PADRAO,
+    ));
+    let mut leitor = EvdevInput::abrir(
+        std::path::Path::new(giochi_defender::input_evdev::DIRETORIO_DE_ENTRADA),
+        mapa.clone(),
+    );
+
+    println!("GIOCHI DEFENDER — espiar /dev/input por {segundos:.0}s");
+    println!("  dispositivos: {}", leitor.dispositivos());
+    for nome in leitor.nomes() {
+        println!("    {nome}");
+    }
+    println!("  mapa: {} símbolo(s)", leitor.mapa().len());
+    if !leitor.mapa().desconhecidos().is_empty() {
+        println!(
+            "  ATENÇÃO: {} símbolo(s) do mapa não reconhecido(s): {}",
+            leitor.mapa().desconhecidos().len(),
+            leitor.mapa().desconhecidos().join(", ")
+        );
+    }
+    println!();
+    println!("pressione os botões agora (o código de cada um sai abaixo):");
+
+    // Nome de cada código que o mapa conhece, para a leitura ser em português.
+    let mut nomes: Vec<(u16, String)> = Vec::new();
+    for (nome, codigo) in mapa.pares() {
+        nomes.push((codigo, nome));
+    }
+    nomes.sort();
+
+    let inicio = Instant::now();
+    let mut vistos: Vec<u16> = Vec::new();
+    let mut anterior = giochi_defender::input_evdev::Controles::default();
+    while inicio.elapsed().as_secs_f32() < segundos {
+        leitor.poll();
+        let agora = leitor.controles();
+        let mut mudou = Vec::new();
+        if agora.cima != anterior.cima {
+            mudou.push(("cima", agora.cima));
+        }
+        if agora.baixo != anterior.baixo {
+            mudou.push(("baixo", agora.baixo));
+        }
+        if agora.esquerda != anterior.esquerda {
+            mudou.push(("esquerda", agora.esquerda));
+        }
+        if agora.direita != anterior.direita {
+            mudou.push(("direita", agora.direita));
+        }
+        if agora.confirmar != anterior.confirmar {
+            mudou.push(("confirmar (a)", agora.confirmar));
+        }
+        if agora.voltar != anterior.voltar {
+            mudou.push(("voltar (b)", agora.voltar));
+        }
+        if agora.atirar != anterior.atirar {
+            mudou.push(("atirar (r)", agora.atirar));
+        }
+        if agora.menu != anterior.menu {
+            mudou.push(("menu (start)", agora.menu));
+        }
+        if agora.volume_mais != anterior.volume_mais {
+            mudou.push(("volume +", agora.volume_mais));
+        }
+        if agora.volume_menos != anterior.volume_menos {
+            mudou.push(("volume -", agora.volume_menos));
+        }
+        for (nome, apertou) in mudou {
+            println!(
+                "  [{:5.2}s] {nome} {}",
+                inicio.elapsed().as_secs_f32(),
+                if apertou { "APERTOU" } else { "soltou" }
+            );
+            if apertou {
+                vistos.push(0);
+            }
+        }
+        anterior = agora;
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    println!();
+    if vistos.is_empty() {
+        println!("nenhum botão foi visto — o problema está entre o driver e o mapa");
+    } else {
+        println!("{} apertão(ões) visto(s)", vistos.len());
     }
     Ok(())
 }
@@ -717,7 +846,12 @@ fn aplicar_preset(camera: &mut OrbitalCamera, diag: &Diag) {
 /// Os três somam em vez de competir: no aparelho não há mouse, no PC não há
 /// controle, e um único caminho de câmera evita que o teste no PC meça outro
 /// comportamento.
-fn atualizar_camera(camera: &mut OrbitalCamera, entrada: &Input, dt: f32) {
+fn atualizar_camera(
+    camera: &mut OrbitalCamera,
+    entrada: &Input,
+    pad: giochi_defender::input_evdev::Controles,
+    dt: f32,
+) {
     let delta = entrada.mouse().delta();
     if delta.x != 0.0 || delta.y != 0.0 {
         camera.orbitar(delta.x, delta.y);
@@ -736,11 +870,21 @@ fn atualizar_camera(camera: &mut OrbitalCamera, entrada: &Input, dt: f32) {
     if entrada.key_down(KEY_RIGHT) || entrada.key_down(KEY_D) {
         yaw += 1.0;
     }
-    if entrada.key_down(KEY_UP) || entrada.key_down(KEY_W) {
+    // O direcional do controle entra como **nível**: segurar gira, que é o que
+    // o jogador espera de uma câmera. O `pitch` é a elevação do olho, então
+    // "para cima" no direcional sobe o olho — e olhar para baixo é o que se
+    // ganha com isso, igual ao `W`.
+    if entrada.key_down(KEY_UP) || entrada.key_down(KEY_W) || pad.cima {
         pitch += 1.0;
     }
-    if entrada.key_down(KEY_DOWN) || entrada.key_down(KEY_S) {
+    if entrada.key_down(KEY_DOWN) || entrada.key_down(KEY_S) || pad.baixo {
         pitch -= 1.0;
+    }
+    if pad.esquerda {
+        yaw -= 1.0;
+    }
+    if pad.direita {
+        yaw += 1.0;
     }
 
     let (analogico_x, analogico_y) = com_zona_morta(
@@ -962,6 +1106,7 @@ fn laco(
     hud_gl: &mut HudGl,
     sons: &mut Sons,
     volume: &mut Volume<Alsa>,
+    controle: &mut EvdevInput,
     tremor: &mut Tremor,
     camera: &mut OrbitalCamera,
     partida: &mut Partida,
@@ -1022,6 +1167,13 @@ fn laco(
             }
         }
         entrada.update(&eventos);
+
+        // O controle é lido aqui, uma vez por quadro, e mesclado com o SDL: no
+        // PC vale o teclado/mouse/SDL-gamepad, no aparelho vale o evdev. As duas
+        // fontes somam em vez de competir.
+        controle.poll();
+        let pad = controle.controles();
+
         if pediu_sair || entrada.key_pressed(KEY_ESCAPE) {
             break;
         }
@@ -1046,6 +1198,7 @@ fn laco(
         // quando as vidas acabam.
         let confirmar = entrada.key_pressed(KEY_SPACE)
             || entrada.key_pressed(KEY_ENTER)
+            || pad.confirmar_apertou
             || (*tela != Tela::Jogando && entrada.key_pressed(KEY_A));
         // `B` do controle (botão leste) e `Backspace`/`Esc` no teclado: o
         // aparelho não tem teclado, então o leste é o caminho real do jogador.
@@ -1053,15 +1206,19 @@ fn laco(
         let reiniciar = entrada.key_pressed(KEY_R);
         let mut acao = None;
         if *tela == Tela::Menu {
-            if entrada.key_pressed(KEY_UP) || entrada.key_pressed(KEY_W) {
+            if entrada.key_pressed(KEY_UP) || entrada.key_pressed(KEY_W) || pad.cima_apertou {
                 menu.mover(false);
             }
-            if entrada.key_pressed(KEY_DOWN) || entrada.key_pressed(KEY_S) {
+            if entrada.key_pressed(KEY_DOWN) || entrada.key_pressed(KEY_S) || pad.baixo_apertou {
                 menu.mover(true);
             }
         }
         if reiniciar {
             acao = Some(Acao::Reiniciar);
+        } else if *tela == Tela::Jogando && pad.menu_apertou {
+            // `start` no meio da partida volta ao menu: é a saída que o jogador
+            // tem no aparelho, onde não há tecla.
+            acao = Some(Acao::Voltar);
         } else if confirmar {
             acao = Some(Acao::Confirmar);
         } else if voltar {
@@ -1070,10 +1227,7 @@ fn laco(
         // O mouse também confirma no menu, e o gatilho do controle também: no
         // aparelho não há teclado, e um menu que só responde a `Enter` seria
         // inoperável no X35H.
-        if acao.is_none()
-            && *tela != Tela::Jogando
-            && (entrada.mouse_down(MOUSE_LEFT) || entrada.gamepad().is_down(BUTTON_SOUTH))
-        {
+        if acao.is_none() && *tela != Tela::Jogando && entrada.mouse_down(MOUSE_LEFT) {
             acao = Some(Acao::Confirmar);
         }
         // Sem tecla nenhuma a tela pode mudar mesmo assim (a partida acaba
@@ -1114,6 +1268,8 @@ fn laco(
             && (entrada.mouse_down(MOUSE_LEFT)
                 || entrada.gamepad().is_down(BUTTON_RIGHT_SHOULDER)
                 || entrada.gamepad().is_down(BUTTON_SOUTH)
+                || pad.atirar
+                || pad.confirmar
                 // `--atirar` mantém o gatilho apertado pelo mesmo caminho da
                 // tecla: não há um segundo laço de tiro só para o diagnóstico.
                 || diag.atirar);
@@ -1162,11 +1318,11 @@ fn laco(
         // Teclas de volume: quem as lia era o launcher, que está bloqueado em
         // `fork`+`wait` enquanto o jogo roda. Sem isto, o jogador não consegue
         // abaixar o som justamente quando está jogando.
-        if entrada.key_pressed(KEY_VOLUMEUP) {
+        if entrada.key_pressed(KEY_VOLUMEUP) || pad.volume_mais {
             let nivel = volume.aumentar();
             log::info!("volume: {nivel}% (tecla)");
         }
-        if entrada.key_pressed(KEY_VOLUMEDOWN) {
+        if entrada.key_pressed(KEY_VOLUMEDOWN) || pad.volume_menos {
             let nivel = volume.diminuir();
             log::info!("volume: {nivel}% (tecla)");
         }
@@ -1179,7 +1335,7 @@ fn laco(
             0
         };
         for _ in 0..passos {
-            atualizar_camera(camera, entrada, laco.fixed_timestep());
+            atualizar_camera(camera, entrada, pad, laco.fixed_timestep());
             arma.atualizar(laco.fixed_timestep());
             mira_estado.atualizar(laco.fixed_timestep());
             hud_estado.atualizar(laco.fixed_timestep());

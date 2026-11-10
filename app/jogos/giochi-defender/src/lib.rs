@@ -11,6 +11,7 @@ pub mod audio;
 pub mod bench;
 pub mod diag;
 pub mod gameplay;
+pub mod input_evdev;
 pub mod screens;
 pub mod state;
 pub mod ui;

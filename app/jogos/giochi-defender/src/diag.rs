@@ -48,6 +48,10 @@ OPÇÕES:
     --tremor              Arma o tremor de dano na abertura, para capturar a
                           câmera sacudida sem esperar um cubo acertar.
     --sem-som             Não carrega nem toca som (para isolar o custo dele).
+    --sem-evdev           Não lê /dev/input (o controle só responde pelo SDL).
+    --espiar-input SEG    Lê /dev/input por SEG segundos e imprime cada código
+                          recebido. Separa o botão que não chega do que chega
+                          e o app ignora.
     --volume N            Aplica N% no Master do ALSA pelo mesmo caminho das
                           teclas de volume, imprime e sai (0 a 100).
     --menu                Abre no menu inicial (o padrão interativo).
@@ -178,6 +182,10 @@ pub struct Diag {
     pub teclas: Vec<String>,
     /// Rodar o balanceamento com o piloto automático e sair.
     pub balanceamento: bool,
+    /// Ler `/dev/input`.
+    pub evdev: bool,
+    /// Espiar a entrada crua por N segundos e sair.
+    pub espiar_input: Option<f32>,
     /// Quantos cubos plantar no eixo da câmera.
     pub alvo: Option<u32>,
     /// Tamanho pedido da janela.
@@ -216,6 +224,8 @@ impl Default for Diag {
             tela_inicial: None,
             teclas: Vec::new(),
             balanceamento: false,
+            evdev: true,
+            espiar_input: None,
             demo_hud: false,
             atirar: false,
             alvo: None,
@@ -291,6 +301,17 @@ impl Diag {
                     }
                 }
                 "--balanceamento" => diag.balanceamento = true,
+                "--sem-evdev" => diag.evdev = false,
+                "--espiar-input" => {
+                    let valor = texto(&mut argumentos, embutido, &nome)?;
+                    let segundos: f32 = valor.parse().map_err(|_| {
+                        anyhow::anyhow!("--espiar-input espera segundos, veio '{valor}'")
+                    })?;
+                    if !(segundos.is_finite() && segundos > 0.0 && segundos <= 120.0) {
+                        anyhow::bail!("--espiar-input espera 0 < SEG <= 120, veio '{valor}'");
+                    }
+                    diag.espiar_input = Some(segundos);
+                }
                 "--menu" => diag.tela_inicial = Some(TelaInicial::Menu),
                 "--sem-menu" => diag.tela_inicial = Some(TelaInicial::Jogo),
                 "--tela-inicial" => {
@@ -649,6 +670,24 @@ mod tests {
             parse(&["--alvo", "2", "--menu"]).unwrap().tela_inicial(),
             TelaInicial::Menu
         );
+    }
+
+    #[test]
+    fn o_espiar_input_e_lido_e_limitado() {
+        assert_eq!(parse(&[]).unwrap().espiar_input, None);
+        assert_eq!(
+            parse(&["--espiar-input", "10"]).unwrap().espiar_input,
+            Some(10.0)
+        );
+        assert!(parse(&["--espiar-input", "0"]).is_err());
+        assert!(parse(&["--espiar-input", "500"]).is_err());
+        assert!(parse(&["--espiar-input", "abc"]).is_err());
+    }
+
+    #[test]
+    fn o_evdev_liga_por_padrao_e_desliga_com_uma_flag() {
+        assert!(parse(&[]).unwrap().evdev);
+        assert!(!parse(&["--sem-evdev"]).unwrap().evdev);
     }
 
     #[test]
