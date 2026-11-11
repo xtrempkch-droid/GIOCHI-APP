@@ -1,0 +1,16 @@
+// GIOCHI Tower Defense — Endless, depois da onda 6 (GDD §4).
+//
+// "após a onda 6, ciclos continuam até derrota; toda onda ≥ 7 tem boss escalado."
+(
+    first_wave: 7,
+    boss_from_wave: 7,
+    boss_cycle: [Queen, Tanker, Plasma, Brain],
+
+    // O pico vivo cresce linearmente; a contagem de spawns cresce por fração.
+    peak_alive_base: 120,
+    peak_alive_growth: 8,
+    spawn_count_growth: 0.12,
+
+    // Escala extra somada à do GDD §8, por onda acima da campanha.
+    extra_scaling_per_wave: 0.05,
+)

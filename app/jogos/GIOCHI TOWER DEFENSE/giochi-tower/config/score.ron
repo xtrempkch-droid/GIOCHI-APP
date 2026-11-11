@@ -1,0 +1,10 @@
+// GIOCHI Tower Defense — pontuação (GDD §13).
+//
+// Também fora da lista do prompt, pelo mesmo motivo do `tower.ron`.
+(
+    kill_common: 10,
+    kill_boss: 500,
+    kill_nemesis_per_tier: 200,
+    wave_clear_per_wave: 100,
+    tower_hp_per_point: 10,
+)

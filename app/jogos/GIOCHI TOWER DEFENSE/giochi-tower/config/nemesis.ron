@@ -1,0 +1,103 @@
+// GIOCHI Tower Defense — "O Coronel" (GDD §10).
+//
+// Spawn na onda 1, em borda aleatória. Se morrer, não respawna. Cada onda que ele
+// SOBREVIVE sobe um tier. Tier 5 é mais forte que a Queen — mas matável.
+(
+    spawn_wave: 1,
+    base_hp: 300.0,
+    base_damage: 20.0,
+    minimap_delay_s: 5.0,
+    reward_score_per_tier: 200,
+
+    // Penalidade por ignorar: dano massivo na torre se ele alcançar (GDD §10).
+    tower_damage_massive: 1500.0,
+
+    // Recompensa por matar inclui item que não existe na loja (GDD §10).
+    exclusive_item: ColonelTrophy,
+
+    tiers: [
+        // Tier 0 — spawn, onda 1: Grunt reforçado.
+        (
+            tier: 0,
+            hp: 300.0,
+            damage: 20.0,
+            gains: [],
+            damage_reduction_pct: 0.0,
+            dash: false,
+            summons: 0,
+            summons_period_s: 0.0,
+            ranged_attack: false,
+        ),
+        // Tier 1 — fim da onda 1: ganha Dash.
+        (
+            tier: 1,
+            hp: 300.0,
+            damage: 20.0,
+            gains: ["dash"],
+            damage_reduction_pct: 0.0,
+            dash: true,
+            summons: 0,
+            summons_period_s: 0.0,
+            ranged_attack: false,
+        ),
+        // Tier 2 — fim da onda 2: invoca 2 adds a cada 30 s.
+        (
+            tier: 2,
+            hp: 300.0,
+            damage: 20.0,
+            gains: ["dash", "invoca 2 adds / 30 s"],
+            damage_reduction_pct: 0.0,
+            dash: true,
+            summons: 2,
+            summons_period_s: 30.0,
+            ranged_attack: false,
+        ),
+        // Tier 3 — fim da onda 3: 30% de redução de dano.
+        (
+            tier: 3,
+            hp: 300.0,
+            damage: 20.0,
+            gains: ["dash", "invoca 2 adds / 30 s", "redução de dano 30%"],
+            damage_reduction_pct: 30.0,
+            dash: true,
+            summons: 2,
+            summons_period_s: 30.0,
+            ranged_attack: false,
+        ),
+        // Tier 4 — fim da onda 4: ataque à distância.
+        (
+            tier: 4,
+            hp: 300.0,
+            damage: 20.0,
+            gains: [
+                "dash",
+                "invoca 2 adds / 30 s",
+                "redução de dano 30%",
+                "ataque à distância",
+            ],
+            damage_reduction_pct: 30.0,
+            dash: true,
+            summons: 2,
+            summons_period_s: 30.0,
+            ranged_attack: true,
+        ),
+        // Tier 5 — fim da onda 5: fase final, HP 5000 / dano 80.
+        (
+            tier: 5,
+            hp: 5000.0,
+            damage: 80.0,
+            gains: [
+                "dash",
+                "invoca 2 adds / 30 s",
+                "redução de dano 30%",
+                "ataque à distância",
+                "fase final",
+            ],
+            damage_reduction_pct: 30.0,
+            dash: true,
+            summons: 2,
+            summons_period_s: 30.0,
+            ranged_attack: true,
+        ),
+    ],
+)

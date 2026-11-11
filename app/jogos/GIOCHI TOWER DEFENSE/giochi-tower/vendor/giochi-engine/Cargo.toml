@@ -1,0 +1,40 @@
+[package]
+name = "giochi-engine"
+description = "GIOCHI-ENGINE core: a C-shaped 2D game engine built on SDL2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+sdl2 = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "sprites_2d"
+harness = false
+
+# Phase 18b: per-frame engine overhead, so a frame-budget regression can be attributed
+# to the engine rather than to the content that happens to be on screen.
+[[bench]]
+name = "engine_overhead"
+harness = false
+
+[features]
+# Compila o SDL2 do código-fonte — o padrão, e o que o CI usa em x86_64.
+default = ["sdl2-bundled"]
+sdl2-bundled = ["sdl2/bundled"]
+# Usa o SDL2 do sistema via pkg-config. É o caminho para embarcado, cuja imagem
+# já traz o SDL2 com KMSDRM — e é o que permite cross-compilar para aarch64 sem
+# compilar uma segunda cópia da biblioteca.
+sdl2-system = ["sdl2/use-pkgconfig"]
+# Fase 15: coleta de tempos/contadores por frame e overlay de debug (F1).
+# Desligada por omissão: sem esta feature o profiler compila como no-op e o
+# renderer não incrementa contadores (ADR-042).
+profiling = []

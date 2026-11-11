@@ -1,0 +1,61 @@
+[package]
+name = "giochi-tower"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Proprietary"
+description = "GIOCHI Tower Defense — TD 3D co-op PvE (2-4 jogadores) sobre a GIOCHI-ENGINE-3D"
+build = "build.rs"
+
+# `exclude` e não `members`: o snapshot em `vendor/` é um workspace próprio, com as
+# suas próprias versões. O jogo o consome por caminho (mesma decisão de `cobrinha`,
+# `neon-drift` e `giochi-defender`, AGENTS.md §25).
+[workspace]
+resolver = "2"
+exclude = ["vendor"]
+
+[dependencies]
+# A engine vem do snapshot local, nunca do repositório compartilhado.
+giochi-engine = { path = "vendor/giochi-engine", default-features = false }
+giochi-engine-3d = { path = "vendor/giochi-engine-3d", default-features = false }
+# A rede é um crate do projeto, com zero dependência externa. O jogo a usa tanto
+# para o tipo de snapshot (`wire::SnapshotInimigo`) quanto para o AOI
+# (`aoi::AreaDeInteresse`); o M4 troca o stub pelo `Host`/`Cliente` reais dela.
+giochi-net = { path = "vendor/giochi-net" }
+# Necessário para nomear `sdl2::event::Event` e `sdl2::mouse::MouseUtil` na
+# fachada de entrada: `Input::update` recebe `&[Event]`. Sem isto o crate não
+# consegue nem declarar a assinatura. Mesmo motivo do `giochi-defender`.
+sdl2 = { version = "0.38", default-features = false }
+# `glam` para a aritmética de vetores: o `Vec3` da engine não implementa `Add`/
+# `Mul` (só `new`/`length`/`normalized`) e delega a conta ao glam. A versão tem de
+# ser a mesma do snapshot da engine (0.34, `vendor/Cargo.toml`) — duas versões do
+# glam no grafo fariam o `From<glam::Vec3> for Vec3` da engine não valer para o
+# nosso glam, e a conversão na fronteira deixaria de compilar.
+glam = "0.34"
+serde = { version = "1", features = ["derive"] }
+# Payload de regra do protocolo (prompt §5). Compacto e sem alocação no decode;
+# o `giochi-net` cuida do transporte e do cabeçalho.
+postcard = { version = "1", features = ["alloc"] }
+ron = "0.8"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+# `stub-net` ligado por padrão: o jogo precisa rodar single-player antes de a
+# issue do `giochi-net` ser mergeada (prompt §3 e §10).
+default = ["stub-net", "sdl2-system"]
+stub-net = []
+real-net = []
+# O aparelho entrega o SDL2 pela imagem (Buildroot, KMSDRM); compilar do código
+# exigiria cmake e uma segunda cópia no rootfs. É o padrão porque é o alvo de
+# produção.
+sdl2-system = ["giochi-engine/sdl2-system", "giochi-engine-3d/sdl2-system"]
+sdl2-bundled = ["giochi-engine/sdl2-bundled", "giochi-engine-3d/sdl2-bundled"]
+# Contadores de draw call do renderer 3D.
+profiling = ["giochi-engine/profiling", "giochi-engine-3d/profiling"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

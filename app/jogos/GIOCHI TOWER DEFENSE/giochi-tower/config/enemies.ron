@@ -1,0 +1,77 @@
+// GIOCHI Tower Defense — inimigos comuns (GDD §8).
+//
+// HP, dano e gold são os do documento. `speed_mps` e `attack_range_m` não estão
+// no GDD e são escolha de balanceamento (DECISIONS.md, D-011).
+(
+    enemies: [
+        (
+            id: Grunt,
+            label: "Grunt",
+            hp: 30.0,
+            damage: 5.0,
+            gold: 1,
+            speed_mps: 2.2,
+            behavior: Straight,
+            flying: false,
+            attack_range_m: 1.2,
+        ),
+        (
+            id: Tank,
+            label: "Tank",
+            hp: 150.0,
+            damage: 15.0,
+            gold: 3,
+            speed_mps: 1.2,
+            behavior: SlowHeavy,
+            flying: false,
+            attack_range_m: 1.4,
+        ),
+        (
+            id: Ranged,
+            label: "Ranged",
+            hp: 60.0,
+            damage: 8.0,
+            gold: 2,
+            speed_mps: 2.0,
+            behavior: StopAndShoot,
+            flying: false,
+            attack_range_m: 9.0,
+        ),
+        (
+            id: Swarm,
+            label: "Swarm",
+            hp: 15.0,
+            damage: 3.0,
+            gold: 1,
+            speed_mps: 3.6,
+            behavior: SwarmGroup,
+            flying: false,
+            attack_range_m: 1.0,
+        ),
+        (
+            id: Flying,
+            label: "Flying",
+            hp: 40.0,
+            damage: 6.0,
+            gold: 2,
+            speed_mps: 2.8,
+            behavior: Flying,
+            flying: true,
+            attack_range_m: 1.2,
+        ),
+    ],
+
+    // GDD §8: HP ×(1 + 0.15·N), dano ×(1 + 0.10·N), velocidade ×(1 + 0.05·N).
+    scaling: (
+        hp_per_wave: 0.15,
+        damage_per_wave: 0.10,
+        speed_per_wave: 0.05,
+    ),
+
+    // GDD §16: teto de inimigos vivos por perfil de host.
+    alive_cap: (
+        full: 150,
+        balanced: 100,
+        rk3326: 45,
+    ),
+)

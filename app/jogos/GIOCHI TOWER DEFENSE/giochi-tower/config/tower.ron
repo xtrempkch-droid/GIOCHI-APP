@@ -1,0 +1,13 @@
+// GIOCHI Tower Defense — a torre (GDD §11).
+//
+// Este arquivo não estava na lista de configs do prompt; foi acrescentado porque
+// o GDD §11 fixa HP, armadura e regeneração da torre, e a regra do prompt é que
+// nenhum valor de balanceamento fique no código. Ver DECISIONS.md (D-014).
+(
+    hp_base: 5000.0,
+    hp_max_shop: 8000.0,
+    armor_base: 5.0,
+    armor_max_shop: 15.0,
+    regen_base: 0.0,
+    regen_max_shop: 10.0,
+)

@@ -102,6 +102,16 @@
       "license": "Proprietary",
       "note": "Tower defense espacial 3D low-poly em Rust sobre a GIOCHI-ENGINE 3D (snapshot em vendor/, engine 0.3.1). Nove blocos fechados: arena, inimigos com pool de 15, tiro com raycast, HUD, som sintetizado, tremor de camera, telas de menu/vitoria/derrota e dificuldade por onda medida com piloto automatico. Medido no X35H: 49,3 fps com 15 cubos e 4,14 ms de trabalho por quadro (o teto e o painel). Ver PROGRESS.md do app.",
       "slug": "giochi-defender"
+    },
+    {
+      "id": "giochi-tower",
+      "folder": "jogos/GIOCHI TOWER DEFENSE/giochi-tower",
+      "slug": "giochi-tower",
+      "runtime": "native",
+      "status": "scaffold",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Tower defense 3D co-op PvE (2-4 jogadores) em Rust sobre a GIOCHI-ENGINE 3D, alvo RK3326. Host-autoritativo; o stub de rede loopback e o default e o giochi-net e o backend real do M4. M1 entregue: cena isometrica, jogador, loop fixo de 60 Hz e as 10 configs RON validadas. Inimigos, torre, bosses, nemesis e loja nos blocos M2/M3. Ver DECISIONS.md do app (inclusive a correcao sobre a ABI C)."
     }
   ]
 }
