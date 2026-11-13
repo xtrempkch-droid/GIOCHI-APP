@@ -6380,6 +6380,26 @@ quadro           1 506 cores · 0,00 % de quase-preto
 rede             host e cliente em dois processos: "jogador 1 entrou" dos dois lados
 ```
 
+### A engine nova pediu uma biblioteca de link, e o CI descobriu
+
+O `vendor/Cargo.toml` liga `image`, `mixer` e `ttf` do crate `sdl2`, então o
+`sdl2-sys` emite `-lSDL2_image`. O binário passou de 5 para **6** `NEEDED`
+(`libSDL2_image-2.0.so.0` entra na lista) e o job do CI morreu em
+`The system library SDL2_image ... was not found` — localmente a biblioteca
+existia e ninguém tinha notado a dependência nova.
+
+É dependência de **carga**, não de uso: o jogo não decodifica PNG (BMP em todo
+lugar, §24 por causa disso), mas sem a `.so` o processo **não sobe**. Mesma
+família do `libasound` do launcher no R35S (§23). O R35S tem
+`libSDL2_image-2.0.so.0.800.2`, e é por isso que o jogo abriu lá.
+
+E o mesmo run expôs um segundo defeito de CI, este de **data**: o passo de
+`apt-get` pedia `libegl1-mesa` e `libgles2-mesa`, nomes do Ubuntu 22.04 que
+**não existem** no 24.04 (o runtime virou libglvnd: `libegl1`, `libgles2`). O
+job nunca tinha chegado ali porque parava antes. Regra: **nome de pacote é
+dado com prazo de validade**, e `cancelled`/`failure` num passo que nunca rodou
+não é sinal de código.
+
 O que continua sendo **afirmação**: o botão físico. `/dev/uinput` não existe no
 aparelho, então `--teclas` cobre o menu e não o evdev — e é por isso que o app
 segue `scaffold` em `apps.json`.

@@ -10,7 +10,7 @@ cada decisão está em [`DECISIONS.md`](DECISIONS.md), o design em
 | | |
 | --- | --- |
 | testes | **213 lib + 26 de integração** (`cargo test --workspace`), `clippy -D warnings` limpo |
-| binário aarch64 | 2,0 MB, 5 bibliotecas `NEEDED` (SDL2, SDL2_mixer, libgcc_s, libm, libc) |
+| binário aarch64 | 2,0 MB, **6** bibliotecas `NEEDED` (SDL2, SDL2_mixer, **SDL2_image**, libgcc_s, libm, libc) |
 | aparelho | R35S / RK3326, 640×480, **GLES 3 no Mali-G31** (Panfrost) |
 | modelos no aparelho | **15/15 carregados**, **16 texturas** na GPU |
 | FPS no aparelho | **59,8** (vblank) sem UI · **59,9** com UI, HUD e 12 inimigos |
@@ -120,6 +120,21 @@ buffers, então o BMP não é preto e não foi preciso forçar o backend por sof
 | M4 — multiplayer | **3 de 6** | host/cliente reais, descoberta por UDP, `local_id` pelo handshake; falta mDNS, predição e o teste de 4 clientes |
 | M5 — handheld | parcial | roda no R35S por KMSDRM com modelos; falta o caminho evdev de entrada |
 | M6 — polimento | **começado** | modelos, texturas, menu e volume de áudio; falta animação e som por evento |
+
+### A engine nova trouxe uma dependência de link: `libSDL2_image`
+
+O `vendor/Cargo.toml` liga `image`, `mixer` e `ttf` do crate `sdl2`, e o
+`sdl2-sys` emite `-lSDL2_image`. O binário passou de 5 para **6** `NEEDED`:
+
+```text
+libSDL2_image-2.0.so.0 · libSDL2_mixer-2.0.so.0 · libSDL2-2.0.so.0 · libgcc_s · libm · libc
+```
+
+Presente no R35S (`libSDL2_image-2.0.so.0.800.2`) e por isso o jogo abre lá. Mas
+é dependência de **carga**, não de uso: numa imagem sem ela o processo **não
+sobe** (`cannot open shared object file`), exatamente como o `libasound` do
+launcher no R35S (AGENTS.md §23). O CI precisou de `libsdl2-image-dev` e falhou
+com `The system library SDL2_image ... was not found` até isso entrar.
 
 ## O que NÃO foi feito, e por quê
 
