@@ -273,10 +273,15 @@ jobs:
       - name: Setup Rust
         run: rustup toolchain install stable --profile minimal --no-self-update
 
+      # Estes eram os nomes do Ubuntu 22.04. No 24.04 (noble) o runtime de
+      # EGL/GLES vem do libglvnd: `libegl1-mesa` e `libgles2-mesa` **nao
+      # existem** e o `apt-get` responde `E: Unable to locate package`, que
+      # derruba o job inteiro antes de compilar uma linha. Os `-dev`
+      # (`libegl1-mesa-dev`) continuam resolvendo — so os de runtime mudaram.
       - name: Install SDL2 (e o mixer, que o binario pede)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libegl1-mesa libgles2-mesa
+          sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libegl1 libgles2 libgl1-mesa-dri
 
       # O snapshot do engine e um workspace proprio (`exclude = vendor`):
       # `--workspace` aqui testa o jogo, nao os testes da engine.
