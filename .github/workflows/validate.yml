@@ -401,8 +401,12 @@ jobs:
         working-directory: app/jogos/giochi-tower
         run: |
           set -e
+          # `--frames` tem de caber a fila: cada tecla gasta **dois** quadros (o
+          # aperto e a soltura que zera a repetição de 0,22 s). Com 5 quadros e 4
+          # teclas a fila não drenava, o log de estado não saía e o `grep`
+          # reprovava um menu que estava certo.
           SDL_VIDEODRIVER=offscreen cargo run --quiet -- --menu --tamanho 640x480 \
-            --frames 5 --teclas "baixo,baixo,a,baixo" --quadro /tmp/menu.bmp 2>/tmp/menu.log
+            --frames 20 --teclas "baixo,baixo,a,baixo" --quadro /tmp/menu.bmp 2>/tmp/menu.log
           grep -q "tela configuracoes | cursor 1 | Câmera" /tmp/menu.log
           python3 - /tmp/menu.bmp <<'PY'
           import struct, sys

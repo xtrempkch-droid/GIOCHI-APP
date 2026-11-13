@@ -334,9 +334,25 @@ pub fn quem_segura_o_drm() -> Option<String> {
 /// | o launcher está rodando | ele segura o DRM; libere e tente de novo |
 /// | só o `giochi-init` | o supervisor está sozinho (provável `RESTART_MAX`) |
 pub fn erro_de_video(original: &str) -> String {
+    let tem_card = std::path::Path::new("/dev/dri/card0").exists();
+    // A detecção de quem segura o DRM só faz sentido se o dispositivo existe;
+    // perguntar antes dá a mesma resposta por outro caminho e escreve no log por
+    // nada.
+    let quem = if tem_card { quem_segura_o_drm() } else { None };
+    mensagem_de_video(original, tem_card, quem.as_deref())
+}
+
+/// Monta a mensagem a partir dos **fatos já medidos**.
+///
+/// Separado do `erro_de_video` porque a versão anterior lia `/dev/dri/card0` de
+/// dentro da função — e o teste que a exercita passava na máquina sem o
+/// dispositivo e **reprovava** na que tem o dispositivo e nenhum processo do
+/// Giochi. Um teste que depende do mundo não testa o código; aqui os três fatos
+/// entram por parâmetro e o teste cobre os três ramos em qualquer máquina.
+pub fn mensagem_de_video(original: &str, tem_card: bool, quem_segura: Option<&str>) -> String {
     let mut msg = format!("não consegui abrir o vídeo ({original}).");
 
-    if !std::path::Path::new("/dev/dri/card0").exists() {
+    if !tem_card {
         msg.push_str(
             "\n  /dev/dri/card0 não existe: o driver não expôs o conector.",
         );
@@ -344,7 +360,7 @@ pub fn erro_de_video(original: &str) -> String {
         return msg;
     }
 
-    match quem_segura_o_drm() {
+    match quem_segura {
         Some(quem) if quem.contains("giochi-launcher") => {
             msg.push_str(&format!("\n  O launcher está rodando e detém o DRM master: {quem}"));
             msg.push_str(
@@ -430,10 +446,38 @@ mod testes_erro {
     fn a_mensagem_nega_o_x_server_quando_o_launcher_segura() {
         // A frase "stop your X server" aparece em app com KMSDRM e manda
         // procurar um servidor gráfico que este aparelho não tem.
-        let msg = erro_de_video("Is a DRM device that is a GPU and is being used by an X server");
-        assert!(
-            msg.contains("não há X nem Wayland") || msg.contains("/dev/dri/card0"),
-            "{msg}"
+        let original = "Is a DRM device that is a GPU and is being used by an X server";
+        let msg = mensagem_de_video(
+            original,
+            true,
+            Some("pid 21665: giochi-launcher --kmsdrm"),
         );
+        assert!(msg.contains("não há X nem Wayland"), "{msg}");
+        assert!(msg.contains("21665"), "nomeia o processo: {msg}");
+    }
+
+    #[test]
+    fn os_tres_ramos_sao_alcancaveis_e_dizem_coisas_diferentes() {
+        // Antes este teste lia `/dev/dri/card0` do disco e por isso passava numa
+        // máquina e reprovava na outra: o runner do CI tem o dispositivo e
+        // nenhum processo do Giochi, que é justamente o ramo que o teste antigo
+        // não cobria. Os fatos entram por parâmetro e os três ramos são
+        // exercitados em qualquer lugar.
+        let sem_device = mensagem_de_video("falhou", false, None);
+        let launcher = mensagem_de_video("falhou", true, Some("pid 1: giochi-launcher"));
+        let so_supervisor = mensagem_de_video("falhou", true, Some("pid 2: giochi-init"));
+        let ninguem = mensagem_de_video("falhou", true, None);
+
+        assert!(sem_device.contains("/dev/dri/card0"), "{sem_device}");
+        assert!(launcher.contains("DRM master"), "{launcher}");
+        assert!(so_supervisor.contains("RESTART_MAX"), "{so_supervisor}");
+        assert!(ninguem.contains("ninguém segura o DRM"), "{ninguem}");
+
+        let todos = [&sem_device, &launcher, &so_supervisor, &ninguem];
+        for (i, a) in todos.iter().enumerate() {
+            for b in todos.iter().skip(i + 1) {
+                assert_ne!(a, b, "dois ramos com a mesma mensagem não informam nada");
+            }
+        }
     }
 }
