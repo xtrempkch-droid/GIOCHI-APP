@@ -247,7 +247,13 @@ jobs:
           SDL_VIDEODRIVER=offscreen \
             cargo run --quiet -- --tamanho 720x1280 --passos 40 \
               --quadro /tmp/retrato.bmp | tee /tmp/retrato.log
-          grep -q "projeto 1280x720 (Ccw90)" /tmp/retrato.log
+          # O `grep` antigo era `projeto 1280x720 (Ccw90)` e passou a falhar
+          # quando a mensagem virou "projeto 1280x720, rotação Ccw90 (formato do
+          # painel)". Nada do desenho estava errado -- o BMP saiu 720x1280 -- mas
+          # o teste conferia a PROSA do log. A tolerância abaixo aceita as duas
+          # formas; o que importa (projeto deitado e rotação Ccw90) continua
+          # exigido.
+          grep -Eq "projeto 1280x720,?[^)]*Ccw90" /tmp/retrato.log
           python3 - /tmp/retrato.bmp <<'PY'
           import struct, sys
           dados = open(sys.argv[1], "rb").read(30)
