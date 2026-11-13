@@ -23,7 +23,7 @@ O que existe hoje, verificado:
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
 | `compilar-launcher.sh --testes` | 229/229 Rust (o Star Dust tem 240: 107 core + 133 ui-sdl) |
 | `compilar-loja.sh --testes` | 116/116 Rust |
-| `giochi-tower` (testes) | **184/184 Rust** — jogo novo, ver §43 |
+| `giochi-tower` (testes) | **186/186 Rust** — jogo novo, ver §43 |
 
 **Catálogo ausente não vira catálogo inventado.** Sem `index.json` (o normal numa
 imagem recém-gravada), o launcher mostra "Nenhum jogo instalado." — antes mostrava

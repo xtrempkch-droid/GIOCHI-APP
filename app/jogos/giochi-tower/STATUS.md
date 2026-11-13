@@ -9,7 +9,7 @@ cada decisão está em [`DECISIONS.md`](DECISIONS.md), o design em
 
 | | |
 | --- | --- |
-| testes | **184** `cargo test --workspace`, `clippy -D warnings` limpo |
+| testes | **186** `cargo test --workspace`, `clippy -D warnings` limpo |
 | binário aarch64 | 1,8 MB, 5 bibliotecas `NEEDED` (SDL2, SDL2_mixer, libgcc_s, libm, libc) |
 | aparelho | R35S / RK3326, 640×480, **GLES 2 no Mali-G31** (acelerado) |
 | FPS no aparelho | **59,8** (vblank de 16,7 ms), com e sem o HUD |
