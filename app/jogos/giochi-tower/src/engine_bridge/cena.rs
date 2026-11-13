@@ -54,15 +54,23 @@ pub fn da_classe(class: ClassId) -> Aparencia {
 
 /// Aparência de cada tipo de inimigo (GDD §8).
 ///
-/// A cor tinge a textura: o mesmo arquivo de textura serve a quatro tons
-/// diferentes, então um Grunt "de elite" não precisa de um OBJ novo.
+/// # Por que a cor não é branca
+///
+/// Boss e Coronel saem **texturizados** (um por vez, são poucos), e aí o branco
+/// é o neutro que mostra o arquivo. A horda comum sai **instanciada**, e o
+/// caminho instanciado não amostra textura — só multiplica a cor. Com branco, os
+/// cinco tipos de bug apareciam brancos: a mesma silhueta pintada de giz.
+///
+/// Estas são as cores de quitina que o lote usa. Elas não são um segundo
+/// conjunto de tons "de mentira": são o marrom-ocre real do filme, e é o que faz
+/// a horda ler como praga em vez de estátua.
 pub fn do_inimigo(kind: EnemyKind) -> Aparencia {
     match kind {
-        EnemyKind::Grunt => Aparencia { modelo: "grunt", altura: 1.65, cor: [1.0, 1.0, 1.0, 1.0], volume: 0.5 },
-        EnemyKind::Tank => Aparencia { modelo: "tank", altura: 1.55, cor: [1.0, 1.0, 1.0, 1.0], volume: 0.9 },
-        EnemyKind::Ranged => Aparencia { modelo: "ranged", altura: 1.75, cor: [1.0, 1.0, 1.0, 1.0], volume: 0.45 },
-        EnemyKind::Swarm => Aparencia { modelo: "swarm", altura: 0.95, cor: [1.0, 1.0, 1.0, 1.0], volume: 0.4 },
-        EnemyKind::Flying => Aparencia { modelo: "flying", altura: 1.55, cor: [1.0, 1.0, 1.0, 1.0], volume: 0.5 },
+        EnemyKind::Grunt => Aparencia { modelo: "grunt", altura: 1.65, cor: [0.66, 0.53, 0.36, 1.0], volume: 0.5 },
+        EnemyKind::Tank => Aparencia { modelo: "tank", altura: 1.7, cor: [0.54, 0.49, 0.40, 1.0], volume: 0.9 },
+        EnemyKind::Ranged => Aparencia { modelo: "ranged", altura: 1.95, cor: [0.42, 0.55, 0.58, 1.0], volume: 0.45 },
+        EnemyKind::Swarm => Aparencia { modelo: "swarm", altura: 0.95, cor: [0.72, 0.56, 0.36, 1.0], volume: 0.4 },
+        EnemyKind::Flying => Aparencia { modelo: "flying", altura: 1.55, cor: [0.62, 0.46, 0.52, 1.0], volume: 0.5 },
     }
 }
 
@@ -141,21 +149,26 @@ pub struct Copia {
 /// então ela não pode envelhecer sozinha.
 pub fn altura_do_arquivo(modelo: &str) -> f32 {
     match modelo {
-        "soldado" => 1.998,
-        "guerreiro" => 2.133,
-        "sniper" => 1.977,
-        "medico" => 1.950,
-        "grunt" => 1.825,
-        "tank" => 1.686,
-        "ranged" => 2.250,
-        "swarm" => 0.848,
-        "flying" => 1.665,
-        "tanker" => 2.879,
-        "plasma" => 2.622,
-        "brain" => 2.878,
-        "queen" => 3.590,
-        "coronel" => 2.709,
+        "soldado" => 1.931,
+        "guerreiro" => 2.125,
+        "sniper" => 1.926,
+        "medico" => 1.883,
+        "grunt" => 1.288,
+        "tank" => 1.312,
+        "ranged" => 2.154,
+        "swarm" => 0.708,
+        "flying" => 1.533,
+        "tanker" => 2.551,
+        "plasma" => 3.213,
+        "brain" => 3.090,
+        "queen" => 2.972,
+        "coronel" => 2.648,
         "torre" => 5.900,
+        "rocha" => 1.000,
+        "espigao" => 3.000,
+        "cratera" => 0.060,
+        "mesa" => 1.000,
+        "destroco" => 1.642,
         _ => 1.8,
     }
 }
@@ -198,11 +211,14 @@ pub fn agrupar(copias: &[Copia]) -> Vec<Lote> {
 mod tests {
     use super::*;
 
-    /// Todos os modelos que o catálogo carrega (`engine_bridge::modelos::NOMES`).
+    /// Os personagens, bosses e a torre (`engine_bridge::modelos::NOMES`).
     const MODELOS: [&str; 15] = [
         "soldado", "guerreiro", "sniper", "medico", "grunt", "tank", "ranged", "swarm", "flying",
         "tanker", "plasma", "brain", "queen", "coronel", "torre",
     ];
+
+    /// O cenário (`engine_bridge::modelos::CENARIO`).
+    const CENARIO: [&str; 5] = ["rocha", "espigao", "cratera", "mesa", "destroco"];
 
     const CLASSES: [ClassId; 4] = [ClassId::Soldier, ClassId::Warrior, ClassId::Sniper, ClassId::Medic];
     const INIMIGOS: [EnemyKind; 5] = [
@@ -299,7 +315,7 @@ mod tests {
         // Uma tabela que ninguém confere é a que envelhece: este teste a compara
         // com os OBJ que o jogo carrega.
         let dir = crate::engine_bridge::modelos::achar_diretorio().expect("assets/");
-        for nome in MODELOS {
+        for nome in MODELOS.into_iter().chain(CENARIO) {
             let (vertices, _) = giochi_engine_3d::mesh::load_obj(&dir.join("modelos").join(format!("{nome}.obj")))
                 .unwrap_or_else(|e| panic!("{nome}.obj: {e}"));
             let mut min = f32::INFINITY;

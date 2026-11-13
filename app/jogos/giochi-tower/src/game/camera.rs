@@ -43,8 +43,14 @@ pub const DEFAULT_FOV_Y_DEG: f32 = 32.0;
 /// Plano próximo, em metros.
 pub const DEFAULT_NEAR_M: f32 = 0.5;
 
-/// Plano distante, em metros. Cobre o mapa inteiro na diagonal.
-pub const DEFAULT_FAR_M: f32 = 420.0;
+/// Plano distante, em metros.
+///
+/// Cobre o chão de 600 m (`game::cenario::LADO_DO_CHAO_M`) **a partir do olho**:
+/// o canto mais distante do plano fica a ~470 m da câmera, e o valor antigo
+/// (420) cortava esse canto numa linha reta — o "horizonte" era o plano de corte,
+/// não a paisagem. 900 m deixa folga para as mesas e mantém precisão de
+/// profundidade suficiente (24 bits sobre 0,5..900 m dá ~1 cm perto da câmera).
+pub const DEFAULT_FAR_M: f32 = 900.0;
 
 /// Limites do campo de batalha, no plano XZ.
 #[derive(Debug, Clone, Copy, PartialEq)]

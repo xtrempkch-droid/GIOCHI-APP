@@ -239,10 +239,12 @@ if [ -n "$INSTALAR" ]; then
   fi
   # ## Assets, não só config
   #
-  # `giochi-tower` carrega 15 modelos OBJ e 15 texturas BMP de `assets/`. Copiar
-  # só o binário e o `config/` fazia o jogo abrir com todos os personagens em
-  # cubo — o log avisava, mas o sintoma ("os modelos não aparecem") manda procurar
-  # defeito no desenho, não em arquivo que faltou levar.
+  # `giochi-tower` carrega 20 modelos OBJ e 21 texturas BMP de `assets/`
+  # (15 personagens + 5 formas de cenário + o regolito do chão). Copiar só o
+  # binário e o `config/` fazia o jogo abrir com todos os personagens em cubo —
+  # o log avisava, mas o sintoma ("os modelos não aparecem") manda procurar
+  # defeito no desenho, não em arquivo que faltou levar. Sem o `terreno.bmp` o
+  # chão cai na cor plana, que é a mesma classe de defeito.
   if [ -d "$JOGO/assets" ]; then
     ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
       "rm -rf $APP_DIR/assets && mkdir -p $APP_DIR/assets" 2>&1 | filtrar_ruido

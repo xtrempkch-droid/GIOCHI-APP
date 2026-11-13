@@ -98,11 +98,30 @@ pub struct Catalogo {
     shader: Option<giochi_engine_3d::ShaderHandle>,
 }
 
-/// Os nomes que o jogo usa. A ordem importa só para o log.
+/// Os personagens, bosses e a torre. A ordem importa só para o log.
+///
+/// O cenário (rochas, crateras, mesas, destroços) fica em [`CENARIO`]: são
+/// modelos do mesmo catálogo, mas **não são personagens**. Misturar os dois faria
+/// um teste que pergunta "a torre é mais alta que todo personagem?" tropeçar
+/// numa mesa de 40 m, e a resposta certa seria "a pergunta está errada", não
+/// "a mesa é baixa".
 pub const NOMES: [&str; 15] = [
     "soldado", "guerreiro", "sniper", "medico", "grunt", "tank", "ranged", "swarm", "flying",
     "tanker", "plasma", "brain", "queen", "coronel", "torre",
 ];
+
+/// As formas do planeta morto, carregadas no mesmo catálogo dos personagens.
+///
+/// Elas não têm textura própria no desenho: o cenário sai em lotes instanciados
+/// com cor (uma chamada por modelo), porque são centenas de cópias estáticas e
+/// uma chamada por pedra custaria mais que a cena inteira. O BMP existe mesmo
+/// assim — é o que mantém `Catalogo::carregar` com um caminho só.
+pub const CENARIO: [&str; 5] = ["rocha", "espigao", "cratera", "mesa", "destroco"];
+
+/// Todos os nomes que o catálogo carrega: personagens, torre e cenário.
+pub fn todos_os_nomes() -> impl Iterator<Item = &'static str> {
+    NOMES.into_iter().chain(CENARIO)
+}
 
 /// Onde os assets moram, em ordem de tentativa.
 ///
@@ -167,7 +186,7 @@ impl Catalogo {
         let shader = render.create_builtin_shader(BuiltinShader::Textured)?;
         let mut modelos = BTreeMap::new();
 
-        for nome in NOMES {
+        for nome in todos_os_nomes() {
             let obj = dir.join("modelos").join(format!("{nome}.obj"));
             let bmp = dir.join("texturas").join(format!("{nome}.bmp"));
 
@@ -210,9 +229,11 @@ impl Catalogo {
 
         let do_disco = modelos.values().filter(|m| m.do_disco).count();
         log::info!(
-            "modelos: {do_disco}/{} de {}, texturas: {} na GPU",
-            NOMES.len(),
+            "modelos: {do_disco}/{} de {} ({} personagens + {} do cenário), texturas: {} na GPU",
+            todos_os_nomes().count(),
             dir.display(),
+            NOMES.len(),
+            CENARIO.len(),
             render.texture_count()
         );
 
@@ -359,7 +380,7 @@ mod tests {
     #[test]
     fn cada_nome_do_catalogo_tem_arquivo() {
         let dir = achar_diretorio().expect("assets");
-        for nome in NOMES {
+        for nome in todos_os_nomes() {
             assert!(
                 dir.join("modelos").join(format!("{nome}.obj")).is_file(),
                 "falta o modelo {nome}"

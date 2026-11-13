@@ -38,6 +38,11 @@ Estado: **M1 (Fundação) entregue.** M2–M6 pendentes.
 | D-029 | O HUD usa fonte de 5×7 em dados e câmera de 90° sobre o 3D | UI |
 | D-030 | A decomposição do glifo é em retângulos, não em pontos | performance |
 | D-031 | O estado do front buffer é medido até antes da troca de buffers | medição |
+| D-039 | A silhueta dos personagens é medida, e o bug não é humanoide | arte |
+| D-040 | O sol vem do lado da câmera, e o plano distante cobre o chão | arte |
+| D-041 | O chão repete a cada 12 m por limite do interpolador do GLES 2 | arte |
+| D-042 | O cenário sai fundido em uma malha por modelo, não instanciado | performance |
+| D-043 | `--vitrine` desenha os 20 modelos num quadro | ferramenta |
 
 ---
 
@@ -531,9 +536,10 @@ qual das duas atacar. Medido no R35S: montar 0,24 ms, desenhar 3,31 ms.
 
 ## D-032 — Modelos e texturas vêm de um gerador, e a prova é a contagem de cores
 
-**Decisão:** os 15 modelos (`.obj`) e as 15 texturas (`.bmp`) são **gerados** por
+**Decisão:** os 20 modelos (`.obj`) e as 21 texturas (`.bmp`) são **gerados** por
 `scripts/gerar-modelos.mjs`, determinístico e com modo `--conferir`. Nenhum
-arquivo binário entra no repositório sem poder ser reproduzido.
+arquivo binário entra no repositório sem poder ser reproduzido. (Eram 15 + 15 até
+a rodada de arte, que acrescentou as cinco formas de cenário e o regolito.)
 
 Três razões, todas medidas:
 
@@ -545,10 +551,12 @@ Três razões, todas medidas:
 3. **Sem ferramenta de modelagem.** Não há Blender nesta máquina, e uma figura
    de 40 vértices cabe em 20 linhas de laço.
 
-**`load_obj` sem `vn` de propósito:** a engine deriva a normal da face em
-`prepare_normals`, e é isso que dá o relevo que o shader `textured` desenha.
-Emitir normais suavizadas esconderia as arestas que fazem o modelo ler como
-sólido a 640×480.
+**~~`load_obj` sem `vn` de propósito~~ — revertido em D-039.** A ideia era que a
+normal de face (*"é isso que dá o relevo"*) fizesse o modelo ler como sólido. A
+medição na vitrine mostrou o contrário: sem `vn`, cada quadrilátero do lathe
+recebe um tom próprio e o corpo vira um **totem de placas empilhadas**. Hoje o
+gerador emite normal por vértice — radial no lathe, da face na caixa —, e o painel
+chapado continua chapado onde deve ser.
 
 **A verificação não é "o arquivo existe":**
 
@@ -667,3 +675,115 @@ desenhos do `neon-drift` (§38): um número que não diz o que mede.
 
 Números por quadro misturados com totais são a versão numérica de "duas listas
 que envelhecem diferente".
+
+## D-039 — A silhueta dos personagens é medida, e o bug não é humanoide
+
+**Decisão:** os cinco inimigos comuns, os quatro bosses e o Coronel são
+**aracnídeos** (corpo alongado em Z, seis a oito pernas, mandíbulas, placas de
+quitina), e as quatro classes são infantaria com elmo, viseira e ombreira. A
+regra é verificada por teste de **proporção**, não de contagem de vértices.
+
+O pedido foi "personagens parecidos com os do filme Tropas Estelares, soldados se
+defendendo de uma horda de bugs". A primeira versão deste projeto tinha os cinco
+inimigos como o mesmo `humanoide()` pintado de roxo e verde: a cor dizia "bicho",
+a forma dizia "pessoa". Um teste que contasse vértices ou checasse "tem textura"
+passaria — o que distingue um inseto de um humanoide é a **caixa**.
+
+`os_bugs_sao_mais_largos_que_altos_e_os_soldados_nao` mede a caixa de cada
+modelo: para os cinco inimigos, a maior extensão horizontal (X ou Z) tem de
+passar a altura em 12 %; para as quatro classes, a altura tem de passar a largura
+em 15 %. Reverter um dos bugs para humanoide reprova.
+
+**O bug não é um humanoide com cor de inseto, e o soldado não é um bug em pé.**
+
+### O que a imagem cobrou depois do teste
+
+Três defeitos passaram pelo teste de proporção e só apareceram na vitrine:
+
+1. **ombro `0.42` era raio, não diâmetro** — 84 cm de ombro a ombro num soldado
+   de 1,85 m. A silhueta lia como caixa empilhada. Agora 0,25 (50 cm).
+2. **Sem `vn`, o corpo vira placas** — o loader deriva uma normal por face, e
+   cada quadrilátero do lathe ganha o seu tom. O gerador passou a emitir normal
+   por vértice (radial no lathe, da face na caixa).
+3. **a cor do inimigo no lote instanciado era branca** — o caminho instanciado não
+   amostra textura, só multiplica a cor; com `Color3D::WHITE` os cinco tipos
+   saíam brancos. As cores de quitina passaram a ser dado de `cena::do_inimigo`.
+
+## D-040 — O sol vem do lado da câmera, e o plano distante cobre o chão
+
+**Decisão:** `luz_do_planeta()` viaja para `(-0,52; -0,72; -0,46)` — isto é, o sol
+está do lado de `+X, +Y, +Z`, que é onde a câmera isométrica fica. E
+`DEFAULT_FAR_M` passou de 420 para **900 m**.
+
+`DirectionalLight::direction` é a direção para onde a luz **viaja**, e a primeira
+versão apontava para `(+0,48; -0,78; +0,40)`: o sol vinha de trás do cenário. Toda
+face virada para o jogador ficava com `lambert = 0` e sobrava só o ambiente (0,32)
+— pedra preta sobre chão claro, e o relevo dos modelos sumia. Nenhum teste pega
+isso: a cena "desenha", só desenha errado.
+
+O plano distante antigo (420 m) era menor que a diagonal do chão novo de 600 m: o
+canto mais distante fica a ~470 m do olho, então o **horizonte era o plano de
+corte**, uma linha reta atravessando a tela. A 900 m o chão termina onde deve — na
+paisagem.
+
+**Nenhum dos dois tem teste automatizado**, e é de propósito: os dois são
+afirmações sobre o que se vê. O que existe é a captura de quadro com números
+(luminância média, % de quase-preto, cores distintas) e o olho.
+
+## D-041 — O chão repete a cada 12 m por limite do interpolador do GLES 2
+
+**Decisão:** `TILE_DO_CHAO_M = 12.0`, e não 3 m.
+
+Com 3 m o chão de 600 m tem `v_uv` até 200, e o interpolador de UV do GLES 2 é
+`mediump` (10 bits de mantissa): a quantização da coordenada vira **grade de
+quadrados** visível a cada repetição. Medido em cinco tamanhos — 3, 6 e 8 mostram
+a grade; 12 e 20 não.
+
+Alternativas descartadas:
+
+| Alternativa | Por que não |
+| --- | --- |
+| mexer no `textured.vert` do vendor para `highp` | o vendor é cópia do repositório da engine; a mudança se perde na próxima sincronização |
+| malha subdividida com UV reiniciando por quad | a textura repetiria idêntica em cada quad e a emenda ficaria **mais** visível |
+| textura maior (256×256) | o mesmo `mediump` continua limitando a **coordenada**, não o texel |
+
+A 12 m cada texel cobre 1,4 cm e o painel de 640×480 desenha ~10 px/m: sobra
+detalhe, e o grão lê como grão.
+
+## D-042 — O cenário sai fundido em uma malha por modelo, não instanciado
+
+**Decisão:** as 473 peças do cenário são fundidas **na abertura** em uma malha por
+modelo (cinco no total), com a matriz de cada cópia aplicada aos vértices.
+
+`draw_instanced` faz uma chamada por modelo só no GLES 3. No R35S o contexto é
+GLES 2 e o caminho de reserva desenha **uma vez por instância**. Medido no
+aparelho:
+
+| Configuração | Trabalho por quadro |
+| --- | --- |
+| sem cenário | 1,80 ms |
+| cenário instanciado (473 cópias) | 4,62 ms |
+| cenário **fundido** (5 malhas) | **2,56 ms** |
+
+A fusão custa 33 mil vértices de VRAM (uma vez) e não custa nada por quadro. O
+que se perde é poder esconder uma peça isolada — e cenário não precisa disso.
+
+A normal é girada pela parte **linear** da matriz e renormalizada: usar a matriz
+inteira multiplicaria a normal pela escala e o brilho sairia errado.
+
+## D-043 — `--vitrine` desenha os 20 modelos num quadro
+
+**Decisão:** existe `--vitrine`, que desenha os 20 modelos em quatro fileiras com
+uma câmera própria a 26 m, grava o quadro e sai.
+
+A câmera do jogo fica a 52 m para caber combate, e nessa distância um soldado de
+2,4 m mede **34 px de altura** em 640×480 (medido) — não dá para julgar silhueta.
+A 26 m o modelo dobra de tamanho na tela.
+
+As quatro fileiras são `classes · inimigos · bosses+torre · cenário`, na mesma
+ordem de `modelos::todos_os_nomes()`: um modelo novo aparece no grupo certo quando
+alguém acrescentar.
+
+**A ferramenta paga por si:** os quatro defeitos de arte desta rodada foram
+encontrados olhando o quadro dela, e nenhum aparecia em teste, log ou contagem de
+arquivos.

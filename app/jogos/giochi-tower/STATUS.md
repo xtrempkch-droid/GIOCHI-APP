@@ -9,24 +9,95 @@ cada decisão está em [`DECISIONS.md`](DECISIONS.md), o design em
 
 | | |
 | --- | --- |
-| testes | **213 lib + 26 de integração** (`cargo test --workspace`), `clippy -D warnings` limpo |
+| testes | **258** (`cargo test`), sendo 222 na lib e 36 de integração; `clippy -D warnings` limpo |
 | binário aarch64 | 2,0 MB, **6** bibliotecas `NEEDED` (SDL2, SDL2_mixer, **SDL2_image**, libgcc_s, libm, libc) |
-| aparelho | R35S / RK3326, 640×480, **GLES 3 no Mali-G31** (Panfrost) |
-| modelos no aparelho | **15/15 carregados**, **16 texturas** na GPU |
-| FPS no aparelho | **59,8** (vblank) sem UI · **59,9** com UI, HUD e 12 inimigos |
-| trabalho por quadro | 1,58 ms sem UI · **6,13 ms** com UI + horda (0,47 chamada/quadro de horda) |
-| pixel a pixel | 1 506 cores no R35S contra 2 795 no PC; **0,00 %** de quase-preto nos dois |
+| aparelho | R35S / RK3326, 640×480, **GLES 2 no Mali-G31** (Panfrost) |
+| modelos no aparelho | **20/20 carregados** (15 personagens + 5 do cenário), **22 texturas** na GPU |
+| FPS no aparelho | **59,6** (vblank) sem UI **com o cenário** · **59,7** com UI e HUD |
+| trabalho por quadro | **2,56 ms** sem UI (com cenário) · **6,19 ms** com UI + HUD |
+| cenário | 473 peças em **5 malhas fundidas**: custa **0,76 ms** por quadro |
+| pixel a pixel | 4 254 cores no PC contra **4 807 no R35S**; **0,00 %** de quase-preto nos dois |
 | multiplicador | host e cliente em dois processos, `jogador 1 entrou` dos dois lados |
 
-## O que foi feito nesta rodada
+## O que foi feito nesta rodada (13/11/2026, noite)
 
-Três pedidos do dono, e o terceiro achou dois defeitos que a suíte não pegava.
+O pedido do dono foi de **arte e de cenário**:
+
+> "a ideia desse jogo é ter os personagens parecidos com os do filme Tropas
+> Estelares (pt-br), então seriam soldados se defendendo de uma horda de bugs.
+> Então a modelagem tem que ter essa atmosfera de guerra estelar. O mapa e os
+> personagens têm que representar uma batalha pelo posto (torre) em um local tipo
+> um planeta sem vegetação e com pedras espalhadas."
 
 | Pedido | Como ficou |
 | --- | --- |
-| "os personagens estão como apenas cubos" | 15 modelos OBJ + 15 texturas BMP **gerados por script**, carregados pela engine atualizada |
-| "ponha o multiplayer" | `net/descoberta.rs` (UDP broadcast) + `net/sessao.rs`, e a `real-net` deixou de ser feature |
-| "um menu para reiniciar, sair e configurar" | `src/menu.rs`, 5 telas, 21 testes, `settings.json` persistido |
+| soldados de infantaria móvel | 4 classes com **elmo, viseira, ombreira e mochila**; proporção humana (ombro 0,5 m, não 0,84 m) |
+| horda de bugs | os **5 inimigos e os 4 bosses** deixaram de ser humanoides pintados e passaram a ser aracnídeos: corpo alongado, 6–8 pernas, mandíbulas, placas de quitina |
+| atmosfera de guerra estelar | sol atrás da câmera, céu de poeira, paleta de aço + quitina; a torre virou **bunker com sacos de areia, antena e farol** |
+| planeta sem vegetação, com pedras | cenário novo: **473 peças** (rochas, espigões, crateras, mesas de horizonte, destroços), chão de regolito com UV de mundo |
+
+![Vitrine dos 20 modelos](../../../docs/imagens/giochi-tower-vitrine-pc.png)
+
+![A batalha pelo posto no R35S](../../../docs/imagens/giochi-tower-planeta-r35s.png)
+
+### Quatro defeitos que só a imagem mostrou
+
+Nenhum destes aparecia em teste, log ou contagem de arquivos — todos precisaram
+de **quadro renderizado** e de olhar o quadro.
+
+1. **O sol estava do lado errado.** `DirectionalLight::direction` é a direção
+   para onde a luz **viaja**; a câmera isométrica olha de `+X,+Y,+Z` e a luz
+   viajava para `+X,-Y,+Z`, ou seja, vinha de trás. Toda face virada para o
+   jogador ficava com `lambert = 0` e sobrava só o ambiente: **pedra preta sobre
+   chão claro**. Corrigido invertendo o vetor.
+2. **O plano distante cortava o horizonte.** 420 m contra um chão de 600 m: o
+   canto mais distante do plano fica a ~470 m do olho, então o "horizonte" era o
+   plano de corte — uma linha reta. Passou a **900 m**.
+3. **Os soldados eram duas vezes mais largos que altos.** `ombro: 0.42` é
+   **raio**: 84 cm de ombro a ombro num soldado de 1,85 m. A silhueta lia como
+   caixa empilhada. As medidas foram para proporção humana.
+4. **Sem normal por vértice o corpo virava um totem de placas.** O loader da
+   engine deriva uma normal **por face** quando o OBJ não traz `vn`, e cada
+   quadrilátero do lathe ganhava o seu tom. O gerador passou a emitir `vn`
+   (radial no lathe, da face na caixa) e o soldado virou um boneco de ombros
+   redondos.
+
+### O chão tem limite de shader, e o limite é medido
+
+A textura de regolito repete a cada **12 m**, e não a cada 3 m. A 3 m o chão
+aparecia com uma **grade de quadrados**: o `v_uv` chega a `600/3 = 200` e o
+interpolador de UV do GLES 2 é `mediump`, então a quantização da coordenada vira
+degrau visível a cada repetição. Medido em cinco tamanhos (3, 6, 8, 12 e 20 m) —
+a grade some a partir de 12.
+
+### O cenário sai fundido, não instanciado
+
+`draw_instanced` só faz uma chamada por modelo no GLES 3. No R35S o contexto é
+**GLES 2** e o caminho de reserva desenha **uma vez por instância**: as 473 peças
+custavam **2,77 ms** por quadro. As cópias passaram a ser fundidas em uma malha
+por modelo na abertura (matriz aplicada aos vértices, normal girada sem escala),
+e o custo caiu para **0,76 ms** — uma chamada por modelo, em qualquer driver.
+
+### Ferramenta nova: `--vitrine`
+
+```bash
+giochi-tower --vitrine --tamanho 1280x720 --quadro /tmp/vitrine.bmp
+```
+
+Desenha os 20 modelos em quatro fileiras, com câmera a 26 m (o dobro do tamanho
+na tela), grava o quadro e sai. Existe porque "o modelo carregou" os testes já
+respondem, mas **"o modelo parece o que devia"** só se responde olhando — e jogar
+até a onda do boss para ver o Tanker Bug é caro.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| FPS **com horda cheia** de bugs no aparelho | **não medido** nesta rodada — os 100 inimigos do perfil Balanced não foram exercitados |
+| o cenário num **X55/X35H** | **não medido** — só R35S (640×480) e PC |
+| animação dos modelos | **não existe** — todos são estáticos; a única animação é o giro pelo rumo |
+
+## O que foi feito na rodada anterior
 
 ### 1. Os personagens têm modelo, e a prova é a contagem de cores
 
@@ -102,13 +173,17 @@ Os quatro caminhos verificados no CI:
 
 ## Capturas no R35S
 
-Menu (97 cores, 0,00 % de preto) e a partida com os 15 modelos + 16 texturas
-(1 506 cores, 0,00 % de preto). As duas foram lidas **antes** da troca de
-buffers, então o BMP não é preto e não foi preciso forçar o backend por software:
+Menu, partida e vitrine, todas lidas **antes** da troca de buffers — o BMP não é
+preto e não foi preciso forçar o backend por software. As capturas da rodada de
+arte são as três primeiras:
 
 ![Menu do GIOCHI Tower Defense no R35S](../../../docs/imagens/giochi-tower-menu-r35s.png)
 
-![Partida com modelos no R35S](../../../docs/imagens/giochi-tower-modelos-r35s.png)
+![A batalha pelo posto no R35S](../../../docs/imagens/giochi-tower-planeta-r35s.png)
+
+![Vitrine dos 20 modelos no R35S](../../../docs/imagens/giochi-tower-vitrine-r35s.png)
+
+![Partida com os primeiros modelos no R35S](../../../docs/imagens/giochi-tower-modelos-r35s.png)
 
 ## Onde o projeto está
 

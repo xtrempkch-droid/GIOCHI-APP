@@ -6373,7 +6373,7 @@ painel mostrou.
 ### Medido no R35S (RK3326, Mali-G31, 640×480)
 
 ```text
-modelos          15/15 de /opt/giochi/apps/giochi-tower/assets · 16 texturas na GPU
+modelos          20/20 de /opt/giochi/apps/giochi-tower/assets · 22 texturas na GPU
 sem UI           59,8 fps · 1,58 ms por quadro
 com UI + horda   59,9 fps · 6,13 ms por quadro · 9 chamadas de UI, 403 instâncias
 quadro           1 506 cores · 0,00 % de quase-preto
@@ -6410,3 +6410,80 @@ não é sinal de código.
 O que continua sendo **afirmação**: o botão físico. `/dev/uinput` não existe no
 aparelho, então `--teclas` cobre o menu e não o evdev — e é por isso que o app
 segue `scaffold` em `apps.json`.
+
+## 45. Tower Defense: a arte de Tropas Estelares e o planeta morto (13/11/2026)
+
+Pedido do dono: **"personagens parecidos com os de Tropas Estelares: soldados se
+defendendo de uma horda de bugs, atmosfera de guerra estelar, mapa de um planeta
+sem vegetação e com pedras espalhadas, batalha pelo posto (torre)"**. É a primeira
+rodada do projeto que é **de arte**, e ela achou quatro defeitos que nenhum teste
+pegava.
+
+### O que mudou nos assets
+
+| Antes | Agora |
+| --- | --- |
+| 15 modelos, 15 texturas | **20 modelos, 21 texturas** (+5 formas de cenário, +`terreno.bmp`) |
+| inimigos eram `humanoide()` pintado | **aracnídeos**: corpo alongado em Z, 6–8 pernas, mandíbulas, placas |
+| soldados com ombro de 0,84 m | proporção humana (0,50 m), com elmo, viseira, ombreira e mochila |
+| torre era um cristal flutuante | **bunker** com sacos de areia, antena, prato e farol |
+| nenhuma normal nos OBJ | **`vn` por vértice** (radial no lathe, da face na caixa) |
+| chão de cor plana, 320×320 m | **regolito** com UV de mundo, 600×600 m, textura a cada 12 m |
+| nada de cenário | **473 peças** (rochas, espigões, crateras, mesas, destroços) em 5 malhas fundidas |
+
+### Os quatro defeitos que só a imagem mostrou
+
+1. **O sol estava atrás do cenário.** `DirectionalLight::direction` é a direção
+   para onde a luz **viaja**; a câmera isométrica olha de `+X,+Y,+Z` e a luz
+   viajava para `+X,-Y,+Z` — vinha de trás. Toda face virada para o jogador tinha
+   `lambert = 0` e sobrava o ambiente: pedra preta sobre chão claro.
+2. **`DEFAULT_FAR_M = 420` cortava o horizonte** de um chão de 600 m (o canto mais
+   distante fica a ~470 m do olho): o "horizonte" era o plano de corte. Foi para 900.
+3. **`ombro: 0.42` era raio** — 84 cm de ombro a ombro num soldado de 1,85 m. A
+   silhueta lia como caixa empilhada.
+4. **Sem `vn` o corpo virava placas**: o loader deriva uma normal **por face**, e
+   cada quadrilátero do lathe ganhava o seu tom.
+
+Nenhum desses aparece em teste, log ou contagem de arquivos. É a mesma lição do
+§30 (o contador que media a intenção) numa camada diferente: **"carregou os 20
+modelos" e "parece um soldado" são afirmações diferentes.**
+
+### Três decisões com número (ver `app/jogos/giochi-tower/DECISIONS.md`)
+
+| Decisão | Número que decide |
+| --- | --- |
+| chão repete a cada **12 m** (D-041) | 3, 6 e 8 m mostram uma grade de quadrados: `v_uv` até 200 estoura o `mediump` do GLES 2 |
+| cenário **fundido**, não instanciado (D-042) | 4,62 ms (473 cópias, GLES 2 sem instancing) → **2,56 ms** (5 malhas) |
+| `--vitrine` a 26 m (D-043) | a câmera do jogo deixa o soldado com **34 px** de altura em 640×480 |
+
+### Medido no R35S (640×480, Mali-G31)
+
+```text
+modelos 20/20 · texturas 22 na GPU · GLES 2 (Panfrost)
+com cenário   59,6 fps · trabalho 2,56 ms por quadro
+sem cenário   60,0 fps · trabalho 1,80 ms por quadro   → o cenário custa 0,76 ms
+com UI + HUD  59,7 fps · trabalho 6,19 ms
+quadro        4 807 cores · 0,00 % de quase-preto · luminância média 94,0
+```
+
+### Ferramenta nova: `--vitrine`
+
+```bash
+giochi-tower --vitrine --tamanho 1280x720 --quadro /tmp/vitrine.bmp
+```
+
+Quatro fileiras (classes · inimigos · bosses+torre · cenário), câmera própria,
+grava e sai. É o que permite julgar arte num quadro em vez de jogar até a onda do
+boss — e é o que revelou os quatro defeitos acima.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| FPS **com horda cheia** de bugs | **não medido** — os 100 inimigos do perfil Balanced não foram exercitados |
+| o cenário num **X55/X35H** | **não medido** — só R35S e PC |
+| animação | **não existe** — o único movimento é o giro pelo rumo |
+
+![Vitrine dos 20 modelos](docs/imagens/giochi-tower-vitrine-pc.png)
+
+![A batalha pelo posto no R35S](docs/imagens/giochi-tower-planeta-r35s.png)

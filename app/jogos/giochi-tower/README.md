@@ -7,8 +7,9 @@ Tower Defense 3D co-op PvE (2–4 jogadores) sobre a **GIOCHI-ENGINE-3D**, alvo
 > da engine (`main` = `33a3b92`, com texturas e OBJ), vendorizada em `vendor/` —
 > três crates: `giochi-engine`, `giochi-engine-3d` e `giochi-net`. O jogo abre,
 > tem menu, desenha personagens com modelo e textura, joga em rede real e roda no
-> R35S a 59,9 fps. O que foi decidido fora do prompt está em
-> [`DECISIONS.md`](DECISIONS.md) — inclusive a correção sobre a ABI C (D-002).
+> R35S a 59,6 fps **com o cenário do planeta**. O que foi decidido fora do prompt
+> está em [`DECISIONS.md`](DECISIONS.md) — inclusive a correção sobre a ABI C
+> (D-002).
 
 O design travado está em
 [`docs/GDD.md`](docs/GDD.md) e o prompt
@@ -44,10 +45,18 @@ torre), minimapa e tela da loja. É fonte de 5×7 em dados + câmera de 90° sob
 
 **M3.5 — arte, menu e rede de verdade**
 
-- **15 modelos OBJ e 15 texturas BMP**, gerados por
-  `scripts/gerar-modelos.mjs` (determinístico, `--conferir`): 4 classes, 5
-  inimigos, 4 bosses, o Coronel e a torre. A horda sai em **um lote instanciado
-  por modelo** — 12 inimigos custam 0,47 chamada de desenho por quadro.
+- **20 modelos OBJ e 21 texturas BMP**, gerados por
+  `scripts/gerar-modelos.mjs` (determinístico, `--conferir`): 4 classes de
+  infantaria, 5 inimigos aracnídeos, 4 bosses, o Coronel, a torre e **5 formas de
+  cenário**. Os personagens têm normal por vértice (sem `vn` o corpo sai facetado,
+  D-039). A horda sai em **um lote instanciado por modelo** — 12 inimigos custam
+  0,47 chamada de desenho por quadro.
+- **O planeta morto**: chão de regolito com UV de mundo (600 m, textura a cada
+  12 m) e **473 peças** de cenário — rochas, espigões, crateras, mesas de
+  horizonte e destroços — distribuídas por regra (`src/game/cenario.rs`) e
+  fundidas em 5 malhas. Custa **0,76 ms** por quadro no R35S (D-042).
+- **`--vitrine`** desenha os 20 modelos em quatro fileiras num quadro, para
+  conferir arte sem jogar até a onda do boss (D-043).
 - **Menu** com cinco telas (Principal, Multijogador, Configurações, Pausa, Fim),
   estado puro em `src/menu.rs`, `settings.json` persistido em `--config`.
 - **Rede real sempre compilada** (`net/sessao.rs`, `net/descoberta.rs`): host
@@ -75,8 +84,9 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 ├── bin/                         binário aarch64; vai para o aparelho junto com config/
 ├── capa.png                     320x320, capa da loja
 ├── forge.json                   requisitos: gles2, 96 MB, 480x320
-├── assets/modelos/              15 .obj low-poly, gerados (não editar à mão)
-├── assets/texturas/             15 .bmp 24 bits, gerados (sem PNG: §24 do AGENTS)
+├── assets/modelos/              20 .obj low-poly com normais, gerados (não editar à mão)
+├── assets/texturas/             21 .bmp 24 bits, gerados (sem PNG: §24 do AGENTS)
+│                                inclui terreno.bmp, o regolito do chão
 ├── src/
 │   ├── main.rs                  bootstrap, argumentos, loop fixo
 │   ├── lib.rs                   módulos públicos
@@ -101,6 +111,7 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 │   ├── ui/                      HUD, loja, minimapa (desenho por retângulo)
 │   └── game/
 │       ├── camera.rs            mapa 4x4 telas, câmera isométrica, raio de AOI
+│       ├── cenario.rs           as 473 peças do planeta: onde, tamanho e cor
 │       ├── player.rs            classes, dano, respawn, predição local
 │       ├── enemy.rs             5 tipos, escala por onda, steering, ataque
 │       ├── waves.rs             spawner por onda, teto de vivos, Endless
@@ -188,6 +199,8 @@ Flags:
 --frames <n>        roda n quadros com passo fixo, sem relógio real
 --benchmark <n>     roda n quadros sem espera e reporta FPS e custo por quadro
 --sem-ui            sem HUD (para isolar o custo da UI)
+--sem-cenario       sem pedras, crateras, mesas e destroços (A/B do cenário)
+--vitrine           desenha os 20 modelos lado a lado e sai (confere a arte)
 --demo-loja         abre a loja na abertura (para capturar a tela)
 --ajuda
 ```
@@ -201,6 +214,12 @@ giochi-tower --menu --teclas "a"                    # começa a partida
 giochi-tower --frames 90 --teclas "start,baixo,a"   # pausa e reinicia
 giochi-tower --menu --teclas "cima,a"               # sai
 giochi-tower --menu --teclas "baixo,baixo,a,esq,esq" # volume 60% e grava
+```
+
+Conferir a arte sem jogar:
+
+```bash
+giochi-tower --vitrine --tamanho 1280x720 --quadro /tmp/vitrine.bmp
 ```
 
 ## Controles
@@ -232,6 +251,13 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 # cena sem interação, para a bancada conferir o quadro
 cargo run --release -- --tamanho 1280x720 --frames 30 --quadro /tmp/tower.bmp
+
+# os 20 modelos num quadro, para conferir a arte
+cargo run --release -- --vitrine --tamanho 1280x720 --quadro /tmp/vitrine.bmp
+
+# quanto o cenário custa: o mesmo comando com e sem --sem-cenario
+cargo run --release -- --benchmark 600 --sem-ui
+cargo run --release -- --benchmark 600 --sem-ui --sem-cenario
 ```
 
 No repositório, o validador de app confere a estrutura:
@@ -262,7 +288,7 @@ assinatura funciona, mas **não dispensa compilar antes de seguir.
 | M3 | 4 bosses com fases, nemesis por tier, loja, HUD, minimapa, tela da loja | **entregue** |
 | M4 | host/cliente reais sobre `giochi-net`, mDNS, predição e *smoothing*, AOI unicast | **3 de 6** — host/cliente, descoberta UDP e `local_id` |
 | M5 | perfis de host, evdev no aparelho (inclui eixos analógicos), `package.sh` | parcial — roda no R35S por KMSDRM com modelos, falta evdev |
-| M6 | balanceamento em RON, Endless, áudio, arte low-poly, README final | iniciado — modelos, texturas, menu e volume |
+| M6 | balanceamento em RON, Endless, áudio, arte low-poly, README final | iniciado — 20 modelos com normal, cenário do planeta, menu e volume |
 
 `--benchmark` é o que mede M5 de verdade: com ele o FPS do aparelho é um número,
 não uma impressão. Ver [`STATUS.md`](STATUS.md).

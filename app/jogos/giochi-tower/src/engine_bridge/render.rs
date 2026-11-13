@@ -26,29 +26,31 @@ use giochi_engine_3d::context::{self, GlState, GlesVersion};
 use giochi_engine_3d::math3d::{Camera3D, Color3D, Quat, Transform3D, Vec3 as EngineVec3};
 use giochi_engine_3d::render3d::DirectionalLight;
 use giochi_engine_3d::shader::BuiltinShader;
-use giochi_engine_3d::{MeshHandle, RenderContext3D, ShaderHandle};
+use giochi_engine_3d::{MeshHandle, RenderContext3D, ShaderHandle, TextureHandle};
 
 use crate::engine_bridge::modelos::{self, Catalogo};
 use crate::errors::{GameError, Result};
 use crate::ui::{self, layout};
 
-/// Cor de fundo padrão (o "vazio" da sala do M1).
-pub const CLEAR_COLOR: Color3D = Color3D::new(0.055, 0.070, 0.105, 1.0);
+/// Cor do céu: a poeira suspensa de um planeta morto ao entardecer.
+///
+/// Não é preto de espaço: a cena é diurna e o terreno é claro, então um céu
+/// escuro faria o horizonte parecer um buraco. É também o que dá contraste para
+/// a horda marrom — bug escuro sobre chão claro, não bug escuro sobre breu.
+pub const CLEAR_COLOR: Color3D = Color3D::new(0.380, 0.300, 0.260, 1.0);
 
-/// Cor do chão.
-pub const GROUND_COLOR: Color3D = Color3D::new(0.135, 0.150, 0.170, 1.0);
+/// Cor do chão quando a textura de regolito **não** está disponível.
+///
+/// É a média da textura (`assets/texturas/terreno.bmp` → 122, 105, 88), para o
+/// caminho degradado ter a mesma luminância do caminho bom. Um fallback mais
+/// escuro faria "a textura faltou" parecer "a noite caiu".
+pub const GROUND_COLOR: Color3D = Color3D::new(0.478, 0.412, 0.345, 1.0);
 
 /// Cor da torre provisória (o marcador do centro do mapa).
 pub const TOWER_COLOR: Color3D = Color3D::new(0.290, 0.520, 0.860, 1.0);
 
 /// Cor do marcador do jogador.
 pub const PLAYER_COLOR: Color3D = Color3D::new(0.950, 0.820, 0.300, 1.0);
-
-/// Cor do eixo X (referência de orientação na sala vazia).
-pub const AXIS_X_COLOR: Color3D = Color3D::new(0.760, 0.290, 0.290, 1.0);
-
-/// Cor do eixo Z (referência de orientação na sala vazia).
-pub const AXIS_Z_COLOR: Color3D = Color3D::new(0.290, 0.760, 0.420, 1.0);
 
 /// Luz que faz a cor chegar à tela sem atenuação.
 ///
@@ -67,12 +69,148 @@ pub fn luz_do_hud() -> DirectionalLight {
     luz
 }
 
+/// O sol do planeta morto: quente, com pouca especular — e **atrás da câmera**.
+///
+/// # A direção não é gosto: é a diferença entre uma cena e um borrão
+///
+/// `DirectionalLight::direction` é a direção para onde a luz **viaja**, então o
+/// sol fica do lado oposto. A primeira versão apontava para `(+0.48, -0.78,
+/// +0.40)`, ou seja, o sol vinha de `-X, -Z`; a câmera isométrica olha de
+/// `+X, +Y, +Z`. Resultado medido no quadro: **toda face virada para o jogador
+/// ficava com `lambert = 0`** e sobrava só o ambiente — pedra preta sobre chão
+/// claro, e o relevo do modelo sumia.
+///
+/// Agora a luz viaja para `(-X, -Y, -Z)`: vem do mesmo lado da câmera, e as
+/// faces visíveis recebem luz. `ambient` 0,32 mantém as faces de sombra legíveis
+/// (o lado oposto de uma rocha não pode virar silhueta chapada).
+pub fn luz_do_planeta() -> DirectionalLight {
+    DirectionalLight::sun()
+        .with_direction(EngineVec3::new(-0.52, -0.72, -0.46))
+        .with_color(Color3D::new(1.0, 0.95, 0.88, 1.0))
+        .with_ambient(0.32)
+        .with_specular(0.06, 16.0)
+}
+
+/// Malha do chão com UV repetido pelo mundo.
+///
+/// `create_plane_mesh` mapeia `0..1` sobre o plano inteiro: a textura esticaria
+/// 600 m e cada texel cobriria ~9 m, virando mancha. Aqui o UV é `posição / tile`,
+/// então a textura repete a cada [`crate::game::cenario::TILE_DO_CHAO_M`] metros —
+/// é o mesmo truque do UV de mundo do `neon-drift` (AGENTS.md §31).
+///
+/// Quatro vértices bastam: a interpolação de UV é perspectiva-correta, e
+/// subdividir só gastaria vértice.
+fn malha_do_chao(
+    render: &mut RenderContext3D,
+    lado: f32,
+    tile: f32,
+) -> std::result::Result<MeshHandle, giochi_engine_3d::Error3D> {
+    use giochi_engine_3d::mesh::Vertex;
+    let metade = lado * 0.5;
+    let repeticoes = lado / tile.max(0.001);
+    let normal = [0.0, 1.0, 0.0];
+    let vertices = [
+        Vertex::new([-metade, 0.0, -metade], normal, [0.0, 0.0]),
+        Vertex::new([-metade, 0.0, metade], normal, [0.0, repeticoes]),
+        Vertex::new([metade, 0.0, metade], normal, [repeticoes, repeticoes]),
+        Vertex::new([metade, 0.0, -metade], normal, [repeticoes, 0.0]),
+    ];
+    // Sentido anti-horário visto de cima (+Y), como o plano da engine.
+    let indices = [0, 1, 2, 0, 2, 3];
+    render.create_mesh(&vertices, &indices)
+}
+
+/// Funde as peças do cenário em **uma malha por modelo**, no espaço do mundo.
+///
+/// # Por que fundir, em vez de instanciar
+///
+/// `draw_instanced` faz uma chamada por modelo **quando o driver tem
+/// instanciação** (GLES 3). No R35S o contexto é GLES 2 (Mali-G31/Panfrost), e o
+/// caminho de reserva desenha uma vez por instância. Medido no aparelho com as
+/// 473 peças: `--sem-cenario` gastava 1,85 ms por quadro e com o cenário ia a
+/// 4,62 ms — **2,77 ms** só para submeter pedra que não se move.
+///
+/// Fundir resolve na abertura o que a instanciação resolveria por quadro: os
+/// vértices já saem girados, escalados e posicionados, e o laço faz uma chamada
+/// por modelo em qualquer driver. O custo é não poder esconder uma peça isolada,
+/// e cenário não precisa disso.
+///
+/// # O normal é girado sem escala
+///
+/// A matriz do cenário tem escala uniforme; transformar a normal com a parte
+/// linear e renormalizar é o suficiente. Usar a matriz inteira multiplicaria a
+/// normal pela escala e o modelo sairia com brilho errado — o tipo de defeito
+/// que ninguém liga à matriz.
+fn malhas_do_cenario(
+    render: &mut RenderContext3D,
+    dir: &Path,
+    copias: &[crate::engine_bridge::cena::Copia],
+) -> Vec<(MeshHandle, Color3D)> {
+    use giochi_engine_3d::mesh::{load_obj, Vertex};
+
+    let mut saida = Vec::new();
+    for nome in modelos::CENARIO {
+        let caminho = dir.join("modelos").join(format!("{nome}.obj"));
+        let (vertices, indices) = match load_obj(&caminho) {
+            Ok(par) => par,
+            Err(erro) => {
+                log::warn!("cenário '{nome}' indisponível ({}): {erro}", caminho.display());
+                continue;
+            }
+        };
+
+        let mut todos: Vec<Vertex> = Vec::new();
+        let mut todos_indices: Vec<u32> = Vec::new();
+        let mut cor = None;
+        let mut usadas = 0usize;
+        for copia in copias.iter().filter(|c| c.modelo == nome) {
+            cor = Some(copia.cor);
+            usadas += 1;
+            let escala = copia.altura / crate::engine_bridge::cena::altura_do_arquivo(nome);
+            let matriz = RenderBridge::matriz_de_modelo(copia.pos, copia.giro, escala).to_glam();
+            let linear = glam::Mat3::from_mat4(matriz);
+            let base = todos.len() as u32;
+            todos.extend(vertices.iter().map(|v| {
+                let posicao = matriz.transform_point3(glam::Vec3::from_array(v.position));
+                let normal = (linear * glam::Vec3::from_array(v.normal)).normalize_or_zero();
+                Vertex::new(posicao.to_array(), normal.to_array(), v.uv)
+            }));
+            todos_indices.extend(indices.iter().map(|i| i + base));
+        }
+
+        let Some(cor) = cor else { continue };
+        match render.create_mesh(&todos, &todos_indices) {
+            Ok(malha) => {
+                log::info!(
+                    "cenário: '{nome}' — {usadas} cópia(s) fundidas em 1 malha ({} vértices)",
+                    todos.len()
+                );
+                saida.push((malha, Color3D::new(cor[0], cor[1], cor[2], cor[3])));
+            }
+            Err(erro) => log::warn!("cenário '{nome}': malha fundida recusada — {erro}"),
+        }
+    }
+    saida
+}
+
 /// Janela + contexto GLES + as malhas compartilhadas do jogo.
 pub struct RenderBridge {
     window: Window,
     render: RenderContext3D,
     shader: ShaderHandle,
     plane: MeshHandle,
+    /// Chão maior que o campo, com UV repetido (ver [`malha_do_chao`]).
+    chao: MeshHandle,
+    /// Textura de regolito. `None` quando `assets/` não tem o arquivo.
+    textura_chao: Option<TextureHandle>,
+    /// Shader do chão texturizado (o mesmo `Textured` dos modelos).
+    shader_texturado: ShaderHandle,
+    /// O cenário já fundido em uma malha por modelo, no espaço do mundo.
+    ///
+    /// Ver [`malhas_do_cenario`]: a fusão é o que faz a paisagem custar 5
+    /// chamadas de desenho **em qualquer driver**, inclusive no GLES 2 do RK3326,
+    /// onde `draw_instanced` cai no caminho de uma chamada por instância.
+    cenario: Vec<(MeshHandle, Color3D)>,
     cube: MeshHandle,
     /// Quadrilátero unitário do HUD: a geometria não muda por quadro, só as
     /// matrizes de instância.
@@ -117,7 +255,7 @@ impl RenderBridge {
         let mut render = RenderContext3D::new(context::create(&window)?);
 
         render.set_clear_color(CLEAR_COLOR);
-        render.set_light(DirectionalLight::sun());
+        render.set_light(luz_do_planeta());
 
         // Blending ligado para o **quadro inteiro**, e não só para o HUD.
         //
@@ -133,7 +271,42 @@ impl RenderBridge {
 
         let shader = render.create_builtin_shader(BuiltinShader::Phong)?;
         let plane = render.create_plane_mesh(crate::game::camera::MapBounds::new().size_m(), 1)?;
+        let shader_texturado = render.create_builtin_shader(BuiltinShader::Textured)?;
         let cube = render.create_cube_mesh(1.0)?;
+
+        // O chão do planeta: plano de 600 m com UV de mundo. Se a malha falhar
+        // (driver sem VAO, handle esgotado), cai no plano antigo de 320 m — o
+        // jogo continua desenhando, só sem horizonte.
+        let assets = modelos::achar_diretorio();
+        let chao = malha_do_chao(
+            &mut render,
+            crate::game::cenario::LADO_DO_CHAO_M,
+            crate::game::cenario::TILE_DO_CHAO_M,
+        )
+        .unwrap_or_else(|erro| {
+            log::warn!("chão com UV de mundo indisponível ({erro}); usando o plano do campo");
+            plane
+        });
+        let textura_chao = assets
+            .as_ref()
+            .map(|dir| dir.join("texturas").join("terreno.bmp"))
+            .and_then(|caminho| match render.create_texture(&caminho) {
+                Ok(textura) => Some(textura),
+                Err(erro) => {
+                    log::warn!(
+                        "textura do chão indisponível ({}): chão fica de cor plana — {erro}",
+                        caminho.display()
+                    );
+                    None
+                }
+            });
+        log::info!(
+            "chão: {:.0}x{:.0} m, textura a cada {:.0} m ({})",
+            crate::game::cenario::LADO_DO_CHAO_M,
+            crate::game::cenario::LADO_DO_CHAO_M,
+            crate::game::cenario::TILE_DO_CHAO_M,
+            if textura_chao.is_some() { "regolito" } else { "cor plana" }
+        );
         let (hud_vertices, hud_indices) = ui::quad_da_hud();
         let hud_quad = render.create_mesh(&hud_vertices, &hud_indices)?;
         let hud_shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
@@ -147,7 +320,7 @@ impl RenderBridge {
 
         // Os modelos são opcionais: um pacote sem `assets/` continua jogável com
         // os cubos, e o log diz por quê. Ficar sem desenhar nada seria pior.
-        let modelos = match (modelos::achar_diretorio(), textura_reserva) {
+        let modelos = match (assets.clone(), textura_reserva) {
             (Some(dir), Some(reserva)) => {
                 match Catalogo::carregar(&mut render, &dir, cube, reserva) {
                     Ok(catalogo) => Some(catalogo),
@@ -166,11 +339,22 @@ impl RenderBridge {
             }
         };
 
+        // O cenário é fundido **antes** de a janela entrar no laço: uma malha por
+        // modelo, com todas as cópias já transformadas para o espaço do mundo.
+        let cenario = match assets.as_ref() {
+            Some(dir) => malhas_do_cenario(&mut render, dir, &crate::game::cenario::montar()),
+            None => Vec::new(),
+        };
+
         Ok(Self {
             window,
             render,
             shader,
             plane,
+            chao,
+            textura_chao,
+            shader_texturado,
+            cenario,
             cube,
             hud_quad,
             hud_shader,
@@ -246,9 +430,46 @@ impl RenderBridge {
     }
 
     /// Desenha o chão do mapa inteiro.
+    ///
+    /// O caminho bom é a malha de 600 m com a textura de regolito repetida pelo
+    /// mundo. Sem a textura (pacote sem `assets/`), cai no plano antigo com cor
+    /// plana — mesmo tamanho do campo, mesma luminância. É degradação, não erro:
+    /// um asset ausente num pacote mal montado não pode impedir de jogar.
     pub fn draw_ground(&mut self, camera: &Camera3D) -> Result<()> {
         let model = Transform3D::IDENTITY;
+        if let Some(textura) = self.textura_chao {
+            let desenhou = self.render.draw_mesh_textured(
+                self.chao,
+                self.shader_texturado,
+                textura,
+                &model,
+                camera,
+                // Branco: a cor vem do BMP. Tingir aqui escureceria duas vezes.
+                Color3D::WHITE,
+            )?;
+            if desenhou {
+                return Ok(());
+            }
+        }
         self.draw(self.plane, &model, camera, GROUND_COLOR)
+    }
+
+    /// Desenha o cenário do planeta (pedras, crateras, mesas e destroços).
+    ///
+    /// Uma chamada por modelo — cinco no total. O cenário é estático, então as
+    /// matrizes de instância foram aplicadas aos vértices na abertura: nada é
+    /// reenviado por quadro e não há dependência de `GL_ARB_instanced_arrays`.
+    pub fn draw_cenario(&mut self, camera: &Camera3D) -> Result<()> {
+        for i in 0..self.cenario.len() {
+            let (malha, cor) = self.cenario[i];
+            self.draw(malha, &Transform3D::IDENTITY, camera, cor)?;
+        }
+        Ok(())
+    }
+
+    /// Quantas malhas o cenário tem (uma por modelo com peças).
+    pub fn cenario_malhas(&self) -> usize {
+        self.cenario.len()
     }
 
     /// Desenha um cubo de aresta `size` centrado em `position`.
@@ -403,7 +624,7 @@ impl RenderBridge {
             )?;
         }
         self.hud_chamadas_gl = chamadas;
-        self.render.set_light(DirectionalLight::sun());
+        self.render.set_light(luz_do_planeta());
         self.hud_lotes = lotes;
         Ok(())
     }

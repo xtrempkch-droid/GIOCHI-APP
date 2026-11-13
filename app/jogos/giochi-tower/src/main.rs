@@ -31,9 +31,10 @@ use giochi_engine_3d::math3d::Color3D;
 
 use giochi_tower::config::{ClassId, GameConfig, ProfileId};
 use giochi_tower::engine_bridge::cena;
-use giochi_tower::engine_bridge::render::{AXIS_X_COLOR, AXIS_Z_COLOR, PLAYER_COLOR};
+use giochi_tower::engine_bridge::render::PLAYER_COLOR;
 use giochi_tower::engine_bridge::{AudioBridge, InputBridge, InputFrame, RenderBridge};
 use giochi_tower::errors::{GameError, Result};
+use giochi_tower::game::cenario;
 use giochi_tower::game::state::{GameState, Phase};
 use giochi_tower::menu::{self, Menu};
 use giochi_tower::net::GameMsg;
@@ -87,6 +88,10 @@ struct Options {
     /// Desenhar o HUD e a loja. Desligado com `--sem-ui`, para medir o custo das
     /// duas camadas separadamente.
     ui: bool,
+    /// Desenhar o cenário (pedras, crateras, mesas, destroços). Desligado com
+    /// `--sem-cenario`: é o A/B que responde "quanto custa a paisagem" sem
+    /// comparar com uma versão antiga do binário.
+    cenario: bool,
     /// Abre a loja já na abertura. Existe porque a loja só aparece 6 minutos
     /// depois do início (e a partida costuma terminar antes disso sem alguém
     /// atirando), então capturá-la exigiria jogar — e verificação que depende de
@@ -105,6 +110,14 @@ struct Options {
     hospedar: Option<u16>,
     /// Entra numa partida no endereço dado (`ip:porta`).
     entrar: Option<String>,
+    /// Vitrine de modelos: desenha os 20 arquivos lado a lado, sem mundo, sem
+    /// HUD e com câmera fixa.
+    ///
+    /// Existe porque "o modelo carregou" e "o modelo parece um soldado" são
+    /// afirmações diferentes, e a segunda não tinha ferramenta: para ver um bug
+    /// seria preciso jogar até a onda dele, e o Coronel só aparece no meio da
+    /// horda. Aqui os vinte cabem num quadro.
+    vitrine: bool,
     /// Sequência de teclas aplicada **antes** do primeiro desenho.
     ///
     /// Existe pela mesma razão do `--teclas` do launcher e do `neon-drift`:
@@ -125,11 +138,13 @@ impl Default for Options {
             capture: None,
             frames: None,
             ui: true,
+            cenario: true,
             demo_loja: false,
             benchmark: None,
             menu: false,
             hospedar: None,
             entrar: None,
+            vitrine: false,
             teclas: Vec::new(),
         }
     }
@@ -150,6 +165,8 @@ OPÇÕES:
   --frames <n>         roda só n quadros, com passo fixo (verificação)
                        (aceita também --quadros, o nome usado no resto do repo)
   --sem-ui             não desenha HUD, minimapa nem loja (mede o custo da UI)
+  --sem-cenario        não desenha pedras, crateras, mesas nem destroços
+  --vitrine            desenha os 20 modelos lado a lado (confere a arte num quadro)
   --demo-loja          abre a loja na abertura (para capturar a tela)
   --benchmark <n>      roda n quadros sem espera e reporta FPS (combine com --sem-ui)
   --menu               abre no menu principal (o padrão é entrar direto na partida)
@@ -205,6 +222,42 @@ fn run() -> Result<()> {
     }
 
     banner(&render, &input, &config, &state, options.frames.is_some());
+
+    // ## Vitrine de modelos
+    //
+    // `--vitrine` não é um modo de jogo: desenha os 20 modelos em duas fileiras,
+    // grava o quadro e sai. Roda **antes** do laço para não precisar de estado de
+    // partida nem de menu, e para o tempo de vida do BMP ser o de um quadro só.
+    if options.vitrine {
+        render.begin();
+        vitrine(&mut render)?;
+        // A captura lê os pixels **antes** da troca de buffers: com GLES o swap
+        // esvazia o back buffer e o BMP sai preto (medido nos três aparelhos).
+        if let Some(caminho) = options.capture.as_ref() {
+            render.capture_bmp(caminho)?;
+        }
+        render.end()?;
+        log::info!(
+            "vitrine: {} modelo(s) desenhado(s) — duas fileiras de personagens e uma de cenário",
+            giochi_tower::engine_bridge::modelos::todos_os_nomes().count()
+        );
+        return Ok(());
+    }
+
+    // O cenário é montado **uma vez**: a paisagem não muda durante a partida, e o
+    // `RenderBridge` já a fundiu em uma malha por modelo na abertura.
+    let cenario_copias = cenario::montar();
+    let contar = |nome: &str| cenario_copias.iter().filter(|c| c.modelo == nome).count();
+    log::info!(
+        "cenário: {} peça(s) em {} malha(s) — {} rocha(s), {} espigão(ões), {} cratera(s), {} mesa(s), {} destroço(s)",
+        cenario_copias.len(),
+        render.cenario_malhas(),
+        contar("rocha"),
+        contar("espigao"),
+        contar("cratera"),
+        contar("mesa"),
+        contar("destroco"),
+    );
 
     let mut game_loop = GameLoop::new();
     let mut clock = FrameClock::new();
@@ -514,6 +567,13 @@ fn run() -> Result<()> {
         render.begin();
         render.draw_ground(&camera)?;
 
+        // O planeta morto: pedras, crateras, mesas no horizonte e destroços.
+        // Uma chamada por modelo — as cópias já foram fundidas na abertura, então
+        // não há matriz de instância para reenviar a cada quadro.
+        if options.cenario {
+            render.draw_cenario(&camera)?;
+        }
+
         // A torre, o alvo a defender (GDD §11). O modelo cresce com o upgrade de
         // HP, então a silhueta diz o quanto ela já foi reforçada.
         let torre = cena::da_torre(state.tower.max_hp);
@@ -550,11 +610,6 @@ fn run() -> Result<()> {
                 )?;
             }
         }
-
-        // Dois marcadores de orientação no chão: sem eles a câmera isométrica não
-        // tem como provar que está girada 45° e não 0°.
-        render.draw_cube(&camera, glam::Vec3::new(12.0, 0.2, 0.0), 0.4, AXIS_X_COLOR)?;
-        render.draw_cube(&camera, glam::Vec3::new(0.0, 0.2, 12.0), 0.4, AXIS_Z_COLOR)?;
 
         // Inimigos: desenhados do **snapshot**, não do mundo do host. Se a AOI
         // filtrar demais, a tela mostra menos inimigos — que é a falha que se
@@ -1231,6 +1286,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
                 options.entrar = Some(endereco);
             }
             "--sem-ui" => options.ui = false,
+            "--sem-cenario" => options.cenario = false,
+            "--vitrine" => options.vitrine = true,
             "--demo-loja" => options.demo_loja = true,
             "--benchmark" => {
                 let value = args
@@ -1283,6 +1340,70 @@ fn parse_size(value: &str) -> Result<(u32, u32)> {
         return Err(GameError::message("largura e altura precisam ser ≥ 1"));
     }
     Ok((width, height))
+}
+
+
+/// Desenha os 20 modelos em quatro fileiras, sob uma câmera própria.
+///
+/// # O que esta função responde
+///
+/// "O modelo carregou" o teste já responde sem GPU. O que nenhum teste responde é
+/// **se ele parece o que devia** — e para isso é preciso olhar. Jogar até a onda do
+/// boss para ver o Tanker Bug é caro; aqui os vinte cabem num quadro.
+///
+/// # A câmera é mais perto que a do jogo, e de propósito
+///
+/// A do jogo fica a 52 m para caber combate; nessa distância um soldado de 2,4 m
+/// mede **34 px de altura** em 640×480 (medido), e não dá para julgar silhueta. A
+/// da vitrine fica a 26 m: o dobro do tamanho na tela, que é o que se quer para
+/// olhar arte.
+///
+/// # Quatro fileiras de cinco
+///
+/// Uma fileira só com os vinte daria 70 m de largura. Quatro fileiras de cinco dão
+/// 17 m, e todas cabem na mesma vista. A ordem segue `modelos::todos_os_nomes()`:
+/// classes, inimigos, bosses+torre, cenário — assim um modelo novo aparece no
+/// grupo certo quando alguém acrescentar.
+fn vitrine(render: &mut RenderBridge) -> Result<()> {
+    let camera = giochi_tower::game::IsoCamera {
+        focus: glam::Vec3::ZERO,
+        distance_m: 26.0,
+        ..giochi_tower::game::IsoCamera::new(glam::Vec3::ZERO)
+    }
+    .engine_camera(1280, 720);
+
+    render.draw_ground(&camera)?;
+
+    let fileiras: [(&[&str], f32, f32); 4] = [
+        (&["soldado", "guerreiro", "sniper", "medico"], 6.0, 2.4),
+        (&["grunt", "tank", "ranged", "swarm", "flying"], 2.0, 2.2),
+        (&["tanker", "plasma", "brain", "queen", "coronel"], -2.0, 3.4),
+        (&["torre", "rocha", "espigao", "cratera", "destroco"], -7.0, 4.0),
+    ];
+
+    for (nomes, z, altura) in fileiras {
+        for (i, nome) in nomes.iter().enumerate() {
+            let x = (i as f32 - (nomes.len() as f32 - 1.0) * 0.5) * 3.6;
+            // O cenário tem escala própria no jogo (uma cratera é um buraco de
+            // 12 m de diâmetro, uma mesa tem 20 m de altura) e na vitrine seria
+            // ilegível. Aqui ele entra na altura da fileira, que é o que permite
+            // comparar a silhueta.
+            let no_mundo = if giochi_tower::engine_bridge::modelos::CENARIO.contains(nome) {
+                altura * 0.55
+            } else {
+                altura
+            };
+            render.draw_modelo(
+                &camera,
+                nome,
+                glam::Vec3::new(x, 0.0, z),
+                no_mundo,
+                0.0,
+                Color3D::WHITE,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
