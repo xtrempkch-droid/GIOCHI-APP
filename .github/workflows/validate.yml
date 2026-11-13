@@ -437,17 +437,24 @@ jobs:
       # acao, entao a tela mudava, o log dizia "tela partida" e a partida nao
       # comecava (0 passo de simulacao em 60 quadros).
       - name: O menu inicia, reinicia, sai e salva configuracao
+        working-directory: app/jogos/giochi-tower
         run: |
           set -ex
           export SDL_VIDEODRIVER=offscreen
           mkdir -p /tmp/towercfg
           cp config/*.ron /tmp/towercfg/
-          BIN=target/release/giochi-tower
+          # `cargo run`, e nao `target/release/...`: este job nao constroi o
+          # perfil de release. Apontar para um binario que ninguem compilou daria
+          # "No such file" e mandaria procurar defeito no menu.
+          BIN="cargo run --quiet --"
 
           # A = Jogar: 60 quadros depois tem de haver passo de simulacao.
           $BIN --menu --frames 60 --teclas "a" --config /tmp/towercfg 2>/tmp/a.log
           grep -q "partida: nova" /tmp/a.log
-          grep -q "passo(s) de simulacao" /tmp/a.log
+          # Sem a palavra acentuada: o que importa e que houve passo, e
+          # `[1-9][0-9]* passo` prova isso sem depender de como o shell do
+          # runner trata o acento (AGENTS.md §19).
+          grep -qE "[1-9][0-9]* passo" /tmp/a.log
 
           # Start abre a pausa; baixo + A reinicia.
           $BIN --frames 90 --teclas "start,baixo,a" --config /tmp/towercfg 2>/tmp/b.log
