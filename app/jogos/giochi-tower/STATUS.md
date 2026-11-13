@@ -67,6 +67,13 @@ cores exatas das constantes aparecem, o HUD muda mais de 2 % do quadro em relaç
 a `--sem-ui`, e o BMP sai 640×480. Um HUD que não desenha reprova no CI, não na
 mão de quem olha a tela.
 
+Capturas feitas **no R35S** (`--quadros 240`, renderer software porque com GLES
+`--quadro` grava preto):
+
+![HUD do GIOCHI Tower Defense no R35S](../../../docs/imagens/giochi-tower-hud-r35s.png)
+
+![Tela da loja no R35S](../../../docs/imagens/giochi-tower-loja-r35s.png)
+
 ### Ferramentas novas
 
 ```bash
