@@ -218,7 +218,16 @@ jobs:
           import json, os, sys
           dados = json.loads(sys.argv[1])
           assert dados["quadros"] == 90, dados
-          assert dados["celula"] == 22, dados
+          # Aqui havia `assert dados["celula"] == 22`, que NUNCA pode rodar: o
+          # `--json` do cobrinha nao tem a chave `celula` (tem quadros, passos,
+          # segundos, fps, fps_teto, pontos, atrasados, gles, instancing). A
+          # assercao so nao aparecia porque o passo morria antes, no fps.
+          #
+          # O tamanho da celula continua coberto, e no lugar certo: os testes de
+          # `geometria.rs` prendem que ela e inteira, que cabe no painel, que e a
+          # maior possivel e que painel maior da celula maior. O valor em pixels
+          # do quadro desenhado depende da escala automatica (o log mostra
+          # `escala 1.25`), entao nao e invariante de CI.
           # Vale nas duas máquinas: o limitador não pode ser ignorado.
           assert dados["fps"] <= dados["fps_teto"] + 1.0, f"teto ignorado: {dados}"
           if os.environ.get("GIOCHI_SOFTWARE_GL") == "1":
