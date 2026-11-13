@@ -40,6 +40,14 @@ O pedido do dono foi de **arte e de cenário**:
 
 ![A batalha pelo posto no R35S](../../../docs/imagens/giochi-tower-planeta-r35s.png)
 
+### A capa também é a cena
+
+`capa.png` deixou de ser um gradiente com um círculo: é um recorte 320×320 do
+quadro do jogo, com a torre, os soldados e a horda. O cartão do launcher passa a
+mostrar o que o jogo é antes de alguém apertar A.
+
+![Cartão do Tower Defense na Home do R35S](../../../docs/imagens/giochi-tower-cartao-home-r35s.png)
+
 ### Quatro defeitos que só a imagem mostrou
 
 Nenhum destes aparecia em teste, log ou contagem de arquivos — todos precisaram
@@ -180,6 +188,14 @@ arte são as três primeiras:
 ![Menu do GIOCHI Tower Defense no R35S](../../../docs/imagens/giochi-tower-menu-r35s.png)
 
 ![A batalha pelo posto no R35S](../../../docs/imagens/giochi-tower-planeta-r35s.png)
+
+### A capa também é a cena
+
+`capa.png` deixou de ser um gradiente com um círculo: é um recorte 320×320 do
+quadro do jogo, com a torre, os soldados e a horda. O cartão do launcher passa a
+mostrar o que o jogo é antes de alguém apertar A.
+
+![Cartão do Tower Defense na Home do R35S](../../../docs/imagens/giochi-tower-cartao-home-r35s.png)
 
 ![Vitrine dos 20 modelos no R35S](../../../docs/imagens/giochi-tower-vitrine-r35s.png)
 
