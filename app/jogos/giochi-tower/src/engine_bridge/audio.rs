@@ -61,6 +61,16 @@ impl AudioBridge {
         self.volume
     }
 
+    /// Ajusta o volume em fração (`0.0..=1.0`), como o menu o apresenta.
+    ///
+    /// A escala do mixer é `0..=MAX_VOLUME`; converter aqui, num lugar só, evita
+    /// que cada chamador invente a sua — foi assim que o launcher acabou com três
+    /// escalas de volume diferentes.
+    pub fn definir_volume(&mut self, fracao: f32) {
+        let fracao = if fracao.is_finite() { fracao.clamp(0.0, 1.0) } else { 0.7 };
+        self.set_volume((fracao * MAX_VOLUME as f32).round() as i32);
+    }
+
     /// Ajusta o volume, limitado a `0..=MAX_VOLUME`.
     pub fn set_volume(&mut self, volume: i32) {
         self.volume = volume.clamp(0, MAX_VOLUME);

@@ -28,6 +28,7 @@ use giochi_engine_3d::render3d::DirectionalLight;
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::{MeshHandle, RenderContext3D, ShaderHandle};
 
+use crate::engine_bridge::modelos::{self, Catalogo};
 use crate::errors::{GameError, Result};
 use crate::ui::{self, layout};
 
@@ -77,6 +78,13 @@ pub struct RenderBridge {
     /// matrizes de instância.
     hud_quad: MeshHandle,
     hud_shader: ShaderHandle,
+    /// Modelos e texturas do jogo (personagens, bosses, torre).
+    modelos: Option<Catalogo>,
+    /// Shader instanciado, para a horda sair em uma chamada por tipo.
+    instanced_shader: ShaderHandle,
+    /// Textura 1×1 branca: o que um modelo sem textura recebe para o shader
+    /// `textured` multiplicar por branco em vez de amostrar lixo.
+    textura_reserva: Option<giochi_engine_3d::TextureHandle>,
     /// Lotes do último quadro, para o diagnóstico contar chamadas.
     hud_lotes: Vec<ui::Lote>,
     /// Chamadas que o **driver** emitiu no último quadro. Diferente de
@@ -129,6 +137,34 @@ impl RenderBridge {
         let (hud_vertices, hud_indices) = ui::quad_da_hud();
         let hud_quad = render.create_mesh(&hud_vertices, &hud_indices)?;
         let hud_shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
+        let instanced_shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
+
+        // Textura 1×1 branca. Não é decoração: `draw_mesh_textured` amostra a
+        // unidade com `u_tint`, e um modelo sem textura precisa de algo ligado —
+        // sem textura o shader amostra o que estiver na unidade 0, que num driver
+        // pode ser lixo do quadro anterior.
+        let textura_reserva = render.create_texture_from_rgba(1, 1, &[255, 255, 255, 255]).ok();
+
+        // Os modelos são opcionais: um pacote sem `assets/` continua jogável com
+        // os cubos, e o log diz por quê. Ficar sem desenhar nada seria pior.
+        let modelos = match (modelos::achar_diretorio(), textura_reserva) {
+            (Some(dir), Some(reserva)) => {
+                match Catalogo::carregar(&mut render, &dir, cube, reserva) {
+                    Ok(catalogo) => Some(catalogo),
+                    Err(erro) => {
+                        log::warn!("catálogo de modelos indisponível: {erro}");
+                        None
+                    }
+                }
+            }
+            _ => {
+                log::warn!(
+                    "assets/ não encontrado (procurei {:?}); personagens ficam como cubos",
+                    modelos::diretorios_candidatos()
+                );
+                None
+            }
+        };
 
         Ok(Self {
             window,
@@ -138,6 +174,9 @@ impl RenderBridge {
             cube,
             hud_quad,
             hud_shader,
+            modelos,
+            instanced_shader,
+            textura_reserva,
             hud_lotes: Vec::new(),
             hud_chamadas_gl: 0,
             driver,
@@ -260,6 +299,78 @@ impl RenderBridge {
         Ok(())
     }
 
+    /// `true` quando há modelos de verdade (e não o cubo de reserva).
+    pub fn tem_modelos(&self) -> bool {
+        self.modelos.as_ref().is_some_and(|c| c.do_disco() > 0)
+    }
+
+    /// Quantos modelos vieram do disco.
+    pub fn modelos_carregados(&self) -> usize {
+        self.modelos.as_ref().map(Catalogo::do_disco).unwrap_or(0)
+    }
+
+    /// Desenha um personagem, boss ou a torre pelo nome do modelo.
+    ///
+    /// `altura_no_mundo` é a altura desejada em metros — a escala é derivada da
+    /// altura medida no arquivo, então mexer no OBJ não muda o tamanho que a
+    /// jogabilidade usa. Sem catálogo, cai no cubo do tamanho equivalente para o
+    /// quadro continuar legível.
+    pub fn draw_modelo(
+        &mut self,
+        camera: &Camera3D,
+        nome: &str,
+        pos: GlamVec3,
+        altura_no_mundo: f32,
+        giro: f32,
+        cor: Color3D,
+    ) -> Result<()> {
+        let Some(catalogo) = self.modelos.as_ref() else {
+            return self.draw_cube(camera, GlamVec3::new(pos.x, altura_no_mundo * 0.5, pos.z), altura_no_mundo * 0.62, cor);
+        };
+        // `pos` é a **base**: o modelo é medido a partir do pé, então o cubo de
+        // reserva sobe meia altura. Passar `pos.y` direto afundaria o personagem.
+        let pedido = modelos::Pedido::novo(nome, EngineVec3::from_glam(pos), altura_no_mundo)
+            .com_giro(giro)
+            .com_tint(cor);
+        match catalogo.desenhar(&mut self.render, camera, pedido) {
+            Ok(()) => Ok(()),
+            Err(erro) => {
+                log::warn!("modelo '{nome}': {erro}");
+                Ok(())
+            }
+        }
+    }
+
+    /// Desenha `matrizes` cópias de um modelo numa chamada (a horda).
+    pub fn draw_modelo_lote(
+        &mut self,
+        camera: &Camera3D,
+        nome: &str,
+        matrizes: &[giochi_engine_3d::math3d::Mat4],
+        cor: Color3D,
+    ) -> Result<u32> {
+        let Some(catalogo) = self.modelos.as_ref() else {
+            return Ok(0);
+        };
+        catalogo
+            .desenhar_lote(&mut self.render, camera, nome, matrizes, cor, self.instanced_shader)
+            .map_err(|erro| GameError::message(format!("lote de '{nome}': {erro}")))
+    }
+
+    /// Matriz de instância para um modelo: posição, giro em Y e escala uniforme.
+    ///
+    /// Pública porque quem monta a lista da horda é `main.rs`, que conhece a
+    /// altura de cada tipo — e a matriz é a única coisa que os dois lados precisam
+    /// combinar.
+    pub fn matriz_de_modelo(pos: GlamVec3, giro: f32, escala: f32) -> giochi_engine_3d::math3d::Mat4 {
+        Transform3D::new(
+            EngineVec3::from_glam(pos),
+            Quat::from_axis_angle(EngineVec3::UP, giro),
+            EngineVec3::new(escala, escala, escala),
+        )
+        .matrix()
+    }
+
     /// Desenha o HUD sobre a cena 3D.
     ///
     /// Tem de ser chamada **depois** do mundo e **antes** de [`Self::end`]: o HUD
@@ -335,11 +446,20 @@ impl RenderBridge {
     pub fn destroy_all(&mut self) {
         // Os retornos são `bool` (handle existia?). Aqui não há decisão a tomar com
         // eles, e ignorá-los explicitamente evita o aviso de `must_use`.
+        let reserva = self.textura_reserva.unwrap_or(0);
+        if let Some(mut catalogo) = self.modelos.take() {
+            catalogo.destruir(&mut self.render, self.cube, reserva);
+        }
+        if reserva != 0 {
+            let _ = self.render.destroy_texture(reserva);
+            self.textura_reserva = None;
+        }
         let _ = self.render.destroy_mesh(self.plane);
         let _ = self.render.destroy_mesh(self.cube);
         let _ = self.render.destroy_mesh(self.hud_quad);
         let _ = self.render.destroy_shader(self.shader);
         let _ = self.render.destroy_shader(self.hud_shader);
+        let _ = self.render.destroy_shader(self.instanced_shader);
         let _ = self.render.release_all();
     }
 }

@@ -23,11 +23,15 @@
 //! vez de pagá-la.
 
 pub mod audio;
+pub mod cena;
 pub mod input;
+pub mod modelos;
 pub mod render;
 pub mod touch;
 
 pub use audio::AudioBridge;
+pub use cena::{Aparencia, Copia};
+pub use modelos::{Catalogo, Modelo};
 pub use input::{Axis, Buttons, Edges, InputBridge, InputFrame, InputSource};
 pub use render::RenderBridge;
 pub use touch::{TouchButton, TouchEmulation};

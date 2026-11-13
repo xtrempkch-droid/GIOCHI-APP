@@ -6257,3 +6257,129 @@ Três defeitos, os três medidos:
    recuperação mata os travados junto com o supervisor.
 
 E o número que fecha: `subir` responde `pid=12248 ppid=12009 drm=6`.
+
+## 44. Tower Defense: modelos, multiplayer, e o `--teclas` que mentia (13/11/2026)
+
+Três pedidos do dono em uma rodada: **"os personagens estão como apenas cubos"**,
+**"ponha o multiplayer"** e **"um menu para reiniciar, sair e configurar"**. Os
+dois primeiros exigiram atualizar o vendor; o terceiro expôs dois defeitos que
+213 testes não pegavam.
+
+### A engine ganhou textura e OBJ — e o vendor foi atualizado por cópia
+
+Upstream `main` passou de `49c5d63` para `33a3b92` com `render3d/texture.rs`
+(`create_texture`, `create_texture_from_rgba`, `draw_mesh_textured`) e
+`load_obj`/`model_viewer`. O `vendor/` é **cópia** (`rsync -a --delete
+--exclude target`), regra R1: nunca editado.
+
+E o `Cargo.toml` do vendor precisou voltar a `glam = "0.34"` / `glow = "0.18"`:
+o snapshot anterior estava em 0.29/0.14, versões em que `glam::camera::…::
+perspective` **não existe**. As duas pontas estavam velhas juntas, então
+compilava. A lição: **o pin segue o código que se chama**, e aqui o código é o da
+engine — um `glam` novo no jogo com engine velha quebraria na primeira matriz.
+
+### A prova de que o cubo virou modelo é a contagem de cores
+
+`scripts/gerar-modelos.mjs` escreve **15 OBJ + 15 BMP** de forma determinística
+(`--conferir` reprova divergência). BMP e não PNG porque o `SDL2_image` do R35S
+já apareceu compilado sem `--enable-png` (§24).
+
+"O arquivo abriu" não prova nada — o teste que vale é o quadro:
+
+```text
+com modelos     2 795 cores distintas · 13,63 % dos pixels diferentes
+sem modelos       113 cores distintas  (cubos de face plana)
+```
+
+113 é o que um cubo de face plana dá; 2 795 é o que uma superfície texturizada
+dá. `tests/modelos.rs` ainda carrega os 15 arquivos **pelo loader da engine** e
+mede altura, largura e vértices — `load_obj` é puro, então asset errado reprova
+sem abrir janela.
+
+Sem `vn` nos OBJ **de propósito**: a engine deriva a normal da face e é isso que
+dá o relevo que o shader `textured` desenha. Normal suavizada apagaria a aresta
+que faz o modelo ler como sólido a 640×480.
+
+### A horda sai instanciada, e o contador estava errado
+
+Um lote por modelo (`cena::agrupar`), não um por inimigo. Com 12 inimigos na tela:
+**0,32 ms** e **0,47 chamada/quadro**.
+
+O relatório imprimia `horda 0.32 ms em 1041 chamada(s)` — um **total de 1800
+quadros** ao lado de um **custo por quadro**. Lê como "1041 chamadas num quadro",
+que é plausível e falso (12 inimigos desenham no máximo 3 lotes). Terceira
+ocorrência da mesma classe neste repositório (§30 no launcher-teste, §38 no
+neon-drift): **um número que não diz o que mede**. Agora é `chamada(s)/quadro`.
+
+### O `local_id` que o handshake mandava e ninguém lia
+
+O crate `giochi-net` **consome** o `HandshakeOk` dentro de `processar()` (guarda o
+id em `jogador()` e faz `continue`). O jogo tinha um braço
+`Mensagem::HandshakeOk` que por isso **nunca podia rodar**: o log "handshake
+aceito" jamais saiu, e o `local_id` ficava no 0 de nascimento — que é **o id do
+host**. Medido com dois processos: o cliente dirigia o avatar do outro.
+
+```text
+antes    cliente: rede: jogador 0 · nenhum "handshake aceito" · local_id = 0
+depois   cliente: rede: assumindo o jogador 1 · net: handshake aceito, jogador 1
+```
+
+A correção é ler `cliente.jogador()` — a autoridade — e não esperar por uma
+mensagem que ninguém entrega. `id_zero_nunca_e_adotado_como_proprio` fixa a regra.
+
+A feature `real-net` **deixou de existir**: rede atrás de `--features` é rede que
+o jogador não tem, e ela escondia duas falhas de compilação latentes
+(`MAX_CLIENTS` em vez de `MAX_CLIENTES`, campo `tamanho` ignorado).
+
+### O `--teclas` mudava a tela e não fazia nada
+
+````text
+antes    --teclas "a" -> tela partida · 60 quadros · 0 passo(s) de simulação
+depois   --teclas "a" -> partida: nova  · 60 quadros · 60 passo(s) de simulação
+````
+
+Ele chamava `Menu::entrada` **antes do laço** e descartava a `Acao` devolvida. A
+tela mudava, o log confirmava, e a partida não começava. Mesma classe do
+`--teclas` do launcher (§24) e do `--atlas` sem forma (§32): **ferramenta que
+imprime um estado plausível sem ter feito nada**.
+
+Agora a tecla entra pela fila de eventos, uma por quadro, e quem executa é o laço
+— caminho de produção, sem cópia. Duas armadilhas apareceram na conversão:
+
+1. **Repetição de 0,22 s engole a tecla seguinte.** `baixo,baixo` a 1/60 s parava
+   em "Multijogador": o segundo `baixo` caía dentro da janela. Daí o **quadro de
+   soltura** entre duas teclas — um dedo levanta o botão.
+2. **`menu::Direcao` não tem START**, e o START é de quem abre a pausa (o laço).
+   Sem `Tecla::Pausa` o caminho pausa → reiniciar → sair não podia ser exercitado
+   por linha de comando.
+
+Os quatro caminhos viraram passo de CI:
+
+| Sequência | Prova |
+| --- | --- |
+| `a` | `partida: nova` **e** passos de simulação |
+| `start,baixo,a` | `partida: reiniciada` |
+| `cima,a` | `sair pedido pelo menu` |
+| `baixo,baixo,a,esq,esq` | `settings.json` com `"volume": 60` |
+
+### `--quadro` passou a ler antes do swap
+
+O repositório contornava o BMP preto obrigando `SDL_RENDER_DRIVER=software` na
+captura. Isso custa a fidelidade do backend que roda de verdade. A captura agora
+acontece **antes** de `render.end()` — mesmo motivo que fez `--benchmark` parar
+ali (§43): a troca de buffers é a fronteira entre o que o jogo fez e o que o
+painel mostrou.
+
+### Medido no R35S (RK3326, Mali-G31, 640×480)
+
+```text
+modelos          15/15 de /opt/giochi/apps/giochi-tower/assets · 16 texturas na GPU
+sem UI           59,8 fps · 1,58 ms por quadro
+com UI + horda   59,9 fps · 6,13 ms por quadro · 9 chamadas de UI, 403 instâncias
+quadro           1 506 cores · 0,00 % de quase-preto
+rede             host e cliente em dois processos: "jogador 1 entrou" dos dois lados
+```
+
+O que continua sendo **afirmação**: o botão físico. `/dev/uinput` não existe no
+aparelho, então `--teclas` cobre o menu e não o evdev — e é por isso que o app
+segue `scaffold` em `apps.json`.

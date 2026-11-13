@@ -1,9 +1,10 @@
-//! GIOCHI Tower Defense â€” regras, estado e ponte com a engine.
+//! GIOCHI Tower Defense — regras, estado e ponte com a engine.
 
 pub mod config;
 pub mod engine_bridge;
 pub mod errors;
 pub mod game;
+pub mod menu;
 pub mod net;
 pub mod ui;
 
@@ -27,3 +28,12 @@ pub const CONFIG_DIR: &str = "config";
 
 /// Variável de ambiente que sobrepõe [`CONFIG_DIR`].
 pub const CONFIG_DIR_ENV: &str = "GIOCHI_TOWER_CONFIG";
+
+/// Diretório de assets padrão (modelos e texturas), relativo ao executável.
+pub const ASSETS_DIR: &str = "assets";
+
+/// Variável de ambiente que sobrepõe [`ASSETS_DIR`].
+///
+/// Existe pelo mesmo motivo do `GIOCHI_TOWER_CONFIG`: sem ela, testar um pacote
+/// de arte em outro diretório exigiria reinstalar o jogo.
+pub const ASSETS_DIR_ENV: &str = "GIOCHI_TOWER_ASSETS";

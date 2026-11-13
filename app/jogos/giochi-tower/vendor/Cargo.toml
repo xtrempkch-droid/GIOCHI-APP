@@ -1,8 +1,18 @@
 # Snapshot da engine, copiado do repositório GIOCHI-ENGINE-3D em `main`
-# (commit 49c5d63 — "feat(net): crate giochi-net com protocolo, AOI e host/cliente P2P").
+# (commit 33a3b92 — texturas, modelos OBJ e a revisao que veio logo depois).
 #
-# Copiado de:  C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi engine 3d
-# Crates:      giochi-engine (2D), giochi-engine-3d (GLES/EGL), giochi-net (P2P + AOI)
+# Crates: giochi-engine (2D), giochi-engine-3d (GLES/EGL), giochi-net (P2P + AOI)
+#
+# # O que mudou neste snapshot, e por que o jogo precisava
+#
+# O snapshot anterior (49c5d63) **nao tinha textura**: o vertice carregava `uv`
+# desde a fase 11 e `BuiltinShader::Textured` existia, mas nada criava uma textura
+# GL nem a vinculava num draw -- todo `textured` amostrava a unidade 0 vazia e saia
+# preto, sem erro. Tambem nao havia caminho de modelo: so as primitivas procedurais
+# (cubo, esfera, plano), que e a razao de os personagens deste jogo serem cubos.
+#
+# Entraram `render3d/texture.rs`, `create_texture`/`create_texture_from_rgba`/
+# `destroy_texture`/`draw_mesh_textured`, e o loader de OBJ endurecido.
 #
 # # Por que três crates e não os dois de antes
 #
@@ -19,9 +29,9 @@
 # `cobrinha`, `neon-drift` e `giochi-defender`.
 #
 # Atualizar = copiar de novo (as três pastas, sem `target`):
-#   robocopy "<Giochi engine 3d>\giochi-engine"      vendor\giochi-engine      /E /XD target
-#   robocopy "<Giochi engine 3d>\giochi-engine-3d"   vendor\giochi-engine-3d   /E /XD target
-#   robocopy "<Giochi engine 3d>\giochi-net"         vendor\giochi-net         /E /XD target
+#   rsync -a --delete --exclude target "$UP/giochi-engine/"    vendor/giochi-engine/
+#   rsync -a --delete --exclude target "$UP/giochi-engine-3d/" vendor/giochi-engine-3d/
+#   rsync -a --delete --exclude target "$UP/giochi-net/"       vendor/giochi-net/
 # e reconferir este manifesto contra o `Cargo.toml` da raiz da engine.
 #
 # # O que este arquivo tem de escolha nossa
@@ -29,9 +39,15 @@
 # `[workspace.dependencies]` é cópia **fiel** do manifesto real da engine, incluindo
 # `features = ["image", "mixer", "ttf", "unsafe_textures"]` no `sdl2` — sem essas
 # quatro a engine 2D não compila (`unsafe_textures` é o que dispensa o tempo de vida
-# da `Texture`, ADR-017). As entradas `mlua` e `cbindgen` vêm junto por fidelidade:
+# da `Texture`, ADR-017). `image` é também o que a textura 3D usa para decodificar,
+# então sem ela `create_texture` não existe. As entradas `mlua` e `cbindgen` vêm
+# junto por fidelidade:
 # pertencem aos crates `giochi-engine-lua` e `giochi-engine-capi`, que não estão
 # aqui, e nenhuma dependência não usada é baixada.
+#
+# `glam` e `glow` acompanham o snapshot, não uma versão escolhida: o código da
+# engine chama `glam::camera::rh::proj::opengl::perspective` (0.34) e o `glow` 0.18.
+# Fixá-los em 0.29/0.14 foi o que impediu o vendor anterior de compilar.
 [workspace]
 resolver = "2"
 members = ["giochi-engine", "giochi-engine-3d", "giochi-net"]
@@ -46,7 +62,7 @@ repository = "https://github.com/xtrempkch-droid/GIOCHI-SYSTEM"
 
 [workspace.dependencies]
 sdl2 = { version = "0.38", default-features = false, features = ["image", "mixer", "ttf", "unsafe_textures"] }
-glam = "0.29"
+glam = "0.34"
 anyhow = "1.0"
 thiserror = "2.0"
 log = "0.4"
@@ -55,6 +71,6 @@ serde = { version = "1", features = ["derive"] }
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
 cbindgen = "0.27"
 criterion = { version = "0.8", features = ["html_reports"] }
-glow = "0.14"
+glow = "0.18"
 bytemuck = { version = "1", features = ["derive"] }
 tobj = "4"

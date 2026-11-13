@@ -32,12 +32,13 @@ sdl2 = { version = "0.38", default-features = false }
 # glam no grafo fariam o `From<glam::Vec3> for Vec3` da engine não valer para o
 # nosso glam, e a conversão na fronteira deixaria de compilar.
 #
-# 0.29 e não 0.34: o snapshot do engine usa `Mat4::look_at_rh`,
-# `perspective_rh_gl` e `orthographic_rh_gl`, que existem em 0.29 e foram
-# removidos em 0.34. Subir o pin sem mexer no código dá `no associated function
-# named look_at_rh` — erro que não sugere versão de biblioteca. É a mesma 0.29
-# dos outros três jogos (`cobrinha`, `neon-drift`, `giochi-defender`).
-glam = "0.29"
+# 0.34 acompanha o snapshot do engine atual (33a3b92), que migrou as projeções
+# para `glam::camera::rh::proj::opengl`. O snapshot anterior era 0.29, e fixar o
+# glam sem olhar a API foi o que impediu aquele vendor de compilar: `look_at_rh`
+# existe em 0.29 e sumiu em 0.34. A regra é o pin seguir o código da engine, não
+# o contrário. (`cobrinha`, `neon-drift` e `giochi-defender` seguem em 0.29 porque
+# os snapshots deles são anteriores — são cópias independentes, de propósito.)
+glam = "0.34"
 serde = { version = "1", features = ["derive"] }
 # Payload de regra do protocolo (prompt §5). Compacto e sem alocação no decode;
 # o `giochi-net` cuida do transporte e do cabeçalho.
@@ -48,11 +49,17 @@ log = "0.4"
 env_logger = "0.11"
 
 [features]
-# `stub-net` ligado por padrão: o jogo precisa rodar single-player antes de a
-# issue do `giochi-net` ser mergeada (prompt §3 e §10).
+# `stub-net` continua ligado: é o caminho single-player, exercitado desde o M2 e
+# o que permite testar o laço de rede sem socket.
+#
+# **Não existe mais `real-net`.** O transporte real (`net/host.rs`, `net/client.rs`,
+# `net/sessao.rs`) entrou em 13/11/2026 como código sempre compilado, e não atrás
+# de uma feature: `giochi-net` é std puro, não acrescenta uma dependência, e uma
+# função que só existe com `--features` é uma função que o jogador não tem. De
+# quebra, some a classe de defeito "funciona com X, não compila sem X" — que este
+# repositório já pagou caro no `--no-default-features` do launcher.
 default = ["stub-net", "sdl2-system"]
 stub-net = []
-real-net = []
 # O aparelho entrega o SDL2 pela imagem (Buildroot, KMSDRM); compilar do código
 # exigiria cmake e uma segunda cópia no rootfs. É o padrão porque é o alvo de
 # produção.

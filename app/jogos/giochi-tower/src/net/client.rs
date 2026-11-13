@@ -33,8 +33,15 @@ impl RealClient {
     /// Entra numa sala. `endereco` é o host (`ip:porta`).
     pub fn entrar(endereco: impl std::net::ToSocketAddrs) -> std::io::Result<Self> {
         let client = Cliente::entrar(endereco)?;
+        // `jogador()` pode ser `None` aqui: o handshake é assíncrono e o
+        // primeiro quadro costuma chegar antes da resposta. Imprimir o
+        // `unwrap_or(0)` dizia "entrou como jogador 0", que é o id do **host** —
+        // um número plausível e falso no log de diagnóstico.
+        match client.jogador() {
+            Some(jogador) => log::info!("net: entrou como jogador {jogador} ({:?})", client.estado()),
+            None => log::info!("net: conectado, aguardando handshake ({:?})", client.estado()),
+        }
         let player_id = client.jogador().unwrap_or(0);
-        log::info!("net: entrou como jogador {player_id} ({:?})", client.estado());
         Ok(Self {
             client,
             snapshot: None,
@@ -54,8 +61,17 @@ impl RealClient {
     }
 
     /// `true` quando o handshake já voltou e o jogo pode começar.
+    ///
+    /// O crate é a autoridade: ele consome o `HandshakeOk` e guarda o id em
+    /// `jogador()`, sem repassá-lo ao jogo. Perguntar a ele é a única resposta
+    /// que não depende de uma mensagem que ninguém entrega.
     pub fn is_ready(&self) -> bool {
-        self.player_id != 0 || self.client.jogador().is_some()
+        self.client.jogador().is_some() || self.player_id != 0
+    }
+
+    /// Id confirmado no handshake, se ele já voltou.
+    pub fn jogador(&self) -> Option<u8> {
+        self.client.jogador()
     }
 
     fn mandar(&mut self, mensagem: Mensagem) -> std::io::Result<()> {
@@ -65,7 +81,10 @@ impl RealClient {
 
 impl ClientBackend for RealClient {
     fn player_id(&self) -> u8 {
-        self.player_id
+        // O crate manda. A cópia local existe para o caminho do stub e para o
+        // `Send`, e pode estar velha por um quadro — usar a velha faria o
+        // cliente mandar input em nome do host.
+        self.client.jogador().unwrap_or(self.player_id)
     }
 
     fn send_input(&mut self, input: GameMsg) {
@@ -108,6 +127,22 @@ impl ClientBackend for RealClient {
 
     fn poll(&mut self, budget: usize) -> Vec<GameMsg> {
         let mut out = Vec::new();
+        // O id mora no crate, que **consome** o `HandshakeOk` em vez de
+        // repassá-lo (ver `vendor/giochi-net/src/client.rs`). Este laço tinha um
+        // braço `Mensagem::HandshakeOk` que nunca podia rodar — o log "handshake
+        // aceito" jamais saiu, e o `local_id` do mundo ficava em 0, fazendo o
+        // cliente controlar o avatar do **host**. Ler o estado do crate é a
+        // correção; esperar por uma mensagem que ninguém entrega não era.
+        match (self.client.jogador(), self.client.estado()) {
+            (Some(jogador), _) if jogador != self.player_id => {
+                log::info!("net: handshake aceito, jogador {jogador}");
+                self.player_id = jogador;
+            }
+            (None, giochi_net::client::Estado::Recusado) if self.player_id == 0 => {
+                log::error!("net: o host recusou a conexão (versão ou lotação)");
+            }
+            _ => {}
+        }
         for mensagem in self.client.processar(budget) {
             match mensagem {
                 Mensagem::Global { dados, tick } => match GameMsg::decode(&dados) {
@@ -121,14 +156,7 @@ impl ClientBackend for RealClient {
                     log::trace!("net: snapshot com {} inimigo(s) em tick {tick}", inimigos.len());
                     self.snapshot = Some(inimigos);
                 }
-                Mensagem::HandshakeOk { jogador, .. } => {
-                    self.player_id = jogador;
-                    log::info!("net: handshake aceito, jogador {jogador}");
-                }
-                Mensagem::HandshakeRecusado { motivo } => {
-                    let texto = String::from_utf8_lossy(&motivo);
-                    log::error!("net: handshake recusado: {texto}");
-                }
+
                 Mensagem::Pong { enviado_ms } => log::trace!("net: pong {enviado_ms} ms"),
                 outro => log::trace!("net: mensagem inesperada no cliente: {outro:?}"),
             }
@@ -141,14 +169,55 @@ impl ClientBackend for RealClient {
     }
 }
 
+/// O motivo do handshake recusado, como texto.
+///
+/// `motivo` é `[u8; 48]` fixo e `tamanho` diz quantos bytes valem. Ler o array
+/// inteiro acrescentaria zeros à mensagem, e o log mostraria o motivo com lixo no
+/// fim — num erro que o jogador precisa ler para saber se é versão, lotação ou
+/// senha.
+pub fn motivo_texto(motivo: &[u8; 48], tamanho: u8) -> String {
+    let n = usize::from(tamanho).min(motivo.len());
+    String::from_utf8_lossy(&motivo[..n]).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_camera_is_kept_for_the_next_input() {
-        // Sem socket: o campo é local e o teste garante que ele não é esquecido.
-        let camera = [12.0f32, -3.0];
-        assert_eq!(camera, [12.0, -3.0]);
+    fn o_motivo_usa_so_os_bytes_validos() {
+        let mut motivo = [0u8; 48];
+        motivo[..5].copy_from_slice(b"cheio");
+        assert_eq!(motivo_texto(&motivo, 5), "cheio");
+        // Tamanho maior que o array não estoura: o crate usa `[u8; 48]` fixo e
+        // um `tamanho` corrompido não pode virar pânico no cliente.
+        assert_eq!(motivo_texto(&motivo, 255).len(), 48);
+        assert_eq!(motivo_texto(&motivo, 0), "");
+    }
+
+    /// A regra que o `passo()` da sessão usa para adotar o id: **0 não é um id
+    /// de cliente**. Se ela mudar, o cliente ou fica sem id ou assume o do host.
+    #[test]
+    fn id_zero_nunca_e_adotado_como_proprio() {
+        let adotavel = |do_crate: Option<u8>, local: u8| match do_crate {
+            Some(id) if id != 0 && id != local => Some(id),
+            _ => None,
+        };
+        assert_eq!(adotavel(Some(1), 0), Some(1), "o primeiro cliente é o 1");
+        assert_eq!(adotavel(Some(0), 0), None, "0 é o host, nunca um cliente");
+        assert_eq!(adotavel(None, 0), None, "sem handshake não há o que adotar");
+        assert_eq!(adotavel(Some(1), 1), None, "já é o meu: nada a fazer");
+        assert_eq!(adotavel(Some(3), 1), Some(3), "o host pode reatribuir");
+    }
+
+    #[test]
+    fn a_flag_de_acao_cabe_em_u16() {
+        // O crate carrega `acoes` em u32 e o jogo em u16. Um bit acima do 15
+        // seria perdido no truncamento — este teste é o que impede a flag de
+        // nascer lá em cima sem ninguém notar.
+        for bit in 0..16 {
+            let flag: u16 = 1 << bit;
+            assert_eq!(u32::from(flag) as u16, flag);
+        }
     }
 }

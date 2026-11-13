@@ -3,11 +3,11 @@
 Tower Defense 3D co-op PvE (2–4 jogadores) sobre a **GIOCHI-ENGINE-3D**, alvo
 `aarch64-unknown-linux-gnu`, mínimo **RK3326 + 1 GB** como cliente.
 
-> **Estado: M1 (Fundação) entregue.** A engine vem do repositório da engine
-> (`Giochi engine 3d`, `main` = `49c5d63`), vendorizada em `vendor/` — três crates:
-> `giochi-engine`, `giochi-engine-3d` e `giochi-net`. O jogo abre, mostra a cena
-> isométrica e lê entrada. Inimigos, torre, ondas, bosses, nemesis e loja chegam
-> em M2/M3. O que foi decidido fora do prompt está em
+> **Estado: M1, M2 e M3 entregues; M4 em 3 de 6.** A engine vem do repositório
+> da engine (`main` = `33a3b92`, com texturas e OBJ), vendorizada em `vendor/` —
+> três crates: `giochi-engine`, `giochi-engine-3d` e `giochi-net`. O jogo abre,
+> tem menu, desenha personagens com modelo e textura, joga em rede real e roda no
+> R35S a 59,9 fps. O que foi decidido fora do prompt está em
 > [`DECISIONS.md`](DECISIONS.md) — inclusive a correção sobre a ABI C (D-002).
 
 O design travado está em
@@ -42,7 +42,19 @@ A interface **desenha**: HUD (onda, relógio, gold, placar, HP do jogador e da
 torre), minimapa e tela da loja. É fonte de 5×7 em dados + câmera de 90° sobre o
 3D, com uma chamada de desenho por cor — ver `DECISIONS.md` D-029 e D-030.
 
-Não faz (ainda): arte (tudo é cubo), áudio de verdade, rede real (M4) e a
+**M3.5 — arte, menu e rede de verdade**
+
+- **15 modelos OBJ e 15 texturas BMP**, gerados por
+  `scripts/gerar-modelos.mjs` (determinístico, `--conferir`): 4 classes, 5
+  inimigos, 4 bosses, o Coronel e a torre. A horda sai em **um lote instanciado
+  por modelo** — 12 inimigos custam 0,47 chamada de desenho por quadro.
+- **Menu** com cinco telas (Principal, Multijogador, Configurações, Pausa, Fim),
+  estado puro em `src/menu.rs`, `settings.json` persistido em `--config`.
+- **Rede real sempre compilada** (`net/sessao.rs`, `net/descoberta.rs`): host
+  escuta e anuncia por UDP broadcast, cliente procura e entra. O id do jogador
+  vem do handshake e vira o `local_id` do mundo.
+
+Não faz (ainda): animação nos modelos, áudio por evento, predição de rede e a
 entrada por evdev do aparelho (M5). O estado atual, com números medidos, está em
 [`STATUS.md`](STATUS.md).
 
@@ -53,6 +65,8 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 ├── docs/
 │   ├── GDD.md                   design oficial: ondas, classes, bosses, loja
 │   └── prompt.md                brief que originou o GDD
+├── scripts/
+│   └── gerar-modelos.mjs        gera assets/modelos/*.obj e assets/texturas/*.bmp
 ├── Cargo.toml                   workspace; vendor/ é excluído e consumido por caminho
 ├── build.rs                     carimba alvo/perfil e falha cedo se o snapshot faltar
 ├── DECISIONS.md                 toda decisão fora do prompt + o que não foi verificado
@@ -61,7 +75,8 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 ├── bin/                         binário aarch64; vai para o aparelho junto com config/
 ├── capa.png                     320x320, capa da loja
 ├── forge.json                   requisitos: gles2, 96 MB, 480x320
-├── assets/                      models/ textures/ audio/ fonts/ (vazio até o M6)
+├── assets/modelos/              15 .obj low-poly, gerados (não editar à mão)
+├── assets/texturas/             15 .bmp 24 bits, gerados (sem PNG: §24 do AGENTS)
 ├── src/
 │   ├── main.rs                  bootstrap, argumentos, loop fixo
 │   ├── lib.rs                   módulos públicos
@@ -71,12 +86,17 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 │   │   ├── mod.rs               fachada
 │   │   ├── input.rs             gamepad (SDL), teclado/mouse, bordas, zona morta
 │   │   ├── render.rs            contexto GLES, malhas, desenho, captura BMP
+│   │   ├── modelos.rs           carrega os .obj e as texturas (GIOCHI_TOWER_ASSETS)
+│   │   ├── cena.rs              tabela de aparência + agrupamento em lotes
 │   │   ├── audio.rs             mixer (sem uso no M1)
 │   │   └── touch.rs             touch emulado por mouse (joystick + 4 botões)
+│   ├── menu.rs                  máquina de estados pura do menu (5 telas, 21 testes)
 │   ├── net/
 │   │   ├── mod.rs               fachada: traits ClientBackend/HostBackend
 │   │   ├── protocol.rs          GameMsg em postcard (input, onda, torre, loja)
-│   │   ├── stub.rs              loopback host+cliente no mesmo processo
+│   │   ├── stub.rs              loopback host+cliente no mesmo processo (banco de prova)
+│   │   ├── sessao.rs            SessaoJogo::Host|Cliente — a única porta de rede do laço
+│   │   ├── descoberta.rs        anúncio e procura de salas por UDP broadcast
 │   │   └── aoi.rs               Interest Management sobre o AOI do giochi-net
 │   ├── ui/                      HUD, loja, minimapa (desenho por retângulo)
 │   └── game/
@@ -92,8 +112,9 @@ app/jogos/giochi-tower/          ← o app (tem metadata.json)
 │       └── state.rs             host: orquestra tudo, tick fixo, fases
 ├── tests/
 │   ├── nemesis_evolution.rs     tiers crescentes e item exclusivo
-│   └── net_stub.rs              host+cliente trocam input/snapshot sem deadlock
-└── vendor/                      engine (main 49c5d63) — NÃO EDITAR (regra R1)
+│   ├── net_stub.rs              host+cliente trocam input/snapshot sem deadlock
+│   └── modelos.rs               os 15 OBJ + 15 BMP carregados pelo loader da engine
+└── vendor/                      engine (main 33a3b92) — NÃO EDITAR (regra R1)
 ```
 
 ## Configuração
@@ -155,13 +176,31 @@ GIOCHI_TOWER_CONFIG=/opt/giochi/apps/giochi-tower/config ./giochi-tower
 Flags:
 
 ```text
---config <dir>      diretório dos .ron (padrão: config ou $GIOCHI_TOWER_CONFIG)
+--config <dir>      diretório dos .ron e do settings.json (padrão: config)
 --tamanho <LxA>     1280x720, 800x600, 640x480 (no KMSDRM o painel manda)
 --classe <nome>     soldado | guerreiro | sniper | medico
 --perfil <nome>     full | balanced | rk3326
---quadro <arquivo>  grava o último quadro em BMP 24 bits
+--menu              abre no menu em vez de entrar direto na partida
+--hospedar [porta]  hospeda uma partida em rede (padrão 7777)
+--entrar <ip:porta> entra numa partida em rede
+--teclas <lista>    injeta teclas uma por quadro (ver abaixo)
+--quadro <arquivo>  grava o último quadro em BMP 24 bits (lido antes do swap)
 --frames <n>        roda n quadros com passo fixo, sem relógio real
+--benchmark <n>     roda n quadros sem espera e reporta FPS e custo por quadro
+--sem-ui            sem HUD (para isolar o custo da UI)
+--demo-loja         abre a loja na abertura (para capturar a tela)
 --ajuda
+```
+
+`--teclas` aceita `cima`, `baixo`, `esq`, `dir`, `a`, `b` e **`start`**. Cada
+tecla entra pela fila de eventos e é aplicada pelo laço, uma por quadro com um
+quadro de soltura entre duas — é o caminho de produção, não um atalho:
+
+```bash
+giochi-tower --menu --teclas "a"                    # começa a partida
+giochi-tower --frames 90 --teclas "start,baixo,a"   # pausa e reinicia
+giochi-tower --menu --teclas "cima,a"               # sai
+giochi-tower --menu --teclas "baixo,baixo,a,esq,esq" # volume 60% e grava
 ```
 
 ## Controles
@@ -221,9 +260,9 @@ assinatura funciona, mas **não dispensa compilar antes de seguir.
 | M1 | fundação, câmera, configs, loop fixo | **entregue** |
 | M2 | rede (protocolo/AOI/stub), inimigos, spawner, torre, score | **entregue** |
 | M3 | 4 bosses com fases, nemesis por tier, loja, HUD, minimapa, tela da loja | **entregue** |
-| M4 | host/cliente reais sobre `giochi-net`, mDNS, predição e *smoothing*, AOI unicast | 1 de 6 |
-| M5 | perfis de host, evdev no aparelho (inclui eixos analógicos), `package.sh` | parcial — roda no R35S por KMSDRM, falta evdev |
-| M6 | balanceamento em RON, Endless, áudio, arte low-poly, README final | pendente |
+| M4 | host/cliente reais sobre `giochi-net`, mDNS, predição e *smoothing*, AOI unicast | **3 de 6** — host/cliente, descoberta UDP e `local_id` |
+| M5 | perfis de host, evdev no aparelho (inclui eixos analógicos), `package.sh` | parcial — roda no R35S por KMSDRM com modelos, falta evdev |
+| M6 | balanceamento em RON, Endless, áudio, arte low-poly, README final | iniciado — modelos, texturas, menu e volume |
 
 `--benchmark` é o que mede M5 de verdade: com ele o FPS do aparelho é um número,
 não uma impressão. Ver [`STATUS.md`](STATUS.md).

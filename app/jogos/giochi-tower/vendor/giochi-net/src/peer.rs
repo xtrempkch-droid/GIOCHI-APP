@@ -88,6 +88,11 @@ impl Net {
     }
 
     /// Endereço local efetivo (o do cliente já traz a porta dada pelo SO).
+    ///
+    /// **Atenção:** quem abriu em `0.0.0.0` recebe `0.0.0.0:porta`, que não é
+    /// endereço de destino — `send_to` para ele falha com `AddrNotAvailable`.
+    /// O socket continua alcançável por qualquer IP da máquina naquela porta;
+    /// só o valor reportado é que é curinga.
     pub fn local(&self) -> io::Result<SocketAddr> {
         self.socket.local_addr()
     }
@@ -107,6 +112,23 @@ impl Net {
         for d in destinos {
             let _ = self.enviar(*d, mensagem);
         }
+    }
+
+    /// Envia bytes crus, sem cabeçalho de versão.
+    ///
+    /// Existe porque **testar o caminho de erro exige produzir erro**: um
+    /// datagrama com versão trocada ou tag inválida não pode ser montado por
+    /// [`Mensagem::codificar`], que sempre escreve o formato correto. Sem esta
+    /// porta, os testes que provam "pacote ruim não derruba o host" teriam de
+    /// acessar o campo privado — e um teste que fura o encapsulamento para
+    /// funcionar está testando outra coisa.
+    ///
+    /// Não use em produção para mandar [`Mensagem`]; para isso existe
+    /// [`Self::enviar`], que carimba a versão.
+    pub fn enviar_bruto(&mut self, para: SocketAddr, bytes: &[u8]) -> io::Result<usize> {
+        let n = self.socket.send_to(bytes, para)?;
+        self.enviados += 1;
+        Ok(n)
     }
 
     /// Drena até `orcamento` pacotes. Devolve os eventos na ordem em que

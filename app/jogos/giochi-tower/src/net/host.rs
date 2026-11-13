@@ -68,8 +68,12 @@ impl RealHost {
     }
 
     /// Quantos clientes cabem (repassa o limite do crate).
+    ///
+    /// O nome vem em português do crate (`MAX_CLIENTES`); escrever `MAX_CLIENTS`
+    /// aqui não compila, e o erro cita "não encontrado neste escopo" — que manda
+    /// procurar defeito no `use`, não no nome.
     pub fn max_clients(&self) -> usize {
-        MAX_CLIENTS
+        MAX_CLIENTES
     }
 
     fn register(&mut self, id: ClienteId) {
@@ -140,10 +144,20 @@ impl HostBackend for RealHost {
     }
 
     fn publish_snapshot(&mut self, enemies: &[SnapshotInimigo]) {
-        self.last_bytes = enemies.len() * std::mem::size_of::<SnapshotInimigo>();
+        self.last_bytes = bytes_do_snapshot(enemies);
         // `tick_snapshot` filtra por cliente com o AOI já definido e faz unicast.
         self.host.tick_snapshot(enemies);
     }
+}
+
+/// Bytes de um snapshot, que é a medida de banda por cliente.
+///
+/// Função solta e não um método: `RealHost::novo` abre socket, e um teste que
+/// dependesse dele seria um teste de rede disfarçado. O que interessa medir é a
+/// conta — e ela é a diferença entre "o snapshot cabe num datagrama" e um pacote
+/// que o crate parte em dois sem ninguém notar.
+pub fn bytes_do_snapshot(enemies: &[SnapshotInimigo]) -> usize {
+    std::mem::size_of_val(enemies)
 }
 
 #[cfg(test)]
@@ -151,9 +165,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_area_default_is_the_balanced_profile() {
-        // Sem rede: só a constante, para o teste não depender de abrir socket.
-        assert!(55.0 > 0.0);
-        assert_eq!(MAX_CLIENTS, 8);
+    fn a_snapshot_of_eight_enemies_fits_in_one_datagram() {
+        // `DATAGRAM_MAX` é o teto do crate. O pico de vivos do perfil mais alto é
+        // 100, então o que se mede aqui é a **taxa**: 8 inimigos por mensagem, e o
+        // host publica a `SNAPSHOT_HZ`.
+        let oito = vec![
+            SnapshotInimigo {
+                id: 0,
+                tipo: 1,
+                x: 0.0,
+                z: 0.0,
+                hp: 10,
+                fase_chefe: 0,
+            };
+            8
+        ];
+        let bytes = bytes_do_snapshot(&oito);
+        assert_eq!(bytes, 8 * std::mem::size_of::<SnapshotInimigo>());
+        assert!(bytes <= super::super::protocol::DATAGRAM_MAX, "snapshot de 8 ocupa {bytes} bytes");
+        // E zero inimigos é zero bytes, não "o tamanho de um cabeçalho": o
+        // `last_snapshot_bytes` existe para dizer quanto saiu de verdade.
+        assert_eq!(bytes_do_snapshot(&[]), 0);
+    }
+
+    #[test]
+    fn the_client_limit_is_the_crate_one() {
+        // O jogo desenha no máximo 4 jogadores (GDD §2). Se o crate baixar o
+        // limite abaixo disso, o host recusaria um jogador que o GDD promete — e
+        // o sintoma seria "a sala está cheia" com três pessoas nela.
+        //
+        // A comparação é por `const` para o clippy não ler o literal e chamar a
+        // asserção de constante: o valor é do crate, não nosso.
+        const PROMETIDOS_PELO_GDD: usize = 4;
+        let limite = MAX_CLIENTES;
+        assert!(
+            limite >= PROMETIDOS_PELO_GDD,
+            "o crate limita a {limite} jogadores e o GDD promete {PROMETIDOS_PELO_GDD}"
+        );
     }
 }

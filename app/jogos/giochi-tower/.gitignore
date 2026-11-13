@@ -1,0 +1,4 @@
+
+# Estado do jogador (volume, câmera, FPS). Não é dado do repositório: cada
+# aparelho tem o seu, e commitar um sobrescreveria a escolha de quem joga.
+config/settings.json

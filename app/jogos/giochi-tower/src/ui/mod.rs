@@ -70,6 +70,10 @@ pub const COR_PAINEL: [f32; 4] = [0.06, 0.08, 0.12, 0.92];
 pub const COR_VEU: [f32; 4] = [0.02, 0.03, 0.05, 0.72];
 /// Moldura do minimapa.
 pub const COR_MOLDURA: [f32; 4] = [0.35, 0.45, 0.60, 0.90];
+/// Texto de item não selecionado — presente, mas recuado.
+pub const COR_APAGADO: [f32; 4] = [0.58, 0.64, 0.74, 1.0];
+/// Fundo da linha selecionada no menu.
+pub const COR_SELECAO: [f32; 4] = [0.16, 0.28, 0.44, 0.95];
 
 /// Abaixo disto a barra muda de cor: o aviso tem de ser visível antes do fim.
 const LIMIAR_CRITICO: f32 = 0.25;
@@ -125,6 +129,11 @@ pub struct Hud {
     pub nemesis_line: Option<String>,
     /// Fase legível (para o canto).
     pub phase: &'static str,
+    /// FPS medido e número de jogadores, quando o jogador pediu para ver.
+    ///
+    /// `None` (e não zero) quando está desligado: o desenho distingue "não
+    /// pedido" de "zero quadros", e um `0 fps` numa tela parada seria mentira.
+    pub fps: Option<(f32, usize)>,
 }
 
 impl Hud {
@@ -148,6 +157,9 @@ impl Hud {
         }
         if let Some(nemesis) = &self.nemesis_line {
             lines.push(nemesis.clone());
+        }
+        if let Some((fps, jogadores)) = self.fps {
+            lines.push(format!("{fps:.0} fps · {jogadores} jogador(es)"));
         }
         lines
     }
@@ -220,6 +232,7 @@ pub fn build(state: &crate::game::state::GameState, config: &crate::config::Game
         boss_line,
         nemesis_line,
         phase: state.phase.as_str(),
+        fps: None,
     };
 
     let half = state.map.half_extent_m.max(1.0);

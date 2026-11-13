@@ -372,6 +372,80 @@ jobs:
           assert diferentes > total * 0.02, "a UI ocupou menos de 2% do quadro"
           PY
 
+      # Os modelos e as texturas sao arte em arquivo: o gerador garante que eles
+      # sao reproduziveis, e o loader da engine tem de aceitar o que ele escreve.
+      # Um OBJ que o tobj recusa passa pelo Node e falha no aparelho.
+      - name: Modelos e texturas carregam
+        working-directory: app/jogos/giochi-tower
+        run: |
+          set -e
+          node scripts/gerar-modelos.mjs --conferir
+          cargo test --locked --test modelos
+
+      # O menu e a primeira tela do jogo. Aqui ele e aberto com teclas sinteticas
+      # (o mesmo caminho do controle) e a captura e conferida por cor: painel,
+      # destaque e selecao tem de aparecer.
+      - name: O menu desenha e navega
+        working-directory: app/jogos/giochi-tower
+        run: |
+          set -e
+          SDL_VIDEODRIVER=offscreen cargo run --quiet -- --menu --tamanho 640x480 \
+            --frames 5 --teclas "baixo,baixo,a,baixo" --quadro /tmp/menu.bmp 2>/tmp/menu.log
+          grep -q "tela configuracoes | cursor 1 | Câmera" /tmp/menu.log
+          python3 - /tmp/menu.bmp <<'PY'
+          import struct, sys
+          b = open(sys.argv[1], "rb").read()
+          off = struct.unpack_from("<I", b, 10)[0]
+          w, h = struct.unpack_from("<ii", b, 18)
+          row = (w * 3 + 3) // 4 * 4
+          cores = {}
+          for y in range(h):
+              base = off + (h - 1 - y) * row
+              for x in range(w):
+                  i = base + x * 3
+                  cor = (b[i + 2], b[i + 1], b[i])
+                  cores[cor] = cores.get(cor, 0) + 1
+          # COR_DESTAQUE, COR_SELECAO, COR_APAGADO — ver src/ui/mod.rs
+          for alvo, nome in [
+              ((115, 217, 255), "destaque"),
+              ((41, 71, 112), "selecao"),
+              ((148, 163, 189), "apagado"),
+          ]:
+              achado = sum(n for c, n in cores.items() if sum(abs(a - bb) for a, bb in zip(c, alvo)) <= 6)
+              assert achado > 50, f"o menu nao desenhou {nome} ({achado} px)"
+          print("menu:", len(cores), "cores distintas")
+          PY
+
+      # O menu tem de **fazer** o que promete. Cada bloco abaixo cobre um caminho
+      # que ja esteve quebrado: o `--teclas` chamava o menu direto e descartava a
+      # acao, entao a tela mudava, o log dizia "tela partida" e a partida nao
+      # comecava (0 passo de simulacao em 60 quadros).
+      - name: O menu inicia, reinicia, sai e salva configuracao
+        run: |
+          set -ex
+          export SDL_VIDEODRIVER=offscreen
+          mkdir -p /tmp/towercfg
+          cp config/*.ron /tmp/towercfg/
+          BIN=target/release/giochi-tower
+
+          # A = Jogar: 60 quadros depois tem de haver passo de simulacao.
+          $BIN --menu --frames 60 --teclas "a" --config /tmp/towercfg 2>/tmp/a.log
+          grep -q "partida: nova" /tmp/a.log
+          grep -q "passo(s) de simulacao" /tmp/a.log
+
+          # Start abre a pausa; baixo + A reinicia.
+          $BIN --frames 90 --teclas "start,baixo,a" --config /tmp/towercfg 2>/tmp/b.log
+          grep -q "partida: reiniciada" /tmp/b.log
+
+          # cima + A sai do processo.
+          $BIN --menu --frames 60 --teclas "cima,a" --config /tmp/towercfg 2>/tmp/c.log
+          grep -q "sair pedido pelo menu" /tmp/c.log
+
+          # Esquerda na linha Volume grava settings.json, e o valor persiste.
+          rm -f /tmp/towercfg/settings.json
+          $BIN --menu --frames 40 --teclas "baixo,baixo,a,esq,esq" --config /tmp/towercfg 2>/dev/null
+          grep -q '"volume": 60' /tmp/towercfg/settings.json
+
       # Os `.ron` sao dado de balanceamento: um arquivo invalido tem de reprovar
       # no carregamento, nao na partida.
       - name: Config invalida reprova no carregamento

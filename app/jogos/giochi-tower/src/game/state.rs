@@ -208,10 +208,106 @@ impl GameState {
     }
 
     fn local_index(&self) -> usize {
-        self.players
-            .iter()
-            .position(|p| p.id == self.local_id)
-            .unwrap_or(0)
+        self.index_of(self.local_id).unwrap_or(0)
+    }
+
+    /// Índice do jogador com esse id.
+    pub fn index_of(&self, id: u8) -> Option<usize> {
+        self.players.iter().position(|p| p.id == id)
+    }
+
+    /// Jogador com esse id, se estiver na partida.
+    pub fn player_of(&self, id: u8) -> Option<&PlayerState> {
+        self.index_of(id).map(|i| &self.players[i])
+    }
+
+    /// Jogador com esse id, mutável.
+    pub fn player_mut_of(&mut self, id: u8) -> Option<&mut PlayerState> {
+        self.index_of(id).map(move |i| &mut self.players[i])
+    }
+
+    /// Põe um jogador em campo (host, ao receber o primeiro input de um cliente).
+    ///
+    /// Nasce **ao lado da torre** e em ângulo diferente por id, para quatro
+    /// jogadores não aparecerem empilhados no mesmo ponto — o que faria o
+    /// primeiro quadro da partida parecer que só um entrou.
+    pub fn adicionar_jogador(&mut self, id: u8, class: ClassId, config: &GameConfig) -> bool {
+        if self.index_of(id).is_some() {
+            return false;
+        }
+        let mut player = PlayerState::new(id, class, config);
+        let angulo = (id as f32) * std::f32::consts::FRAC_PI_2;
+        player.position = glam::Vec3::new(angulo.cos() * 6.0, 0.0, angulo.sin() * 6.0);
+        player.aim = glam::Vec3::new(-player.position.x, 0.0, -player.position.z).normalize_or_zero();
+        self.players.push(player);
+        log::info!("partida: jogador {id} entrou como {}", class.as_str());
+        true
+    }
+
+    /// Tira um jogador da partida (cliente desconectado).
+    pub fn remover_jogador(&mut self, id: u8) -> bool {
+        if id == self.local_id {
+            return false;
+        }
+        let Some(indice) = self.index_of(id) else {
+            return false;
+        };
+        self.players.remove(indice);
+        log::info!("partida: jogador {id} saiu");
+        true
+    }
+
+    /// Aplica o input de **outro** jogador, no host.
+    ///
+    /// É o mesmo caminho do jogador local ([`Self::step_player`]) parametrizado
+    /// pelo id: um segundo laço de movimento para os remotos envelheceria
+    /// diferente do primeiro, e a divergência apareceria como "o cliente anda
+    /// mais rápido que o host".
+    pub fn aplicar_input_de(
+        &mut self,
+        id: u8,
+        dt: f32,
+        input: &InputFrame,
+        config: &GameConfig,
+    ) {
+        if self.index_of(id).is_none() || id == self.local_id {
+            return;
+        }
+        self.step_player_of(id, dt, input, config);
+    }
+
+    /// Atualiza o resumo de um jogador vindo do host (lado cliente).
+    ///
+    /// O cliente prevê o **próprio** movimento; a posição dos outros vem daqui.
+    /// Aplicar o resumo no local também faria a predição brigar com o servidor,
+    /// e o sintoma seria o personagem tremendo parado.
+    pub fn aplicar_resumo_de_jogador(
+        &mut self,
+        id: u8,
+        pos: [f32; 2],
+        hp: u16,
+        max_hp: u16,
+        score: u32,
+        alive: bool,
+    ) {
+        if id == self.local_id {
+            // Do local, só a vida e o placar: a posição é a predita.
+            if let Some(player) = self.player_mut_of(id) {
+                player.hp = f32::from(hp);
+                player.max_hp = f32::from(max_hp);
+                player.score = score;
+                player.alive = alive;
+            }
+            return;
+        }
+        if let Some(player) = self.player_mut_of(id) {
+            player.position.x = pos[0];
+            player.position.z = pos[1];
+            player.hp = f32::from(hp);
+            player.max_hp = f32::from(max_hp);
+            player.score = score;
+            player.alive = alive;
+        }
     }
 
     /// Executa um passo fixo de simulação.
@@ -257,23 +353,36 @@ impl GameState {
 
     // ----------------------------------------------------------------- jogador
     fn step_player(&mut self, dt: f32, input: &InputFrame, config: &GameConfig) {
+        self.step_player_of(self.local_id, dt, input, config);
+    }
+
+    /// O mesmo passo, para o jogador `id`. O local e os remotos passam por aqui.
+    fn step_player_of(&mut self, id: u8, dt: f32, input: &InputFrame, config: &GameConfig) {
         let map = self.map;
-        let speed = self.local().move_speed(config);
+        let Some(speed) = self.player_of(id).map(|p| p.move_speed(config)) else {
+            return;
+        };
         let camera = self.camera;
         {
-            let player = self.local_mut();
+            let Some(player) = self.player_mut_of(id) else {
+                return;
+            };
             player.move_local(input, &camera, map, speed, dt);
             player.attack_timer_s = (player.attack_timer_s - dt).max(0.0);
         }
 
         // Atacar: hitscan no inimigo mais próximo dentro do alcance e do cone.
-        if !input.buttons.attack || self.local().attack_timer_s > 0.0 {
+        let pode_atirar = self
+            .player_of(id)
+            .map(|p| input.buttons.attack && p.attack_timer_s <= 0.0)
+            .unwrap_or(false);
+        if !pode_atirar {
             return;
         }
-        let Some((index, distance)) = self.target_in_aim(config) else {
+        let Some((index, distance)) = self.target_in_aim_de(id, config) else {
             return;
         };
-        let damage = self.local().damage(config);
+        let damage = self.player_of(id).map(|p| p.damage(config)).unwrap_or(0.0);
         let (killed, kind, gold) = {
             let enemy = &mut self.enemies[index];
             let killed = enemy.take_damage(damage);
@@ -287,21 +396,31 @@ impl GameState {
             if killed { " (morto)" } else { "" }
         );
 
-        let cooldown = self.local().attack_cooldown(config);
-        self.local_mut().attack_timer_s = cooldown;
-
-        if killed {
+        let cooldown = self.player_of(id).map(|p| p.attack_cooldown(config)).unwrap_or(0.0);
+        let award = if killed {
             self.enemies.swap_remove(index);
-            let player = self.local_mut();
-            player.gold = player.gold.saturating_add(gold);
-            let award = self.score.add_common_kill(&config.score);
-            self.local_mut().score = self.local().score.saturating_add(award);
+            Some(self.score.add_common_kill(&config.score))
+        } else {
+            None
+        };
+        if let Some(player) = self.player_mut_of(id) {
+            player.attack_timer_s = cooldown;
+            if let Some(award) = award {
+                player.gold = player.gold.saturating_add(gold);
+                player.score = player.score.saturating_add(award);
+            }
         }
     }
 
-    /// Inimigo mais próximo dentro do alcance e à frente da mira.
+    /// Inimigo mais próximo dentro do alcance e à frente da mira do jogador `id`.
+    /// Inimigo mais próximo dentro do alcance e à frente da mira do local.
+    #[cfg(test)]
     fn target_in_aim(&self, config: &GameConfig) -> Option<(usize, f32)> {
-        let player = self.local();
+        self.target_in_aim_de(self.local_id, config)
+    }
+
+    fn target_in_aim_de(&self, id: u8, config: &GameConfig) -> Option<(usize, f32)> {
+        let player = self.player_of(id)?;
         if !player.can_act() {
             return None;
         }
@@ -1044,6 +1163,102 @@ mod tests {
         assert_eq!(s.phase, Phase::Defeat);
         assert_eq!(s.tower.hp, 0.0);
         assert!(s.score.is_finished());
+    }
+
+    #[test]
+    fn um_jogador_remoto_entra_ao_lado_da_torre_e_nao_sobre_o_outro() {
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        assert!(s.adicionar_jogador(1, ClassId::Sniper, &c));
+        assert!(s.adicionar_jogador(2, ClassId::Medic, &c));
+        // Entrar duas vezes com o mesmo id não duplica: o host chama isto a cada
+        // input até o cliente ser conhecido, e um `push` cego criaria um jogador
+        // novo por pacote.
+        assert!(!s.adicionar_jogador(1, ClassId::Sniper, &c));
+        assert_eq!(s.players.len(), 3);
+
+        let p1 = s.player_of(1).expect("jogador 1").position;
+        let p2 = s.player_of(2).expect("jogador 2").position;
+        let d1 = (p1.x * p1.x + p1.z * p1.z).sqrt();
+        let d2 = (p2.x * p2.x + p2.z * p2.z).sqrt();
+        assert!(d1 < 15.0 && d2 < 15.0, "nasceram longe: {p1:?} {p2:?}");
+        assert!((p1 - p2).length() > 1.0, "nasceram empilhados: {p1:?} {p2:?}");
+    }
+
+    #[test]
+    fn o_input_remoto_move_o_jogador_dele_e_nao_o_local() {
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        s.phase = Phase::Combat;
+        s.adicionar_jogador(1, ClassId::Warrior, &c);
+        let local_antes = s.local().position;
+        let remoto_antes = s.player_of(1).expect("jogador 1").position;
+
+        let frame = InputFrame {
+            move_dir: Axis::new(0.0, 1.0),
+            ..InputFrame::default()
+        };
+        s.aplicar_input_de(1, 1.0 / 60.0, &frame, &c);
+
+        let local_depois = s.local().position;
+        let remoto_depois = s.player_of(1).expect("jogador 1").position;
+        assert_eq!(local_antes, local_depois, "o input do cliente mexeu no host");
+        assert_ne!(remoto_antes, remoto_depois, "o input do cliente não mexeu nele");
+    }
+
+    #[test]
+    fn o_host_ignora_input_do_proprio_jogador_local() {
+        // O host também manda input (é jogador), mas a simulação dele vem do laço
+        // local. Aplicar duas vezes dobraria a velocidade — o defeito clássico de
+        // host autoritativo mal costurado.
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        s.phase = Phase::Combat;
+        let antes = s.local().position;
+        let frame = InputFrame {
+            move_dir: Axis::new(0.0, 1.0),
+            ..InputFrame::default()
+        };
+        s.aplicar_input_de(s.local_id, 1.0 / 60.0, &frame, &c);
+        assert_eq!(s.local().position, antes);
+    }
+
+    #[test]
+    fn o_resumo_do_host_nao_sobrescreve_a_posicao_predita_do_local() {
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        s.local_mut().position = glam::Vec3::new(3.0, 0.0, -4.0);
+        // O host manda a posição "atrasada" do nosso jogador; aplicá-la faria o
+        // personagem voltar e tremer.
+        s.aplicar_resumo_de_jogador(s.local_id, [0.0, 0.0], 80, 100, 42, true);
+        assert_eq!(s.local().position, glam::Vec3::new(3.0, 0.0, -4.0));
+        assert_eq!(s.local().hp, 80.0, "a vida vem do host");
+        assert_eq!(s.local().score, 42, "o placar vem do host");
+    }
+
+    #[test]
+    fn o_resumo_do_host_move_os_outros_jogadores() {
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        s.adicionar_jogador(2, ClassId::Sniper, &c);
+        s.aplicar_resumo_de_jogador(2, [12.0, -7.0], 55, 90, 9, true);
+        let outro = s.player_of(2).expect("jogador 2");
+        assert_eq!(outro.position.x, 12.0);
+        assert_eq!(outro.position.z, -7.0);
+        assert_eq!(outro.hp, 55.0);
+        assert_eq!(outro.score, 9);
+    }
+
+    #[test]
+    fn um_jogador_desconectado_sai_da_partida_mas_o_local_nao() {
+        let c = config();
+        let mut s = GameState::new(&c, ClassId::Soldier, ProfileId::Balanced);
+        s.adicionar_jogador(1, ClassId::Medic, &c);
+        assert!(s.remover_jogador(1));
+        assert!(s.player_of(1).is_none());
+        assert_eq!(s.players.len(), 1);
+        // O local nunca sai por rede: sem ele não há quem desenhe a câmera.
+        assert!(!s.remover_jogador(s.local_id));
     }
 
     #[test]

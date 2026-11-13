@@ -237,6 +237,19 @@ if [ -n "$INSTALAR" ]; then
       "$JOGO/config/." "root@$HOST:$APP_DIR/config/" 2>&1 | filtrar_ruido
     ok "config/ instalado ($(ls "$JOGO/config" | wc -l) arquivo(s))"
   fi
+  # ## Assets, não só config
+  #
+  # `giochi-tower` carrega 15 modelos OBJ e 15 texturas BMP de `assets/`. Copiar
+  # só o binário e o `config/` fazia o jogo abrir com todos os personagens em
+  # cubo — o log avisava, mas o sintoma ("os modelos não aparecem") manda procurar
+  # defeito no desenho, não em arquivo que faltou levar.
+  if [ -d "$JOGO/assets" ]; then
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
+      "rm -rf $APP_DIR/assets && mkdir -p $APP_DIR/assets" 2>&1 | filtrar_ruido
+    scp -q -r -o BatchMode=yes -o StrictHostKeyChecking=no \
+      "$JOGO/assets/." "root@$HOST:$APP_DIR/assets/" 2>&1 | filtrar_ruido
+    ok "assets/ instalado ($(find "$JOGO/assets" -type f | wc -l) arquivo(s))"
+  fi
   for extra in metadata.json capa.png; do
     if [ -f "$JOGO/$extra" ]; then
       scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \

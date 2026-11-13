@@ -24,17 +24,20 @@
 //! reconciliação. Tudo isso é M4 e vive do outro lado da mesma costura.
 
 pub mod aoi;
+pub mod descoberta;
 pub mod protocol;
 
 #[cfg(feature = "stub-net")]
 pub mod stub;
 
-// M4: transporte real sobre o `giochi-net`. Desligado por padrão — o stub é o
-// default do prompt, e o jogo tem de rodar sozinho antes de rodar em rede.
-#[cfg(feature = "real-net")]
+// M4: transporte real sobre o `giochi-net`. Sempre compilado desde 13/11/2026 —
+// ver a nota em `Cargo.toml` sobre por que a feature saiu.
 pub mod client;
-#[cfg(feature = "real-net")]
 pub mod host;
+pub mod sessao;
+
+pub use descoberta::{procurar, Sala};
+pub use sessao::SessaoJogo;
 
 pub use protocol::{
     action_flags, GameMsg, NetMode, ACTION_ABILITY1, ACTION_ABILITY2, ACTION_ATTACK, ACTION_ITEM,

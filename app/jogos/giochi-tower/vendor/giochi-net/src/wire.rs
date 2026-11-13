@@ -191,6 +191,16 @@ const TAG_PING: u8 = 8;
 const TAG_PONG: u8 = 9;
 const TAG_SHOP_BUY: u8 = 10;
 
+/// Bytes que um inimigo ocupa no snapshot.
+///
+/// `id`(2) + `x`(2) + `z`(2) + `hp`(1) + `tipo`(1) + `fase_chefe`(1) = **9**.
+///
+/// A primeira versão usava 5 aqui — número que eu tinha deduzido do campo
+/// "posição" e não do que o codificador realmente escreve. Com o divisor
+/// errado, 150 inimigos passavam do limite de datagrama e o crate produzia
+/// pacote grande demais. O teste pegou.
+const TAM_INIMIGO: usize = 9;
+
 struct Escritor {
     buf: Vec<u8>,
 }
@@ -334,10 +344,10 @@ impl Mensagem {
             Mensagem::Inimigos { tick, inimigos } => {
                 w.u8(TAG_INIMIGOS);
                 w.u32(*tick);
-                // Quantos cabem: 5 bytes por inimigo + 2 do contador, sobre o
-                // que já foi escrito.
+                // Quantos cabem: `TAM_INIMIGO` bytes por inimigo + 2 do
+                // contador, sobre o que já foi escrito.
                 let cabecalho = w.buf.len() + 2;
-                let cabe = crate::DATAGRAMA_MAX.saturating_sub(cabecalho) / 5;
+                let cabe = crate::DATAGRAMA_MAX.saturating_sub(cabecalho) / TAM_INIMIGO;
                 let n = inimigos.len().min(cabe);
                 w.u16(n as u16);
                 for ini in &inimigos[..n] {
@@ -430,7 +440,11 @@ impl Mensagem {
             TAG_INIMIGOS => {
                 let tick = r.u32()?;
                 let n = r.u16()? as usize;
-                let mut inimigos = Vec::with_capacity(n);
+                // `n` vem do fio e pode ser 65535 num datagrama de 7 bytes. Reservar
+                // o valor pedido transformaria um pacote minúsculo em centenas de KB
+                // de alocação por pacote; o que o buffer comporta é o teto real.
+                let cabem = r.buf.len().saturating_sub(r.pos) / TAM_INIMIGO;
+                let mut inimigos = Vec::with_capacity(n.min(cabem));
                 for _ in 0..n {
                     inimigos.push(SnapshotInimigo {
                         id: r.u16()?,
@@ -470,9 +484,10 @@ impl Mensagem {
 
 /// Posição `f32` → centímetros inteiros.
 ///
-/// Faixa útil: ±327 m, mais que qualquer mapa deste projeto. Satura em vez de
-/// dar a volta, porque posição que "salta" no cliente é pior que posição colada
-/// na borda.
+/// Faixa representável: `0..=655.35 m` (o campo é `u16` e a unidade é 1 cm).
+/// Coordenadas negativas saturam em 0 — o mapa deste projeto usa o primeiro
+/// quadrante —, e acima de 655.35 m satura no topo em vez de dar a volta,
+/// porque posição que "salta" no cliente é pior que posição colada na borda.
 fn quantizar(v: f32) -> u16 {
     let cm = (v * 100.0).round();
     if !cm.is_finite() || cm <= 0.0 {
@@ -649,6 +664,46 @@ mod testes {
                 assert!(!inimigos.is_empty());
             }
             outro => panic!("variante errada: {outro:?}"),
+        }
+    }
+
+    #[test]
+    fn entrada_arbitraria_nao_provoca_panic() {
+        // Todo byte de um datagrama vem da rede. O decoder pode recusar, mas
+        // nunca pode entrar em pânico: um pacote forjado derrubaria o host.
+        let mut estado = 0x9E37_79B9u32;
+        let mut proximo = || {
+            estado ^= estado << 13;
+            estado ^= estado >> 17;
+            estado ^= estado << 5;
+            estado as u8
+        };
+
+        for len in 0..96 {
+            let mut bytes: Vec<u8> = (0..len).map(|_| proximo()).collect();
+            let _ = Mensagem::decodificar(&bytes);
+
+            if len >= 3 {
+                bytes[0..2].copy_from_slice(&VERSAO_PROTOCOLO.to_le_bytes());
+                for tag in 1..=11u8 {
+                    bytes[2] = tag;
+                    let _ = Mensagem::decodificar(&bytes);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contagem_de_inimigos_maior_que_o_pacote_e_recusada() {
+        // Um datagrama de 9 bytes pode declarar 65535 inimigos. O decodificador
+        // não pode reservar o que o campo pede antes de saber se há bytes.
+        let mut bytes = VERSAO_PROTOCOLO.to_le_bytes().to_vec();
+        bytes.push(TAG_INIMIGOS);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        match Mensagem::decodificar(&bytes) {
+            Err(ErroLeitura::Truncado { .. }) => {}
+            outro => panic!("esperava Truncado, veio {outro:?}"),
         }
     }
 

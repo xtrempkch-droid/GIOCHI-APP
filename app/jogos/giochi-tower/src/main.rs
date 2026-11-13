@@ -20,7 +20,7 @@
 //! fixo (sem relógio real). É o que permite a bancada conferir a cena — a mesma
 //! ideia do `--dump-frame` do launcher e do `--quadro` dos jogos do repositório.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -29,11 +29,13 @@ use giochi_engine::core::time::FrameClock;
 use giochi_engine::platform::{quit_signal, Platform, QuitSignal};
 use giochi_engine_3d::math3d::Color3D;
 
-use giochi_tower::config::{ClassId, EnemyKind, GameConfig, ProfileId};
-use giochi_tower::engine_bridge::render::{AXIS_X_COLOR, AXIS_Z_COLOR, PLAYER_COLOR, TOWER_COLOR};
-use giochi_tower::engine_bridge::{AudioBridge, InputBridge, RenderBridge};
+use giochi_tower::config::{ClassId, GameConfig, ProfileId};
+use giochi_tower::engine_bridge::cena;
+use giochi_tower::engine_bridge::render::{AXIS_X_COLOR, AXIS_Z_COLOR, PLAYER_COLOR};
+use giochi_tower::engine_bridge::{AudioBridge, InputBridge, InputFrame, RenderBridge};
 use giochi_tower::errors::{GameError, Result};
 use giochi_tower::game::state::{GameState, Phase};
+use giochi_tower::menu::{self, Menu};
 use giochi_tower::net::GameMsg;
 use giochi_tower::ui::{self, layout};
 use giochi_tower::{BUILD_PROFILE, BUILD_TARGET, CONFIG_DIR, CONFIG_DIR_ENV, TITLE, VERSION};
@@ -46,6 +48,18 @@ const DEFAULT_HEIGHT: u32 = 720;
 
 /// Intervalo entre quadros no caminho normal, em milissegundos.
 const FRAME_MS: u32 = 1000 / 60;
+
+/// Porta UDP padrão do hospedeiro (a mesma da descoberta na rede local).
+const PORTA_PADRAO: u16 = 7777;
+
+/// Modo do laço: menu na frente, ou mundo simulado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modo {
+    /// O menu está na frente; o mundo, se houver, fica congelado atrás.
+    Menu,
+    /// Jogando (o menu de pausa é `Modo::Menu` com `Tela::Pausa`).
+    Jogando,
+}
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -81,6 +95,23 @@ struct Options {
     /// Roda N quadros **sem espera** e reporta FPS. É o que separa "abriu" de
     /// "roda a 40 fps": com o teto de 16 ms do caminho normal todo jogo mede 60.
     benchmark: Option<u64>,
+    /// Começar no menu principal em vez de direto na partida.
+    ///
+    /// Ligado por padrão quando **nada** deterministico foi pedido. `--frames` e
+    /// `--benchmark` continuam entrando direto na partida, senão toda a bancada
+    /// (e o CI) mediria a tela de menu.
+    menu: bool,
+    /// Hospeda uma partida em rede na porta dada.
+    hospedar: Option<u16>,
+    /// Entra numa partida no endereço dado (`ip:porta`).
+    entrar: Option<String>,
+    /// Sequência de teclas aplicada **antes** do primeiro desenho.
+    ///
+    /// Existe pela mesma razão do `--teclas` do launcher e do `neon-drift`:
+    /// verificação que depende de dedo não entra em rodada automatizada. Cada
+    /// tecla é entregue ao menu pelo caminho de produção (`Menu::entrada`), não
+    /// por um atalho que mexa no cursor diretamente.
+    teclas: Vec<String>,
 }
 
 impl Default for Options {
@@ -96,6 +127,10 @@ impl Default for Options {
             ui: true,
             demo_loja: false,
             benchmark: None,
+            menu: false,
+            hospedar: None,
+            entrar: None,
+            teclas: Vec::new(),
         }
     }
 }
@@ -117,7 +152,19 @@ OPÇÕES:
   --sem-ui             não desenha HUD, minimapa nem loja (mede o custo da UI)
   --demo-loja          abre a loja na abertura (para capturar a tela)
   --benchmark <n>      roda n quadros sem espera e reporta FPS (combine com --sem-ui)
+  --menu               abre no menu principal (o padrão é entrar direto na partida)
+  --hospedar [porta]   hospeda uma partida em rede (padrão 7777)
+  --entrar <ip:porta>  entra numa partida em rede
+  --teclas <lista>     aplica teclas antes do primeiro quadro, separadas por vírgula
+                       (cima, baixo, esq, dir, a, b) — para verificar o menu sem dedo
   --ajuda              esta mensagem
+
+MENU (gamepad ou teclado):
+  cima/baixo           escolhe a linha
+  esquerda/direita     ajusta volume, câmera e FPS
+  A / espaço           confirma
+  B / Q                volta um nível (nunca encerra o jogo)
+  Start / Esc          pausa durante a partida
 
 CONTROLES (gamepad tem prioridade sobre teclado):
   analógico esq. / WASD     mover
@@ -173,14 +220,92 @@ fn run() -> Result<()> {
     // submissão de GPU. Somadas elas não dizem qual das duas atacar.
     let mut cpu_ui = std::time::Duration::ZERO;
     let mut cpu_ui_desenho = std::time::Duration::ZERO;
+    // A horda é o custo que cresce com o número de inimigos: medido à parte, ele
+    // responde "quantos inimigos este aparelho aguenta" sem misturar com o HUD.
+    let mut cpu_horda = std::time::Duration::ZERO;
+    let mut chamadas_horda: u64 = 0;
 
-    // Sessão de rede local (M2). O stub carrega o mesmo input do jogador local e
-    // devolve o snapshot já filtrado por AOI — é o dado que vai para a tela, então
-    // um erro de transporte aparece como inimigo faltando, não como silêncio.
+    // --- menu e configurações --------------------------------------
+    //
+    // As configurações vivem num arquivo ao lado dos `.ron`, e o menu é o editor
+    // delas. Ler antes de desenhar o primeiro quadro é o que faz o volume
+    // escolhido na sessão anterior valer já na abertura.
+    let caminho_settings = options.config_dir.join("settings.json");
+    let mut config_jogo = carregar_config(&caminho_settings);
+    log::info!(
+        "configurações: volume {}%, câmera {:.0} m, fps {}",
+        config_jogo.volume,
+        config_jogo.camera_dist_m,
+        if config_jogo.mostrar_fps { "sim" } else { "não" }
+    );
+    audio.definir_volume(config_jogo.volume_fracao());
+    state.camera.distance_m = config_jogo.camera_dist_m;
+
+    // A bancada (`--frames`, `--benchmark`, `--demo-loja`, rede) entra direto na
+    // partida: um teste que abrisse no menu mediria a tela de menu.
+    let comeca_no_menu = options.menu
+        || (!deterministic
+            && !options.demo_loja
+            && options.hospedar.is_none()
+            && options.entrar.is_none());
+    let mut menu = Menu::novo(false);
+    let mut modo = if comeca_no_menu {
+        Modo::Menu
+    } else {
+        Modo::Jogando
+    };
+    menu.config = config_jogo;
+    if !comeca_no_menu {
+        menu.marcar_partida(true);
+    }
+
+    // --- rede ------------------------------------------------------
+    //
+    // Uma sessão por vez, e o papel decide o que fazer com ela: o host simula e
+    // publica; o cliente manda input e desenha o que recebe. Single-player
+    // continua pelo stub de loopback, que é o caminho exercitado desde o M2.
+    let mut sessao: Option<giochi_tower::net::SessaoJogo> = None;
     #[cfg(feature = "stub-net")]
     let mut session = giochi_tower::net::local_session();
     #[cfg(feature = "stub-net")]
     let mut net_inputs: u64 = 0;
+
+    if let Some(porta) = options.hospedar {
+        sessao = Some(giochi_tower::net::SessaoJogo::hospedar(porta)?);
+        log::info!("rede: hospedando na porta {porta}");
+    }
+    if let Some(endereco) = options.entrar.as_deref() {
+        sessao = Some(giochi_tower::net::SessaoJogo::entrar(endereco)?);
+        log::info!("rede: entrando em {endereco}");
+    }
+    // `--teclas`: uma tecla por quadro, injetada como **entrada** e não como
+    // chamada direta ao menu.
+    //
+    // A versão anterior chamava `Menu::entrada` aqui, antes do laço, e
+    // descartava a `Acao` devolvida: o menu trocava de tela, o log dizia
+    // "--teclas: a -> tela partida" e a partida **não começava** — 60 quadros
+    // depois, `0 passo(s) de simulação`. É a mesma classe do `--teclas` do
+    // launcher (AGENTS.md §24): ferramenta que imprime um estado plausível sem
+    // ter feito nada. Agora a tecla entra pela fila de eventos e quem executa a
+    // ação é o laço, no caminho de produção.
+    let mut fila_teclas = parse_teclas(&options.teclas);
+    let tinha_teclas = !fila_teclas.is_empty();
+    if tinha_teclas {
+        log::info!("--teclas: {} tecla(s) na fila", fila_teclas.len());
+    }
+    // Um quadro de soltura entre duas teclas: a navegação tem repetição de
+    // `REPETICAO_S` (0,22 s) e a tecla seguinte, chegando 1/60 s depois, cairia
+    // dentro dela e seria **engolida**. Foi o que aconteceu com
+    // `baixo,baixo,a` — parava em "Multijogador" e o resto ia para outra tela.
+    // Um dedo levanta o botão; a fila agora também.
+    let mut soltar_tecla = false;
+    let mut teclas_logadas = false;
+
+    let mut fps_medido = 0.0_f32;
+    let mut anunciou_rede = false;
+    let mut quadros_para_fps = 0u32;
+    let mut inicio_fps = Instant::now();
+    let mut jogadores_rede = 1usize;
 
     let mut frames: u64 = 0;
     let mut announced_source = false;
@@ -205,7 +330,30 @@ fn run() -> Result<()> {
 
         // --- entrada ----------------------------------------------------
         let (drawable_w, drawable_h) = render.drawable_size();
-        let frame_input = input.update(&events, (drawable_w as f32, drawable_h as f32));
+        let mut frame_input = input.update(&events, (drawable_w as f32, drawable_h as f32));
+        // Uma tecla da fila por quadro: dá tempo de a borda ser consumida e
+        // reproduz o que o dedo faz, em vez de aplicar três comandos no mesmo
+        // instante (o que o menu leria como uma tecla só, por causa da borda).
+        if soltar_tecla {
+            frame_input = InputFrame::default();
+            soltar_tecla = false;
+        } else if !fila_teclas.is_empty() {
+            frame_input = fila_teclas.remove(0).quadro();
+            soltar_tecla = true;
+        }
+        // O estado do menu é o resultado que o `--teclas` promete. Imprimi-lo no
+        // fim da fila (e não antes de aplicar) é o que separa "mudei de tela" de
+        // "o comando foi executado".
+        if tinha_teclas && fila_teclas.is_empty() && !soltar_tecla && !teclas_logadas {
+            log::info!(
+                "--teclas: {} -> tela {} | cursor {} | {}",
+                options.teclas.join(","),
+                menu.tela.nome(),
+                menu.cursor,
+                menu.item_atual().map(|i| i.rotulo).unwrap_or_default()
+            );
+            teclas_logadas = true;
+        }
         if !announced_source && frame_input.source != giochi_tower::engine_bridge::InputSource::None {
             log::info!(
                 "entrada: {:?}{}",
@@ -218,21 +366,114 @@ fn run() -> Result<()> {
             announced_source = true;
         }
 
-        // --- simulação: passos fixos, nunca ditados pelo framerate -------
         let delta = if deterministic {
             fixed_step
         } else {
             clock.tick()
         };
-        let steps = game_loop.advance(delta);
+
+        // --- menu na frente ---------------------------------------------
+        //
+        // O menu consome a entrada **antes** da simulação: com o mundo
+        // congelado, um "reiniciar" não pode deixar meio passo de simulação
+        // entrar no estado novo.
+        if modo == Modo::Menu {
+            let acao = menu.entrada(&frame_input, delta);
+            match acao {
+                menu::Acao::Nada => {}
+                menu::Acao::Voltar => {
+                    // "Continuar" e o B na pausa: volta ao jogo, com o relógio
+                    // reiniciado para a pausa não virar um salto de tempo.
+                    if menu.em_partida {
+                        clock = FrameClock::new();
+                        modo = Modo::Jogando;
+                    }
+                }
+                menu::Acao::Jogar | menu::Acao::Reiniciar => {
+                    state = GameState::new(&config, options.class, options.profile);
+                    state.camera.distance_m = config_jogo.camera_dist_m;
+                    aplicar_demo(&mut state, &options);
+                    clock = FrameClock::new();
+                    game_loop = GameLoop::new();
+                    menu.marcar_partida(true);
+                    modo = Modo::Jogando;
+                    log::info!("partida: {}", if acao == menu::Acao::Jogar { "nova" } else { "reiniciada" });
+                }
+                menu::Acao::MenuPrincipal => {
+                    // A sessão de rede morre com a partida: manter o socket aberto
+                    // deixaria o host publicando um mundo que ninguém vê.
+                    sessao = None;
+                    menu.marcar_partida(false);
+                    modo = Modo::Menu;
+                    log::info!("menu: sessão encerrada");
+                }
+                menu::Acao::Sair => {
+                    log::info!("sair pedido pelo menu");
+                    break;
+                }
+                menu::Acao::Hospedar => {
+                    iniciar_rede(&mut menu, &mut sessao, Papel::Host, options.hospedar.unwrap_or(PORTA_PADRAO));
+                }
+                menu::Acao::ProcurarSalas => {
+                    procurar_salas(&mut menu, options.hospedar.unwrap_or(PORTA_PADRAO));
+                }
+                menu::Acao::EntrarSala(indice) => {
+                    entrar_em_sala(&mut menu, &mut sessao, &mut state, &options, &config, indice)
+                }
+                menu::Acao::Abrir(_) | menu::Acao::Pausar => {}
+            }
+
+            // Mudança de configuração vale no quadro seguinte: volume no mixer e
+            // distância na câmera. Aplicar no ato evita "só vale depois de
+            // reiniciar", que é indistinguível de não funcionar.
+            if menu.config != config_jogo {
+                config_jogo = menu.config.saneada();
+                audio.definir_volume(config_jogo.volume_fracao());
+                state.camera.distance_m = config_jogo.camera_dist_m;
+                if let Err(erro) = salvar_config(&caminho_settings, config_jogo) {
+                    // Não salvar não impede jogar; engolir o erro faria a escolha
+                    // sumir no próximo boot sem ninguém saber por quê.
+                    log::warn!("não consegui salvar {}: {erro}", caminho_settings.display());
+                }
+            }
+        }
+
+        // --- simulação: passos fixos, nunca ditados pelo framerate -------
+        let steps = if modo == Modo::Jogando {
+            game_loop.advance(delta)
+        } else {
+            0
+        };
         for _ in 0..steps {
             state.step(fixed_step, &frame_input, &config);
         }
 
+        // Pausa: o botão Start abre o menu de pausa em vez de alternar um
+        // booleano dentro do estado. Um `paused` no estado deixava dois lugares
+        // decidindo se o mundo anda, e o jogador via a pausa "não pegar" quando um
+        // deles discordava.
+        if modo == Modo::Jogando && frame_input.edges.pause {
+            menu.abrir(menu::Tela::Pausa);
+            modo = Modo::Menu;
+            continue;
+        }
+
         // --- rede: input sobe, snapshot desce filtrado por AOI -----------
         let mut visible = state.snapshot_enemies();
+        // Sessão real tem prioridade: com duas ativas, o stub entregaria um
+        // snapshot de um mundo que ninguém está jogando.
+        if let Some(rede) = sessao.as_mut() {
+            visible = rede.passo(&mut state, &frame_input, &config, fixed_step);
+            if !anunciou_rede {
+                log::info!("rede: {:?} com {} jogador(es)", rede.papel(), rede.jogadores());
+                anunciou_rede = true;
+            }
+            jogadores_rede = rede.jogadores();
+        }
+        // `if let` aninhado em vez de let-chain: o crate é edição 2021, onde
+        // `&& let` não compila (o erro fala de edição, não de sintaxe).
         #[cfg(feature = "stub-net")]
-        if let Some((host, client)) = session.as_mut() {
+        if let (None, Some((host, client))) = (sessao.as_ref(), session.as_mut()) {
             // Os dois traits, e não só o do cliente: `poll_input`,
             // `publish_snapshot` e `broadcast` são do `HostBackend`. Faltando
             // ele no escopo, o erro é `no method named poll_input found`, que
@@ -257,9 +498,15 @@ fn run() -> Result<()> {
             visible = client.take_snapshot().unwrap_or_default();
         }
 
-        if state.phase.is_over() {
+        // Fim de partida: abre o menu de fim em vez de encerrar o processo. Antes
+        // disto a janela simplesmente fechava ao perder a torre, e o jogador não
+        // tinha como reiniciar sem reabrir o jogo.
+        if state.phase.is_over() && modo == Modo::Jogando {
+            let venceu = state.phase == Phase::Victory;
             log::info!("fim: {}", state.summary());
-            break;
+            menu.marcar_partida(false);
+            menu.abrir(menu::Tela::Fim { venceu });
+            modo = Modo::Menu;
         }
 
         // --- desenho ----------------------------------------------------
@@ -267,19 +514,42 @@ fn run() -> Result<()> {
         render.begin();
         render.draw_ground(&camera)?;
 
-        // Torre provisória no centro do mapa (o alvo a defender, GDD §11).
-        render.draw_cube(&camera, glam::Vec3::new(0.0, 3.0, 0.0), 6.0, TOWER_COLOR)?;
-
-        // Jogador: um cubo, e um segundo cubo à frente marcando a mira.
-        let player = state.local().position;
-        render.draw_cube(&camera, glam::Vec3::new(player.x, 0.9, player.z), 1.6, PLAYER_COLOR)?;
-        let aim = state.local().aim;
-        render.draw_cube(
+        // A torre, o alvo a defender (GDD §11). O modelo cresce com o upgrade de
+        // HP, então a silhueta diz o quanto ela já foi reforçada.
+        let torre = cena::da_torre(state.tower.max_hp);
+        render.draw_modelo(
             &camera,
-            glam::Vec3::new(player.x + aim.x * 2.4, 0.45, player.z + aim.z * 2.4),
-            0.5,
-            AXIS_Z_COLOR,
+            torre.modelo,
+            glam::Vec3::new(0.0, 0.0, 0.0),
+            torre.altura,
+            0.0,
+            Color3D::new(torre.cor[0], torre.cor[1], torre.cor[2], 1.0),
         )?;
+
+        // Jogadores: um modelo por classe, com a cor da classe. O jogador local
+        // ganha um marcador no chão para se achar no meio de quatro.
+        for jogador in &state.players {
+            if !jogador.can_act() {
+                continue;
+            }
+            let aparencia = cena::da_classe(jogador.class);
+            render.draw_modelo(
+                &camera,
+                aparencia.modelo,
+                glam::Vec3::new(jogador.position.x, 0.0, jogador.position.z),
+                aparencia.altura,
+                jogador.aim.x.atan2(jogador.aim.z),
+                Color3D::new(aparencia.cor[0], aparencia.cor[1], aparencia.cor[2], 1.0),
+            )?;
+            if jogador.id == state.local_id {
+                render.draw_cube(
+                    &camera,
+                    glam::Vec3::new(jogador.position.x, 0.03, jogador.position.z),
+                    1.3,
+                    PLAYER_COLOR,
+                )?;
+            }
+        }
 
         // Dois marcadores de orientação no chão: sem eles a câmera isométrica não
         // tem como provar que está girada 45° e não 0°.
@@ -289,32 +559,88 @@ fn run() -> Result<()> {
         // Inimigos: desenhados do **snapshot**, não do mundo do host. Se a AOI
         // filtrar demais, a tela mostra menos inimigos — que é a falha que se
         // quer ver acontecendo, e não um silêncio.
+        //
+        // Boss e Coronel desenham sozinhos (texturizado, um por vez: são poucos e
+        // são o que o jogador precisa reconhecer). A horda sai em **um lote por
+        // tipo** — 60 inimigos em 60 chamadas custariam ~90 µs de CPU por quadro
+        // só para submeter no Cortex-A35.
+        let mut horda: Vec<cena::Copia> = Vec::with_capacity(visible.len());
         for enemy in &visible {
-            // `tipo` 9 é boss e 10 é o Coronel; o resto é inimigo comum.
-            let (height, size, color) = match enemy.tipo {
-                9 => (3.5, 4.5, Color3D::new(0.95, 0.15, 0.35, 1.0)),
-                10 => (2.5, 3.0, Color3D::new(0.85, 0.15, 0.85, 1.0)),
-                _ => {
-                    let kind = GameState::enemy_kind_of_byte(enemy.tipo);
-                    let (height, size) = match kind {
-                        EnemyKind::Flying => (2.6, 1.3),
-                        EnemyKind::Tank => (1.1, 2.2),
-                        EnemyKind::Swarm => (0.6, 0.9),
-                        EnemyKind::Ranged => (0.9, 1.4),
-                        EnemyKind::Grunt => (0.9, 1.5),
-                    };
-                    (height, size, enemy_color(kind))
-                }
-            };
-            render.draw_cube(
+            let aparencia = cena::do_byte_de_inimigo(enemy.tipo, state.boss.as_ref().map(|b| b.kind));
+            let pos = glam::Vec3::new(enemy.x, 0.0, enemy.z);
+            // O giro é **derivado**: o snapshot não carrega orientação, e todo
+            // inimigo caminha para a torre. Apontar para o centro é exatamente o
+            // que ele está fazendo, e custa uma conta em vez de um campo novo no
+            // protocolo (que exigiria subir a versão e recusar cliente antigo).
+            let giro = (-enemy.x).atan2(-enemy.z);
+            if enemy.tipo == 9 || enemy.tipo == 10 {
+                render.draw_modelo(
+                    &camera,
+                    aparencia.modelo,
+                    pos,
+                    aparencia.altura,
+                    giro,
+                    Color3D::new(aparencia.cor[0], aparencia.cor[1], aparencia.cor[2], 1.0),
+                )?;
+                continue;
+            }
+            horda.push(cena::Copia {
+                modelo: aparencia.modelo,
+                pos,
+                altura: aparencia.altura,
+                giro,
+                cor: aparencia.cor,
+            });
+        }
+        for lote in cena::agrupar(&horda) {
+            let antes = Instant::now();
+            let chamadas = render.draw_modelo_lote(
                 &camera,
-                glam::Vec3::new(enemy.x, height, enemy.z),
-                size,
-                color,
+                lote.modelo,
+                lote.matrizes.as_slice(),
+                Color3D::new(lote.cor[0], lote.cor[1], lote.cor[2], 1.0),
             )?;
+            if sem_espera {
+                cpu_horda += antes.elapsed();
+                chamadas_horda += u64::from(chamadas);
+            }
         }
 
         // --- UI: HUD, minimapa e loja -----------------------------------
+        //
+        // No menu, o mundo fica congelado atrás e o painel entra por cima. É o
+        // que dá contexto à pausa: o jogador vê onde estava.
+
+        if modo == Modo::Menu {
+            if options.ui {
+                let plano = layout::menu(&menu, layout::Tela::new(drawable_w, drawable_h));
+                render.draw_ui(&plano)?;
+            }
+            // A captura tem de acontecer **antes** da troca de buffers. Com
+            // GLES/KMSDRM o `gl_swap_window` esvazia o back buffer, e ler depois
+            // dele grava um BMP preto — a armadilha que o launcher só contornava
+            // forçando o backend por software (AGENTS.md §23). Ler antes resolve
+            // na origem e vale para os dois backends.
+            let ultimo_quadro = options.frames.is_some_and(|limite| frames + 1 >= limite);
+            if ultimo_quadro {
+                if let Some(path) = options.capture.as_deref() {
+                    render.capture_bmp(path)?;
+                }
+            }
+            render.end()?;
+            frames += 1;
+            if ultimo_quadro {
+                break;
+            }
+            if !sem_espera {
+                let spent = started.elapsed().as_millis() as u32;
+                if spent < FRAME_MS {
+                    platform.delay_ms(FRAME_MS - spent);
+                }
+            }
+            continue;
+        }
+
         //
         // Montada a partir do estado **deste** quadro e desenhada por cima do
         // mundo. As duas camadas são separadas de propósito: `ui::build` produz
@@ -322,7 +648,12 @@ fn run() -> Result<()> {
         // que permite testar "a loja cabe em 640x480?" sem abrir janela.
         if options.ui {
             let antes = Instant::now();
-            let frame_ui = ui::build(&state, &config);
+            let mut frame_ui = ui::build(&state, &config);
+            if config_jogo.mostrar_fps {
+                // O FPS é medida, não decoração: é o número que responde "este
+                // aparelho aguenta esta onda" sem abrir o benchmark.
+                frame_ui.hud.fps = Some((fps_medido, jogadores_rede));
+            }
             let plano = layout::montar(&frame_ui, layout::Tela::new(drawable_w, drawable_h));
             if sem_espera {
                 cpu_ui += antes.elapsed();
@@ -345,18 +676,34 @@ fn run() -> Result<()> {
             cpu_total += trabalho;
         }
 
-        render.end()?;
+        // FPS por média móvel de 30 quadros: um número instantâneo pisca a cada
+        // vblank perdido e não diz nada sobre o desempenho.
+        quadros_para_fps += 1;
+        if quadros_para_fps >= 30 {
+            let decorrido = inicio_fps.elapsed().as_secs_f32();
+            if decorrido > 0.0 {
+                fps_medido = quadros_para_fps as f32 / decorrido;
+            }
+            quadros_para_fps = 0;
+            inicio_fps = Instant::now();
+        }
 
-        frames += 1;
-        let ultimo_quadro = options.frames.is_some_and(|limite| frames >= limite);
         // A captura é do **último** quadro, não de todos: gravar dentro do laço
         // escrevia o BMP 60 vezes em `--frames 60` e enchia o log com 60 linhas
         // idênticas, escondendo o resto do diagnóstico.
+        //
+        // Antes de `end()`, pelo mesmo motivo do caminho do menu: o swap esvazia
+        // o back buffer e a captura sairia preta no aparelho.
+        let ultimo_quadro = options.frames.is_some_and(|limite| frames + 1 >= limite);
         if ultimo_quadro {
             if let Some(path) = options.capture.as_deref() {
                 render.capture_bmp(path)?;
             }
         }
+
+        render.end()?;
+
+        frames += 1;
         if ultimo_quadro {
             break;
         }
@@ -387,11 +734,22 @@ fn run() -> Result<()> {
         let cpu_ms = por_quadro(cpu_total);
         let montar_ms = por_quadro(cpu_ui);
         let desenho_ms = por_quadro(cpu_ui_desenho);
+        let horda_ms = por_quadro(cpu_horda);
+        // A contagem da horda é a **única** grandeza que não é por quadro por
+        // natureza (duas ondas de inimigos desenham números diferentes), então
+        // ela sai como média por quadro. Publicá-la crua — 1041 num laço de
+        // 1800 quadros — lia como "1041 chamadas num quadro", que é um número
+        // plausível e falso: 12 inimigos desenham no máximo 3 lotes.
+        let horda_chamadas = if frames > 0 {
+            chamadas_horda as f64 / frames as f64
+        } else {
+            0.0
+        };
         log::info!(
-            "benchmark: {frames}/{limite} quadro(s) em {total:.2} s = {fps:.1} fps · trabalho por quadro: {cpu_ms:.2} ms · ui: {} lote(s) → {} chamada(s) reais, {} instância(s) · montar {montar_ms:.2} ms + desenhar {desenho_ms:.2} ms",
+            "benchmark: {frames}/{limite} quadro(s) em {total:.2} s = {fps:.1} fps · trabalho por quadro: {cpu_ms:.2} ms · ui: {} lote(s) → {} chamada(s) reais, {} instância(s) · montar {montar_ms:.2} ms + desenhar {desenho_ms:.2} ms · horda {horda_ms:.2} ms em {horda_chamadas:.2} chamada(s)/quadro",
             render.hud_draw_calls(),
             render.hud_gl_draws(),
-            render.hud_instances()
+            render.hud_instances(),
         );
     }
 
@@ -428,19 +786,6 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-/// Cor de cada tipo de inimigo.
-///
-/// A silhueta já diferencia pelo tamanho; a cor é a segunda pista, e é o que o
-/// GDD §18 pede ("destaques em vermelho para inimigos").
-fn enemy_color(kind: EnemyKind) -> Color3D {
-    match kind {
-        EnemyKind::Grunt => Color3D::new(0.86, 0.27, 0.22, 1.0),
-        EnemyKind::Tank => Color3D::new(0.55, 0.14, 0.14, 1.0),
-        EnemyKind::Ranged => Color3D::new(0.92, 0.48, 0.12, 1.0),
-        EnemyKind::Swarm => Color3D::new(0.96, 0.72, 0.22, 1.0),
-        EnemyKind::Flying => Color3D::new(0.70, 0.32, 0.78, 1.0),
-    }
-}
 
 /// Imprime o que está de fato aberto, não o que foi pedido.
 ///
@@ -500,6 +845,246 @@ fn banner(
     }
 }
 
+/// Lê `settings.json`, caindo no padrão quando ele não existe ou está corrompido.
+///
+/// Não é erro abrir o jogo pela primeira vez: `NotFound` vira o padrão em
+/// silêncio. JSON inválido, **sim**, vira aviso no log — um arquivo editado à mão
+/// que o jogo ignora sem dizer nada é o defeito que o validador deste repositório
+/// combate desde o `buttons.map`.
+fn carregar_config(caminho: &Path) -> menu::Config {
+    match std::fs::read_to_string(caminho) {
+        Ok(texto) => match serde_json_lite(&texto) {
+            Some(config) => config.saneada(),
+            None => {
+                log::warn!(
+                    "{} não é um settings.json válido; usando o padrão",
+                    caminho.display()
+                );
+                menu::Config::default()
+            }
+        },
+        Err(erro) if erro.kind() == std::io::ErrorKind::NotFound => menu::Config::default(),
+        Err(erro) => {
+            log::warn!("não consegui ler {}: {erro}", caminho.display());
+            menu::Config::default()
+        }
+    }
+}
+
+/// Grava `settings.json`.
+///
+/// Escrito à mão, sem dependência de serialização: são três campos, e o crate não
+/// tem `serde_json`. O formato é o JSON mais chato possível, com uma chave por
+/// linha, para um `diff` mostrar a mudança.
+fn salvar_config(caminho: &Path, config: menu::Config) -> std::io::Result<()> {
+    let config = config.saneada();
+    let texto = format!(
+        "{{\n  \"volume\": {},\n  \"camera_dist_m\": {:.1},\n  \"mostrar_fps\": {}\n}}\n",
+        config.volume, config.camera_dist_m, config.mostrar_fps
+    );
+    std::fs::write(caminho, texto)
+}
+
+/// Lê os três campos de um JSON de configuração.
+///
+/// Parser mínimo e **tolerante**: procura `"chave"` e o valor depois dos dois
+/// pontos. Não valida JSON — a versão estrita seria um parser inteiro para três
+/// números, e o pior caso dele é cair no padrão, que é o que já acontece com
+/// arquivo ausente.
+fn serde_json_lite(texto: &str) -> Option<menu::Config> {
+    let ler_numero = |chave: &str| -> Option<f32> {
+        let inicio = texto.find(&format!("\"{chave}\""))? + chave.len() + 2;
+        let resto = &texto[inicio..];
+        let dois_pontos = resto.find(':')? + 1;
+        let valor: String = resto[dois_pontos..]
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+            .collect();
+        valor.parse().ok()
+    };
+    let ler_bool = |chave: &str| -> Option<bool> {
+        let inicio = texto.find(&format!("\"{chave}\""))? + chave.len() + 2;
+        let resto = &texto[inicio..];
+        let dois_pontos = resto.find(':')? + 1;
+        let valor = resto[dois_pontos..].trim_start();
+        if valor.starts_with("true") {
+            Some(true)
+        } else if valor.starts_with("false") {
+            Some(false)
+        } else {
+            None
+        }
+    };
+
+    Some(menu::Config {
+        volume: ler_numero("volume")?.round().clamp(0.0, 100.0) as u8,
+        camera_dist_m: ler_numero("camera_dist_m")?,
+        mostrar_fps: ler_bool("mostrar_fps").unwrap_or(false),
+    })
+}
+
+/// Aplica uma lista de teclas ao menu, pelo caminho de produção.
+///
+/// "Produção" quer dizer [`Menu::entrada`] com um `InputFrame` sintético — o
+/// mesmo que o analógico produz. Um atalho que mexesse no `cursor` testaria a
+/// suposição de quem escreveu o teste, não o menu.
+/// Uma tecla que o `--teclas` sabe apertar.
+///
+/// `menu::Direcao` é o vocabulário **do menu**; o START não está nele porque o
+/// menu não o consome — quem trata é o laço, que abre a pausa. Faltava essa
+/// tecla e a consequência era o caminho pausa → reiniciar → sair não poder ser
+/// exercitado por linha de comando: só com o dedo no controle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tecla {
+    Dir(menu::Direcao),
+    Pausa,
+}
+
+impl Tecla {
+    fn quadro(self) -> InputFrame {
+        match self {
+            Self::Dir(direcao) => menu::quadro(direcao),
+            Self::Pausa => {
+                let mut frame = InputFrame::default();
+                frame.edges.pause = true;
+                frame
+            }
+        }
+    }
+}
+
+fn parse_teclas(teclas: &[String]) -> Vec<Tecla> {
+    let mut fila = Vec::with_capacity(teclas.len());
+    for tecla in teclas {
+        match tecla.to_ascii_lowercase().as_str() {
+            "cima" | "up" => fila.push(Tecla::Dir(menu::Direcao::Cima)),
+            "baixo" | "down" => fila.push(Tecla::Dir(menu::Direcao::Baixo)),
+            "esq" | "esquerda" | "left" => fila.push(Tecla::Dir(menu::Direcao::Esquerda)),
+            "dir" | "direita" | "right" => fila.push(Tecla::Dir(menu::Direcao::Direita)),
+            "a" | "confirma" | "enter" => fila.push(Tecla::Dir(menu::Direcao::Confirma)),
+            "b" | "volta" | "back" => fila.push(Tecla::Dir(menu::Direcao::Volta)),
+            "start" | "pausa" | "pause" => fila.push(Tecla::Pausa),
+            // Nome errado é erro, não aviso: uma tecla descartada em silêncio
+            // transforma o diagnóstico inteiro em ficção.
+            outra => log::warn!("--teclas: '{outra}' não é uma tecla conhecida"),
+        }
+    }
+    fila
+}
+
+/// Liga a demo da loja quando `--demo-loja` foi pedido.
+fn aplicar_demo(state: &mut GameState, options: &Options) {
+    if !options.demo_loja {
+        return;
+    }
+    // Loja aberta e gold inicial para o menu ter itens compráveis e outros não:
+    // uma tela só com "sem gold" não mostra o marcador de escolha.
+    state.phase = Phase::Shop;
+    state.local_mut().gold = 120;
+    log::info!("demo: loja aberta na abertura (--demo-loja)");
+}
+
+/// Papel que o menu pode pedir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Papel {
+    /// Hospedar.
+    Host,
+}
+
+/// Sobe uma sessão de rede pedida pelo menu.
+fn iniciar_rede(
+    menu: &mut Menu,
+    sessao: &mut Option<giochi_tower::net::SessaoJogo>,
+    papel: Papel,
+    porta: u16,
+) {
+    {
+        match papel {
+            Papel::Host => match giochi_tower::net::SessaoJogo::hospedar(porta) {
+                Ok(nova) => {
+                    *sessao = Some(nova);
+                    menu.aviso = Some(format!("hospedando na porta {porta}"));
+                    // Anunciar é o que faz a sala aparecer na procura dos outros.
+                    if let Err(erro) = giochi_tower::net::descoberta::Anunciante::novo(porta, TITLE)
+                        .iniciar()
+                    {
+                        log::warn!("descoberta indisponível: {erro}");
+                        menu.aviso = Some(format!("hospedando (sem anúncio: {erro})"));
+                    }
+                }
+                Err(erro) => {
+                    log::error!("{erro}");
+                    menu.aviso = Some(format!("{erro}"));
+                }
+            },
+        }
+    }
+}
+
+/// Procura salas e põe o resultado no menu.
+fn procurar_salas(menu: &mut Menu, porta: u16) {
+    let _ = porta;
+    log::info!("rede: procurando salas…");
+    let salas = giochi_tower::net::procurar(
+        giochi_tower::net::descoberta::PORTA_DESCOBERTA,
+        giochi_tower::net::descoberta::ESPERA_PADRAO_MS,
+    );
+    if salas.is_empty() {
+        menu.aviso = Some("nenhuma sala encontrada".into());
+        log::info!("rede: nenhuma sala");
+    } else {
+        log::info!("rede: {} sala(s)", salas.len());
+        menu.aviso = None;
+    }
+    menu.definir_salas(salas.iter().map(|s| s.rotulo()).collect());
+    // Guarda os endereços para o "Entrar" — o rótulo é para o olho, o endereço é
+    // para o socket, e derivar um do outro por `split('@')` quebraria num nome
+    // com arroba.
+    SALAS_ATUAIS.with(|celula| *celula.borrow_mut() = salas);
+}
+
+thread_local! {
+    /// Última procura. `thread_local` porque o menu roda no laço principal e não
+    /// há outro consumidor — um `static mut` exigiria `unsafe` por nada.
+    static SALAS_ATUAIS: std::cell::RefCell<Vec<giochi_tower::net::Sala>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Entra na sala `indice` da última procura.
+fn entrar_em_sala(
+    menu: &mut Menu,
+    sessao: &mut Option<giochi_tower::net::SessaoJogo>,
+    state: &mut GameState,
+    options: &Options,
+    config: &GameConfig,
+    indice: usize,
+) {
+    let sala = SALAS_ATUAIS.with(|celula| celula.borrow().get(indice).cloned());
+    let Some(sala) = sala else {
+        menu.aviso = Some("essa sala não está mais disponível".into());
+        return;
+    };
+    {
+        match giochi_tower::net::SessaoJogo::entrar(&sala.endereco.to_string()) {
+            Ok(nova) => {
+                *sessao = Some(nova);
+                // Ao entrar, a partida antiga não serve: o mundo é o do host.
+                *state = GameState::new(config, options.class, options.profile);
+                // Não se adivinha o id: ele vem no handshake e o `passo()` da
+                // sessão adota o valor do crate. Fixar 1 aqui funcionava só
+                // enquanto o host atribuísse 1 ao primeiro cliente.
+                menu.aviso = Some(format!("entrou em {}", sala.rotulo()));
+                menu.abrir(menu::Tela::Pausa);
+            }
+            Err(erro) => {
+                log::error!("{erro}");
+                menu.aviso = Some(format!("{erro}"));
+            }
+        }
+    }
+}
+
 /// Onde procurar os `.ron`, do mais específico para o mais genérico.
 ///
 /// O padrão era `config` relativo ao **diretório de execução**, e isso quebra
@@ -507,6 +1092,17 @@ fn banner(
 /// app (funciona), mas rodar à mão de dentro de `bin/` não acha nada — e o
 /// sintoma no aparelho foi `não consegui ler config/classes.ron`, que parece
 /// instalação incompleta e é resolução de caminho.
+///
+/// A ordem cobre os três casos reais: instalado (`<app>/config`), rodando do
+/// `bin/` (`<app>/config` via `..`), e a árvore do repositório no PC (onde o
+/// `CARGO_MANIFEST_DIR` é o único caminho que existe sempre).
+/// Onde procurar os `.ron`, do mais específico para o mais genérico.
+///
+/// O padrão era `config` relativo ao **diretório de execução**, e isso quebra no
+/// aparelho de duas maneiras: o launcher inicia o app com `cwd` na pasta do app
+/// (funciona), mas rodar à mão de dentro de `bin/` não acha nada — e o sintoma no
+/// aparelho foi `não consegui ler config/classes.ron`, que parece instalação
+/// incompleta e é resolução de caminho.
 ///
 /// A ordem cobre os três casos reais: instalado (`<app>/config`), rodando do
 /// `bin/` (`<app>/config` via `..`), e a árvore do repositório no PC (onde o
@@ -553,7 +1149,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
         }
     }
 
-    let mut args = args;
+    // `peekable` porque `--hospedar` tem argumento **opcional**: consumi-lo com
+    // `next` engoliria a flag seguinte quando a porta não fosse dada.
+    let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ajuda" | "--help" | "-h" => {
@@ -604,6 +1202,34 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
             // arcade-volleyball) e o que `aparelho.sh verificar-jogo` passa.
             // Aceitar os dois evita "argumento desconhecido" na ferramenta que
             // existe justamente para provar que o jogo desenha no aparelho.
+            "--menu" => options.menu = true,
+            "--hospedar" => {
+                // Porta opcional: `--hospedar` sozinho usa a padrão.
+                let porta = args.peek().and_then(|v| v.parse::<u16>().ok());
+                if porta.is_some() {
+                    let _ = args.next();
+                }
+                options.hospedar = Some(porta.unwrap_or(PORTA_PADRAO));
+            }
+            "--teclas" => {
+                let lista = args
+                    .next()
+                    .ok_or_else(|| GameError::message("--teclas precisa de uma lista"))?;
+                options.teclas = lista
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                if options.teclas.is_empty() {
+                    return Err(GameError::message("--teclas vazia"));
+                }
+            }
+            "--entrar" => {
+                let endereco = args
+                    .next()
+                    .ok_or_else(|| GameError::message("--entrar precisa de um endereço ip:porta"))?;
+                options.entrar = Some(endereco);
+            }
             "--sem-ui" => options.ui = false,
             "--demo-loja" => options.demo_loja = true,
             "--benchmark" => {

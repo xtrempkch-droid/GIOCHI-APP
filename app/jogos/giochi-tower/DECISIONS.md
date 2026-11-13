@@ -528,3 +528,142 @@ D-030) e a diferença entre "otimizei" e "não mexi" fica visível.
 A divisão montar/desenhar existe pelo mesmo motivo: são otimizações opostas
 (alocação de `String` contra número de instâncias), e somadas elas não dizem
 qual das duas atacar. Medido no R35S: montar 0,24 ms, desenhar 3,31 ms.
+
+## D-032 — Modelos e texturas vêm de um gerador, e a prova é a contagem de cores
+
+**Decisão:** os 15 modelos (`.obj`) e as 15 texturas (`.bmp`) são **gerados** por
+`scripts/gerar-modelos.mjs`, determinístico e com modo `--conferir`. Nenhum
+arquivo binário entra no repositório sem poder ser reproduzido.
+
+Três razões, todas medidas:
+
+1. **BMP e não PNG.** O `SDL2_image` do R35S já apareceu compilado sem
+   `--enable-png` e `IMG_Load` responde *"PNG images are not supported"*
+   (AGENTS.md §24). Um jogo com PNG no asset simplesmente não abriria lá.
+2. **Reprodutibilidade.** `--conferir` reprova se qualquer arquivo divergir do
+   gerador. Um OBJ editado à mão e perdido no histórico não tem como voltar.
+3. **Sem ferramenta de modelagem.** Não há Blender nesta máquina, e uma figura
+   de 40 vértices cabe em 20 linhas de laço.
+
+**`load_obj` sem `vn` de propósito:** a engine deriva a normal da face em
+`prepare_normals`, e é isso que dá o relevo que o shader `textured` desenha.
+Emitir normais suavizadas esconderia as arestas que fazem o modelo ler como
+sólido a 640×480.
+
+**A verificação não é "o arquivo existe":**
+
+| | cores distintas | pixels diferentes |
+| --- | --- | --- |
+| com modelos | **2 795** | **13,63 %** |
+| sem modelos (cubos) | 113 | — |
+
+E `tests/modelos.rs` carrega os 15 arquivos pelo **loader da engine** e mede
+altura, largura e número de vértices. Um OBJ vazio ou com face invertida reprova
+sem abrir janela — `load_obj` é puro, não toca GL.
+
+**A horda sai instanciada por modelo** (`cena::agrupar`), não uma por inimigo:
+12 inimigos custam **0,47 chamada/quadro** e 0,32 ms.
+
+## D-033 — O `glam` do jogo segue o que o código da engine chama
+
+**Decisão:** `glam = "0.34"` no jogo, e o `vendor/Cargo.toml` também re-pinado,
+porque a engine usa `glam::camera::rh::proj::opengl::perspective` — API que só
+existe a partir da 0.34.
+
+O snapshot anterior estava em `0.29` e o código compilava **porque as duas
+pontas estavam velhas juntas**: o vendor tinha a mesma versão do jogo. Atualizar
+o vendor para o upstream e deixar o jogo em 0.29 falha com
+`no function or associated item named 'perspective' found`, que manda procurar
+defeito no jogo.
+
+A regra é de mão única: **o pin segue o código que a engine chama**, nunca o
+contrário. Um `glam` mais novo no jogo com uma engine antiga quebraria na
+primeira chamada de matriz.
+
+## D-034 — A `real-net` deixou de ser uma feature
+
+**Decisão:** `net/host.rs`, `net/client.rs`, `net/sessao.rs` e `net/descoberta.rs`
+compilam **sempre**. A feature `real-net` foi removida.
+
+Rede atrás de `--features` é rede que o jogador não tem: o binário instalado no
+aparelho foi compilado sem ela, e as duas funções `RealHost::novo` e
+`RealClient::entrar` tinham erros de compilação **latentes que ninguém viu**
+(`MAX_CLIENTS` em vez de `MAX_CLIENTES`, e o campo `tamanho` do
+`HandshakeRecusado` ignorado). Um caminho que nunca é compilado não é código: é
+texto.
+
+O `stub-net` continua como feature porque ele é banco de prova (rede de
+loopback determinística) e não caminho de produção.
+
+## D-035 — O id do jogador vem de `cliente.jogador()`, nunca de uma mensagem
+
+**Decisão:** o cliente lê o próprio id de `giochi_net::client::Cliente::jogador()`
+e o copia para `state.local_id`; o braço `Mensagem::HandshakeOk { .. }` do jogo
+foi **removido**.
+
+O crate **consome** o `HandshakeOk` dentro de `processar()` (guarda o id e faz
+`continue`), então aquela mensagem nunca chega ao jogo. O braço existia, o log
+`handshake aceito` nunca saiu, e a consequência real foi medida com dois
+processos: o cliente ficava com `local_id = 0`, que é **o id do host** — ele
+dirigia o avatar do outro e via o próprio como remoto.
+
+```text
+antes    cliente: rede: jogador 0        (nunca chegava o handshake)
+depois   cliente: rede: assumindo o jogador 1
+         cliente: net: handshake aceito, jogador 1
+```
+
+O teste `id_zero_nunca_e_adotado_como_proprio` fixa a regra: 0 não é id de
+cliente. É a mesma família do `year_label()` do launcher — **um valor plausível
+no lugar do dado ausente esconde o defeito**.
+
+## D-036 — `--teclas` injeta entrada; não chama o menu
+
+**Decisão:** `--teclas` transforma a lista em `Tecla` e injeta **uma por quadro**
+na entrada, com um quadro de soltura entre duas. Quem executa a ação é o laço.
+
+A versão anterior chamava `Menu::entrada` antes do laço e descartava a `Acao`
+devolvida. O sintoma medido:
+
+```text
+--teclas "a" -> tela partida · 60 quadros · 0 passo(s) de simulação
+```
+
+A tela mudava e nada começava — ferramenta que imprime um estado plausível sem
+ter feito nada, a mesma classe do `--teclas` do launcher (AGENTS.md §24).
+
+O **quadro de soltura** existe porque a repetição do menu é de `REPETICAO_S`
+(0,22 s): a tecla seguinte, chegando 1/60 s depois, caía dentro da janela e era
+engolida. Medido: `baixo,baixo` parava em "Multijogador" em vez de chegar a
+"Configurações". Um dedo levanta o botão; a fila agora também.
+
+`Tecla::Pausa` foi acrescentada porque `menu::Direcao` é o vocabulário **do
+menu** e o START não está nele — sem ela, o caminho pausa → reiniciar → sair não
+podia ser exercitado por linha de comando.
+
+## D-037 — A captura lê os pixels antes da troca de buffers
+
+**Decisão:** `--quadro` lê o frame **antes** de `render.end()`, nos dois caminhos
+(menu e partida).
+
+Com GLES/KMSDRM o `gl_swap_window` esvazia o back buffer, e ler depois grava um
+BMP **preto**. O repositório contornava isso obrigando `SDL_RENDER_DRIVER=software`
+na captura — um paliativo que custa a fidelidade do backend que roda de verdade.
+Ler antes resolve na origem e vale para os dois backends.
+
+É o mesmo motivo que fez `--benchmark` parar antes de `end()` (D-031): a troca de
+buffers é o limite entre "o que o jogo fez" e "o que o painel mostrou".
+
+## D-038 — A contagem de chamadas da horda é por quadro
+
+**Decisão:** o relatório de `--benchmark` publica `horda … chamada(s)/quadro`,
+média por quadro, e não o total acumulado.
+
+A primeira versão imprimia `horda 0.32 ms em 1041 chamada(s)` — um total de 1800
+quadros ao lado de um custo por quadro. Lê como "1041 chamadas num quadro", que é
+**plausível e falso**: 12 inimigos desenham no máximo 3 lotes. É a mesma classe
+do contador de efeitos do `launcher-teste` (AGENTS.md §30) e do contador de
+desenhos do `neon-drift` (§38): um número que não diz o que mede.
+
+Números por quadro misturados com totais são a versão numérica de "duas listas
+que envelhecem diferente".

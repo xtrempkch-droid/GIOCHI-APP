@@ -69,9 +69,23 @@ pub struct Host {
 }
 
 impl Host {
-    /// Sobe na porta dada (ou [`PORTA_PADRAO`]).
+    /// Sobe na porta dada (ou [`PORTA_PADRAO`]) escutando em todas as
+    /// interfaces — é o que um host de LAN precisa.
+    ///
+    /// **Cuidado com [`Self::endereco`]**: escutando em `0.0.0.0`, o endereço
+    /// devolvido **não é conectável**. `send_to` para `0.0.0.0` falha com
+    /// `AddrNotAvailable` (WSAEADDRNOTAVAIL no Windows, EADDRNOTAVAIL no
+    /// Linux) — e é o tipo de erro que aparece só quando um cliente tenta
+    /// entrar, não no host que subiu. Para dar o endereço a clientes, use o IP
+    /// da interface, como faz [`Self::endereco_anunciado`].
     pub fn novo(porta: Option<u16>) -> std::io::Result<Self> {
-        let net = Net::aberto_padrao(Modo::Host, porta.unwrap_or(PORTA_PADRAO))?;
+        Self::escutar(("0.0.0.0", porta.unwrap_or(PORTA_PADRAO)))
+    }
+
+    /// Sobe em um endereço explícito. Usado pelos testes com `127.0.0.1`, e por
+    /// quem quiser prender o host a uma interface só.
+    pub fn escutar(ender: impl std::net::ToSocketAddrs) -> std::io::Result<Self> {
+        let net = Net::abrir(ender, Modo::Host)?;
         Ok(Self {
             net,
             clientes: HashMap::new(),
@@ -85,8 +99,26 @@ impl Host {
     }
 
     /// Endereço de escuta, para o cliente saber para onde mandar.
+    ///
+    /// Com o host aberto em `0.0.0.0`, isto devolve `0.0.0.0:porta` — inútil
+    /// para conectar. Prefira [`Self::endereco_anunciado`].
     pub fn endereco(&self) -> std::io::Result<SocketAddr> {
         self.net.local()
+    }
+
+    /// Endereço que um cliente consegue usar.
+    ///
+    /// Descobre o IP da interface de saída com o truque padrão: um UDP
+    /// `connect` para um destino externo **não envia pacote**, só faz o SO
+    /// escolher a rota — e `local_addr` passa a devolver o IP daquela
+    /// interface. Sem rede externa configurada pode falhar; nesse caso o
+    /// chamador cai no [`Self::endereco`] e resolve na mão.
+    pub fn endereco_anunciado(&self) -> std::io::Result<SocketAddr> {
+        let porta = self.net.local()?.port();
+        let sonda = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        sonda.connect("192.0.2.1:9")?; // TEST-NET-1: documentação, não roteável
+        let ip = sonda.local_addr()?.ip();
+        Ok(SocketAddr::new(ip, porta))
     }
 
     /// Quantos clientes aceitos agora.
@@ -205,8 +237,13 @@ impl Host {
             return;
         }
 
-        let id = self.proximo_id;
-        self.proximo_id = self.proximo_id.wrapping_add(1).max(1);
+        // Na volta de 255 para 1, o id gerado pode estar em uso: reutilizá-lo
+        // faria dois jogadores compartilharem o mesmo input e AOI.
+        let mut id = self.proximo_id;
+        while self.clientes.values().any(|c| c.id == id) {
+            id = id.wrapping_add(1).max(1);
+        }
+        self.proximo_id = id.wrapping_add(1).max(1);
         self.clientes.insert(
             de,
             Cliente {
@@ -319,7 +356,7 @@ mod testes {
 
     #[test]
     fn host_sobe_e_escuta() {
-        let host = Host::novo(Some(0)).expect("devia subir");
+        let host = Host::escutar(("127.0.0.1", 0)).expect("devia subir");
         assert!(host.endereco().unwrap().port() > 0);
         assert_eq!(host.clientes(), 0);
     }
@@ -343,7 +380,7 @@ mod testes {
 
     #[test]
     fn handshake_aceita_e_atribui_id_a_partir_de_um() {
-        let mut host = Host::novo(Some(0)).unwrap();
+        let mut host = Host::escutar(("127.0.0.1", 0)).unwrap();
         let addr = host.endereco().unwrap();
         let mut cliente = Net::abrir("127.0.0.1:0", Modo::Cliente).unwrap();
 
@@ -383,19 +420,49 @@ mod testes {
     }
 
     #[test]
+    fn id_nao_reusa_cliente_vivo_quando_o_contador_da_a_volta() {
+        let mut host = Host::escutar(("127.0.0.1", 0)).unwrap();
+        for (id, porta) in [(1u8, 1u16), (255u8, 2u16)] {
+            let addr = SocketAddr::from(([127, 0, 0, 1], porta));
+            host.clientes.insert(
+                addr,
+                Cliente {
+                    id,
+                    addr,
+                    ultimo_pacote: Instant::now(),
+                    camera_x: 0.0,
+                    camera_z: 0.0,
+                    raio: 0.0,
+                },
+            );
+        }
+        host.proximo_id = 255;
+
+        let novo = SocketAddr::from(([127, 0, 0, 1], 3));
+        host.responder_handshake(novo, VERSAO_PROTOCOLO, 0, Instant::now());
+        assert_eq!(
+            host.clientes.get(&novo).map(|c| c.id),
+            Some(2),
+            "255 e 1 estão em uso; o próximo id livre é 2"
+        );
+    }
+
+    #[test]
     fn handshake_de_versao_errada_e_recusado() {
-        let mut host = Host::novo(Some(0)).unwrap();
+        let mut host = Host::escutar(("127.0.0.1", 0)).unwrap();
         let addr = host.endereco().unwrap();
         let mut cliente = Net::abrir("127.0.0.1:0", Modo::Cliente).unwrap();
 
-        // Manda versão antiga montando o datagrama à mão.
+        // Manda versão antiga montando o datagrama à mão: `enviar` sempre
+        // carimba a versão atual, então o caminho de recusa só é exercitado
+        // por bytes crus.
         let mut bytes = Mensagem::Handshake {
             versao: 1,
             tipo_controle: 0,
         }
         .codificar();
         bytes[0] = 99; // versão local = 99
-        cliente.socket.send_to(&bytes, addr).unwrap();
+        cliente.enviar_bruto(addr, &bytes).unwrap();
 
         // Como a versão é recusada na LEITURA, o host nem vê a mensagem.
         // O cliente de verdade recebe o recusado; aqui provamos que o host não
@@ -407,7 +474,7 @@ mod testes {
 
     #[test]
     fn mensagem_de_quem_nao_fez_handshake_e_ignorada() {
-        let mut host = Host::novo(Some(0)).unwrap();
+        let mut host = Host::escutar(("127.0.0.1", 0)).unwrap();
         let addr = host.endereco().unwrap();
         let mut estranho = Net::abrir("127.0.0.1:0", Modo::Cliente).unwrap();
 
@@ -438,7 +505,7 @@ mod testes {
 
     #[test]
     fn snapshot_respeita_a_taxa_e_o_aoi_por_cliente() {
-        let mut host = Host::novo(Some(0)).unwrap();
+        let mut host = Host::escutar(("127.0.0.1", 0)).unwrap();
         let addr = host.endereco().unwrap();
 
         let mut cliente = Net::abrir("127.0.0.1:0", Modo::Cliente).unwrap();

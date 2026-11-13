@@ -437,6 +437,20 @@ fn hud(h: &super::Hud, tela: Tela, e: f32) -> Plano {
         super::COR_TEXTO,
     ));
 
+    // FPS e jogadores, quando pedidos: canto inferior esquerdo, abaixo do
+    // minimapa que fica à direita — sem cruzar o bloco do rodapé.
+    if let Some((fps, jogadores)) = h.fps {
+        let texto = format!("{fps:.0} FPS - {jogadores}J");
+        let largura = font::largura_texto(&font::normalizar(&texto)) as f32 * (e * 0.8);
+        plano.textos.push(Texto::new(
+            texto,
+            tela.largura - margem(tela) - largura,
+            minimapa(tela).y - altura_da_linha(e * 0.8) - (e * 1.5).round(),
+            e * 0.8,
+            super::COR_DESTAQUE,
+        ));
+    }
+
     plano
 }
 
@@ -474,6 +488,143 @@ fn barra_do_minimapa(mapa: &super::Minimap, tela: Tela) -> Plano {
     }
     if let Some(nemesis) = mapa.nemesis {
         ponto_em(nemesis, super::COR_NEMESIS, ponto * 1.3);
+    }
+
+    plano
+}
+
+/// Um menu: véu, painel, título, linhas e o rodapé de teclas.
+///
+/// É montado a partir de [`crate::menu::Menu`] — o mesmo objeto que decide a
+/// navegação. Duas listas (uma para desenhar, outra para navegar) é como o
+/// carrossel do launcher dessincronizou do foco; aqui o desenho lê a lista que a
+/// navegação usa.
+pub fn menu(menu: &crate::menu::Menu, tela: Tela) -> Plano {
+    let mut plano = Plano::default();
+    let e = escala(tela);
+    let linha = altura_da_linha(e);
+    let interno = (e * 7.0).round().max(7.0);
+
+    // O jogo continua atrás: a pausa não esconde onde o jogador estava.
+    plano.retangulos.push(Retangulo::new(
+        Caixa::new(0.0, 0.0, tela.largura, tela.altura),
+        super::COR_VEU,
+    ));
+
+    let itens = menu.itens();
+    let largura_maxima = itens
+        .iter()
+        .map(|i| {
+            let valor = i.valor.as_deref().unwrap_or("");
+            let texto = font::largura_texto(&font::normalizar(&format!("{}   {}", i.rotulo, valor)));
+            texto
+        })
+        .chain(std::iter::once(font::largura_texto("CONFIGURACOES")))
+        .max()
+        .unwrap_or(0);
+    let e_menu = escala_que_cabe(largura_maxima, tela.largura * 0.62, e);
+
+    let passo_linha = (altura_da_linha(e_menu) + (e_menu * 3.0).round()).max(1.0);
+    let altura_painel = 2.0 * interno + altura_da_linha(e_menu) * 2.0 + passo_linha * itens.len() as f32;
+    let largura_painel = (largura_maxima as f32 * e_menu + 2.0 * interno)
+        .min(tela.largura - 2.0 * margem(tela))
+        .max(1.0);
+    let painel = Caixa::new(
+        ((tela.largura - largura_painel) * 0.5).round(),
+        ((tela.altura - altura_painel) * 0.5).max(margem(tela)),
+        largura_painel,
+        altura_painel,
+    );
+    plano.retangulos.push(Retangulo::new(painel, super::COR_PAINEL));
+
+    let titulo = match menu.tela {
+        crate::menu::Tela::Principal => format!("{} {}", crate::TITLE, crate::VERSION),
+        crate::menu::Tela::Multijogador => "MULTIJOGADOR".to_string(),
+        crate::menu::Tela::Configuracoes => "CONFIGURACOES".to_string(),
+        crate::menu::Tela::Pausa => "PAUSA".to_string(),
+        crate::menu::Tela::Fim { venceu: true } => "CAMPANHA VENCIDA".to_string(),
+        crate::menu::Tela::Fim { venceu: false } => "A TORRE CAIU".to_string(),
+    };
+    plano.textos.push(Texto::new(
+        titulo,
+        painel.x + interno,
+        painel.y + interno,
+        e_menu,
+        super::COR_DESTAQUE,
+    ));
+
+    let mut y = painel.y + interno + linha + (e_menu * 2.0).round();
+    for (indice, item) in itens.iter().enumerate() {
+        let selecionado = indice == menu.cursor;
+        if selecionado {
+            // Marcador à esquerda **e** fundo na linha: num painel escuro, só a
+            // cor do texto não distingue o item escolhido a 640×480.
+            plano.retangulos.push(Retangulo::new(
+                Caixa::new(
+                    painel.x + interno * 0.4,
+                    y - (e_menu * 0.6).round(),
+                    largura_painel - interno * 0.8,
+                    altura_da_linha(e_menu) + (e_menu * 1.2).round(),
+                ),
+                super::COR_SELECAO,
+            ));
+            plano.retangulos.push(Retangulo::new(
+                Caixa::new(
+                    painel.x + interno * 0.4,
+                    y,
+                    (e_menu * 1.4).round().max(2.0),
+                    altura_da_linha(e_menu),
+                ),
+                super::COR_DESTAQUE,
+            ));
+        }
+        let cor = if selecionado {
+            super::COR_TEXTO
+        } else {
+            super::COR_APAGADO
+        };
+        plano.textos.push(Texto::new(
+            &item.rotulo,
+            painel.x + interno * 1.3,
+            y,
+            e_menu,
+            cor,
+        ));
+        if let Some(valor) = &item.valor {
+            let largura_valor = font::largura_texto(&font::normalizar(valor)) as f32 * e_menu;
+            plano.textos.push(Texto::new(
+                valor,
+                painel.direita() - interno - largura_valor,
+                y,
+                e_menu,
+                if selecionado { super::COR_OURO } else { super::COR_APAGADO },
+            ));
+        }
+        y += passo_linha;
+    }
+
+    // Rodapé de teclas: o que o jogador pode fazer **nesta** tela.
+    let dicas = match menu.tela {
+        crate::menu::Tela::Configuracoes => "CIMA/BAIXO ESCOLHE - ESQ/DIR AJUSTA - B VOLTA",
+        crate::menu::Tela::Multijogador => "A ESCOLHE - B VOLTA",
+        _ => "CIMA/BAIXO ESCOLHE - A CONFIRMA - B VOLTA",
+    };
+    plano.textos.push(Texto::new(
+        dicas,
+        painel.x + interno,
+        painel.base() - interno + (e_menu * 0.5).round(),
+        e_menu * 0.8,
+        super::COR_APAGADO,
+    ));
+
+    if let Some(aviso) = &menu.aviso {
+        plano.textos.push(Texto::new(
+            aviso,
+            painel.x + interno,
+            painel.base() + (e_menu * 1.5).round(),
+            e_menu * 0.8,
+            super::COR_ALERTA,
+        ));
     }
 
     plano
