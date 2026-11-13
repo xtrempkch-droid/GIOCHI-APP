@@ -137,7 +137,13 @@ jobs:
         run: cargo test -p giochi-cobrinha-core --locked
 
   # Os testes da interface não precisam de janela; precisam de SDL2 para linkar.
-  # O `dummy` respeita o tamanho pedido, então a prova de desenho roda no runner.
+  #
+  # A prova de desenho, porém, precisa de um contexto GL: o cobrinha desenha pela
+  # GIOCHI-ENGINE 3D. O driver `dummy` do SDL **não tem OpenGL** ("OpenGL support
+  # is either not configured in SDL or not available in current SDL video driver
+  # (dummy)"), e é isso que deixou este job vermelho de #45 a #61 — a captura
+  # nunca chegava a desenhar. `offscreen` dá um contexto EGL/GLES real sem
+  # display, e é o que `GIOCHI-ENGINE-3D/.github/workflows/ci.yml` usa há fases.
   cobrinha-build:
     runs-on: ubuntu-24.04
     steps:
@@ -147,8 +153,15 @@ jobs:
       - name: Setup Rust
         run: rustup toolchain install stable --profile minimal --no-self-update
 
-      - name: Install SDL2
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Install SDL2 and software GL
+        # O cobrinha desenha pela GIOCHI-ENGINE 3D, que exige um contexto GL.
+        # `libsdl2-dev` sozinho nao traz o driver GL por software (llvmpipe), e
+        # sem ele o SDL responde "OpenGL support is either not configured in SDL
+        # or not available in current SDL video driver". Ver a nota equivalente
+        # em `GIOCHI-ENGINE-3D/.github/workflows/ci.yml`, que ja passou por isto.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libegl1-mesa-dev libgl1-mesa-dri
 
       - name: Test workspace
         working-directory: app/jogos/cobrinha
@@ -161,7 +174,7 @@ jobs:
         working-directory: app/jogos/cobrinha
         run: |
           set -e
-          SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+          SDL_VIDEODRIVER=offscreen \
             cargo run --quiet -- --tamanho 640x480 --passos 60 \
               --quadro /tmp/cobrinha.bmp
           test -s /tmp/cobrinha.bmp
@@ -185,7 +198,7 @@ jobs:
         working-directory: app/jogos/cobrinha
         run: |
           set -e
-          saida=$(SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+          saida=$(SDL_VIDEODRIVER=offscreen \
             cargo run --quiet -- --tamanho 640x480 --quadros 90 --json)
           echo "$saida"
           python3 - "$saida" <<'PY'
@@ -203,7 +216,7 @@ jobs:
         working-directory: app/jogos/cobrinha
         run: |
           set -e
-          SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+          SDL_VIDEODRIVER=offscreen \
             cargo run --quiet -- --tamanho 720x1280 --passos 40 \
               --quadro /tmp/retrato.bmp | tee /tmp/retrato.log
           grep -q "projeto 1280x720 (Ccw90)" /tmp/retrato.log
