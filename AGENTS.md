@@ -6393,6 +6393,13 @@ lugar, §24 por causa disso), mas sem a `.so` o processo **não sobe**. Mesma
 família do `libasound` do launcher no R35S (§23). O R35S tem
 `libSDL2_image-2.0.so.0.800.2`, e é por isso que o jogo abriu lá.
 
+E o conjunto de **build** é maior que o de **carga**: o `sdl2-sys` exige o
+`.pc` de `image`, `mixer` **e** `ttf` mesmo quando o binário final não pede a
+`.so` correspondente (`--as-needed` descarta `SDL2_ttf`, que o jogo não
+referencia). O CI precisou de `libsdl2-ttf-dev` também, com
+`Package SDL2_ttf was not found`. Duas listas, dois significados — a mesma
+lição das duas cópias do enum de runtimes (§16).
+
 E o mesmo run expôs um segundo defeito de CI, este de **data**: o passo de
 `apt-get` pedia `libegl1-mesa` e `libgles2-mesa`, nomes do Ubuntu 22.04 que
 **não existem** no 24.04 (o runtime virou libglvnd: `libegl1`, `libgles2`). O

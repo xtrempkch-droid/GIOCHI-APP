@@ -278,14 +278,17 @@ jobs:
       # existem** e o `apt-get` responde `E: Unable to locate package`, que
       # derruba o job inteiro antes de compilar uma linha. Os `-dev`
       # (`libegl1-mesa-dev`) continuam resolvendo — so os de runtime mudaram.
-      # O `libsdl2-image-dev` nao e opcional: o `vendor/Cargo.toml` da engine
-      # liga as features `image`, `mixer` e `ttf` do crate `sdl2`, e o
-      # `sdl2-sys` emite `-lSDL2_image` — o link falha sem o `.pc`. Medido no
-      # binario: 6 NEEDED, com `libSDL2_image-2.0.so.0`.
+      # O `vendor/Cargo.toml` da engine liga as features `image`, `mixer` e `ttf`
+      # do crate `sdl2`, e o `sdl2-sys` exige o `.pc` das **tres** no build,
+      # mesmo quando o binario final nao acaba pedindo a `.so` (`--as-needed`
+      # descarta `SDL2_ttf`, que o jogo nao referencia). Medido no binario:
+      # 6 NEEDED, com `libSDL2_image-2.0.so.0` e sem `libSDL2_ttf`.
+      # Ou seja: build e carga tem conjuntos diferentes, e o CI precisa cobrir o
+      # maior — `Package SDL2_ttf was not found` derruba o job antes de compilar.
       - name: Install SDL2 (e o mixer e a imagem, que o binario pede)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libsdl2-image-dev libegl1 libgles2 libgl1-mesa-dri
+          sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libsdl2-image-dev libsdl2-ttf-dev libegl1 libgles2 libgl1-mesa-dri
 
       # O snapshot do engine e um workspace proprio (`exclude = vendor`):
       # `--workspace` aqui testa o jogo, nao os testes da engine.
