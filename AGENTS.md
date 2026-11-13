@@ -18,11 +18,12 @@ O que existe hoje, verificado:
 | --- | --- |
 | apps em `apps.json` | **10**: `forge`, `store`, `painel`, `loja` (host) + `launcher`, `launcher-teste`, `launcher-star-dust`, `cobrinha`, `neon-drift`, `giochi-defender` (image) |
 | jogos | **3**: `cobrinha`, `neon-drift` e `giochi-defender` — Rust + GIOCHI-ENGINE-3D/SDL2 |
-| `validate-app.mjs --all` | 10 apps válidos (1 em scaffold) |
+| `validate-app.mjs --all` | 11 apps válidos (2 em scaffold) |
 | `tests/run-all.mjs` | 199/199 JS |
 | `testar-apps-pc.sh` | 90/90 Python (58 forge + 32 painel) |
 | `compilar-launcher.sh --testes` | 229/229 Rust (o Star Dust tem 240: 107 core + 133 ui-sdl) |
 | `compilar-loja.sh --testes` | 116/116 Rust |
+| `giochi-tower` (testes) | **184/184 Rust** — jogo novo, ver §43 |
 
 **Catálogo ausente não vira catálogo inventado.** Sem `index.json` (o normal numa
 imagem recém-gravada), o launcher mostra "Nenhum jogo instalado." — antes mostrava
@@ -6163,3 +6164,96 @@ cross-compile chegar só numa das cópias.
 | energia gasta a 30 Hz | **não medida** — o argumento da cadência é de desenho, não de watt |
 | painel 720×1280 **no aparelho** | **não medido** — os quatro tamanhos foram conferidos no PC; no aparelho, só 640×480 |
 | Star Dust substituindo o launcher no boot | **não feito, de propósito** — trocar quem sobe no boot é decisão de imagem |
+
+## 43. GIOCHI Tower Defense: o HUD que não desenhava, e os cinco defeitos (13/11/2026)
+
+Jogo novo em `app/jogos/giochi-tower` (Rust, engine 3D vendorizada). O projeto
+chegou escrito e **nunca compilado** — a mensagem do commit dizia isso com todas
+as letras. Esta rodada compilou, consertou o que apareceu e fez a interface
+desenhar.
+
+### O que a primeira compilação revelou
+
+| Defeito | Causa | Correção |
+| --- | --- | --- |
+| vendor não compilava | `glow = "0.18"` / `glam = "0.34"`, mas o código usa a API de **0.14/0.29** | pins alinhados (as versões de `cobrinha`, `neon-drift`, `giochi-defender`) |
+| **86 testes falhando** | escrita contra assinatura lida, nunca executada | ver a lista em `STATUS.md` |
+| tier 5 "mais fraco que a Queen" | comparação de HP **cru** (5000 × 6000) ignorando 30 % de redução | HP **efetivo** (5000/0,7 = 7143) |
+| cadência 2 golpes em 3 s | `f32`: 60 × 1/60 = 0,99999994 | `game::timers` com tolerância e resíduo |
+| stick virtual ativo em qualquer lugar | `Axis::clamped()` limita por eixo | zona explícita + normalização radial |
+| câmera nunca seguia o jogador | `step()` não tocava em `camera.focus` | segue o local, com `clamp_focus` |
+| `forge.json` reprovava no validador | `graphics_api_fallback: "none"` não existe no enum | campo removido |
+| pasta `GIOCHI TOWER DEFENSE/giochi-tower` | 3 níveis, espaços, maiúsculas | renomeada para `app/jogos/giochi-tower` |
+
+### O HUD desenha, e a medição achou o custo
+
+`src/ui/` era só modelo. Agora são três camadas puras (modelos → layout em pixels
+→ fonte 5×7) e **uma** que toca o GL. A ponte é a de sempre: câmera na origem,
+`fov` 90°, HUD a 10 unidades, planos 9..4000.
+
+**A loja rodava a 29,9 fps no R35S.** Não era a loja: era a contagem de
+instâncias. Uma por ponto aceso dava 4 649 instâncias, e no Cortex-A35 cada uma
+custa **1,47 µs** (medido: 944 → 4,32 ms; 4 649 → 9,75 ms). Decompor o glifo em
+retângulos máximos dá 5,3 por caractere contra 14,9 pontos:
+
+```text
+HUD    944 → 406 instâncias · desenho 4,32 → 3,31 ms · 59,5 fps
+loja  4 649 → 1 463 instâncias · desenho 9,75 → 5,64 ms · 29,9 → 59,4 fps
+pixels diferentes entre antes e depois: 0
+```
+
+Zero pixels, 3,2× menos trabalho. É a versão de otimização que este repositório
+aceita: a que não muda o desenho.
+
+### `--benchmark` mede submissão, não o vblank
+
+A primeira versão acumulava até **depois** da troca de buffers e reportava
+16,72 ms "de trabalho" com e sem UI — o vblank do painel. O número estava certo e
+a conclusão que ele permitia era falsa. Hoje ele para antes do `render.end()` e
+separa montar (CPU) de desenhar (GPU), porque são otimizações opostas.
+
+### As ferramentas que faltavam
+
+```bash
+giochi-tower --benchmark 300 [--sem-ui]      # FPS e custo, sem espera
+giochi-tower --demo-loja --quadro /tmp/q.bmp # a loja sem jogar 6 minutos
+```
+
+`--demo-loja` existe porque a loja só abre depois de 6 minutos de combate, e
+partida sem ninguém atirando termina em derrota antes disso. Verificação que
+depende de dedo não entra em rodada automatizada.
+
+### O CI passou a conferir o HUD
+
+`validate.yml` procura as **cores exatas** das constantes na captura, exige que
+o quadro com UI difira do `--sem-ui` em mais de 2 % e que o BMP saia 640×480. Um
+HUD que não desenha reprova no CI, não na mão de quem olha.
+
+### E o aparelho ficou sem interface — duas vezes, pelo mesmo motivo
+
+`aparelho.sh verificar-jogo` derruba o launcher a cada rodada (o KMSDRM é
+exclusivo), e o `giochi-init` desiste depois de 5 quedas em 60 s. A recuperação
+existia e **nunca rodava**, porque `esperar_launcher_supervisionado` tratava
+"processo vivo sem DRM" como sucesso:
+
+```text
+antes    aviso: vivo, mas sem descritor de DRM aberto
+         supervisor: giochi-init — não iniciado por este script     ← tela preta
+depois   SEM_DRM
+         aviso o launcher está vivo mas sem DRM: não desenha (tela preta)
+         reiniciando o supervisor (o inittab o respawna com a cota zerada)
+```
+
+Três defeitos, os três medidos:
+
+1. **`SEM_DRM` era aviso, não falha** — o caminho de recuperação do `RESTART_MAX`
+   nunca era alcançado.
+2. **`/run/giochi/launcher-parado` nunca era apagado.** A recuperação limpava só
+   `dev-free-console`, então o supervisor novo herdava o marcador de desistência.
+3. **Mais de um launcher vivo.** Um travado em estado `D` (I/O), reparentado para
+   o pid 1, e o novo do supervisor. `pid=$(pids_launcher)` devolvia os dois e
+   `ls /proc/$pid/fd` não achava nada — o script anunciava tela preta **com a
+   tela funcionando**. Agora ele procura o primeiro que **abriu** o DRM, e a
+   recuperação mata os travados junto com o supervisor.
+
+E o número que fecha: `subir` responde `pid=12248 ppid=12009 drm=6`.

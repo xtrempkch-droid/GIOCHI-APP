@@ -105,13 +105,13 @@
     },
     {
       "id": "giochi-tower",
-      "folder": "jogos/GIOCHI TOWER DEFENSE/giochi-tower",
+      "folder": "jogos/giochi-tower",
       "slug": "giochi-tower",
       "runtime": "native",
-      "status": "scaffold",
+      "status": "ready",
       "distribution": "image",
       "license": "Proprietary",
-      "note": "Tower defense 3D co-op PvE (2-4 jogadores) em Rust sobre a GIOCHI-ENGINE 3D, alvo RK3326. Host-autoritativo; o stub de rede loopback e o default e o giochi-net e o backend real do M4. M1 entregue: cena isometrica, jogador, loop fixo de 60 Hz e as 10 configs RON validadas. Inimigos, torre, bosses, nemesis e loja nos blocos M2/M3. Ver DECISIONS.md do app (inclusive a correcao sobre a ABI C)."
+      "note": "Tower Defense 3D co-op sobre a GIOCHI-ENGINE-3D vendorizada. M1-M3 entregues: combate, boss, nemesis, loja e HUD/minimapa desenhados (fonte 5x7 em dados + camera de 90 sobre o 3D). Medido no R35S: 59,8 fps, 9 chamadas de desenho por quadro. M4 (rede real) e M5 (evdev) pendentes."
     }
   ]
 }

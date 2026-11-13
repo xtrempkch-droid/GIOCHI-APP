@@ -555,6 +555,18 @@ pid_do_giochi_init() {
 # ou `MORREU` se ele não vier.
 esperar_launcher_supervisionado() {
   local tentativas="${1:-60}"
+  # Devolve tres coisas diferentes, e a diferenca importa:
+  #
+  #   `pid=... drm=N`  o launcher existe e abriu o hardware  → interface
+  #   `MORREU`         nao ha launcher nenhum                → supervisor desistiu
+  #   `... + SEM_DRM`  existe e NAO abriu o hardware         → tela preta
+  #
+  # Os dois ultimos deixam o aparelho sem desenho. Ate esta correcao o
+  # `SEM_DRM` era apenas um aviso e a funcao devolvia sucesso, entao o caminho
+  # de recuperacao do RESTART_MAX nunca rodava e o script anunciava
+  # "supervisor: giochi-init — nao iniciado por este script" com a tela preta.
+  #
+  # `processo vivo` nao e `abriu o hardware`: o descritor de DRM e a prova.
   no_aparelho "$TRECHO_MATAR_LAUNCHER""
     i=0
     while [ \$i -lt $tentativas ]; do
@@ -566,29 +578,49 @@ esperar_launcher_supervisionado() {
       echo MORREU
       exit 0
     fi
-    # 'processo vivo' não é 'abriu o hardware' — o descritor de DRM é a prova.
+    # Pode haver **mais de um** launcher vivo (um travado de uma rodada
+    # anterior, reparentado para o pid 1, e o novo do supervisor). Medir o
+    # descritor do primeiro da lista dava `drm=0` com outro desenhando a tela —
+    # e o script anunciava tela preta com a tela funcionando. Aqui se procura o
+    # primeiro que **abriu** o hardware.
+    escolhido=
     d=0; i=0
     while [ \$i -lt 20 ]; do
-      d=\$(ls -l /proc/\$pid/fd 2>/dev/null | grep -c 'card0\|renderD')
-      [ \"\$d\" -gt 0 ] && break
+      for p in \$pid; do
+        n=\$(ls -l /proc/\$p/fd 2>/dev/null | grep -c 'card0\|renderD')
+        if [ \"\$n\" -gt 0 ]; then escolhido=\$p; d=\$n; break; fi
+      done
+      [ -n \"\$escolhido\" ] && break
       i=\$((i+1)); sleep 0.5
     done
-    echo \"pid=\$pid ppid=\$(cut -d' ' -f4 /proc/\$pid/stat 2>/dev/null) drm=\$d\"
-    [ \"\$d\" -eq 0 ] && echo 'aviso: vivo, mas sem descritor de DRM aberto'
+    if [ -z \"\$escolhido\" ]; then
+      escolhido=\$(echo \$pid | cut -d' ' -f1)
+      echo \"pid=\$escolhido drm=0 (de \$(echo \$pid | wc -w) processo(s))\"
+      echo SEM_DRM
+      exit 0
+    fi
+    echo \"pid=\$escolhido ppid=\$(cut -d' ' -f4 /proc/\$escolhido/stat 2>/dev/null) drm=\$d\"
     exit 0
   "
 }
 
 iniciar_launcher() {
-  local init_pid saida
-  # A flag de console livre de uma captura anterior impediria o supervisor de
-  # subir o launcher para sempre. Limpar aqui é o que fecha o ciclo
-  # capturar → retomar, em vez de deixar o aparelho sem interface.
-  no_aparelho 'rm -f /run/giochi/dev-free-console' || true
+  local init_pid saida preciso_reiniciar=0
+  # As **duas** flags de uma captura anterior impedem o supervisor de subir o
+  # launcher para sempre: `dev-free-console` diz "não suba", e `launcher-parado`
+  # é o marcador de que ele já desistiu. Limpar só a primeira deixava o aparelho
+  # sem interface depois de cinco capturas.
+  no_aparelho 'rm -f /run/giochi/dev-free-console /run/giochi/launcher-parado' || true
   init_pid=$(pid_do_giochi_init)
   if [ -n "$init_pid" ]; then
     saida=$(esperar_launcher_supervisionado 60)
-    if [ "$saida" = "MORREU" ]; then
+    # `MORREU` é supervisor sem launcher; `SEM_DRM` é launcher vivo que não abriu
+    # o hardware. Os dois deixam a tela preta e os dois se recuperam do mesmo
+    # jeito: reiniciar o supervisor, que o inittab respawna com a cota zerada.
+    case "$saida" in
+      MORREU | *SEM_DRM*) preciso_reiniciar=1 ;;
+    esac
+    if [ "$preciso_reiniciar" = "1" ]; then
       # ## Por que o launcher às vezes não volta
       #
       # O `giochi-init` desiste: `RESTART_MAX=5` quedas dentro de
@@ -600,9 +632,21 @@ iniciar_launcher() {
       # Matar o `giochi-init` devolve a cota: o `::respawn:` do inittab o
       # reinicia com `restarts=0`. É por isso que essa segunda chance existe em
       # vez de uma mensagem de erro.
-      aviso "o giochi-init (pid $init_pid) parou de reiniciar — provável RESTART_MAX"
+      case "$saida" in
+        MORREU) aviso "o giochi-init (pid $init_pid) está sem launcher vivo — provável RESTART_MAX" ;;
+        *)      aviso "o launcher está vivo mas sem DRM: não desenha (tela preta)" ;;
+      esac
       printf '  reiniciando o supervisor (o inittab o respawna com a cota zerada)\n'
-      no_aparelho "kill $init_pid 2>/dev/null; sleep 2; true"
+      # `matar_launcher` junto: o processo travado pode ter sido reparentado para
+      # o pid 1 e continuar vivo (medido: um launcher em estado `D`, dormindo em
+      # I/O, com `ppid=1`). Só matar o supervisor deixaria o zumbi no caminho.
+      no_aparelho "$TRECHO_MATAR_LAUNCHER""
+        kill $init_pid 2>/dev/null
+        sleep 2
+        matar_launcher >/dev/null 2>&1
+        rm -f /run/giochi/launcher-parado
+        exit 0
+      "
       init_pid=$(pid_do_giochi_init)
       if [ -z "$init_pid" ]; then
         echo MORREU
@@ -610,7 +654,18 @@ iniciar_launcher() {
         return 0
       fi
       saida=$(esperar_launcher_supervisionado 120)
-      [ "$saida" = "MORREU" ] && { echo MORREU; echo "nem com o giochi-init novo (pid $init_pid) o launcher subiu em 60s"; return 0; }
+      case "$saida" in
+        MORREU)
+          echo MORREU
+          echo "nem com o giochi-init novo (pid $init_pid) o launcher subiu em 60s"
+          return 0
+          ;;
+        *SEM_DRM*)
+          printf '%s\n' "$saida"
+          printf '  FALHA o launcher voltou mas não abriu o DRM — a tela continua preta\n'
+          return 0
+          ;;
+      esac
       printf '%s\n' "$saida"
       printf 'supervisor: giochi-init (pid %s) — reiniciado por este script\n' "$init_pid"
       return 0

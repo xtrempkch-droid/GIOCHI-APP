@@ -205,7 +205,16 @@ ok "pronto: $JOGO/bin/$BINARIO ($(du -h "$BIN" | cut -f1))"
 # ── 3. instalar ─────────────────────────────────────────────
 if [ -n "$INSTALAR" ]; then
   HOST="${INSTALAR#root@}"
-  DESTINO="/opt/giochi/apps/$NOME_JOGO/bin"
+  # O diretório no aparelho é o **slug** do `metadata.json`, não o nome da
+  # pasta: o catálogo resolve `id`/slug, e instalar em outro nome cria um app
+  # que o launcher não acha (`AGENTS.md` §26).
+  SLUG="$NOME_JOGO"
+  if [ -f "$JOGO/metadata.json" ]; then
+    SLUG_META=$(node -e "process.stdout.write(require('$JOGO/metadata.json').slug||'')" 2>/dev/null)
+    [ -n "$SLUG_META" ] && SLUG="$SLUG_META"
+  fi
+  APP_DIR="/opt/giochi/apps/$SLUG"
+  DESTINO="$APP_DIR/bin"
   filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
 
   echo "  instalando em root@$HOST:$DESTINO"
@@ -214,6 +223,27 @@ if [ -n "$INSTALAR" ]; then
     "$JOGO/bin/$BINARIO" "root@$HOST:$DESTINO/$BINARIO" 2>&1 | filtrar_ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
     "chmod 755 $DESTINO/$BINARIO; sha256sum $DESTINO/$BINARIO" 2>&1 | filtrar_ruido
+
+  # ## Dados de runtime, não só o binário
+  #
+  # `giochi-tower` lê `config/*.ron` em execução; copiar só o binário produziu
+  # `não consegui ler config/classes.ron` no aparelho — erro que parece
+  # instalação quebrada e é arquivo que faltou levar. Metadados e capa vão
+  # junto pelo mesmo motivo: sem eles o cartão do launcher não aparece.
+  if [ -d "$JOGO/config" ]; then
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
+      "rm -rf $APP_DIR/config && mkdir -p $APP_DIR/config" 2>&1 | filtrar_ruido
+    scp -q -r -o BatchMode=yes -o StrictHostKeyChecking=no \
+      "$JOGO/config/." "root@$HOST:$APP_DIR/config/" 2>&1 | filtrar_ruido
+    ok "config/ instalado ($(ls "$JOGO/config" | wc -l) arquivo(s))"
+  fi
+  for extra in metadata.json capa.png; do
+    if [ -f "$JOGO/$extra" ]; then
+      scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
+        "$JOGO/$extra" "root@$HOST:$APP_DIR/$extra" 2>&1 | filtrar_ruido
+    fi
+  done
+  ok "app em $APP_DIR"
 
   LOCAL=$(sha256sum "$JOGO/bin/$BINARIO" | cut -d' ' -f1)
   REMOTO=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$HOST" \
