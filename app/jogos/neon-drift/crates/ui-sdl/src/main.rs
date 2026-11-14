@@ -634,6 +634,22 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
 
     let (largura, altura) = janela.drawable_size();
     render.resize(largura, altura);
+    // `--tamanho` é um painel **simulado**: no PC os drivers `offscreen` e
+    // `dummy` obedecem, mas no KMSDRM o aparelho continua no modo dele. Aí o
+    // projeto fica 640×480 num drawable 720×1280, a rotação vem de
+    // `deduzir(pedido)` em vez do sistema, e o BMP sai com o conteúdo no canto.
+    // Já custou uma rodada inteira de medição errada; avisa em vez de mentir.
+    //
+    // A comparação é com o **drawable de verdade**, não com o nome do driver:
+    // assim vale para qualquer backend, sem lista de exceções.
+    if o.tamanho.is_some() && (largura, altura) != tamanho_painel {
+        eprintln!(
+            "neon-drift: aviso --tamanho {}x{} mas o drawable saiu {largura}x{altura}: \
+             o driver ignorou o pedido, a rotação veio de `deduzir` e a captura sai \
+             inconsistente — no aparelho, capture sem --tamanho",
+            tamanho_painel.0, tamanho_painel.1
+        );
+    }
     // O `Upscaler` da engine: desenha num alvo menor e estica com bilinear. Num
     // painel de 720×1280 são 921 mil pixels por quadro, e o Mali-G52 gasta
     // proporcionalmente ao **pixel**, não ao triângulo — é o botão que troca
