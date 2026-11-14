@@ -1,11 +1,10 @@
 {
   "arch": "aarch64",
-  "runtime": "godot",
-  "graphics_api_min": "gles3",
+  "runtime": "native",
+  "graphics_api_min": "gles2",
   "graphics_api_fallback": "gles2",
-  "godot_version": "4.3",
-  "ram_min_mb": 512,
-  "vram_min_mb": 64,
+  "ram_min_mb": 32,
+  "vram_min_mb": 8,
   "display_min_width": 640,
   "display_min_height": 480,
   "touchscreen_required": false

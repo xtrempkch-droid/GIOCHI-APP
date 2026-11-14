@@ -3,7 +3,7 @@
   "developer": "Seu Nome",
   "version": "1.0.0",
   "arch": "aarch64",
-  "runtime": "godot",
+  "runtime": "native",
   "entrypoint": "bin/executavel",
   "releaseYear": 2026
 }
