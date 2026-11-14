@@ -749,7 +749,7 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
         );
     }
 
-    let botoes = evdev::Botoes::iniciar();
+    let mut botoes = evdev::Botoes::iniciar();
     if !o.json {
         eprintln!("neon-drift: {} dispositivo(s) de entrada", botoes.abertos());
     }

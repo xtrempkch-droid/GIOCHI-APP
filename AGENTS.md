@@ -6781,3 +6781,128 @@ pixels — as duas concordam.
 | FPS depois da sincronização | **não medido no aparelho** nesta rodada (o jogo foi instalado para o dono jogar, não para medir) |
 | a folha de sprites do usuário em PNG **no X55** | o caminho PNG→atlas foi exercitado no PC; no aparelho só o BMP |
 | `--prova-rotacao` noutro painel | só 720×1280/Ccw90 tem previsão escrita |
+
+## 48. Bluetooth: pareava e não pareava; e o controle não virava nó de entrada (13/11/2026)
+
+Relato do dono: **"launcher não consigo parear com controles bluetooth"**.
+
+### O rádio sempre esteve lá — o defeito era a sequência de comandos
+
+Medido no X55, ao contrário do que o §16 registrava:
+
+```text
+/sys/class/bluetooth/hci0                 presente
+dmesg  RTL: fw version 0x75b8f098          firmware carregado
+rfkill  1: hci0: Bluetooth                não bloqueado
+bluetoothctl show  Paired: no / Pairable: no
+```
+
+O `§16` dizia "sem adaptador". Era verdade na imagem de 06/11; a de 09/11
+trouxe o firmware e o `hci0`. **Medição velha vira fato falso**, e é a terceira
+vez na semana.
+
+A reprodução do defeito, com um "Pro Controller" já descoberto:
+
+```text
+bluetoothctl --timeout 20 pair 98:B6:E9:9C:46:65
+  hci0 ... type BR/EDR connect failed (status 0x04, Connect Failed)
+  Failed to pair: org.bluez.Error.ConnectionAttemptFailed
+```
+
+`0x04` é **page timeout**: o controle não respondeu porque não estava
+anunciando. Um `pair` sem descoberta recente falha por motivo que não é o
+pareamento — e a mensagem manda o usuário procurar defeito no app.
+
+A correção, e ela é de sequência, não de código de erro:
+
+| Passo | Por quê |
+| --- | --- |
+| `power on` + `pairable on` | `Pairable: no` é o padrão; a recusa vem genérica |
+| **`scan on` por 5 s** | **é a peça que faltava** — acorda o aparelho para anunciar |
+| `pair` com `--agent NoInputNoOutput` | um controle não tem teclado nem tela: é Just Works. O agente tem de estar **no mesmo processo** do `pair`; cada `bluetoothctl` é um processo e o agente registrado num morre com ele |
+| veredito por `info`, não pelo texto | `Pairing successful` já saiu para aparelho que voltou a `Paired: no` |
+| `trust` + `connect` | pareado e sem conectar é pareado e inútil |
+
+Depois da correção, no aparelho:
+
+```text
+[CHG] Device 98:B6:E9:9C:46:65 Bonded: yes
+[CHG] Device 98:B6:E9:9C:46:65 Paired: yes
+Pairing successful
+```
+
+E as três falhas passaram a ter instrução em vez de código do BlueZ:
+`ConnectionAttemptFailed` → "coloque-o em modo de pareamento"; `not available` →
+"não está mais visível, aproxime"; `AuthenticationFailed` → "apague-o no
+controle". Cinco testes fixam cada tradução — um deles reprova se o texto cru do
+BlueZ chegar ao usuário.
+
+### O controle pareado não virava `/dev/input` — e isso é da imagem
+
+Medido depois de parear e conectar:
+
+```text
+bluetoothctl info  → Connected: yes
+ls /dev/input/event*  →  event0..event4 (os do aparelho, nenhum novo)
+connect  → Failed: org.bluez.Error.NotAvailable br-connection-profile-unavailable
+```
+
+| Peça | Estado no X55 |
+| --- | --- |
+| `hidp.ko` | **existe** em `/lib/modules/6.12.0/kernel/net/bluetooth/hidp/` e `modprobe hidp` **carrega** |
+| `uhid` | **não existe na imagem** — `modprobe: FATAL: Module uhid not found` |
+| `/dev/uhid` | **ausente** |
+
+Sem `uhid` nenhum controle HID-over-Bluetooth cria nó de entrada: o controle
+conecta e o jogo não vê botão nenhum. É **do Giochi System**, não deste
+repositório — vai para o canal, com o pedido de `CONFIG_UHID=y` e de `hidp`
+carregado no boot.
+
+### A entrada passou a reexaminar `/dev/input`
+
+Achado no caminho, e é do app: **nem o launcher nem o jogo reliam
+`/dev/input` depois da abertura**. Um controle Bluetooth cria o nó `event*`
+**quando conecta**, então parear com a interface já rodando deixava o controle
+invisível até reiniciar — indistinguível de "não pareou".
+
+Os dois apps ganharam a mesma revisão: reler o diretório a cada **2 s**, abrir só
+o que ainda não tem leitor, e **dizer no log** quantos abriram (`entrada: 1
+dispositivo(s) novo(s) — 6 no total`). Sem essa linha, "conectou" e "foi lido"
+continuam iguais vistos de fora.
+
+Idempotente por um `HashSet` de caminhos já abertos. Teste nos dois, e o do
+launcher foi verificado por mutação (transformar `revisar` em no-op reprova).
+De quebra, `sem_dev_input_nenhum_dispositivo_e_o_jogo_nao_quebra` afirmava
+`abertos() == 0 || abertos() > 0` — tautologia que passava dos dois lados;
+virou `assert_eq!(abertos(), 0)`.
+
+### O que continua em aberto: esquerda/direita invertidos no jogo
+
+Relato do dono: *"no jogo a esquerda e direita estão invertidos; no PC não"*.
+
+**Não reproduzido.** O que foi medido, e por que não fecha:
+
+| Medida | Resultado |
+| --- | --- |
+| `--quadros 200 --teclas enter,up,right` vs `left`, `--json` | `s` = 1306,3 contra 2185,4 — **o volante funciona** |
+| `--passos 200 --teclas up,right` + `--quadro`, right vs left | **quadros idênticos** — a ferramenta não mede o que se queria |
+| mundo do aparelho des-rotacionado × PC | 99,99 % — a cena é `girar_rect`-consistente, como o launcher |
+
+A armadilha: **`--quadro` desenha um quadro ANTES do laço**, então nada que
+dependa de `--quadros` chega ao BMP. E `--passos` só dirige se a corrida tiver
+começado (`enter`) — com as teclas só de acelerar/volante o carro fica na tela
+de título e todos os quadros saem iguais. Duas execuções idênticas apresentadas
+como A/B, de novo (§47).
+
+Como o mundo é `girar_rect`-consistente e o launcher está visualmente certo, a
+inversão **não é de desenho** — sobra a entrada física. O `--teclas` do jogo não
+passa por evdev, então nenhuma medição desta rodada exercitou o direcional de
+verdade. O próximo passo é ler os códigos crus enquanto alguém aperta esquerda e
+direita.
+
+| Alegação | Estado |
+| --- | --- |
+| pareamento Bluetooth pelo launcher | **consertado e medido no aparelho** |
+| o controle vira dispositivo de entrada | **bloqueado na imagem** (falta `uhid`) |
+| releitura de `/dev/input` nos dois apps | **feito, com teste e mutação** |
+| esquerda/direita invertidos | **não reproduzido** — falta ver o código de cada botão |

@@ -124,7 +124,21 @@ pub fn aplicar_evento(mascara: &AtomicU32, bytes: &[u8]) -> bool {
 pub struct Botoes {
     mascara: Arc<AtomicU32>,
     abertos: usize,
+    /// Guardado para os leitores que nascem **depois** da abertura: um controle
+    /// Bluetooth cria o nó só quando conecta, e o launcher pode estar rodando.
+    dir: std::path::PathBuf,
+    conhecidos: std::collections::HashSet<std::path::PathBuf>,
+    proxima_revisao: std::time::Instant,
 }
+
+/// De quanto em quanto tempo `/dev/input` é reexaminado.
+///
+/// Mesmo valor do launcher, de propósito: um controle Bluetooth aparece como um
+/// `event*` novo quando conecta, e abrir a lista uma vez deixava o controle
+/// recém-pareado invisível para sempre. Aqui o sintoma seria "o controle
+/// pareou e o jogo não responde" — a mesma classe do `buttons.map` sem o
+/// símbolo, que já custou duas rodadas.
+const REVISAO_MS: u64 = 2_000;
 
 impl Botoes {
     /// Abre todos os `/dev/input/event*` e sobe uma thread por dispositivo.
@@ -132,11 +146,36 @@ impl Botoes {
     /// Sem `/dev/input` (o PC) devolve zero dispositivos e máscara zerada — o
     /// teclado do SDL cobre esse caso, e falhar aqui impediria de rodar no CI.
     pub fn iniciar() -> Self {
-        let mascara = Arc::new(AtomicU32::new(0));
-        let mut abertos = 0;
+        let mut this = Self {
+            mascara: Arc::new(AtomicU32::new(0)),
+            abertos: 0,
+            dir: std::path::PathBuf::from("/dev/input"),
+            conhecidos: std::collections::HashSet::new(),
+            proxima_revisao: std::time::Instant::now()
+                + std::time::Duration::from_millis(REVISAO_MS),
+        };
+        this.abrir_novos();
+        this
+    }
 
-        let Ok(dir) = std::fs::read_dir("/dev/input") else {
-            return Self { mascara, abertos };
+    /// Construtor com diretório explícito. Só teste: o jogo usa `/dev/input`.
+    #[cfg(test)]
+    fn em_dir(dir: std::path::PathBuf) -> Self {
+        let mut this = Self {
+            mascara: Arc::new(AtomicU32::new(0)),
+            abertos: 0,
+            dir,
+            conhecidos: std::collections::HashSet::new(),
+            proxima_revisao: std::time::Instant::now(),
+        };
+        this.abrir_novos();
+        this
+    }
+
+    /// Abre os `event*` que ainda não têm leitor. Idempotente.
+    fn abrir_novos(&mut self) -> usize {
+        let Ok(dir) = std::fs::read_dir(&self.dir) else {
+            return 0;
         };
         let mut caminhos: Vec<_> = dir
             .flatten()
@@ -150,11 +189,15 @@ impl Botoes {
             .collect();
         caminhos.sort();
 
+        let mut novos = 0;
         for caminho in caminhos {
+            if self.conhecidos.contains(&caminho) {
+                continue;
+            }
             let Ok(arquivo) = std::fs::File::open(&caminho) else {
                 continue;
             };
-            let mascara = Arc::clone(&mascara);
+            let mascara = Arc::clone(&self.mascara);
             let nome = caminho
                 .file_name()
                 .unwrap_or_default()
@@ -163,14 +206,35 @@ impl Botoes {
             let _ = std::thread::Builder::new()
                 .name(format!("evdev-{nome}"))
                 .spawn(move || ler_dispositivo(arquivo, mascara));
-            abertos += 1;
+            self.conhecidos.insert(caminho);
+            self.abertos = self.conhecidos.len();
+            novos += 1;
         }
+        novos
+    }
 
-        Self { mascara, abertos }
+    /// Reexamina `/dev/input`. Chamado por `bits`, com janela de 2 s.
+    ///
+    /// A janela fica no **chamador** e não numa thread: `bits` já roda uma vez
+    /// por quadro, então não há relógio extra nem canal a mais.
+    fn revisar(&mut self) {
+        if std::time::Instant::now() < self.proxima_revisao {
+            return;
+        }
+        self.proxima_revisao =
+            std::time::Instant::now() + std::time::Duration::from_millis(REVISAO_MS);
+        let novos = self.abrir_novos();
+        if novos > 0 {
+            eprintln!(
+                "neon-drift: {novos} dispositivo(s) de entrada novo(s) — {} no total",
+                self.abertos
+            );
+        }
     }
 
     /// Máscara de botões pressionados neste instante.
-    pub fn bits(&self) -> u32 {
+    pub fn bits(&mut self) -> u32 {
+        self.revisar();
         self.mascara.load(Ordering::Relaxed)
     }
 
@@ -281,11 +345,43 @@ mod testes {
     }
 
     #[test]
-    fn sem_dev_input_nenhum_dispositivo_e_o_jogo_nao_quebra() {
-        // No CI não há `/dev/input`. O construtor tem de devolver zero, não
-        // entrar em pânico.
-        let b = Botoes::iniciar();
-        assert!(b.abertos() == 0 || b.abertos() > 0, "sempre responde");
+    fn diretorio_inexistente_abre_zero_e_nao_quebra() {
+        // No CI não há `/dev/input`. A condição tem de ser **zero**, e não
+        // "zero ou não" — a versão anterior deste teste era
+        // `abertos() == 0 || abertos() > 0`, que passa dos dois lados e por
+        // isso nunca provou nada.
+        let mut b = Botoes::em_dir(std::path::PathBuf::from("/dev/input-que-nao-existe"));
+        assert_eq!(b.abertos(), 0);
+        assert_eq!(b.bits(), 0);
+    }
+
+    /// Um `event*` que aparece **depois** da abertura tem de ser lido.
+    ///
+    /// É o caso do controle Bluetooth: o nó só nasce quando ele conecta, e
+    /// abrir a lista uma vez deixava o controle recém-pareado invisível para
+    /// sempre. O sintoma seria "pareou e o jogo não responde" — indistinguível
+    /// de "não pareou".
+    #[test]
+    fn dispositivo_novo_e_aberto_na_revisao_seguinte() {
+        let dir = std::env::temp_dir().join(format!("nd-evdev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("event0"), []).expect("event0");
+
+        let mut b = Botoes::em_dir(dir.clone());
+        assert_eq!(b.abertos(), 1);
+
+        std::fs::write(dir.join("event1"), []).expect("event1");
+        // Vence a janela de 2 s à mão em vez de dormir.
+        b.proxima_revisao = std::time::Instant::now() - std::time::Duration::from_millis(1);
         let _ = b.bits();
+        assert_eq!(b.abertos(), 2, "o event1 apareceu depois da abertura");
+
+        // Idempotente: revisar de novo não duplica o leitor.
+        b.proxima_revisao = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        let _ = b.bits();
+        assert_eq!(b.abertos(), 2, "a segunda revisão duplicou");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
