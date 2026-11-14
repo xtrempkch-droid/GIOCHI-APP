@@ -93,13 +93,13 @@ test("deriva título, ano e categoria do metadata.json", () => {
 });
 
 // O `dir` do aparelho é convenção do Giochi System e NÃO se deriva do caminho
-// no repositório. `jogos/pacman` vira `/opt/giochi/apps/pacman` — o `id` manda.
+// no repositório. `<grupo>/<slug>` vira `/opt/giochi/apps/<id>` — o `id` manda.
 test("dir do aparelho usa o id, não o caminho do repositório", () => {
   withTempDir((dir) => {
-    escreverIndice(dir, [criarApp(dir, "pacman", { folder: "jogos/pacman" })]);
+    escreverIndice(dir, [criarApp(dir, "editor", { folder: "ferramentas/editor" })]);
     const { catalogo } = gerarCatalogo(dir);
-    assert.equal(catalogo.apps[0].dir, `${DIR_BASE_PADRAO}/pacman`);
-    assert.ok(!catalogo.apps[0].dir.includes("jogos"));
+    assert.equal(catalogo.apps[0].dir, `${DIR_BASE_PADRAO}/editor`);
+    assert.ok(!catalogo.apps[0].dir.includes("ferramentas"));
   });
 });
 
@@ -228,8 +228,8 @@ test("serialização termina com newline e é JSON válido", () => {
 
 // A árvore real do repositório.
 //
-// A lista era um retrato dos jogos prontos — e retrato de catálogo reprova por
-// motivo errado: apagar um jogo é decisão de produto, não defeito de código.
+// A lista era um retrato dos apps prontos — e retrato de catálogo reprova por
+// motivo errado: apagar um app é decisão de produto, não defeito de código.
 // O que o teste realmente garante continua valendo e não depende de quais apps
 // existem: `distribution: image` + `bin/` entram, `distribution: host` e
 // `role: shell` ficam fora, e todo `dir` sai da base padrão.

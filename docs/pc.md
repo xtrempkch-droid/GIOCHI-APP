@@ -141,14 +141,14 @@ permissão de execução no macOS. Isso não aparece num job que só roda
 
 1. confere o `SHA256SUMS` publicado (o mesmo comando que o usuário faria);
 2. abre os dois apps com `--help` — prova que o `zipimport` resolveu tudo;
-3. o forge empacota o `arcade-volleyball` de verdade;
+3. o forge empacota um app de verdade (`tests/fixtures/app-nativo`);
 4. o store lê o pacote que o forge acabou de fazer (um app consome o outro);
 5. o store gera `store.json`;
 6. roda o atalho do sistema (`.sh` no Unix, `.cmd` no Windows).
 
 O passo 4 é o que pegou o defeito de 06/11/2026: o forge e o store tinham **duas
-cópias** da lista de `runtime`, e as duas divergiam do schema. Ver
-[`docs/diario/2026-11-06.md`](diario/2026-11-06.md).
+cópias** da lista de `runtime`, e as duas divergiam do schema. Hoje
+`tests/consistencia-runtimes.test.mjs` exige que as quatro cópias concordem.
 
 ## O painel: interface web local
 

@@ -8,10 +8,27 @@
 //   1. o conteúdo cabe? (margem nas quatro bordas — nada encostando na borda)
 //   2. a tela aproveita o painel? (fração de pixels de fundo puro)
 //
+// ## `--demo` é o padrão, e por um motivo medido
+//
+// O catálogo do aparelho é projeção do `apps.json` + os `metadata.json`, e hoje
+// ele sai **vazio** (os sete apps do repositório são host ou shell). Sem
+// conteúdo, a tela de detalhe desenha zero pixels: `game_detail` desiste quando
+// não há app selecionado, e a medição passa a reprovar uma tela que está certa.
+//
+// Medido em 640×480, o mesmo binário:
+//
+//   --tela detalhe          270 cores, 0 px de conteúdo   (nada a detalhar)
+//   --tela detalhe --demo  1744 cores, 5626 px            (layout medível)
+//
+// O que este script mede é **layout**, e layout de uma tela com conteúdo só se
+// mede com conteúdo. `--sem-demo` volta ao catálogo real, para quem quiser
+// fotografar o estado do aparelho.
+//
 // Uso:
 //   node scripts/verificar-telas.mjs
 //   node scripts/verificar-telas.mjs --tamanho 640x480
 //   node scripts/verificar-telas.mjs --tela home --tela busca
+//   node scripts/verificar-telas.mjs --sem-demo
 //   node scripts/verificar-telas.mjs --bin app/launcher/target/release/giochi-launcher
 //
 // Saída: dist/telas/<LxA>/<tela>.bmp e .png, mais uma tabela no terminal.
@@ -47,7 +64,7 @@ const TELAS = [
 ];
 
 function argumentos(argv) {
-  const opcoes = { tamanhos: [], telas: [], bin: null, saida: join(raiz, "dist/telas") };
+  const opcoes = { tamanhos: [], telas: [], bin: null, saida: join(raiz, "dist/telas"), demo: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const proximo = () => {
@@ -59,9 +76,11 @@ function argumentos(argv) {
     else if (a === "--tela") opcoes.telas.push(proximo().toLowerCase());
     else if (a === "--bin") opcoes.bin = resolve(proximo());
     else if (a === "--saida") opcoes.saida = resolve(proximo());
+    else if (a === "--demo") opcoes.demo = true;
+    else if (a === "--sem-demo") opcoes.demo = false;
     else if (a === "-h" || a === "--ajuda") {
       console.log(
-        "uso: node scripts/verificar-telas.mjs [--tamanho LxA]... [--tela nome]... [--bin caminho] [--saida dir]",
+        "uso: node scripts/verificar-telas.mjs [--tamanho LxA]... [--tela nome]... [--bin caminho] [--saida dir] [--sem-demo]",
       );
       process.exit(0);
     } else throw new Error(`argumento desconhecido: ${a}`);
@@ -113,10 +132,12 @@ function ambiente(bin) {
   };
 }
 
-function renderizar(bin, tamanho, tela, destino) {
+function renderizar(bin, tamanho, tela, destino, demo) {
+  const args = ["--tamanho", tamanho, "--tela", tela, "--dump-frame", destino];
+  if (demo) args.push("--demo");
   const r = spawnSync(
     bin,
-    ["--tamanho", tamanho, "--tela", tela, "--dump-frame", destino],
+    args,
     { env: ambiente(bin), encoding: "utf8", timeout: 25_000 },
   );
   if (r.error) return `falhou ao executar: ${r.error.message}`;
@@ -175,7 +196,7 @@ function main() {
 
     for (const tela of opcoes.telas) {
       const bmp = join(dir, `${tela}.bmp`);
-      const erro = renderizar(bin, tamanho, tela, bmp);
+      const erro = renderizar(bin, tamanho, tela, bmp, opcoes.demo);
       if (erro) {
         console.log(`  ${tela.padEnd(12)}  ${erro}`);
         falhas++;

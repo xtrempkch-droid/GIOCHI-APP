@@ -38,7 +38,7 @@ que mantém o rootfs pequeno e o sistema substituível.
 ## 1. O que funciona hoje
 
 ```text
-app/jogos/pacman ──empacotar──▶ pacman.giochi ──instalar-pacote──▶ X55 ──▶ jogo
+app/loja ──empacotar──▶ loja.giochi ──instalar-pacote──▶ X55 ──▶ app
                      + .sig
                      + .manifest.json
 ```
@@ -85,10 +85,11 @@ Valem como restrição de projeto, não como pendência de código:
 | Steam não tem download oficial por terceiros | no máximo "importar biblioteca", sem baixar |
 | Editoras podem não publicar build Linux ARM | sem build aarch64 não há o que empacotar — e isso não é resolvível do nosso lado |
 
-Sobre a última: é a limitação mais dura e a menos discutida. Um catálogo de
-jogos de PC não é um catálogo de jogos ARM64. O que existe hoje neste repositório
-são três jogos **escritos aqui** (`volley`, `pacman`, `cobrinha`) e quatro
-projetos Godot sem export.
+Sobre a última: é a limitação mais dura e a menos discutida. Um catálogo de apps
+de PC não é um catálogo de apps ARM64 — sem build aarch64 não há o que empacotar.
+E o acervo é o que existe: os apps deste repositório são **de PC ou de
+interface**, não conteúdo vendável. Encher a loja depende do repositório de
+jogos.
 
 ---
 
@@ -149,7 +150,7 @@ Esta era a pergunta mais importante, e a resposta está em
 ### 4. A chave pública no rootfs — e por que ela não é o risco
 
 A preocupação do dono do projeto foi: *"usarem essa chave para ter acesso aos
-dados e roubarem os jogos via rede"*.
+dados e roubarem os apps via rede"*.
 
 **Uma chave pública não dá acesso a nada.** Ela só confere assinaturas: não
 decifra, não abre catálogo, não emite licença, não autentica. Publicá-la na
@@ -417,7 +418,7 @@ pergunta já enviada ao Giochi System sobre `loja-publica.pem`.
 
 ---
 
-## 4.4 Como a lista de jogos é preenchida
+## 4.4 Como a lista de apps é preenchida
 
 **Não é escrita à mão em lugar nenhum.** É o resultado de um pipeline, e cada
 etapa deixa um artefato que se pode conferir:
@@ -536,11 +537,16 @@ tirados de bytes diferentes de um FNV-1a. Determinística — a mesma slug dá s
 a mesma arte, e `DefaultHasher` do Rust **não** serviria porque não é estável
 entre versões do compilador.
 
-Medi uma colisão de verdade: `volley` e `painel` caem na mesma matiz de 8 bits
-(com 12 itens, ~23% de chance por aniversário). Por isso a cor não é o único
-diferenciador — há o deslocamento e as iniciais do título, e o teste exige que o
-**conjunto** seja único. Um teste separado documenta a colisão da matiz sozinha,
-para ninguém "consertar" isso achando que é bug.
+A colisão foi medida de verdade em 06/11/2026, com o catálogo da época: `volley`
+e `painel` caíam na **mesma matiz** (116) — com 12 itens, ~23 % de chance por
+aniversário. Com os sete slugs de hoje as matizes são
+`112, 116, 119, 137, 142, 207, 209` e não há colisão, mas isso é sorte do
+conjunto, não da função.
+
+Por isso a cor não é o único diferenciador: há o deslocamento e as iniciais do
+título, e o teste exige que o **conjunto** seja único. Um teste separado
+*documenta* a colisão da matiz sozinha, para ninguém "consertar" isso achando que
+é bug.
 
 Caminho para arte de verdade, quando houver: `SDL2_image` + cache local da capa
 baixada, e esta função passa a ser o *fallback* de item sem arte.

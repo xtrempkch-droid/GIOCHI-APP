@@ -73,7 +73,9 @@ fn matiz_para_cor(h: u8, luz: f32) -> (u8, u8, u8) {
 /// # Por que três campos, e não só a cor
 ///
 /// Matiz de 8 bits em 12 itens colide (problema do aniversário: ~23% de chance).
-/// Medi, e colidiu de verdade — `volley` e `painel` caíram na mesma matiz.
+/// Medi, e colidiu de verdade: dois slugs do catálogo de então (`volley` e
+/// `painel`) caíram na mesma matiz. Hoje o catálogo do repositório é outro, mas a
+/// função é a mesma — e um conjunto maior volta a colidir.
 ///
 /// A cor não é o único diferenciador possível, então não deve ser o único:
 /// **matiz + matiz do detalhe + deslocamento da faixa** dá 256×256×8
@@ -179,6 +181,10 @@ mod testes {
         assert_ne!(fnv1a("pacman"), fnv1a("cobrinha"));
     }
 
+    // Conjunto **sintético** de 12 slugs para medir a função de hash. Os nomes
+    // são só strings: nenhum teste aqui depende de um app existir no repositório.
+    // Com o catálogo real de hoje (7 apps) não há colisão de matiz, mas isso é
+    // sorte do conjunto — 12 itens colidem com ~23 % de chance.
     const CATALOGO: [&str; 12] = [
         "pacman", "cobrinha", "volley", "arcade-volleyball", "spacewar",
         "colossal-cave-adventure", "shattered-pixel-dungeon", "loja",

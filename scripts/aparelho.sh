@@ -918,9 +918,9 @@ cmd_log() {
 # ## Por que este subcomando existe
 #
 # Até 04/11/2026 o `/opt/giochi/apps/index.json` era escrito **à mão**. Instalei
-# `cobrinha` e `pacman` e o aparelho continuou mostrando **um** jogo até eu
-# reescrever o JSON — e um app instalado fora dele fica invisível, sem erro em
-# lugar nenhum: nem no app, nem no log, nem na tela.
+# dois apps e o aparelho continuou mostrando **um** cartão até eu reescrever o
+# JSON — e um app instalado fora dele fica invisível, sem erro em lugar nenhum:
+# nem no app, nem no log, nem na tela.
 #
 # Agora o catálogo é **projeção** de `app/apps.json` + os `metadata.json`. Quem
 # gera é `scripts/gerar-catalogo.mjs`, que também diz o que ficou de fora e por
@@ -964,7 +964,7 @@ cmd_catalogo() {
   # ── conferência NO APARELHO ────────────────────────────────────────────
   #
   # O gerador checa o binário na árvore do repositório. Quem importa é o
-  # aparelho: um jogo presente no repo e **não instalado** entraria no catálogo
+  # aparelho: um app presente no repo e **não instalado** entraria no catálogo
   # e viraria cartão morto — o usuário aperta e nada acontece, sem mensagem.
   #
   # É a mesma regra que já vale do lado do repo ("catálogo apontando para
@@ -991,7 +991,7 @@ cmd_catalogo() {
   if [ -n "$faltando" ]; then
     aviso "não instalado(s) no aparelho:$faltando"
     printf '  esses saem do catálogo — cartão que abre nada é pior que cartão ausente\n'
-    printf '  instale com: bash scripts/compilar-jogo-arm64.sh --jogo <nome> --instalar %s\n' "$HOST"
+    printf '  instale com: bash scripts/compilar-launcher-arm64.sh --app <nome> --instalar\n'
     node -e "
       const fs = require('fs');
       const p = '$temp';
@@ -1504,120 +1504,6 @@ cmd_verificar() {
     iniciar_launcher | while IFS= read -r linha; do printf '  %s\n' "$linha"; done
   fi
 }
-
-# ── verificar um jogo no aparelho ───────────────────────────
-#
-# Responde "o jogo desenha no aparelho?" sem depender de olhar a tela. Roda o
-# binário com `--dump-frame`, traz o BMP e analisa.
-#
-# ## Por que não compara pixel a pixel com o PC como `verificar` faz
-#
-# Aqui **não dá**: o launcher desenha uma Home parada, então a mesma entrada
-# produz o mesmo quadro; um jogo avança a simulação por quadro, e o
-# `opengles2` do aparelho não entrega os quadros no mesmo instante que o
-# render por software do PC. Medido no arcade-volleyball: 97,9 % de acerto, e
-# os 2,1 % restantes são exatamente a bola e os jogadores — que se movem.
-#
-# O que a comparação ainda prova é a **geometria**: chão, rede e o jogador que
-# não se moveu caem nos mesmos pixels. Por isso o piso de cores e o percentual
-# aparecem, mas o veredito de "desenhou" é: processo vivo, quadro do tamanho do
-# painel, sem lixo.
-cmd_verificar_jogo() {
-  local jogo="${1:-}" quadros="${2:-240}"
-  [ -n "$jogo" ] || morrer "uso: aparelho.sh verificar-jogo <jogo> [quadros]"
-
-  # O binário não se chama igual à pasta em todo jogo: o `cobrinha` instala
-  # `bin/giochi-cobrinha`. Ler `metadata.json` é o que permite esta função
-  # servir a qualquer app instalado, em vez de só à convenção `<pasta>/bin/<pasta>`
-  # que o `volley` e o `arcade-volleyball` usavam.
-  local meta="$RAIZ/app/jogos/$jogo/metadata.json"
-  [ -f "$meta" ] || morrer "app/jogos/$jogo/metadata.json não existe"
-
-  local entry slug
-  entry=$(node -e "process.stdout.write(require('$meta').entrypoint||'')" 2>/dev/null)
-  slug=$(node -e "process.stdout.write(require('$meta').slug||'$jogo')" 2>/dev/null)
-  [ -n "$entry" ] || morrer "metadata.json de $jogo sem entrypoint"
-
-  local bin_local="$RAIZ/app/jogos/$jogo/$entry"
-  [ -f "$bin_local" ] || morrer "sem binário em app/jogos/$jogo/$entry (compile primeiro)"
-
-  exigir_aparelho
-  titulo "jogo $jogo"
-
-  local painel rot
-  painel=$(resolucao_do_aparelho)
-  [ -n "$painel" ] || morrer "não descobri a resolução do painel"
-  rot=$(rotacao_do_aparelho)
-  ok "painel $painel, rotação $rot"
-
-  # Tenta as duas raízes, porque `distribution` decide onde o app mora: `image`
-  # vai para `/opt/giochi/apps` e `store` para `/user/apps`. Fixar uma delas
-  # fazia o app certo parecer ausente.
-  local raiz_app remoto=""
-  for raiz_app in /opt/giochi/apps /user/apps; do
-    if [ "$(no_aparelho "[ -x $raiz_app/$slug/$entry ] && echo SIM || echo NAO")" = "SIM" ]; then
-      remoto="$raiz_app/$slug/$entry"
-      break
-    fi
-  done
-  # `test -x` não imprime nada: canalizar para `grep` nunca casaria e o script
-  # diria "não existe" com o arquivo lá. A resposta tem de ser explícita.
-  [ -n "$remoto" ] || morrer "$slug/$entry não está instalado (nem em /opt/giochi/apps nem em /user/apps)"
-  ok "instalado em $remoto"
-
-  # `--dump-frame` (launcher, volley, arcade-volleyball) e `--quadro`
-  # (cobrinha) fazem a mesma coisa com nomes diferentes. Perguntar ao binário
-  # é melhor que manter uma tabela de qual usa qual.
-  local flag="--dump-frame"
-  if [ "$(no_aparelho "$remoto --ajuda 2>&1 | grep -c -- '--quadro'")" != "0" ]; then
-    flag="--quadro"
-  fi
-  ok "flag de captura: $flag"
-
-  titulo "rodando no aparelho"
-  # O `inittab` ressuscita o launcher em ~1 s e o KMSDRM é exclusivo: matar uma
-  # vez não basta. As duas mortes e a execução vão na MESMA sessão ssh, senão o
-  # respawn ganha a corrida e o jogo recebe "kmsdrm not available".
-  local saida
-  saida=$(no_aparelho "$TRECHO_MATAR_LAUNCHER""
-    # A flag diz ao giochi-init para NAO subir o launcher. Sem ela o supervisor
-    # o ressuscita em ~1 s: o DRM nunca libera e a captura morre com
-    # 'kmsdrm not available' apontando para o app errado.
-    mkdir -p /run/giochi; touch /run/giochi/dev-free-console
-    matar_launcher || echo \"AVISO o DRM continuou ocupado\"
-    cd \$(dirname $remoto)/.. 2>/dev/null || cd /;
-    # Software porque com GLES o swap esvazia o buffer e o BMP sai preto —
-    # medido. Sem isto a função reprovaria um jogo que desenha.
-    SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software $remoto --quadros $quadros $flag /tmp/jogo.bmp 2>&1
-    echo \"STATUS=\$?\"
-    ls -l /tmp/jogo.bmp 2>/dev/null | awk '{print \"TAMANHO=\"\$5}'
-  ")
-  printf '%s\n' "$saida" | sed 's/^/  /'
-
-  local status
-  status=$(printf '%s' "$saida" | sed -n 's/^STATUS=//p')
-  [ "${status:-1}" = "0" ] || falha "o jogo saiu com código ${status:-?}"
-
-  local tamanho
-  tamanho=$(printf '%s' "$saida" | sed -n 's/^TAMANHO=//p')
-  [ -n "$tamanho" ] || morrer "o jogo não gravou /tmp/jogo.bmp — não desenhou"
-
-  local tmp
-  tmp=$(mktemp -d)
-  if "${SCP_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST:/tmp/jogo.bmp" "$tmp/jogo.bmp" 2>/dev/null; then
-    titulo "quadro"
-    node "$RAIZ/scripts/verificar-frame.mjs" --captura "$tmp/jogo.bmp" --min-cores "${3:-3}" |
-      sed 's/^/  /'
-  else
-    falha "não consegui baixar o quadro"
-  fi
-  no_aparelho 'rm -f /tmp/jogo.bmp'
-
-  titulo "retomando o launcher"
-  iniciar_launcher | while IFS= read -r linha; do printf '  %s\n' "$linha"; done
-  rm -rf "$tmp"
-}
-
 
 # ── verificar a camada de efeitos NO APARELHO ───────────────
 #
@@ -2132,9 +2018,6 @@ case "${1:-ajuda}" in
     shift
     cmd_instalar_pacote "${1:-}" ;;
   instalar-do-cartao|cartao) cmd_instalar_do_cartao ;;
-  verificar-jogo)
-    shift
-    cmd_verificar_jogo "${1:-}" "${2:-}" "${3:-}" ;;
   verificar-teste|teste)
     shift
     cmd_verificar_teste "$@" ;;

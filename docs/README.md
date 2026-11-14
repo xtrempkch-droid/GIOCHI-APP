@@ -8,11 +8,9 @@
 - [Contrato de metadata](metadata.md) — os campos do `metadata.json` e por que são fechados.
 - [Requisitos do app](forge.md) — o `forge.json` e como a compatibilidade é calculada.
 - [Formato do pacote](pacote.md) — o `.giochi`: ordem, assinatura Ed25519 e o empacotador que existe.
-- [Godot no aparelho](godot.md) — por que o Arcade Volleyball roda como C++/SDL2 e não como Godot: nenhum build oficial do motor tem KMSDRM.
-- [Jogos no cartão SD](cartao-sd.md) — o X55 roda o sistema do próprio cartão, 116 GB sem partição, e o que funciona hoje.
+- [Godot no aparelho](godot.md) — por que nenhum build oficial do motor tem KMSDRM, e o que isso faz com a classificação de um app `runtime: godot`.
+- [Apps no cartão SD](cartao-sd.md) — o X55 roda o sistema do próprio cartão, 116 GB sem partição, e o que funciona hoje.
 - [Apps de PC](pc.md) — a loja e o forge nos três sistemas: um `.pyz` determinístico, matriz Windows/Linux/macOS e o que ainda não foi executado.
-- [Diário de 06/11/2026](diario/2026-11-06.md) — o jogo que não existia, a listagem que não era confiável, a navegação que não seguia a tela e o app de PC que não tinha como ser distribuído.
-- [Diário de 07/11/2026](diario/2026-11-07.md) — a rodada da engine no R35S: o que compilou, o que rodou e o PNG que a imagem não decodificava.
 - [Loja e multi-lojas](loja.md) — o que funciona, o que não existe e as decisões que faltam antes de escrever a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
@@ -27,14 +25,14 @@
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.
 - [R35S](r35s.md) — o que o app já garante nesse aparelho, o que **ainda** falta do sistema, e o estado real do build (a imagem existe desde 07/11).
-- [Testar no X35H](teste-x35h.md) — roteiro escrito em 04/11 quando o aparelho ainda estava fora da rede; hoje ele já foi medido (ver §27 do `AGENTS.md`), e o roteiro continua servindo para uma imagem nova.
+- [Testar no X35H](teste-x35h.md) — roteiro para uma imagem nova: o que conferir, em que ordem, e de quem é o problema quando falha.
 - [Rede: Wi-Fi e Bluetooth](rede.md) — a aba de configurações navegável, a lista de redes, o teclado de senha e o que foi medido no aparelho.
 
 ## Princípio
 
 Um app é **uma pasta**. Se precisa de mais que isso, o desenho está errado.
 
-Cada pasta `app/<slug>/` — ou `app/jogos/<slug>/` — é autossuficiente: contrato
+Cada pasta `app/<slug>/` é autossuficiente: contrato
 (`metadata.json`), requisitos (`forge.json`), o que instala (`bin/`) e a
 arte-fonte (`assets/`). Nada de configuração espalhada pela raiz do repositório.
 

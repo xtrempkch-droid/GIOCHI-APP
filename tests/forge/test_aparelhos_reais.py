@@ -64,9 +64,9 @@ class AreaUtilizavelTest(unittest.TestCase):
 
 
 class ClassificacaoCorrigidaTest(unittest.TestCase):
-    def test_jogo_1280x720_cabe_num_aparelho_720x1280(self):
+    def test_app_1280x720_cabe_num_aparelho_720x1280(self):
         # O caso que o código antigo reprovava. Não é hipótese: é o formato do
-        # espaço de projeto do launcher e dos jogos.
+        # espaço de projeto do launcher.
         req = GameRequirements(
             runtime="native", graphics_api_min="gles2",
             display_min_width=1280, display_min_height=720,
@@ -78,7 +78,7 @@ class ClassificacaoCorrigidaTest(unittest.TestCase):
             "tela 1280x720 não pode ser problema num painel 720x1280 girado",
         )
 
-    def test_jogo_1280x720_e_reprovado_num_painel_640x480(self):
+    def test_app_1280x720_e_reprovado_num_painel_640x480(self):
         # E o outro lado: no X35H, que é 4:3 de verdade, não cabe.
         req = GameRequirements(
             runtime="native", graphics_api_min="gles2",
@@ -88,7 +88,7 @@ class ClassificacaoCorrigidaTest(unittest.TestCase):
         self.assertIs(result.verdict, Verdict.INCOMPATIBLE)
         self.assertTrue(any(i.requirement == "display" for i in result.issues))
 
-    def test_jogo_godot_e_incompativel_no_x55(self):
+    def test_app_godot_e_incompativel_no_x55(self):
         req = GameRequirements(runtime="godot", godot_version="4.3",
                                graphics_api_min="gles3")
         result = classify(req, MANUAL_PROFILES["x55"])

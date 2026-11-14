@@ -6,7 +6,7 @@
 
 ---
 
-## FEITO: detecção automática de jogos (06/11/2026)
+## FEITO: catálogo por projeção (06/11/2026)
 
 Era a prioridade pedida em 04/11. Está implementado e medido no X55.
 
@@ -18,23 +18,23 @@ node scripts/gerar-catalogo.mjs --lista  # quem entra e quem fica de fora
 O catálogo deixou de ser JSON escrito à mão e virou **projeção** de
 `app/apps.json` + os `metadata.json`.
 
-**Prova de que é projeção e não cópia:** removi o binário do `cobrinha` do
-aparelho e o comando reduziu o catálogo de 3 para 2, dizendo o que tirou e como
-instalar; restaurei e voltou a 3. Reflete remoção, não só adição.
+**Prova de que é projeção e não cópia:** removi o binário de um app do aparelho
+e o comando reduziu o catálogo de 3 para 2, dizendo o que tirou e como instalar;
+restaurei e voltou a 3. Reflete remoção, não só adição.
 
 Uma descoberta do próprio gerador: **o launcher entrava no seu próprio
 catálogo** — tem `status: ready`, `distribution: image` e binário no lugar. O
 cartão "Launcher" abriria um segundo launcher e os dois brigariam pelo DRM. Agora
 o papel é declarado (`role: "shell"`), não inferido do nome.
 
-Detalhes e as cinco armadilhas em [`AGENTS.md`](../AGENTS.md) §12.
+Detalhes e as cinco armadilhas em [`AGENTS.md`](../AGENTS.md) §8.
 
 ### O que sobrou de manual
 
-Ainda é preciso **instalar** o jogo antes de publicar o catálogo:
+Ainda é preciso **instalar** o app antes de publicar o catálogo:
 
 ```bash
-bash scripts/compilar-jogo-arm64.sh --jogo <nome> --instalar 10.55.0.2
+bash scripts/compilar-launcher-arm64.sh --app <nome> --instalar 10.55.0.2
 bash scripts/aparelho.sh catalogo
 ```
 
@@ -155,30 +155,22 @@ conector estabilizar — diagnóstico diferente de "não subiu".
 
 Ver acima. É o item com maior chance de ter regredido.
 
-### 3. Os três jogos
+### 3. Os apps do catálogo
 
-Todos os três rodam no X55 com `projeto 1280x720 (Ccw90)`. No X35H o projeto é
-640×480 — **outro espaço**, com a mesma lógica proporcional mas números
-diferentes.
-
-| Jogo | O que olhar | Risco específico |
-| --- | --- | --- |
-| `volley` | faixa preta, raquete, placar | já rodou no X35H em versão anterior; não deve mudar |
-| `cobrinha` | **legibilidade das células** | 24 colunas em 640 px = célula de ~25 px; em 480 de altura a grade pode ficar apertada |
-| `pacman` | **legibilidade do labirinto** | 21×21 células em 480 de altura = ~22 px por célula; é o menor dos três |
-
-O `pacman` foi projetado para 640×480 ser o caso pequeno — se ele não for legível
-lá, o mapa (21×21) precisa encolher ou a pontuação sair da área do labirinto.
+O catálogo do aparelho é **projeção** de `apps.json` + os `metadata.json`, e
+hoje ele sai vazio (os sete apps são host ou shell). Para exercitar a navegação,
+use `--demo`; para exercitar um app instalado, instale um pacote e republica:
 
 ```bash
-# conferir os três do catálogo, no aparelho
-for app in pacman cobrinha volley; do
-  echo "== $app"
-  /opt/giochi/apps/launcher/bin/giochi-launcher --lancar $app --dump-frame /tmp/$app.bmp
-done
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/<slug>.giochi
+bash scripts/aparelho.sh catalogo
+/opt/giochi/apps/launcher/bin/giochi-launcher --lancar <id> --dump-frame /tmp/x.bmp
 ```
 
-Cada um imprime `painel LxA, projeto LxA (Nenhuma)` no X35H.
+No X35H o projeto é 640×480 — **outro espaço** que o X55 (720×1280 girado), com
+a mesma lógica proporcional e números diferentes. O que olhar ali é o que
+depende de escala: legibilidade do texto, alvo de toque e se o layout cabe sem
+letterbox (deve dar 0,00 % de preto).
 
 ### 4. Lista com três itens
 
@@ -210,7 +202,7 @@ Já verificado em hardware e sem mudança desde então:
 - brilho em sysfs e persistência (os dois)
 - rotação lida de `fbcon/rotate` (os dois)
 - mapa de botões completo (`buttons.map` + `code_for`)
-- `--lancar` abrindo pelo catálogo (X55, nos três jogos)
+- `--lancar` abrindo pelo catálogo (X55)
 
 ## Registro do que aconteceu hoje
 

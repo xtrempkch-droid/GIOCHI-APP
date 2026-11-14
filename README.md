@@ -1,13 +1,14 @@
 # Giochi app
 
-Aplicativos e jogos do projeto Giochi.
+Aplicativos do sistema Giochi. **Os jogos moram em outro repositório** desde
+14/11/2026.
 
 Este repositório é a **camada de experiência**: os apps que rodam sobre o sistema
 gerado pelo **Giochi System** e que são reunidos com ele no **Giochi os**.
 
 | Repositório | Função |
 | --- | --- |
-| **Giochi app** (este) | Apps, jogos, arte e o manifesto de requisitos de cada um |
+| **Giochi app** (este) | Apps do sistema, ferramentas de PC, arte e o manifesto de requisitos |
 | **Giochi System** | Cria o sistema Linux limpo: kernel, rootfs, boot, drivers, painel |
 | **Giochi os** | Junta o sistema com os apps e gera a imagem final por aparelho |
 
@@ -19,30 +20,27 @@ Giochi app/
 │   ├── _template/            # modelo para app novo
 │   ├── launcher/             # interface do aparelho (Rust + SDL2)
 │   ├── launcher-teste/       # o mesmo launcher desenhado sobre a GIOCHI-ENGINE
+│   ├── launcher-star-dust/   # o launcher + camada de efeitos
 │   ├── loja/                 # loja do PC (Rust + SDL2)
 │   ├── painel/               # interface web local do PC
 │   ├── forge/                # empacotador/classificador (native, Python)
-│   ├── store/                # CLI da loja (native, Python)
-│   └── jogos/
-│       ├── cobrinha/         # jogo 3D (Rust + SDL2 + GLES)
-│       └── neon-drift/       # corrida arcade 3D noturna (Rust + SDL2 + GLES)
+│   └── store/                # CLI da loja (native, Python)
 ├── schemas/                  # JSON Schema do metadata.json e do forge.json
 ├── scripts/                  # validador, empacotador e toolkit do aparelho
 ├── tests/
 └── docs/
 ```
 
-O que existe hoje, medido em 09/11/2026:
+O que existe hoje, medido em 14/11/2026:
 
 | Item | Estado |
 | --- | --- |
-| apps em `apps.json` | **8**: `forge`, `store`, `painel`, `loja` (host) + `launcher`, `launcher-teste` (shell) + `cobrinha`, `neon-drift` (jogos) |
-| `validate-app.mjs --all` | **8 válidos** (1 em `scaffold`) |
+| apps em `apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, shell) + `forge`, `store`, `painel`, `loja` (host) |
+| `validate-app.mjs --all` | **7 válidos** (1 em `scaffold`) |
 | `tests/run-all.mjs` | **199/199** JS |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| `compilar-launcher.sh --testes` | **226/226** Rust (119 core + 107 ui-sdl) |
+| `compilar-launcher.sh --testes` | **241/241** Rust (134 ui-sdl + 107 core) |
 | `compilar-loja.sh --testes` | **116/116** Rust |
-| `neon-drift` | **240** Rust (121 ui-sdl + 119 core) |
 | aparelhos medidos | X55 (720×1280), X35H e R35S (640×480) |
 
 Cada app tem a mesma anatomia:
@@ -82,10 +80,10 @@ node scripts/validate-app.mjs app/meu-app
 
 - `version` em semver — `1.0.0`, nunca `1.0`.
 - `runtime` aceita `native`, `godot`, `retroarch` ou `proton`. `native` é o
-  caso dos apps em Rust, C++ e Python — e é o que **todos os 8** apps deste
-  repositório usam hoje. Os outros três valores existem para os projetos Godot
-  que ainda não foram portados; um deles é classificado como `Incompatível`
-  porque nenhum build oficial do Godot tem KMSDRM (ver
+  caso dos apps em Rust, C++ e Python — e é o que **todos os 7** apps deste
+  repositório usam hoje. Os outros três valores existem porque o campo descreve
+  como o app roda no aparelho: um app de terceiro classificado como `godot` sai
+  **Incompatível**, porque nenhum build oficial do Godot tem KMSDRM (ver
   [docs/godot.md](docs/godot.md)).
 - `arch` depende de `distribution`, e é conferido em par com ela:
 
@@ -98,7 +96,7 @@ node scripts/validate-app.mjs app/meu-app
   e um app de PC que declare `aarch64` também (`arquitetura_de_console_em_app_de_pc`).
   Só ampliar o enum deixaria o campo voltar a não significar nada.
 - `entrypoint` começa em `bin/`, não é absoluto e não contém `..`.
-- `entrypoint` aponta para arquivo que **existe**.
+- `entrypoint` aponta para arquivo que **existe** (medido no arquivo, não no JSON).
 - `capa.png`, quando presente, tem exatamente **320×320** (não é exigida em
   `distribution: "host"` — avisar sobre a capa de um app que é a própria loja é
   ruído que ensina a ignorar avisos).
@@ -127,8 +125,8 @@ Cada app declara o que precisa em `forge.json`: arquitetura, runtime, API gráfi
 memória e resolução mínimas. **Não** declara pacotes Buildroot — quem sabe o que a
 imagem tem é o `Giochi System`.
 
-O sistema compara esse manifesto com o perfil do aparelho e responde
-`Compatível`, `Parcial` ou `Incompatível`. Detalhes em
+A ferramenta compara esse manifesto com o perfil **medido** do aparelho e
+responde `Compatível`, `Parcial` ou `Incompatível`. Detalhes em
 [docs/forge.md](docs/forge.md).
 
 ## Onde cada app vai parar
@@ -138,9 +136,13 @@ obrigações diferentes de licença:
 
 | `distribution` | Onde roda | Exemplo |
 | --- | --- | --- |
-| `image` | dentro da imagem assinada do aparelho | jogos padrão |
-| `store` | instalado em `/user` no aparelho, enviado pela loja | Shattered Pixel Dungeon |
-| `host` | no **computador do usuário** — não vai para o aparelho | loja, forge |
+| `image` | dentro da imagem assinada do aparelho | launcher (que é `role: shell`) |
+| `store` | instalado em `/user` no aparelho, enviado pela loja | um app comprado |
+| `host` | no **computador do usuário** — não vai para o aparelho | loja, forge, store, painel |
+
+Hoje **nenhum app entra no catálogo do aparelho**: os três de interface são
+`role: shell` (a interface não lista a si mesma) e os quatro de PC são `host`.
+O catálogo sai vazio, e isso é o resultado correto das regras.
 
 A loja roda no PC e envia o pacote pronto para o aparelho. Por isso um app GPL
 **pode** ser vendido: ele não entra na imagem assinada, e o comprador pode

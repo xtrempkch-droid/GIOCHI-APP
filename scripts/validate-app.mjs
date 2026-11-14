@@ -39,8 +39,8 @@ for (const error of index.errors) {
 if (all) {
   const registered = new Set();
   // Caminhos de pasta registrados, relativos a `app/`. O nome do app nem sempre
-  // é o caminho: `volley` mora em `jogos/volley`, e comparar só o basename
-  // deixaria `app/volley` passar como registrado sem existir registro dele.
+  // é o caminho: um app de grupo mora em `<grupo>/<slug>`, e comparar só o
+  // basename deixaria `app/<id>` passar como registrado sem registro dele.
   const pastasRegistradas = new Set();
 
   for (const [id, entry] of index.entries) {

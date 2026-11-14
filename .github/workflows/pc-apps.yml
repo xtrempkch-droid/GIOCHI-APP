@@ -222,11 +222,11 @@ jobs:
       # Exercita o que escreve em disco: `Path.mkdir`, `os.replace` e leitura de
       # arquivo. É aqui que Windows e macOS diferem de Linux de verdade.
       #
-      # Usa `tests/fixtures/app-nativo`, não um jogo do catálogo: o CI de apps de
-      # PC estava empacotando `app/jogos/arcade-volleyball`, e apagar o jogo
-      # derrubou quatro jobs que não têm nada a ver com jogos. A fixture é um
-      # app completo (metadata + capa 320×320 + binário), então o caminho
-      # exercitado é idêntico.
+      # Usa `tests/fixtures/app-nativo`, não um app do catálogo: o CI de apps de
+      # PC já empacotou um app publicado de verdade, e apagá-lo derrubou quatro
+      # jobs que não têm nada a ver com ele. A fixture é um app completo
+      # (metadata + capa 320×320 + binário), então o caminho exercitado é
+      # idêntico.
       - name: Forge empacota um app de verdade
         shell: bash
         run: |

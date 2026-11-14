@@ -61,6 +61,12 @@ pub struct App {
     /// tela é uma ação humana. Um intervalo só para os dois obrigaria a escolher
     /// entre reler bateria rápido demais ou girar devagar demais.
     energia_poll: f32,
+    /// Já saiu alguma linha `energia:` no log.
+    ///
+    /// A primeira é sempre registrada, mesmo sem mudança: é ela que diz ao
+    /// operador se o aparelho tem medidor de bateria e sensor de temperatura.
+    /// Depois disso, só quando algo muda — senão a linha vira ruído de 5 em 5 s.
+    energia_registrada: bool,
     /// Backlight: apagar ao dormir, restaurar ao acordar.
     backlight: Backlight,
     /// Botão de energia físico.
@@ -174,6 +180,7 @@ impl App {
             last_minute: 0,
             rotation_poll: 0.0,
             energia: crate::energia::Energia::discover(),
+            energia_registrada: false,
             // Zero no primeiro quadro: a barra superior abre com a leitura já
             // feita, em vez de mostrar `—` por dois segundos.
             energia_poll: 0.0,
@@ -687,8 +694,21 @@ impl App {
         // silenciosa, e uma leitura que falha (sensor some, caminho muda) ficava
         // invisível: a HUD mostrava `—` e ninguém sabia se era ausência real ou
         // bug. O log tem de cobrir os dois lados.
-        if nivel != self.state.battery || temperatura.map(|t| t as u16) != Some(self.state.hud.temp_c)
-        {
+        //
+        // A decisão vive em `energia_deve_registrar` porque ela já esteve
+        // errada de um jeito que nenhum teste pegava: `hud.temp_c` é `u16` e não
+        // tem valor para "sem leitura", então `None != Some(0)` dava **sempre
+        // verdadeiro** e um aparelho sem sensor imprimia a linha a cada 5 s
+        // (medido no R35S). Ver o teste `sem_sensor_nao_registra_a_cada_leitura`.
+        let deve_registrar = energia_deve_registrar(
+            nivel,
+            self.state.battery,
+            temperatura,
+            self.state.hud.temp_c,
+            self.energia_registrada,
+        );
+        if deve_registrar {
+            self.energia_registrada = true;
             eprintln!(
                 "energia: bateria {} · temperatura {}",
                 match (&bateria, nivel) {
@@ -981,4 +1001,88 @@ fn capacidades_do_kernel() -> Option<Vec<u16>> {
     todos.sort_unstable();
     todos.dedup();
     Some(todos)
+}
+
+/// Decide se a linha `energia:` deve sair no log agora.
+///
+/// ## O bug que esta função existe para impedir
+///
+/// `hud.temp_c` é `u16`, e `0` é o sentinela de "desconhecido" (a HUD desenha
+/// `—`). A comparação anterior era `temperatura.map(|t| t as u16) !=
+/// Some(self.state.hud.temp_c)`, e num aparelho **sem sensor** o lado esquerdo é
+/// `None`: `None != Some(0)` é sempre verdadeiro, então a linha saía a cada 5 s
+/// para sempre. Medido no R35S em 06/11/2026 — o console serial recebia
+/// `energia: bateria sem medidor · temperatura sem sensor` oito vezes em 40 s,
+/// que é justamente o canal usado quando o USB não sobe.
+///
+/// Comparar `None` com o **mesmo sentinela** que a HUD usa resolve de uma vez:
+/// sem sensor, o valor é 0 e não muda.
+///
+/// ## E por que a primeira linha é sempre registrada
+///
+/// Porque é ela que responde "este aparelho tem medidor e sensor?" — a pergunta
+/// que o operador faz ao abrir o app. Depois dela, silêncio até algo mudar.
+fn energia_deve_registrar(
+    nivel: Option<u8>,
+    nivel_anterior: Option<u8>,
+    temperatura: Option<u16>,
+    temperatura_na_hud: u16,
+    ja_registrou: bool,
+) -> bool {
+    if !ja_registrou {
+        return true;
+    }
+    nivel != nivel_anterior || temperatura.unwrap_or(0) != temperatura_na_hud
+}
+
+#[cfg(test)]
+mod testes_energia {
+    use super::energia_deve_registrar;
+
+    #[test]
+    fn sem_sensor_nao_registra_a_cada_leitura() {
+        // O defeito medido no R35S: aparelho sem sensor de temperatura
+        // imprimindo a linha a cada 5 s. `None` comparado com `Some(0)` é
+        // sempre diferente, e "sempre diferente" aqui é ruído permanente no
+        // único canal que existe quando o USB não sobe.
+        let primeira = energia_deve_registrar(None, None, None, 0, true);
+        assert!(
+            !primeira,
+            "sem sensor e sem mudança de bateria, a linha não pode sair de novo"
+        );
+    }
+
+    #[test]
+    fn a_primeira_leitura_sempre_sai() {
+        // Mesmo sem nada para reportar: é a linha que diz "aqui não há medidor
+        // nem sensor", e sem ela a HUD mostra `—` sem explicação.
+        assert!(energia_deve_registrar(None, None, None, 0, false));
+        assert!(energia_deve_registrar(Some(78), None, Some(41), 0, false));
+    }
+
+    #[test]
+    fn sensor_estavel_nao_registra() {
+        assert!(!energia_deve_registrar(Some(78), Some(78), Some(41), 41, true));
+    }
+
+    #[test]
+    fn temperatura_que_muda_registra() {
+        assert!(energia_deve_registrar(Some(78), Some(78), Some(43), 41, true));
+    }
+
+    #[test]
+    fn bateria_que_muda_registra() {
+        // Bateria e temperatura dividem a linha, então qualquer uma das duas
+        // mudando é motivo para registrar as duas.
+        assert!(energia_deve_registrar(Some(77), Some(78), Some(41), 41, true));
+    }
+
+    #[test]
+    fn sensor_que_desaparece_registra_uma_vez() {
+        // `41` na HUD e `None` na leitura: o sensor sumiu. Isso precisa
+        // aparecer — uma vez. Na leitura seguinte o sentinela já está em 0 e o
+        // silêncio volta.
+        assert!(energia_deve_registrar(Some(78), Some(78), None, 41, true));
+        assert!(!energia_deve_registrar(Some(78), Some(78), None, 0, true));
+    }
 }

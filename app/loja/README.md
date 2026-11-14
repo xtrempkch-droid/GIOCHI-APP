@@ -15,7 +15,7 @@ app/loja/bin/giochi-loja --teclas down,down --dump-frame /tmp/q.bmp
 ## A decisão que define tudo: três chaves, três perguntas
 
 A preocupação que originou esta loja foi *"e se usarem a chave pública para
-roubar os jogos?"*. A resposta é que uma chave **pública** não permite nada além
+roubar os apps?"*. A resposta é que uma chave **pública** não permite nada além
 de conferir assinaturas — o perigo nunca foi ela. O perigo é **confundir
 "autêntico" com "comprado"**, porque aí um único pacote assinado serve para todo
 mundo.
@@ -68,12 +68,12 @@ seria mentira.
   "sem provedor de pagamento configurado". Com `--demo`, o código sai com um
   aviso vermelho dizendo que não é pagável.
 
-## Como a lista de jogos é preenchida
+## Como a lista de apps é preenchida
 
-Não há lista escrita à mão. Publicar um jogo são **dois comandos**:
+Não há lista escrita à mão. Publicar um app são **dois comandos**:
 
 ```bash
-node scripts/empacotar.mjs app/jogos/meu-jogo --saida dist/pacotes
+node scripts/empacotar.mjs app/meu-app --saida dist/pacotes
 node scripts/gerar-catalogo-loja.mjs --pacotes dist/pacotes \
      --chave ~/.giochi/catalogo.pem --url-base https://cdn.giochi.example
 ```

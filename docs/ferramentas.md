@@ -14,12 +14,9 @@ nenhum foi escrito "por completude".
 | `scripts/verificar-mapa.mjs` | PC | um `buttons.map` contra os símbolos que o launcher entende |
 | `scripts/empacotar.mjs` | PC | pasta de app → `.giochi` assinado |
 | `scripts/verificar-pacote.mjs` | PC | estrutura + SHA-256 + Ed25519 de um pacote |
-| `scripts/verificar-jogos.mjs` | PC | geometria dos jogos: a célula é legível? |
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
-| `scripts/compilar-jogo-arm64.sh` | PC | idem para os jogos em Rust (`cobrinha`), reusando o cache |
-| `scripts/compilar-jogo-cpp-arm64.sh` | PC | idem para o jogo em C++ (`arcade-volleyball`), montando o compilador cruzado sem root |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
 | `scripts/migrar-do-antecessor.sh` | PC | traz as fontes do repositório antecessor |
 
@@ -32,7 +29,6 @@ bash scripts/aparelho.sh instalar        # cross-compila e instala, conferindo s
 bash scripts/aparelho.sh subir           # inicia o launcher e mostra pid + log
 bash scripts/aparelho.sh parar           # encerra pelo pid
 bash scripts/aparelho.sh verificar       # processo + DRM + entrada + frame comparado
-bash scripts/aparelho.sh verificar-jogo cobrinha        # roda o jogo e analisa o quadro
 bash scripts/aparelho.sh verificar-teste                # launcher da engine × launcher de produção
 bash scripts/aparelho.sh log             # últimas 40 linhas de /tmp/giochi.log
 bash scripts/aparelho.sh input 15        # eventos crus de /dev/input por 15 s
@@ -192,20 +188,19 @@ aparelho — e não precisa haver.
 
 ### `--min-cores`: o piso de cores é do app, não do verificador
 
-O limiar de cores já foi 8 fixo, e isso dava **falso positivo em jogo**. O
-`arcade-volleyball` desenha exatamente as 6 cores da sua paleta (fundo, chão,
-rede, dois jogadores, bola) — um quadro perfeito tem 6 cores, e a ferramenta o
-reprovava dizendo "o render provavelmente parou cedo".
+O limiar de cores já foi 8 fixo, e isso dava **falso positivo** num app de
+paleta curta: um quadro perfeito de 6 cores era reprovado dizendo "o render
+provavelmente parou cedo".
 
-O mesmo número tem significado oposto nos dois casos:
+O mesmo número tem significado oposto conforme o app:
 
 | App | Cores de um quadro bom | 6 cores significa |
 | --- | --- | --- |
 | launcher | 350–400 (texto com antialiasing) | parou cedo |
-| arcade-volleyball | 6 (retângulos, paleta fixa) | desenhou tudo |
+| app de retângulos, paleta fixa | 6 | desenhou tudo |
 
-Por isso o piso é do chamador: `--min-cores 8` para o launcher, o padrão `3`
-para os jogos. Abaixo do piso continua sendo suspeito; entre o piso e 8 a
+Por isso o piso é do chamador: `--min-cores 8` para o launcher, o padrão `3` para
+qualquer outro. Abaixo do piso continua sendo suspeito; entre o piso e 8 a
 ferramenta imprime `paleta: plana` e explica, sem reprovar.
 
 Sai com código 1 quando desconfia do quadro:
@@ -376,9 +371,9 @@ Três decisões que custaram medição:
 ### Pacote: `empacotar.mjs` → `instalar-pacote`
 
 ```bash
-node scripts/empacotar.mjs app/jogos/pacman            # → dist/pacotes/pacman.giochi
-node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
-bash scripts/aparelho.sh instalar-pacote dist/pacotes/pacman.giochi
+node scripts/empacotar.mjs app/loja                    # → dist/pacotes/loja.giochi
+node scripts/verificar-pacote.mjs dist/pacotes/loja.giochi
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/loja.giochi
 ```
 
 O pacote é **reprodutível**: dois empacotamentos do mesmo conteúdo dão o mesmo
@@ -392,7 +387,7 @@ gerado incluindo o que está instalado em `/opt/giochi/apps/`, não só o
 
 O extrator é um script copiado, não um `sh -c` com aspas aninhadas: a primeira
 versão fazia isso e o shell comeu o `$(...)`, produzindo
-`sh: "bin/giochi-pacman": unknown operand`. Aninhar três níveis de aspas para
+`sh: "bin/giochi-app": unknown operand`. Aninhar três níveis de aspas para
 falar com outra máquina não é difícil de escrever — é difícil de **ler quando
 falha**.
 
@@ -555,11 +550,11 @@ aparelho — e verificação que depende de dedo não entra em rodada automatiza
 # no PC, com um catálogo de mentira e um filho de mentira
 GIOCHI_CATALOGO=/tmp/cat/index.json \
   SDL_VIDEODRIVER=dummy ./giochi-launcher --tamanho 640x480 \
-  --lancar volley --dump-frame /tmp/depois.bmp
+  --lancar <id> --dump-frame /tmp/depois.bmp
 
 # no aparelho, de verdade
 SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
-  /opt/giochi/apps/launcher/bin/giochi-launcher --lancar volley --dump-frame /tmp/depois.bmp
+  /opt/giochi/apps/launcher/bin/giochi-launcher --lancar <id> --dump-frame /tmp/depois.bmp
 ```
 
 Escreve em `state.lancar`, o **mesmo** campo que o botão "Jogar" preenche — então
@@ -572,48 +567,6 @@ o que prova que a janela foi recriada e que o texto continua aparecendo.
 **Cuidado com `| head` no `--dump-frame`.** O `head` fecha o pipe, o `SIGPIPE`
 mata o launcher antes de gravar, e o arquivo não aparece — o sintoma é "não
 gerou o quadro" com o programa retornando 0. Já aconteceu ao investigar.
-
-## `verificar-jogos.mjs`
-
-```bash
-node scripts/verificar-jogos.mjs                    # 640x480, 800x600, 1280x720
-node scripts/verificar-jogos.mjs --tamanhos 800x600
-node scripts/verificar-jogos.mjs --png              # uma imagem por caso
-```
-
-Irmão do `verificar-telas.mjs`, com uma diferença de fundo: aquele mede se o
-desenho **cabe**; este mede se a grade **serve**.
-
-Um jogo de grade não tem referência de pixels para comparar consigo mesma em
-outro tamanho — o desenho é proporcional por construção. O que pode dar errado é
-a célula ficar pequena demais para ler num painel de 3,5". Por isso a medida é
-geométrica:
-
-| Jogo | O que se mede | Piso |
-| --- | --- | --- |
-| `cobrinha` | passo da grade (24 colunas) | 14 px |
-| `pacman` | passo do labirinto (21 colunas) | 14 px |
-| `volley` | altura da raquete | 28 px |
-
-O piso de 14 px é 25% de folga sobre o menor aparelho real (640×480 dá 18,4 px no
-`cobrinha`). Abaixo disso o vão entre células, o corpo e a comida viram o mesmo
-borrão.
-
-Medido nos três tamanhos: tudo acima do piso, tudo proporcional. **600p não é um
-caso especial** — é o mesmo desenho num terceiro tamanho, porque o layout é
-proporcional desde `Moldura` (launcher) e desde a primeira linha (jogos).
-
-### O `--tamanho` dos jogos
-
-Sem ele, o `SDL_VIDEODRIVER=dummy` devolve o **desktop** (1024×768), e não havia
-como pedir outro painel — testar 480p ou 600p exigia o hardware na mão:
-
-```bash
-giochi-pacman --tamanho 800x600 --quadro /tmp/p.bmp
-```
-
-Mesma flag do launcher, mesma semântica. No aparelho, sem a flag, o
-`fullscreen_desktop` usa o modo do conector, que é o certo.
 
 ## `capacidades-input.mjs`
 
@@ -686,28 +639,9 @@ bash scripts/compilar-launcher-arm64.sh --instalar root@192.168.1.4
 ```
 
 Cross-compila para `aarch64-unknown-linux-gnu` e copia para
-`app/launcher/bin/`. Detalhes das quatro armadilhas de link em
-[compilar-launcher.md](./compilar-launcher.md).
-
-## `compilar-jogo-arm64.sh`
-
-```bash
-bash scripts/compilar-jogo-arm64.sh
-bash scripts/compilar-jogo-arm64.sh --instalar 10.55.0.2
-```
-
-Mesmo alvo, mesmo binário de saída em `app/jogos/volley/bin/`. **Não redescobre nada:**
-exige o cache de `~/.cache/giochi-arm64` que o script do launcher prepara e reusa
-o wrapper de `rust-lld` e as bibliotecas do aparelho. Se o cache não existir, ele
-para e diz qual comando rodar antes.
-
-É a diferença entre um segundo lugar para envelhecer e um segundo consumidor do
-mesmo lugar. O jogo linka só contra `libSDL2` (sem `ttf`, sem `asound`), então é
-um teste mais simples do mesmo caminho.
-
-Ele também confere `PT_INTERP` com `readelf` **antes** de instalar: sem essa
-entrada o kernel mata o processo na largada e `file` ainda diz que o ELF é
-válido.
+`app/<app>/bin/`. `--app <nome>` escolhe qual dos três launchers (o nome do
+binário sai do `Cargo.toml` e o slug do `metadata.json`). Detalhes das armadilhas
+de link em [compilar-launcher.md](./compilar-launcher.md).
 
 ## `validate-app.mjs`
 
@@ -824,29 +758,6 @@ status 0 e com status 1 significam coisas diferentes.
 `1500000` — é o que o `device.json` do R35S declara (`console=ttyS2,1500000`) e
 o que o aparelho responde. Outros aparelhos Rockchip usam o mesmo.
 
-## `aparelho.sh verificar-jogo`
-
-```bash
-bash scripts/aparelho.sh verificar-jogo cobrinha        # roda e analisa o quadro
-bash scripts/aparelho.sh verificar-jogo cobrinha 300    # 300 quadros antes de capturar
-```
-
-Prova que o jogo desenha no aparelho **sem ninguém olhar a tela**: roda com
-captura de quadro, traz o BMP e analisa.
-
-Duas coisas que ele passou a descobrir sozinho em 06/11/2026, por ter falhado
-com o `cobrinha`:
-
-- **onde o app está instalado** — `/opt/giochi/apps` (distribution `image`) ou
-  `/user/apps` (distribution `store`). Fixar uma das duas fazia o app certo
-  parecer ausente;
-- **o nome do binário e a flag de captura** — vinham do `metadata.json` e de
-  `--ajuda` do próprio binário, não de uma convenção `<pasta>/bin/<pasta>` nem
-  de uma tabela de qual jogo usa `--quadro` ou `--dump-frame`.
-
-E ele força `SDL_RENDER_DRIVER=software`: com GLES o swap esvazia o buffer e o
-BMP sai preto, o que faria a função reprovar um jogo que desenha.
-
 ## Duas armadilhas do KMSDRM (relatadas pela equipe da engine)
 
 A equipe do Giochi System documentou as duas em `KMSDRM.md` §8, e as duas já
@@ -874,8 +785,8 @@ X11 nem Wayland no rootfs. O que segura o dispositivo é o launcher do próprio
 console (PID do processo, não um servidor gráfico).
 
 Quem resolve é o toolkit, matando o launcher duas vezes na mesma sessão SSH (o
-`inittab` o ressuscita em ~1 s; matar uma vez só perde a corrida). O `cobrinha`
-agora também **detecta** e nomeia o dono:
+`inittab` o ressuscita em ~1 s; matar uma vez só perde a corrida). O app que
+tenta abrir o vídeo também **detecta** e nomeia o dono:
 
 ```text
 erro: não consegui abrir o vídeo (kmsdrm not available).
@@ -889,7 +800,7 @@ Três causas separadas na mensagem, porque exigem três ações diferentes:
 | causa detectada | o que fazer |
 | --- | --- |
 | `/dev/dri/card0` ausente | driver/imagem — é do **Giochi System** |
-| launcher rodando | liberar o console (`aparelho.sh verificar-jogo`) |
+| launcher rodando | liberar o console (`aparelho.sh parar`, com a flag `dev-free-console`) |
 | só o `giochi-init` vivo | `RESTART_MAX` esgotado — `aparelho.sh subir` |
 
 ### 2. O supervisor desiste em silêncio e estaciona
@@ -914,17 +825,16 @@ ok   pid=5426 ppid=5422 drm=6
 ```
 
 **Nada disso é contornável pelo app**: a cota é do supervisor. O que o app pode
-fazer é não piorar — e é por isso que o `verificar-jogo` faz as duas mortes na
-mesma sessão, em vez de uma por comando.
+fazer é não piorar — e é por isso que `instalar` e `verificar` fazem as duas
+mortes na mesma sessão, em vez de uma por comando.
 
 ## Catálogo ausente não vira catálogo inventado
 
 O Giochi System apontou (canal, 19:45) que `/opt/giochi/apps/index.json` **não
 existe na imagem** e o selftest avisa `[WARN] sem ... — a grade ficaria vazia`.
 
-A grade não ficava vazia: ficava **cheia de jogos que não existem**. O fallback
-desenhava quatro jogos de demonstração (Arcade Volleyball, Colossal Cave,
-Spacewar, Shattered Pixel Dungeon) e oito apps. Apertar A dava
+A grade não ficava vazia: ficava **cheia de apps que não existem**. O fallback
+desenhava quatro jogos de demonstração e oito apps no aparelho. Apertar A dava
 `este app não está no catálogo do sistema` — exatamente o cartão que aparece e
 não abre que `podar_sem_binario` existe para impedir.
 
@@ -933,7 +843,7 @@ A regra agora:
 | situação | tela |
 | --- | --- |
 | catálogo válido | os apps do índice |
-| catálogo ausente ou vazio | **"Nenhum jogo instalado."** + onde ele é lido |
+| catálogo ausente ou vazio | **"Nenhum jogo instalado."** + onde ele é lido (a frase é do app, e hoje o catálogo sai vazio por desenho: §8 do `AGENTS.md`) |
 | `--demo` | catálogo de demonstração (foto, protótipo) |
 
 Medido: catálogo ausente → **122 cores** (só a moldura); `--demo` → **318 cores**

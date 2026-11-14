@@ -17,11 +17,11 @@ from giochi_painel import acoes
 
 RAIZ = Path(__file__).resolve().parents[2]
 
-# Fixtures, não jogos reais.
+# Fixtures, não apps publicados.
 #
-# Estes testes usavam `app/jogos/arcade-volleyball` e `app/jogos/spacewar`.
-# Isso acoplava o teste do painel ao catálogo de jogos: apagar um jogo jogava
-# 12 testes para o vermelho sem nenhum defeito no painel. A fixture nativa
+# Estes testes usavam dois apps do repositório. Isso acoplava o teste do painel
+# ao catálogo: apagar um app jogava 12 testes para o vermelho sem nenhum defeito
+# no painel. A fixture nativa
 # (`forge.json` + metadata + capa + binário) e a fixture Godot (`project.godot`)
 # exercitam os mesmos caminhos de código sem depender do que está publicado.
 NATIVO = RAIZ / "tests" / "fixtures" / "app-nativo"

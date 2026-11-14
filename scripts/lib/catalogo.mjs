@@ -6,8 +6,8 @@
 //! derivava de nada: nem do `app/apps.json`, nem dos `metadata.json`. As
 //! consequências apareceram na prática, em 04/11/2026:
 //!
-//! - instalei `cobrinha` e `pacman` e o aparelho continuou mostrando **um**
-//!   jogo até eu reescrever o JSON à mão;
+//! - instalei dois apps e o aparelho continuou mostrando **um** cartão até eu
+//!   reescrever o JSON à mão;
 //! - um app instalado fora do JSON fica **invisível**, e não há erro em lugar
 //!   nenhum — nem no app, nem no log, nem na tela;
 //! - `title`, `year` e `category` podiam divergir do `metadata.json` do pacote
@@ -22,7 +22,7 @@
 //!
 //! O que **não** é derivável e por isso está explícito aqui: o `dir` do
 //! aparelho (`/opt/giochi/apps/<id>`). É convenção do `Giochi System`, não do
-//! repositório, e o caminho no repo (`jogos/pacman`) não se traduz nele.
+//! repositório, e o caminho no repo (`<grupo>/<slug>`) não se traduz nele.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -150,7 +150,7 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
     }
 
     // O `dir` do aparelho é convenção do sistema e **não** o caminho no repo.
-    // `jogos/pacman` vira `/opt/giochi/apps/pacman`, e o `id` é que manda.
+    // `<grupo>/<slug>` vira `/opt/giochi/apps/<id>`, e o `id` é que manda.
     apps.push({
       id,
       version: metadata.version,
@@ -212,9 +212,9 @@ export function mesclarInstalados(
     // `metadata.json`** no aparelho (que é o certo a fazer, e é o que o
     // `aparelho.sh catalogo` colhe) trazia ele de volta pela porta dos fundos:
     // medido em 09/11/2026 na imagem nova, o catálogo ficou com `Giochi
-    // Launcher` e `Giochi Launcher (engine)` como se fossem jogos. Apertar `A`
-    // no primeiro abriria um segundo launcher, que perde o DRM (exclusivo) e
-    // morre com `kmsdrm not available`.
+    // Launcher` e `Giochi Launcher (engine)` como se fossem apps comuns.
+    // Apertar `A` no primeiro abriria um segundo launcher, que perde o DRM
+    // (exclusivo) e morre com `kmsdrm not available`.
     //
     // O papel **não** pode vir do catálogo já filtrado: o launcher está fora
     // dele justamente por ser shell, então `porId` não tem a informação. É por

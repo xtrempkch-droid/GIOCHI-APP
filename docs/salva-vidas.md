@@ -156,9 +156,8 @@ esperar — não afirmar que passou.
 
 ## 5. O que estava em aberto quando o shell caiu
 
-Nada disso é trabalho perdido: tudo está em `AGENTS.md` §23 e no
-[diário de 06/11](diario/2026-11-06.md). Fica aqui só como fila, para a retomada
-não começar do zero:
+Nada disso é trabalho perdido: o que virou regra está no `AGENTS.md` §13. Fica
+aqui só como fila, para a retomada não começar do zero:
 
 1. **Um reboot não explicado no R35S** — matar o launcher por SSH derrubou a
    conexão e o aparelho voltou com uptime de 245 s. O `respawn` funcionou depois,

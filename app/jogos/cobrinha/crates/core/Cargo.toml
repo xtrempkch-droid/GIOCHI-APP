@@ -1,9 +1,0 @@
-[package]
-name = "giochi-cobrinha-core"
-description = "Regras da cobrinha: grade, passos discretos, ritmo. Sem SDL."
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-
-[dependencies]

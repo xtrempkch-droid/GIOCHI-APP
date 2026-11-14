@@ -625,11 +625,10 @@ export function validateApp(appDir, { status = "ready", distribution = "image" }
  *
  * ## Grupos
  *
- * Um jogo não é a mesma coisa que uma ferramenta, e a árvore diz isso:
- * `app/launcher`, `app/forge` e `app/store` são apps soltos, enquanto os jogos
- * vivem em `app/jogos/<slug>`. **O que distingue um do outro é o
- * `metadata.json`** — o arquivo que, desde o começo do contrato, é o que faz de
- * uma pasta um app.
+ * Os apps deste repositório ficam soltos em `app/<slug>`. A varredura ainda
+ * aceita um nível de grupo (`app/<grupo>/<slug>`) porque é barato e não exige
+ * lista escrita à mão: **o que distingue grupo de app é o `metadata.json`** — o
+ * arquivo que, desde o começo do contrato, é o que faz de uma pasta um app.
  *
  * Por isso a varredura desce um nível apenas em pasta **sem** `metadata.json`.
  * Não há lista de grupos escritos à mão em lugar nenhum: quem cria a pasta e

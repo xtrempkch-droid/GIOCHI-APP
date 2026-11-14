@@ -54,16 +54,6 @@
       "role": "shell"
     },
     {
-      "id": "cobrinha",
-      "folder": "jogos/cobrinha",
-      "runtime": "native",
-      "status": "ready",
-      "distribution": "image",
-      "license": "Proprietary",
-      "note": "Jogo 3D Rust com GIOCHI-ENGINE-3D, SDL2 e GLES; grade 24x18, render limitado a no maximo 75 fps. Requer GLES2 e tenta GLES3 com fallback. A copia da engine fica em app/jogos/cobrinha/vendor/.",
-      "slug": "cobrinha"
-    },
-    {
       "id": "painel",
       "folder": "painel",
       "slug": "painel",
@@ -82,36 +72,6 @@
       "distribution": "host",
       "license": "Proprietary",
       "note": "Loja do PC: executavel nativo Rust+SDL2 para Linux, Windows e macOS. Separa autenticidade (assinatura do pacote) de licenca (por aparelho). Nao manipula dado de cartao: PIX copia-e-cola ou checkout hospedado. Ver docs/loja.md."
-    },
-    {
-      "id": "neon-drift",
-      "folder": "jogos/neon-drift",
-      "runtime": "native",
-      "status": "ready",
-      "distribution": "image",
-      "license": "Proprietary",
-      "note": "Corrida arcade 3D noturna em Rust com GIOCHI-ENGINE-3D, SDL2/GLES2 e KMSDRM. Passo fixo de 75 Hz: o teto de quadros e de simulacao. Pista de 962 m com reta de 170 m, praca de drift 19 m, tunel de 157 m e curva fechada de raio 20 m. Copia da engine em app/jogos/neon-drift/vendor/.",
-      "slug": "neon-drift"
-    },
-    {
-      "id": "giochi-defender",
-      "folder": "jogos/giochi-defender",
-      "runtime": "native",
-      "status": "ready",
-      "distribution": "image",
-      "license": "Proprietary",
-      "note": "Tower defense espacial 3D low-poly em Rust sobre a GIOCHI-ENGINE 3D (snapshot em vendor/, engine 0.3.1). Nove blocos fechados: arena, inimigos com pool de 15, tiro com raycast, HUD, som sintetizado, tremor de camera, telas de menu/vitoria/derrota e dificuldade por onda medida com piloto automatico. Medido no X35H: 49,3 fps com 15 cubos e 4,14 ms de trabalho por quadro (o teto e o painel). Ver PROGRESS.md do app.",
-      "slug": "giochi-defender"
-    },
-    {
-      "id": "giochi-tower",
-      "folder": "jogos/giochi-tower",
-      "slug": "giochi-tower",
-      "runtime": "native",
-      "status": "ready",
-      "distribution": "image",
-      "license": "Proprietary",
-      "note": "Tower Defense 3D co-op sobre a GIOCHI-ENGINE-3D vendorizada. M1-M3 entregues: combate, boss, nemesis, loja e HUD/minimapa desenhados (fonte 5x7 em dados + camera de 90 sobre o 3D). Medido no R35S: 59,8 fps, 9 chamadas de desenho por quadro. M4 (rede real) e M5 (evdev) pendentes."
     }
   ]
 }

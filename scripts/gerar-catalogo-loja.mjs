@@ -7,7 +7,7 @@
 //   node scripts/gerar-catalogo-loja.mjs --pacotes dist/pacotes --url-base https://cdn.giochi.example
 //   node scripts/gerar-catalogo-loja.mjs --lista        # o que entraria e o que não
 //
-// ## É esta ferramenta que responde "como a lista de jogos é preenchida"
+// ## É esta ferramenta que responde "como a lista da loja é preenchida"
 //
 // A lista **não** é escrita à mão em lugar nenhum. Ela é o resultado de um
 // pipeline, e cada etapa deixa um artefato verificável:
@@ -24,7 +24,7 @@
 //   CDN  →  loja no PC  →  aparelho
 //
 // O aparelho confia em **uma** chave pública (a do catálogo). Todo o resto —
-// quais jogos existem, por quanto, e de onde baixar — vem assinado por ela. É
+// quais apps existem, por quanto, e de onde baixar — vem assinado por ela. É
 // por isso que cadastrar um jogo é rodar o forge e rodar este script: não há
 // tabela em banco para editar à mão e esquecer.
 //
@@ -132,7 +132,7 @@ async function principal() {
   const dirPacotes = path.isAbsolute(o.pacotes) ? o.pacotes : path.join(RAIZ, o.pacotes);
   if (!existsSync(dirPacotes)) {
     console.error(`ERRO pasta de pacotes não existe: ${dirPacotes}`);
-    console.error("  gere os pacotes antes:  node scripts/empacotar.mjs app/jogos/pacman");
+    console.error("  gere os pacotes antes:  node scripts/empacotar.mjs app/launcher");
     return 1;
   }
 

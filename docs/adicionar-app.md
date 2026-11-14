@@ -3,23 +3,22 @@
 ## 1. Copie o template
 
 ```bash
-cp -r app/_template app/meu-app          # ferramenta ou launcher
-cp -r app/_template app/jogos/meu-jogo   # jogo
+cp -r app/_template app/meu-app
 ```
 
-O nome da pasta é o `slug` do app: minúsculas, números e hífen. `Meu App` e
+O nome da pasta é o `id` do app: minúsculas, números e hífen. `Meu App` e
 `meu_app` são rejeitados pelo validador.
 
-**Onde criar:** jogos vão em `app/jogos/`; todo o resto fica solto em `app/`. A
-diferença é só organizacional — o que faz da pasta um app é o `metadata.json`,
-e o validador descobre grupo por isso. Registre com o mesmo caminho:
+**Onde criar:** solto em `app/<slug>`. A varredura também aceita um nível de
+grupo (`app/<grupo>/<slug>`) — o que faz da pasta um app é o `metadata.json`, não
+uma lista de grupos escrita à mão. Se usar grupo, registre com o mesmo caminho:
 
 ```json
-{ "id": "meu-jogo", "folder": "jogos/meu-jogo", "runtime": "godot", "status": "scaffold" }
+{ "id": "meu-app", "folder": "ferramentas/meu-app", "runtime": "native", "status": "scaffold" }
 ```
 
-Grupo não precisa — e não deve — ter `metadata.json` próprio: pasta com o
-arquivo é app, e um grupo que se declara app vira um app quebrado.
+Grupo não precisa — e não deve — ter `metadata.json` próprio: pasta com o arquivo
+é app, e um grupo que se declara app vira um app quebrado.
 
 ## 2. Preencha o `metadata.json`
 
@@ -29,10 +28,10 @@ arquivo é app, e um grupo que se declara app vira um app quebrado.
   "developer": "Seu Nome",
   "version": "1.0.0",
   "arch": "aarch64",
-  "runtime": "godot",
+  "runtime": "native",
   "entrypoint": "bin/meu-app",
   "releaseYear": 2026,
-  "category": "Arcade"
+  "category": "Ferramenta"
 }
 ```
 
@@ -64,18 +63,22 @@ aparelho — isso só se descobre no hardware.
 
 ## 4. Declare os requisitos em `forge.json`
 
-Opcional, mas recomendado: sem ele o sistema assume os defaults (`godot`, GLES 3,
+Opcional, mas recomendado: sem ele o sistema assume os defaults (`Godot`, GLES 3,
 0 MB de RAM) e pode liberar o app num aparelho que não aguenta.
 
 ```json
 {
-  "runtime": "godot",
-  "graphics_api_min": "gles3",
-  "ram_min_mb": 512,
+  "runtime": "native",
+  "graphics_api_min": "none",
+  "ram_min_mb": 32,
   "display_min_width": 640,
   "display_min_height": 480
 }
 ```
+
+`graphics_api_min: "none"` é para app que desenha em software (SDL2 puro). O
+default continua `gles3`: omitir num app gráfico é conservador, `none` é
+declaração.
 
 Ver [forge.md](forge.md).
 

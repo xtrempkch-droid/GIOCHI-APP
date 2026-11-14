@@ -1,7 +1,11 @@
-# Jogos no cartão SD — o que funciona, o que não
+# Apps no cartão SD — o que funciona, o que não
 
 Estado em 06/11/2026, medido no X55. Responde "dá para usar cartão SD para levar
-jogos?" com o que foi executado, e separa o que é do app do que é do sistema.
+apps?" com o que foi executado, e separa o que é do app do que é do sistema.
+
+> Os transcriptos citam `pacman` e `cobrinha` porque foram os pacotes usados na
+> medição. O mecanismo (`instalar-do-cartao`, descoberta de cartões, poda do
+> catálogo) vale para qualquer `.giochi`.
 
 ---
 
@@ -29,7 +33,7 @@ O último setor usado é **4.194.303 = 2 GiB**. Num cartão de 128 GB sobram
 df /  →  974 MB total, 757 MB livres
 ```
 
-Ou seja: "espaço para jogos" não falta no cartão — falta **partição**.
+Ou seja: "espaço para apps" não falta no cartão — falta **partição**.
 
 ---
 
@@ -101,7 +105,7 @@ seja, uma decisão de dependência, não um `if`.
 ## 3b. Vários cartões e eMMC — o desenho genérico
 
 Alguns aparelhos têm **dois slots de SD e ainda eMMC**: o sistema pode ficar num
-cartão e os jogos no outro, e haverá casos de jogos **nos dois**. A primeira
+cartão e os apps no outro, e haverá casos de apps **nos dois**. A primeira
 versão deste código tinha `/dev/mmcblk1p1` fixo — o mesmo erro do
 `DEFAULT_ROTATION = Ccw90` que já foi corrigido na rotação: acerta num aparelho e
 mente no seguinte, sem avisar.
@@ -163,15 +167,15 @@ o cartão estará lá no próximo boot. Quem sabe é o aparelho.
 
 Levado ao canal em 06/11/2026 — 05:55 (partição e montagem) e 06:08 (multi-cartão),
 com os números acima. As três perguntas objetivas ao System estão na segunda
-mensagem: convenção de montagem, onde ficam os jogos com eMMC, e se "partição de
+mensagem: convenção de montagem, onde ficam os apps com eMMC, e se "partição de
 dados" e "slot 2" são a mesma coisa ou duas.
 
 | # | Item | Por que trava |
 | --- | --- | --- |
-| 1 | **Partição de dados** nos 116,5 GB | hoje `/user` é diretório **dentro do rootfs**. Regravar a imagem apaga os jogos comprados — e `distribution: store` ("fora da imagem assinada") deixa de ser verdade |
-| 1b | **Layout nos aparelhos com 2 slots + eMMC** | o app já descobre qualquer número de cartões, mas *onde* os jogos devem morar (instalar em `/user` ou rodar do cartão) muda com o layout da imagem |
+| 1 | **Partição de dados** nos 116,5 GB | hoje `/user` é diretório **dentro do rootfs**. Regravar a imagem apaga os apps comprados — e `distribution: store` ("fora da imagem assinada") deixa de ser verdade |
+| 1b | **Layout nos aparelhos com 2 slots + eMMC** | o app já descobre qualquer número de cartões, mas *onde* os apps devem morar (instalar em `/user` ou rodar do cartão) muda com o layout da imagem |
 | 1c | **Convenção de montagem** para o slot 2 | hoje o app monta em `/mnt/cartao<N>` porque ninguém monta; se o sistema fixar um caminho, o app para de montar |
-| 1d | **eMMC: jogos onde?** | eMMC, cartão, ou os dois — muda o `dir` do catálogo, e a loja precisa saber antes de instalar |
+| 1d | **eMMC: apps onde?** | eMMC, cartão, ou os dois — muda o `dir` do catálogo, e a loja precisa saber antes de instalar |
 | 2 | **Montar `GIOCHI_BOOT`** no boot | não está no `fstab` nem montada. Se eles montarem num caminho fixo, o app para de montar |
 | 3 | **Automount** de mídia removível | não há `mdev.conf` nem udev ativo. Irrelevante para o cartão de boot; necessário para um segundo slot ou pendrive |
 
@@ -184,7 +188,7 @@ justifica a loja neste desenho não se sustenta.
 ## 5. Limite prático hoje
 
 - `GIOCHI_BOOT` tem **210 MB livres** (45 MB em uso de 256 MB). Cabem dois ou
-  três jogos pequenos, não uma biblioteca.
+  três apps pequenos, não uma biblioteca.
 - É a **única** partição que um PC lê (FAT32). A `rootfs` é ext4 e não é
   montável pelo Windows.
 - Instalar exige o cartão no leitor e depois `instalar-do-cartao` no aparelho —

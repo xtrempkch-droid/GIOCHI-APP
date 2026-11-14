@@ -83,7 +83,7 @@ execução de binário arbitrário, e sanear esconderia que o arquivo está erra
 arquivo (`crates/ui-sdl/src/catalogo.rs`), desenha o catálogo real e executa o
 `entrypoint`. Medido no aparelho: `catálogo: 1 app(s) de
 /opt/giochi/apps/index.json`, e o ciclo abrir jogo → sair → voltar funcionou com
-o app `volley`.
+o app instalado.
 
 Duas variáveis de ambiente existem para diagnóstico: `GIOCHI_CATALOGO` aponta
 outro arquivo (é como se testa no PC, onde `/opt` não existe) e

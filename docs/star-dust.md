@@ -1,7 +1,7 @@
 # Star Dust — o launcher com a camada de efeitos
 
 `app/launcher-star-dust` é o **launcher de produção** com os oito efeitos que
-nasceram no [`launcher-teste`](../launcher-teste/README.md). Medido em
+nasceram no [`launcher-teste`](../app/launcher-teste/README.md). Medido em
 10/11/2026.
 
 ```bash

@@ -26,7 +26,7 @@
 # ## Por que `SDL_VIDEODRIVER=offscreen`
 #
 # `dummy` não tem OpenGL e o launcher-teste pede um contexto; `offscreen` tem
-# EGL por software e desenha de verdade. A armadilha é a mesma do neon-drift.
+# EGL por software e desenha de verdade.
 set -uo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

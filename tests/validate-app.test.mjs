@@ -285,9 +285,9 @@ test("aceita forge.json completo e válido", () => {
 });
 
 test("graphics_api_min 'none' sem fallback é aceito", () => {
-  // É o caso dos jogos nativos em SDL2: rodam em software, então não exigem API
-  // gráfica. Antes desta rodada eles não tinham forge.json nenhum, e o forge se
-  // recusava a classificá-los — inclusive os que rodam de verdade no aparelho.
+  // É o caso de um app nativo em SDL2: roda em software, então não exige API
+  // gráfica. Sem este valor o forge assumia `gles3` por omissão e reprovava
+  // apps que rodam de verdade no aparelho.
   withTempDir((dir) => {
     const result = validateApp(
       makeApp(dir, "a", { forge: { arch: "aarch64", runtime: "native", graphics_api_min: "none" } }),
@@ -528,20 +528,20 @@ test("aceita releaseYear e recusa ano fora de faixa", () => {
   });
 });
 
-// ── grupos: app/jogos/<slug> ────────────────────────────────
+// ── grupos: app/<grupo>/<slug> ──────────────────────────────
 //
-// Os jogos passaram a viver em `app/jogos/`, e `app/jogos` é pasta mas não é
-// app. O que distingue um do outro é o `metadata.json` — não uma lista de
-// grupos escrita à mão, que envelheceria em outro lugar.
+// Um grupo é pasta mas não é app. O que distingue um do outro é o
+// `metadata.json` — não uma lista de grupos escrita à mão, que envelheceria em
+// outro lugar.
 
 test("listApps desce em grupo e não trata o grupo como app", () => {
   withTempDir((dir) => {
     makeApp(dir, "launcher");
-    makeApp(path.join(dir, "jogos"), "volley");
-    makeApp(path.join(dir, "jogos"), "spacewar");
+    makeApp(path.join(dir, "ferramentas"), "editor");
+    makeApp(path.join(dir, "ferramentas"), "terminal");
 
     const achados = listApps(dir).map((p) => path.relative(dir, p).split(path.sep).join("/"));
-    assert.deepEqual(achados, ["jogos/spacewar", "jogos/volley", "launcher"]);
+    assert.deepEqual(achados, ["ferramentas/editor", "ferramentas/terminal", "launcher"]);
   });
 });
 

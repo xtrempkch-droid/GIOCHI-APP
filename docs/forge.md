@@ -67,15 +67,15 @@ incompatível — não é bug, é o hardware.
 
 O painel do X55 é 720×1280 — **retrato**. Mas nenhum app deste projeto desenha em
 retrato: o espaço de projeto é paisagem (1280×720) e o sistema gira o desenho
-(`fbcon/rotate=3`), o que o launcher e os jogos aplicam.
+(`fbcon/rotate=3`), o que o launcher aplica.
 
-Comparar `forge.json` com o painel cru reprovava o caso mais comum: um jogo que
-declara 1280×720 "não caber" num aparelho de 720×1280 **onde ele roda** — foi
-exatamente o que o arcade-volleyball fez, medido.
+Comparar `forge.json` com o painel cru reprovava o caso mais comum: um app que
+declara 1280×720 "não caber" num aparelho de 720×1280 **onde ele roda** — medido,
+e é o caso do próprio launcher.
 
 A regra é maior lado × menor lado, que não precisa saber a rotação:
 
-| Painel | Utilizável | Um jogo 1280×720 |
+| Painel | Utilizável | Um app 1280×720 |
 | --- | --- | --- |
 | 720×1280 (X55, retrato) | 1280×720 | **cabe** |
 | 640×480 (X35H, 4:3) | 640×480 | não cabe |
@@ -128,8 +128,8 @@ giochi-forge check --profile device_profile.json --project .
 
 ## Exemplo
 
-Um jogo nativo — o que roda de fato nos aparelhos medidos. É o `forge.json` do
-`arcade-volleyball`, com os números **medidos** no X55 (19 MB de pico):
+Um app nativo — o que roda de fato nos aparelhos medidos. Os números são
+**medidos**: 19 MB de pico de RAM no X55.
 
 ```json
 {

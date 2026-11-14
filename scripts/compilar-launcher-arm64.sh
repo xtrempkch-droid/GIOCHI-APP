@@ -349,7 +349,7 @@ log "pronto: $LAUNCHER/bin/$BIN_NAME ($(du -h "$BIN" | cut -f1))"
 # ── 6. instalar no aparelho ─────────────────────────────────
 if [ -n "$INSTALAR" ]; then
   # O caminho do aparelho segue a convenção do `Giochi System`: a pasta é o
-  # **slug**, não o nome do crate. `jogos/pacman` vira `/opt/giochi/apps/pacman`
+  # **slug**, não o nome do crate. `<grupo>/<slug>` vira `/opt/giochi/apps/<slug>`
   # — e é essa a regra que o catálogo usa.
   DESTINO="/opt/giochi/apps/$SLUG/bin"
   # O dropbear/openssh do aparelho avisa sobre criptografia pós-quântica a cada

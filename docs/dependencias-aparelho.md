@@ -31,8 +31,7 @@ está abaixo.
 > `giochi-selftest`, que já tem o bloco "bibliotecas do launcher" — presente só
 > na imagem nova. Ou seja: a coluna "imagem antiga" abaixo é **histórico**, não o
 > estado do aparelho. As cinco bibliotecas de texto e o `DejaVuSans.ttf` estão na
-> imagem; `readelf` continua ausente. Ver
-> [o que o arcade-volleyball precisa](#o-que-o-arcade-volleyball-precisa-nada).
+> imagem; `readelf` continua ausente.
 
 > **A imagem do X35H em `out/` foi construída 14 minutos ANTES da correção do
 > `post-build.sh`.** Ela tem tudo de texto e **não** tem o `respawn`. Verificado
@@ -174,7 +173,7 @@ setsid nohup env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software \
 **Um aparelho que só mostra interface por SSH não é um console** — este é o item
 de maior impacto da lista, acima até do texto.
 
-## O que o `arcade-volleyball` precisa: **nada**
+## O que um app de SDL2 puro precisa: **nada**
 
 Levantado em 06/11/2026 no X55, e é a exceção que confirma a regra deste
 documento: o primeiro app que não pede nada à imagem.
@@ -182,13 +181,13 @@ documento: o primeiro app que não pede nada à imagem.
 ### Como foi medido
 
 Não por lista de cabeçalho, e sim **do processo vivo**: `/proc/<pid>/maps` de um
-`arcade-volleyball` rodando por KMSDRM. Isso separa "declara" de "usa" — a mesma
+um app nativo rodando por KMSDRM. Isso separa "declara" de "usa" — a mesma
 distinção que o `giochi-selftest` faz com `readelf -d`, só que no sentido
 inverso: aqui a pergunta é o que o kernel de fato mapeou.
 
 ```bash
 # no aparelho, com o jogo rodando
-grep '\.so' /proc/$(pidof arcade-volleyball)/maps | tr -s ' ' | rev | cut -d' ' -f1 | rev | sort -u
+grep '\.so' /proc/$(pidof giochi-launcher)/maps | tr -s ' ' | rev | cut -d' ' -f1 | rev | sort -u
 ```
 
 ### As 15 bibliotecas carregadas
@@ -217,7 +216,8 @@ grep '\.so' /proc/$(pidof arcade-volleyball)/maps | tr -s ' ' | rev | cut -d' ' 
 | `libz.so.1.3.1` / `libzstd.so.1.5.5` / `libexpat.so.1.9.1` | compressão e parsing, do Mesa |
 
 **Diferença: zero.** As 15 já estavam na imagem. A prova mais forte é o que o
-pacote instalou — três arquivos, nenhuma biblioteca:
+pacote instalou — três arquivos, nenhuma biblioteca (o app medido em 06/11/2026
+mora hoje no repositório de jogos; o transcripto é o da medição):
 
 ```text
 membros: metadata.json → capa.png → bin/ → bin/arcade-volleyball
@@ -229,20 +229,19 @@ $ find /user/apps/arcade-volleyball -type f
 
 ### Por que ele não pede nada, e o launcher pede quatro coisas
 
-É decisão de projeto do port, não sorte: **o jogo não usa fonte nem áudio**. O
-placar é desenhado em sete segmentos de retângulo e todo o resto são retângulos,
-linhas e um círculo feito de spans. Nenhuma chamada a `SDL_ttf`, nenhuma a
-`libasound`.
+É decisão de projeto, não sorte: **um app pode não usar fonte nem áudio**. Um
+placar em sete segmentos de retângulo, e todo o resto em retângulos, linhas e um
+círculo feito de spans, não faz nenhuma chamada a `SDL_ttf` nem a `libasound`.
 
 | App | Precisa a mais | Por quê |
 | --- | --- | --- |
-| launcher | `SDL2_ttf`, `freetype`, `harfbuzz`, fonte TTF | a UI é feita de texto |
-| `arcade-volleyball` | **nada** | desenha o placar em barras; sem áudio |
+| launcher e Star Dust | `SDL2_ttf`, `freetype`, `harfbuzz`, fonte TTF | a UI é feita de texto |
+| app de geometria pura | **nada** | desenha em retângulos; sem áudio |
 
 Ou seja: a regra "não peça à imagem o que o app pode desenhar" custa um placar
 menos bonito e economiza quatro dependências, uma fonte e a discussão de licença
-dela. Para os jogos, é o caminho — e é replicável: `volley`, `pacman` e
-`cobrinha` também não pedem nada.
+dela. **E é o que faz um binário só rodar em aparelho sem `libasound`** — o
+launcher resolve isso por `dlopen` (ver `AGENTS.md` §6.5).
 
 ### Uma correção de estado: o X55 já roda a imagem de 04/11
 

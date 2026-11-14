@@ -2,8 +2,8 @@
 // Empacota um app da pasta `app/` num `.giochi` assinado.
 //
 // Uso:
-//   node scripts/empacotar.mjs app/jogos/pacman
-//   node scripts/empacotar.mjs app/jogos/pacman --saida dist/pacotes
+//   node scripts/empacotar.mjs app/launcher
+//   node scripts/empacotar.mjs app/launcher --saida dist/pacotes
 //
 // Gera três arquivos, como o antecessor:
 //   <slug>.giochi               o pacote
@@ -57,7 +57,7 @@ function argumentos(argv) {
         [
           "empacotar.mjs — monta e assina um pacote .giochi",
           "",
-          "  <pasta do app>       app/<slug> ou app/jogos/<slug>",
+          "  <pasta do app>       app/<slug> (ou app/<grupo>/<slug>)",
           "  --saida <dir>        onde gravar (padrão: dist/pacotes)",
           "  --chave <arquivo>    chave privada PEM Ed25519",
           "",
@@ -72,7 +72,7 @@ function argumentos(argv) {
       throw new Error(`argumento desconhecido: ${a}`);
     }
   }
-  if (!opcoes.app) throw new Error("informe a pasta do app (ex.: app/jogos/pacman)");
+  if (!opcoes.app) throw new Error("informe a pasta do app (ex.: app/launcher)");
   if (!opcoes.saida) opcoes.saida = join(raiz, "dist/pacotes");
   return opcoes;
 }
@@ -148,7 +148,7 @@ function principal() {
   if (!existsSync(caminhoMetadata)) {
     throw new Error(
       `${dirApp} não tem metadata.json\n` +
-        "— se é um grupo (app/jogos/), informe a pasta do app dentro dele",
+        "— se é um grupo (app/<grupo>/), informe a pasta do app dentro dele",
     );
   }
 
@@ -208,7 +208,7 @@ function principal() {
     console.warn("aviso: esta chave NÃO é a da imagem do aparelho — ela vai recusar o pacote");
     console.warn("       (a pública em /etc/giochi/loja-publica.pem é outra)");
   }
-  // O slug **não** é o nome da pasta: `jogos/pacman` → `pacman`, e um app
+  // O slug **não** é o nome da pasta: `<grupo>/<slug>` → `<slug>`, e um app
   // renomeado na árvore não pode mudar o diretório no aparelho.
   const { slug, origem: origemSlug } = slugDoPacote(metadata, idDoIndice(dirApp));
   const nomePacote = `${slug}.giochi`;

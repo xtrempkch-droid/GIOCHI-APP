@@ -62,6 +62,8 @@ pub struct App {
     /// tela é uma ação humana. Um intervalo só para os dois obrigaria a escolher
     /// entre reler bateria rápido demais ou girar devagar demais.
     energia_poll: f32,
+    /// Já saiu alguma linha `energia:` no log. Ver `energia_deve_registrar`.
+    energia_registrada: bool,
     /// Backlight: apagar ao dormir, restaurar ao acordar.
     backlight: Backlight,
     /// Botão de energia físico.
@@ -187,6 +189,7 @@ impl App {
             last_minute: 0,
             rotation_poll: 0.0,
             energia: crate::energia::Energia::discover(),
+            energia_registrada: false,
             // Zero no primeiro quadro: a barra superior abre com a leitura já
             // feita, em vez de mostrar `—` por dois segundos.
             energia_poll: 0.0,
@@ -778,8 +781,17 @@ impl App {
         // silenciosa, e uma leitura que falha (sensor some, caminho muda) ficava
         // invisível: a HUD mostrava `—` e ninguém sabia se era ausência real ou
         // bug. O log tem de cobrir os dois lados.
-        if nivel != self.state.battery || temperatura.map(|t| t as u16) != Some(self.state.hud.temp_c)
-        {
+        //
+        // A decisão vive em `energia_deve_registrar`; ver o comentário de lá
+        // para o bug do `None` comparado com `Some(0)`.
+        if energia_deve_registrar(
+            nivel,
+            self.state.battery,
+            temperatura,
+            self.state.hud.temp_c,
+            self.energia_registrada,
+        ) {
+            self.energia_registrada = true;
             eprintln!(
                 "energia: bateria {} · temperatura {}",
                 match (&bateria, nivel) {
@@ -1097,4 +1109,45 @@ fn capacidades_do_kernel() -> Option<Vec<u16>> {
     todos.sort_unstable();
     todos.dedup();
     Some(todos)
+}
+
+/// Decide se a linha `energia:` deve sair no log agora.
+///
+/// Ver o gêmeo em `app/launcher/crates/ui-sdl/src/app.rs` para o diagnóstico
+/// completo. Em resumo: `hud.temp_c` é `u16` com `0` significando "desconhecido",
+/// e comparar `Option<u16>` com `Some(0)` dá **sempre verdadeiro** quando não há
+/// sensor. O resultado medido no R35S foi a linha saindo a cada 5 s no console
+/// serial — o único canal que existe quando o USB não sobe.
+fn energia_deve_registrar(
+    nivel: Option<u8>,
+    nivel_anterior: Option<u8>,
+    temperatura: Option<u16>,
+    temperatura_na_hud: u16,
+    ja_registrou: bool,
+) -> bool {
+    if !ja_registrou {
+        return true;
+    }
+    nivel != nivel_anterior || temperatura.unwrap_or(0) != temperatura_na_hud
+}
+
+#[cfg(test)]
+mod testes_energia {
+    use super::energia_deve_registrar;
+
+    #[test]
+    fn sem_sensor_nao_registra_a_cada_leitura() {
+        assert!(!energia_deve_registrar(None, None, None, 0, true));
+    }
+
+    #[test]
+    fn a_primeira_leitura_sempre_sai() {
+        assert!(energia_deve_registrar(None, None, None, 0, false));
+    }
+
+    #[test]
+    fn sensor_estavel_nao_registra_e_mudanca_registra() {
+        assert!(!energia_deve_registrar(Some(78), Some(78), Some(41), 41, true));
+        assert!(energia_deve_registrar(Some(78), Some(78), Some(43), 41, true));
+    }
 }

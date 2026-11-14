@@ -29,9 +29,9 @@ const EMPACOTADOR = path.join(RAIZ, "scripts", "empacotar.mjs");
 
 // App de mentira, comitado em `tests/fixtures/app-teste/`.
 //
-// Antes estes testes empacotavam `app/jogos/pacman` de verdade. Isso fazia o
-// teste do gerador depender do catálogo de jogos: apagar ou renomear um jogo
-// reprovava testes que não têm nada a ver com jogos. A fixture é um app
+// Antes estes testes empacotavam um app publicado de verdade. Isso fazia o
+// teste do gerador depender do catálogo: apagar ou renomear aquele app
+// reprovava testes que não têm nada a ver com ele. A fixture é um app
 // completo (metadata + capa 320×320 + binário), então o empacotador real roda
 // igual — só a origem do conteúdo deixou de ser acidental.
 const APP_FIXTURE = path.join(RAIZ, "tests", "fixtures", "app-teste");

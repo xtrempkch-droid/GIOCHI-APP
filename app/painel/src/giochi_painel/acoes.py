@@ -50,7 +50,7 @@ def _projeto(caminho: str) -> Path:
     if not p.is_dir():
         # Dizer **o caminho resolvido** e não só o digitado: caminho relativo é
         # relativo ao diretório de onde o painel foi aberto, e quem digitou
-        # "app/jogos/volley" no navegador não tem como adivinhar qual foi.
+        # "app/loja" no navegador não tem como adivinhar qual foi.
         raise ErroDeAcao(f"pasta não encontrada: {caminho} (resolvido para {p.resolve()})")
     if not (p / "metadata.json").is_file():
         raise ErroDeAcao(f"{caminho} não tem metadata.json (não é pasta de app)")

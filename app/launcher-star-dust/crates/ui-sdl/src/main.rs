@@ -650,9 +650,9 @@ fn main() -> Result<(), String> {
         // Pedido de lançamento: o núcleo decidiu *o que* abrir, e aqui é o
         // único lugar que sabe *como* — fechar o display, rodar, reabrir.
         //
-        // Antes desta checagem o botão "Jogar" só mostrava um aviso. Não havia
-        // como testar a integração porque não havia jogo; agora há
-        // (`app/jogos/volley`), e sem este trecho ele continuaria inalcançável.
+        // Antes desta checagem o botão "Jogar" só mostrava um aviso: o estado
+        // mudava e nada abria. Sem este trecho o app escolhido no cartão
+        // continuaria inalcançável.
         if let Some(id) = app.tomar_pedido_de_lancamento() {
             let alvo = catalogo.as_ref().and_then(|c| c.alvo(id)).cloned();
 

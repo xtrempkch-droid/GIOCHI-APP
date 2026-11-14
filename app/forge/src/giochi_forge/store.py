@@ -133,10 +133,11 @@ def _describe_gap(path: Path, kind: Kind) -> str:
                 "-- o caminho e port nativo (runtime \"native\")")
     if kind is Kind.SOURCE:
         # Idem: era "aarch64/musl". O alvo e aarch64/glibc 2.38, e o
-        # cross-compile existe (scripts/compilar-jogo-*-arm64.sh).
-        return ("precisa cross-compile para aarch64/glibc 2.38; ver "
-                "scripts/compilar-jogo-arm64.sh (Rust) e "
-                "scripts/compilar-jogo-cpp-arm64.sh (C++)")
+        # cross-compile existe (scripts/compilar-launcher-arm64.sh).
+        return ("precisa cross-compile para aarch64/glibc 2.38; o mesmo "
+                "toolchain de scripts/compilar-launcher-arm64.sh serve "
+                "(sysroot + wrapper de link), e o projeto precisa exportar "
+                "o binario para bin/ antes de empacotar")
     if kind is Kind.UNKNOWN:
         return "sem metadata.json, project.godot nem build system reconhecido"
     return ""

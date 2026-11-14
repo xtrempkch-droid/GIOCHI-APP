@@ -1,9 +1,0 @@
-[package]
-name = "giochi-neon-drift-core"
-description = "Neon Drift — regras puras: pista, física arcade, drift, IA e corrida"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-
-[dependencies]

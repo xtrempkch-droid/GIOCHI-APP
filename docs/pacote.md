@@ -3,6 +3,12 @@
 O arquivo que a loja instala no aparelho. Formato herdado do antecessor
 `GIOCHI-KONSOL-OS`.
 
+> **Nota sobre os exemplos.** Os transcriptos abaixo citam `pacman` e
+> `arcade-volleyball` porque foram **os pacotes usados na medição**, em
+> 06/11/2026. Os jogos saíram deste repositório em 14/11/2026, mas os números
+> continuam reais — trocar os nomes seria inventar medição que não aconteceu. O
+> formato, o empacotador e o verificador valem para qualquer app.
+
 ## Ordem dos membros é obrigatória
 
 Um arquivo `tar` **ustar**, com os membros nesta ordem:
@@ -130,21 +136,22 @@ decidir se `graphics_api` entra no metadata ou se fica só no `forge.json`.
 
 ## O que falta para o pacote existir
 
-1. **Export ARM64** dos projetos Godot (`src/` → `bin/`). Continua pendente: os
-   jogos Godot seguem sem `bin/`.
-2. ~~Migrar empacotador e assinador~~ — **feito em 06/11/2026**, em Node, sem
+1. ~~Migrar empacotador e assinador~~ — **feito em 06/11/2026**, em Node, sem
    dependência externa. Ver abaixo.
-3. ~~Portar o teste de ida e volta~~ — **feito**: `tests/pacote.test.mjs`,
+2. ~~Portar o teste de ida e volta~~ — **feito**: `tests/pacote.test.mjs`,
    incluindo a adulteração.
+3. **Export aarch64** do app que se quer publicar (`src/` → `bin/`). Isso é do
+   app, não do formato: enquanto `bin/` estiver vazio, o validador avisa
+   `bin_vazia` e o pacote sai sem o que executar.
 
 ---
 
 ## Implementado em 06/11/2026
 
 ```bash
-node scripts/empacotar.mjs app/jogos/pacman          # gera + assina
-node scripts/verificar-pacote.mjs dist/pacotes/pacman.giochi
-bash scripts/aparelho.sh instalar-pacote dist/pacotes/pacman.giochi
+node scripts/empacotar.mjs app/loja                  # gera + assina
+node scripts/verificar-pacote.mjs dist/pacotes/loja.giochi
+bash scripts/aparelho.sh instalar-pacote dist/pacotes/loja.giochi
 ```
 
 | Arquivo | Papel |
