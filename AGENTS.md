@@ -6880,29 +6880,84 @@ virou `assert_eq!(abertos(), 0)`.
 
 Relato do dono: *"no jogo a esquerda e direita estão invertidos; no PC não"*.
 
-**Não reproduzido.** O que foi medido, e por que não fecha:
+**Reproduzido e consertado.** O volante estava certo; errado era **para que lado
+da tela o eixo X do mundo cai**.
 
-| Medida | Resultado |
+### A medida que fechou o caso
+
+Sonda de 20 linhas projetando dois pontos com a `Camera3D` de perseguição do jogo:
+
+```text
++X (para onde o carro vai ao "virar direita")   NDC x = -1.687  -> ESQUERDA da tela
+-X                                              NDC x = +1.687  -> DIREITA  da tela
+```
+
+O `virar` estava certo de ponta a ponta: `DPAD_RIGHT`(547) chega, `bit_do_codigo`
+mapeia para `DIREITA`, `combinar` faz `virar += 1`, o núcleo faz `theta += giro`
+e o carro vai para `+X`. O que faltava era que **`+X` aparece à esquerda**, porque
+`Mat4::look_at` é *right-handed* e monta `s = cross(f, up)` — com a câmera olhando
+para `+Z` (a direção em que o carro anda), `s = (-1, 0, 0)`.
+
+Isso não é escolha do jogo: é a convenção da câmera encontrando a convenção do
+núcleo. As duas estão documentadas em arquivos diferentes e ninguém as pôs lado
+a lado — a mesma família do "carros correndo de ré" (§37), agora no eixo X.
+
+### Por que a correção é na projeção, e não no volante
+
+| Candidato | Por que não |
 | --- | --- |
-| `--quadros 200 --teclas enter,up,right` vs `left`, `--json` | `s` = 1306,3 contra 2185,4 — **o volante funciona** |
-| `--passos 200 --teclas up,right` + `--quadro`, right vs left | **quadros idênticos** — a ferramenta não mede o que se queria |
-| mundo do aparelho des-rotacionado × PC | 99,99 % — a cena é `girar_rect`-consistente, como o launcher |
+| inverter `virar` em `entrada_jogo::combinar` | o piloto automático **não passa por ali** (`virar: erro * 3.2` direto no núcleo) — jogador e piloto passariam a discordar |
+| negar o sinal do `angulo` no núcleo | muda a física e obriga a inverter o piloto junto: o defeito espalhado por dois arquivos |
+| **espelhar X em `girar_ponto`** | **um lugar só**; física, pista, piloto e HUD intactos |
 
-A armadilha: **`--quadro` desenha um quadro ANTES do laço**, então nada que
-dependa de `--quadros` chega ao BMP. E `--passos` só dirige se a corrida tiver
-começado (`enter`) — com as teclas só de acelerar/volante o carro fica na tela
-de título e todos os quadros saem iguais. Duas execuções idênticas apresentadas
-como A/B, de novo (§47).
+`girar_ponto` passou a devolver `(-p.x, p.z)` e `girar_angulo` passou a devolver
+`-angulo`. As duas metades são obrigatórias e cada uma tem teste:
 
-Como o mundo é `girar_rect`-consistente e o launcher está visualmente certo, a
-inversão **não é de desenho** — sobra a entrada física. O `--teclas` do jogo não
-passa por evdev, então nenhuma medição desta rodada exercitou o direcional de
-verdade. O próximo passo é ler os códigos crus enquanto alguém aperta esquerda e
-direita.
+| Mutação | Reprova |
+| --- | --- |
+| `girar_ponto` volta a `(p.x, p.z)` **e** `girar_angulo` a `angulo` | `virar_para_a_direita_poe_o_carro_a_direita_na_tela` (NDC -1,687) |
+| só `girar_angulo` volta a `angulo` | `o_carro_desenhado_aponta_para_onde_ele_anda` |
+
+O primeiro é a afirmação que faltava desde o começo: **o que o jogador mede é o
+quadro**, não a matemática do núcleo. Ele passa pelo caminho de produção
+(`girar_ponto` e depois a `Camera3D`), e tem contraprova — virar à esquerda tem
+de cair do outro lado, senão uma projeção que devolvesse sempre o mesmo sinal
+passaria.
+
+### "No PC não" era falta de teste, não diferença de plataforma
+
+O `--teclas` do PC e o controle no aparelho terminam no **mesmo** `combinar`, e a
+câmera é a mesma. A inversão existia nos dois; no PC ninguém tinha virado com o
+teclado. Isso explica por que três medições anteriores não acharam nada: elas
+mediam `s` (que sempre esteve certo) e comparavam quadros gerados pela **mesma**
+build espelhada — auto-consistentes por construção. **Uma comparação entre duas
+execuções do mesmo defeito não encontra o defeito.**
+
+### As duas lições de ferramenta (custaram uma rodada cada)
+
+1. **`--quadro` desenha um quadro ANTES do laço**, então nada que dependa de
+   `--quadros` chega ao BMP.
+2. **`--passos` só dirige se a corrida tiver começado** (`enter`); sem isso o
+   carro fica na tela de título e todos os quadros saem iguais — "duas execuções
+   idênticas" apresentadas como A/B, de novo (§47).
+3. E uma terceira, nova: **`--tamanho` no aparelho produz captura inconsistente**.
+   O painel continua 720×1280, mas o projeto vira 640×480 e `confiar_no_sistema`
+   cai para `false` — o log diz `rotação Nenhuma (formato do painel)` e o BMP sai
+   com o conteúdo no canto. No aparelho, captura-se **sem** `--tamanho`.
+
+### Verificado
+
+```text
+cargo test --workspace (neon-drift)   138 ui-sdl + 143 core = 281   (eram 280)
+scripts/verificar-rotacao-neon-drift.sh   99,60% (99,74% em 4 níveis) — sem regressão
+aparelho 720x1280 Ccw90 × PC 1280x720     98,4% de acerto, texto linha 0,91
+binário no aparelho                       sha256 61891a83… igual nas duas pontas
+```
 
 | Alegação | Estado |
 | --- | --- |
 | pareamento Bluetooth pelo launcher | **consertado e medido no aparelho** |
 | o controle vira dispositivo de entrada | **bloqueado na imagem** (falta `uhid`) |
 | releitura de `/dev/input` nos dois apps | **feito, com teste e mutação** |
-| esquerda/direita invertidos | **não reproduzido** — falta ver o código de cada botão |
+| esquerda/direita invertidos | **consertado** — `girar_ponto` espelha X, com teste e mutação |
+| o volante com o dedo no controle | **não exercitado** — a cadeia vai do código evdev ao pixel, sem dedo |

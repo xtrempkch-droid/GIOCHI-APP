@@ -1984,13 +1984,44 @@ fn criar(render: &mut RenderContext3D, c: &Construtor) -> Result<MeshHandle, Box
     Ok(render.create_mesh(c.vertices(), c.indices())?)
 }
 
-/// Gira um ponto do mundo para o espaço do projeto.
+/// Gira um ponto do mundo para o espaço de projeto, **espelhando X**.
+///
+/// ## O espelhamento não é gosto: é a convenção da câmera
+///
+/// `Mat4::look_at` é *right-handed* e monta a base com `s = cross(f, up)`. Com a
+/// câmera atrás do carro olhando para **+Z** (a direção em que ele anda, ver
+/// `direcao()` no núcleo), isso dá:
+///
+/// ```text
+/// f = (0,0,1), up = (0,1,0)  ->  s = cross(f, up) = (-1, 0, 0)
+/// ```
+///
+/// Ou seja, o eixo X do mundo aponta para a **esquerda** na tela. Medido, não
+/// deduzido — um ponto em `+X` a 10 m à frente projeta em NDC x = **-1,687**
+/// (esquerda), e `-X` em **+1,687** (direita).
+///
+/// A consequência prática é o relato do dono: *"a esquerda e a direita estão
+/// invertidos"*. O volante estava certo (aperta direita → `virar = +1` → `θ`
+/// cresce → o carro vai para `+X`), mas `+X` é a esquerda da tela.
+///
+/// ## Por que consertar aqui, e não no volante
+///
+/// Três candidatos foram descartados com medida:
+///
+/// | Onde | Por que não |
+/// | --- | --- |
+/// | inverter `virar` em `entrada_jogo::combinar` | o piloto automático **não** passa por ali (`virar: erro * 3.2` direto no núcleo), então o jogador e o piloto passariam a discordar |
+/// | inverter o sinal do `angulo` no núcleo | muda a física e obriga a inverter o piloto junto: o mesmo defeito espalhado por dois arquivos |
+/// | **espelhar X na conversão mundo→tela** | **um lugar só**, e a física, a pista e o piloto ficam intactos |
+///
+/// O espelhamento é um reflexo do mundo inteiro (pista, cenário, carros,
+/// partículas), então nada fica inconsistente: só a mão muda. E como o HUD não
+/// passa por aqui, ele não é afetado.
 fn girar_ponto(rot: Rotacao, p: Ponto) -> (f32, f32) {
-    match rot {
-        Rotacao::Nenhuma => (p.x, p.z),
-        // O giro da câmera já resolve a tela; o mundo fica como está.
-        Rotacao::Cw90 | Rotacao::Ccw90 => (p.x, p.z),
-    }
+    let _ = rot;
+    // O giro **do painel** é feito pelo `roll` da câmera; aqui só entra o
+    // espelhamento, que vale em qualquer orientação.
+    (-p.x, p.z)
 }
 
 /// Matriz de modelo do carro, com a **frente apontando para onde ele anda**.
@@ -2047,10 +2078,15 @@ fn girar_direcao(rot: Rotacao, p: Ponto) -> (f32, f32) {
     girar_ponto(rot, p)
 }
 
+/// Ângulo do carro no espaço **espelhado**.
+///
+/// Espelhar X inverte o sentido dos ângulos: um giro anti-horário visto de cima
+/// em `(x, z)` vira horário quando `x` troca de sinal. Sem este `-`, o carro
+/// seria espelhado mas continuaria apontando para o lado oposto ao que anda —
+/// era o "carro andando de ré" de outra forma.
 fn girar_angulo(rot: Rotacao, angulo: f32) -> f32 {
-    match rot {
-        Rotacao::Nenhuma | Rotacao::Cw90 | Rotacao::Ccw90 => angulo,
-    }
+    let _ = rot;
+    -angulo
 }
 
 /// Constrói a geometria estática do mapa, escolhendo o cenário pelo **tipo**
@@ -3636,7 +3672,13 @@ mod testes {
                 m.data[2] * local.x + m.data[6] * local.y + m.data[10] * local.z + m.data[14],
             );
             let frente = Vec3::new(world.x, 0.0, world.z).normalized();
-            let esperado = Vec3::new(d.x, 0.0, d.z).normalized();
+            // A `direcao()` do núcleo passa por `girar_ponto` antes de virar
+            // pixel — e essa função espelha X (ver o comentário dela). Comparar
+            // com a direção crua exigiria que o carro apontasse para o lado
+            // oposto ao que anda na tela, que é o bug que o espelhamento
+            // conserta.
+            let (ex, ez) = girar_direcao(Rotacao::Nenhuma, d);
+            let esperado = Vec3::new(ex, 0.0, ez).normalized();
             let alinhamento = frente.x * esperado.x + frente.z * esperado.z;
             assert!(
                 alinhamento > 0.99,
@@ -3645,6 +3687,72 @@ mod testes {
                  é o 'correndo de ré'"
             );
         }
+    }
+
+    #[test]
+    fn virar_para_a_direita_poe_o_carro_a_direita_na_tela() {
+        // O defeito relatado em 10/11/2026: *"a esquerda e a direita estao
+        // invertidos"*. O volante estava certo (aperta direita -> `virar = +1`
+        // -> `theta` cresce -> o carro vai para `+X`); o que estava errado era
+        // `+X` cair à **esquerda** da tela, porque `Mat4::look_at` é
+        // right-handed e monta `s = cross(f, up)` — com `f = +Z` isso dá `-X`
+        // como "direita da tela".
+        //
+        // Este teste é a afirmação que faltava, e ele mede a única coisa que o
+        // jogador mede: para que lado do **quadro** o carro vai. Ele passa pelo
+        // caminho de produção (`girar_ponto` e depois a `Camera3D`), não por uma
+        // reimplementação — foi a lição do `--teclas` que imprimia estado sem
+        // ter mudado nada (§24) e do contador que media a intenção (§30).
+        //
+        // Devolver `(p.x, p.z)` cru em `girar_ponto` reprova com NDC x = -1,687.
+        // Medido, não estimado.
+        use giochi_engine_3d::math3d::Camera3D;
+
+        // A câmera de perseguição do jogo: atrás do carro, olhando para +Z.
+        let cam = Camera3D::from_parts(
+            Vec3::new(0.0, 3.0, -7.0),
+            Vec3::new(0.0, 1.0, 7.0),
+            Vec3::UP,
+        )
+        .with_fov_y(std::f32::consts::FRAC_PI_2)
+        .with_clip_planes(0.25, 900.0)
+        .with_drawable_size(1280, 720);
+        let vp = cam.view_projection().expect("matriz view-projection");
+
+        // Depois de virar à direita, o carro andou alguns metros para `+X`.
+        let theta = 0.35f32;
+        let mundo = Ponto {
+            x: theta.sin() * 12.0,
+            z: theta.cos() * 12.0,
+        };
+        assert!(
+            mundo.x > 1.0,
+            "o cenário do teste precisa de deslocamento lateral: x = {:.2}",
+            mundo.x
+        );
+
+        let (px, pz) = girar_ponto(Rotacao::Nenhuma, mundo);
+        let ndc = vp.transform_point(Vec3::new(px, 1.0, pz));
+        assert!(
+            ndc.x > 0.05,
+            "o carro virou à direita e caiu em NDC x = {:+.3}, que é a ESQUERDA \
+             da tela — é a inversão de esquerda/direita relatada",
+            ndc.x
+        );
+
+        // A contraprova: virar à esquerda tem de cair do outro lado. Sem ela,
+        // uma projeção que devolvesse sempre o mesmo sinal passaria.
+        let esquerda = Ponto {
+            x: -theta.sin() * 12.0,
+            z: theta.cos() * 12.0,
+        };
+        let (ex, ez) = girar_ponto(Rotacao::Nenhuma, esquerda);
+        let ndc_esq = vp.transform_point(Vec3::new(ex, 1.0, ez));
+        assert!(
+            ndc_esq.x < -0.05,
+            "o carro virou à esquerda e caiu em NDC x = {:+.3}",
+            ndc_esq.x
+        );
     }
 
     #[test]
