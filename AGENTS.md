@@ -6609,8 +6609,11 @@ a 17 m da torre, fora dos 14 m do Soldado.
 cargo test                        265 (229 lib + 36 integração)   ← eram 258
 cargo clippy -D warnings          limpo
 validate-app.mjs --all            11 apps válidos
+tests/run-all.mjs                 199/199
 R35S, 640×480                     binário instalado, sha256 conferido nas duas pontas
                                   quadro 640x480 · 630 px avermelhados, duas populações de alfa
+custo da mira no R35S             0,16 ms por quadro (2,66 com × 2,50 sem),
+                                  59,6–59,7 fps nos dois — cabe no vblank
 ```
 
 ### O que continua sendo afirmação

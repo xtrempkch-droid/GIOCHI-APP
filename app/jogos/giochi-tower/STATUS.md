@@ -16,7 +16,7 @@ cada decisão está em [`DECISIONS.md`](DECISIONS.md), o design em
 | FPS no aparelho | **59,6** (vblank) sem UI **com o cenário** · **59,7** com UI e HUD |
 | trabalho por quadro | **2,56 ms** sem UI (com cenário) · **6,19 ms** com UI + HUD |
 | cenário | 473 peças em **5 malhas fundidas**: custa **0,76 ms** por quadro |
-| mira | linha **40 % transparente** (α 0,60 medido nos dois lados), retículo opaco |
+| mira | linha **40 % transparente** (α 0,60 medido nos dois lados), retículo opaco · custa **0,16 ms** por quadro |
 | pixel a pixel | 4 254 cores no PC contra **4 807 no R35S**; **0,00 %** de quase-preto nos dois |
 | multiplicador | host e cliente em dois processos, `jogador 1 entrou` dos dois lados |
 
@@ -114,11 +114,16 @@ que é o vermelho puro do `TARGET_COLOR`. Só a linha recebeu alfa — o retícu
 translúcido sumiria justamente sobre a pedra clara, que é onde ele mais importa
 (`D-046`).
 
-### Duas ferramentas novas de bancada
+### Ferramentas de bancada
 
 `--posicionar x,z` e `--sem-entrada`. A primeira porque capturar um quadro **com
 alvo marcado** exigia jogar até a horda encostar, e os inimigos de longo alcance
 param a 17 m da torre, fora dos 14 m do Soldado.
+
+O custo da camada, medido no R35S com `--benchmark 300 --sem-ui --sem-entrada`:
+**2,66 ms** com mira contra **2,50 ms** sem ela — **0,16 ms** por quadro, e os
+dois casos a 59,6–59,7 fps. A camada cabe folgada no orçamento de 16,7 ms do
+painel.
 
 A segunda foi descoberta por medição, não por desenho: o aparelho tem controle
 conectado, e o analógico parado emite ruído. Esse ruído move o `aim` do soldado e
