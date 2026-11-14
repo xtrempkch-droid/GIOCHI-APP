@@ -49,6 +49,16 @@ const ESPERA_VARREDURA_MS: u64 = 4_000;
 /// Janela de descoberta do Bluetooth, em segundos.
 const JANELA_BT_S: u32 = 8;
 
+/// Janela de "acordar" o aparelho imediatamente antes de parear.
+///
+/// Existe porque `pair` sem descoberta recente resulta em page timeout
+/// (`ConnectionAttemptFailed`) mesmo com o controle a um metro — ele só responde
+/// enquanto está anunciando. Curta de propósito: é um empurrão, não uma varredura.
+const JANELA_ACORDAR_S: u32 = 5;
+
+/// Janela do próprio `pair`, em segundos (aceito como texto pelo `bluetoothctl`).
+const JANELA_PAREAR_S: &str = "25";
+
 pub struct SemFio {
     pedidos: Sender<Pedido>,
     respostas: Receiver<Cmd>,
@@ -546,9 +556,43 @@ fn escanear_bt() -> Cmd {
 }
 
 fn parear(mac: &str) -> Cmd {
-    let janela = "25";
+    // ── 1. acordar o aparelho ────────────────────────────────────────────
+    //
+    // Medido no X55 (13/11/2026) com um "Pro Controller" já descoberto:
+    //
+    //     bluetoothctl --timeout 20 pair 98:B6:E9:9C:46:65
+    //     connect failed (status 0x04, Connect Failed)
+    //     Failed to pair: org.bluez.Error.ConnectionAttemptFailed
+    //
+    // `0x04` é **page timeout**: o controle não respondeu. Ele só responde
+    // enquanto está anunciando, e a varredura do launcher acabou minutos antes.
+    // Um `pair` sem descoberta recente, portanto, falha por motivo que não é o
+    // pareamento — e a mensagem manda o usuário procurar defeito no app.
+    //
+    // Uma janela curta de descoberta imediatamente antes resolve: o aparelho
+    // volta a anunciar (é o que o modo de pareamento faz) e o `pair` o alcança.
+    let _ = bt(&["power", "on"]);
+    let _ = bt(&["pairable", "on"]);
+    let janela = JANELA_ACORDAR_S.to_string();
+    let _ = Command::new(programa("bluetoothctl"))
+        .args(["--timeout", &janela, "scan", "on"])
+        .output();
+
+    // ── 2. parear com agente ─────────────────────────────────────────────
+    //
+    // `--agent` explícito, e não `agent` numa chamada anterior: cada
+    // `bluetoothctl` é um processo, e o agente registrado num morre com ele. Um
+    // controle é `NoInputNoOutput` (não tem teclado nem tela para confirmar
+    // código) — é o Just Works, que é o que ele espera.
     let saida = Command::new(programa("bluetoothctl"))
-        .args(["--timeout", janela, "pair", mac])
+        .args([
+            "--agent",
+            "NoInputNoOutput",
+            "--timeout",
+            JANELA_PAREAR_S,
+            "pair",
+            mac,
+        ])
         .output();
     let texto = match saida {
         Ok(s) => String::from_utf8_lossy(&s.stdout).into_owned(),
@@ -558,24 +602,55 @@ fn parear(mac: &str) -> Cmd {
         Err(e) => return Cmd::ResultadoBt(Some(format!("bluetoothctl: {e}"))),
     };
 
-    if texto.contains("Pairing successful") || texto.contains("AlreadyExists") {
+    // ── 3. o veredito é o estado, não o texto ────────────────────────────
+    //
+    // `Pairing successful` já apareceu para aparelho que voltou a `Paired: no`
+    // logo depois (o controle cai e o BlueZ desfaz). Quem decide é o `info`.
+    let info = bt(&["info", mac]).unwrap_or_default();
+    let pareado = info.contains("Paired: yes");
+
+    if pareado || texto.contains("AlreadyExists") {
         // Parear sem confiar exige autorizar de novo a cada conexão; e sem
         // conectar o aparelho fica pareado e inútil.
         let _ = bt(&["trust", mac]);
-        let _ = bt(&["connect", mac]);
-        eprintln!("bluetooth: {mac} pareado");
+        if !info.contains("Connected: yes") {
+            let _ = bt(&["connect", mac]);
+        }
+        eprintln!("bluetooth: {mac} pareado e confiado");
         return Cmd::ResultadoBt(None);
     }
 
-    // O motivo real, não um "falhou" genérico: `AuthenticationFailed`,
-    // `already exists` e `not available` pedem ações diferentes do usuário.
-    let motivo = texto
+    Cmd::ResultadoBt(Some(motivo_do_pareamento(&texto, &info)))
+}
+
+/// Traduz a falha do BlueZ em ação para o usuário.
+///
+/// As três falhas pedem coisas diferentes, e a mensagem crua (`Failed to pair:
+/// org.bluez.Error.ConnectionAttemptFailed`) não diz nenhuma delas.
+fn motivo_do_pareamento(texto: &str, info: &str) -> String {
+    if info.is_empty() {
+        return "o aparelho não está mais visível: aproxime e procure de novo".into();
+    }
+    if texto.contains("ConnectionAttemptFailed") || texto.contains("status 0x04") {
+        return "o controle não respondeu: coloque-o em modo de pareamento \
+                (segure o botão de sync/par) e tente de novo"
+            .into();
+    }
+    if texto.contains("AuthenticationFailed") || texto.contains("AuthenticationRejected") {
+        return "o controle recusou a autenticação: apague-o no controle e pareie de novo".into();
+    }
+    if texto.contains("AlreadyExists") {
+        return "já existe um pareamento com este aparelho; remova e tente de novo".into();
+    }
+    if texto.contains("NoAgentAvailable") || texto.contains("No agent") {
+        return "o BlueZ não tinha agente para confirmar o pareamento".into();
+    }
+    texto
         .lines()
         .map(|l| l.trim())
         .find(|l| l.contains("Failed") || l.contains("not available"))
         .map(|l| l.to_string())
-        .unwrap_or_else(|| "pareamento recusado".into());
-    Cmd::ResultadoBt(Some(motivo))
+        .unwrap_or_else(|| "pareamento recusado".into())
 }
 
 /// Anexa a mensagem de erro ao comando.
@@ -601,6 +676,55 @@ impl ComErro for Cmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A falha de page timeout é a que aconteceu no X55 com um controle
+    /// **já descoberto**: `pair` sem descoberta recente.
+    #[test]
+    fn page_timeout_vira_instrucao_e_nao_codigo_do_bluez() {
+        let motivo = motivo_do_pareamento(
+            "Attempting to pair with 98:B6:E9:9C:46:65\n\
+             hci0 98:B6:E9:9C:46:65 type BR/EDR connect failed (status 0x04, Connect Failed)\n\
+             Failed to pair: org.bluez.Error.ConnectionAttemptFailed",
+            "Device 98:B6:E9:9C:46:65\n  Name: Pro Controller\n  Paired: no",
+        );
+        assert!(motivo.contains("modo de pareamento"), "{motivo}");
+        assert!(!motivo.contains("org.bluez"), "código cru não é instrução: {motivo}");
+    }
+
+    #[test]
+    fn aparelho_fora_de_alcance_pede_procurar_de_novo() {
+        let motivo = motivo_do_pareamento("Failed to pair: not available", "");
+        assert!(motivo.contains("não está mais visível"), "{motivo}");
+    }
+
+    #[test]
+    fn autenticacao_recusada_pede_apagar_no_controle() {
+        let motivo = motivo_do_pareamento(
+            "Failed to pair: org.bluez.Error.AuthenticationFailed",
+            "Device X\n  Paired: no",
+        );
+        assert!(motivo.contains("apague-o no controle"), "{motivo}");
+    }
+
+    /// Sem agente o BlueZ responde `NoAgentAvailable` — e a ação é outra.
+    #[test]
+    fn falta_de_agente_e_diagnosticada_como_tal() {
+        let motivo = motivo_do_pareamento(
+            "Failed to pair: org.bluez.Error.NoAgentAvailable",
+            "Device X\n  Paired: no",
+        );
+        assert!(motivo.contains("agente"), "{motivo}");
+    }
+
+    /// O que não é reconhecido tem de chegar ao usuário, não sumir.
+    #[test]
+    fn falha_desconhecida_vira_o_texto_do_bluez() {
+        let motivo = motivo_do_pareamento(
+            "Failed to pair: org.bluez.Error.InProgress",
+            "Device X\n  Paired: no",
+        );
+        assert!(motivo.contains("InProgress"), "{motivo}");
+    }
 
     const BRUTO: &str = "bssid / frequency / signal level / flags / ssid\n\
 e4:be:ed:3e:88:16\t2462\t-70\t[WPA-PSK-CCMP+TKIP][WPA2-PSK-CCMP+TKIP][ESS]\tORLEANS\n\

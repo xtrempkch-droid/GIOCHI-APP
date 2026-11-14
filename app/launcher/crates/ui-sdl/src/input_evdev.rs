@@ -27,6 +27,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use giochi_launcher_core::GamepadFrame;
 
@@ -284,7 +285,21 @@ pub struct EvdevInput {
     devices: usize,
     names: Vec<String>,
     _threads: Vec<JoinHandle<()>>,
+    /// Transmissor guardado para os leitores abertos **depois** da abertura
+    /// inicial (controle Bluetooth que conectou com o launcher já rodando).
+    tx: Sender<Ev>,
+    dir: PathBuf,
+    abertos: HashSet<PathBuf>,
+    proxima_revisao: Instant,
 }
+
+/// De quanto em quanto tempo `/dev/input` é reexaminado.
+///
+/// Um controle Bluetooth aparece como um `event*` novo **só quando conecta**, e
+/// nunca no boot. Abrir a lista uma vez — como era — deixava o controle recém-
+/// pareado invisível para sempre, e o sintoma era "pareou mas não funciona":
+/// indistinguível de "não pareou".
+const REVISAO_MS: u64 = 2_000;
 
 impl EvdevInput {
     /// Abre todos os dispositivos de `/dev/input/event*`.
@@ -293,40 +308,79 @@ impl EvdevInput {
     /// interessam simplesmente nunca aparecem no mapa.
     pub fn open(input_dir: &Path, map: ButtonsMap) -> Self {
         let (tx, rx) = channel();
-        let mut threads = Vec::new();
-        let mut names = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(input_dir) {
-            let mut paths: Vec<PathBuf> = entries
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .map(|name| name.starts_with("event"))
-                        .unwrap_or(false)
-                })
-                .collect();
-            paths.sort();
-
-            for path in paths {
-                if let Some(name) = device_name(&path) {
-                    names.push(name);
-                }
-                if let Some(handle) = spawn_reader(path, tx.clone()) {
-                    threads.push(handle);
-                }
-            }
-        }
-
-        Self {
+        let mut this = Self {
             rx,
             map,
             pressed: HashMap::new(),
             hat: (0, 0),
-            devices: threads.len(),
-            names,
-            _threads: threads,
+            devices: 0,
+            names: Vec::new(),
+            _threads: Vec::new(),
+            tx,
+            dir: input_dir.to_path_buf(),
+            abertos: HashSet::new(),
+            proxima_revisao: Instant::now() + Duration::from_millis(REVISAO_MS),
+        };
+        this.abrir_novos();
+        this
+    }
+
+    /// Abre os `event*` que ainda não têm leitor.
+    ///
+    /// Idempotente e barato: relê o diretório e ignora o que já está em
+    /// `abertos`. Devolve quantos abriu agora, o que é o que o log reporta.
+    fn abrir_novos(&mut self) -> usize {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return 0;
+        };
+        let mut caminhos: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("event"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        caminhos.sort();
+
+        let mut novos = 0;
+        for path in caminhos {
+            if self.abertos.contains(&path) {
+                continue;
+            }
+            if let Some(handle) = spawn_reader(path.clone(), self.tx.clone()) {
+                self._threads.push(handle);
+                self.abertos.insert(path.clone());
+                self.devices = self.abertos.len();
+                if let Some(name) = device_name(&path) {
+                    self.names.push(name);
+                }
+                novos += 1;
+            }
+        }
+        novos
+    }
+
+    /// Reexamina `/dev/input` de tempos em tempos. Chamado por `poll`.
+    ///
+    /// O intervalo existe para não reler o diretório 60 vezes por segundo: um
+    /// controle Bluetooth leva segundos para conectar, e 2 s de atraso é
+    /// invisível para quem acabou de apertar "parear".
+    fn revisar(&mut self) {
+        if Instant::now() < self.proxima_revisao {
+            return;
+        }
+        self.proxima_revisao = Instant::now() + Duration::from_millis(REVISAO_MS);
+        let novos = self.abrir_novos();
+        if novos > 0 {
+            // O log importa: sem ele, "o controle conectou" e "o controle foi
+            // lido" continuam indistinguíveis de fora.
+            eprintln!(
+                "entrada: {novos} dispositivo(s) novo(s) — {} no total",
+                self.devices
+            );
         }
     }
 
@@ -344,6 +398,7 @@ impl EvdevInput {
 
     /// Drena o canal e atualiza o estado. Chamar uma vez por quadro.
     pub fn poll(&mut self) {
+        self.revisar();
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 // value 2 é autorepeat; para botão de controle não interessa.
@@ -493,6 +548,41 @@ pub const SIMBOLOS_CONHECIDOS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Um `event*` que aparece **depois** da abertura tem de ser lido.
+    ///
+    /// É o caso do controle Bluetooth: ele só cria o nó quando conecta, e a
+    /// abertura única deixava o controle recém-pareado invisível para sempre —
+    /// o sintoma era "pareou mas não funciona", indistinguível de "não pareou".
+    #[test]
+    fn dispositivo_novo_e_aberto_na_revisao_seguinte() {
+        let dir = std::env::temp_dir().join(format!("giochi-evdev-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        fs::write(dir.join("event0"), []).expect("event0");
+
+        let mut entrada = EvdevInput::open(&dir, ButtonsMap::parse("a = BTN_EAST\n"));
+        assert_eq!(entrada.device_count(), 1, "o event0 existente tem de ser aberto");
+
+        // O controle conectou: o nó apareceu com o launcher já rodando.
+        fs::write(dir.join("event1"), []).expect("event1");
+
+        // `revisar` tem uma janela de 2 s; aqui ela é vencida à mão.
+        entrada.proxima_revisao = Instant::now() - Duration::from_millis(1);
+        entrada.revisar();
+        assert_eq!(
+            entrada.device_count(),
+            2,
+            "o event1 apareceu depois da abertura e não foi aberto"
+        );
+
+        // E a revisão é idempotente: nada novo, nada duplicado.
+        entrada.proxima_revisao = Instant::now() - Duration::from_millis(1);
+        entrada.revisar();
+        assert_eq!(entrada.device_count(), 2, "a segunda revisão duplicou o leitor");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parse_le_mapa_plano() {
@@ -790,6 +880,10 @@ mod tests {
             devices: 0,
             names: Vec::new(),
             _threads: Vec::new(),
+            tx: channel().0,
+            dir: PathBuf::from("/dev/input"),
+            abertos: HashSet::new(),
+            proxima_revisao: Instant::now() + Duration::from_secs(3600),
         };
         let frame = input.frame();
         assert!(frame.dpad_up, "hat para cima deve virar dpad_up");
