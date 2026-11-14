@@ -6626,3 +6626,158 @@ custo da mira no R35S             0,16 ms por quadro (2,66 com × 2,50 sem),
 | a mira em **multijogador** | desenha só para `state.local_id`; para os outros jogadores não |
 
 ![A mira antes e depois](docs/imagens/giochi-tower-mira-antes-depois.png)
+
+## 47. Neon Drift: engine 0.4.0, e a rotação que girava em dois sentidos (13/11/2026)
+
+Duas frentes na mesma rodada: **sincronizar com a GIOCHI-ENGINE-3D 0.4.0** e
+resolver o relato do X55 — *"o jogo tá de ponta a cabeça e as informações estão
+na vertical"*.
+
+### O HUD e o mundo discordavam 180°, e cada um estava coerente
+
+Este é o defeito da rodada, e ele é da família que este repositório já registrou
+três vezes: **duas verdades sobre o mesmo fato**.
+
+| Peça | Como decidia a orientação | Estava |
+| --- | --- | --- |
+| HUD | `video::girar_rect` — a regra do launcher | **certo** |
+| mundo | `roll` da câmera, escrito por raciocínio | **invertido** |
+
+O raciocínio do `roll` era: *"girar a câmera por θ gira a imagem por −θ;
+`girar_rect(Ccw90)` gira a imagem em −90°; logo a câmera gira −90°"*. A última
+passagem está errada — **é +90°** — e nada no código dizia qual das duas era a
+certa. Pior: o comentário ao lado argumentava a favor do sinal errado em cinco
+linhas, o que é mais convincente que um número solto.
+
+O que resolveu foi **separar os dois lados**, não olhar a tela:
+
+1. **`--prova-rotacao`** desenha três barras de cor conhecida pelo caminho do
+   `girar_rect`, com posição prevista em número. Elas caem onde o launcher manda
+   → o HUD está certo e o mundo é que discorda.
+2. O mundo, sozinho (`GIOCHI_SEM=hud,carros,particulas`), exigia a rotação
+   **contrária** para voltar ao projeto. 180° de diferença, medido.
+
+Com o sinal trocado: mundo **99,99 %**, quadro completo **99,74 %** no PC; e no
+**X55**, 84,99 % exatos / 99,49 % dentro de 4 níveis.
+
+```text
+rot90-cw    erro médio  1.0     ← a inversa correta, procurando entre as 8
+rot90-ccw   erro médio 37.2
+identidade  erro médio 36.4
+transposta  erro médio 27.1
+```
+
+### A armadilha que invalidou uma rodada de medições: BMP de 32 bits
+
+`gravar_quadro` grava BMP pelo `Surface::save_bmp` em RGBA32 = **32 bpp**. Todos
+os scripts de análise liam 24 bpp. Os sintomas eram cor ciclando a cada pixel,
+"0 vermelhos" num quadro vermelho e diffs sem sentido — e **o defeito parecia do
+jogo**.
+
+A verificação que pega isso em dez segundos: **girar 90° e girar de volta tem de
+dar 100,00 %**. Deu 0 % até o leitor ser corrigido.
+
+Segunda armadilha, de convenção: desfazer `Ccw90` **não** é "girar para o outro
+lado". `girar_rect(Ccw90)` leva o projeto em `(y, W−x)`; a inversa leva o painel
+em `(y, H−x)` com as medidas trocadas. Girar para o lado errado produz uma
+**transposta** — que num quadro quase simétrico passa despercebida e num
+assimétrico reprova. As barras de cor são o que separa os dois casos.
+
+### `scripts/verificar-rotacao-neon-drift.sh`
+
+```bash
+bash scripts/verificar-rotacao-neon-drift.sh            # PC
+bash scripts/verificar-rotacao-neon-drift.sh --aparelho # ida e volta
+```
+
+Duas perguntas, e as duas reprovam o defeito:
+
+1. **As barras giram como o `girar_ponto` manda?** Mede o **centro** de cada
+   barra, não a extensão: as barras saem com metade do tamanho pedido (o quad do
+   HUD é 1×1 e a matriz supõe 2×2), mas o centro é exato — e é o centro que
+   carrega a rotação. Medir extensão misturaria duas perguntas.
+2. **O quadro retrato des-rotacionado reproduz o paisagem?** 99,53 %. Com o sinal
+   antigo do `roll`, **2,70 %**.
+
+Reverter o sinal reprova 2 testes (`o_roll_do_mundo_e_o_oposto_do_giro_do_hud`,
+`a_derrapagem_soma_ao_roll_do_sistema`) e o script. O `roll` virou função com
+nome, `roll_do_mundo`, justamente para poder ser testado sem câmera.
+
+Porque a relação é `roll + giro_do_hud == 0`: a câmera gira ao contrário da
+imagem. Escrito assim, o sinal deixa de ser escolha.
+
+### Um bug de ferramenta que deixou 3 cartões mortos no catálogo
+
+`aparelho.sh` verificava cada app do catálogo no aparelho com `no_aparelho`
+dentro de um `while read`. O **`ssh` lê o stdin**, então o laço terminava na
+primeira linha: só o primeiro app era conferido e os outros três foram
+publicados apontando para `/opt/giochi/apps/<jogo>`, que não existe.
+
+O sintoma é o pior tipo: o catálogo tinha 3 apps, o launcher desenhava 3 cartões,
+e apertar A em qualquer um não abria nada — **a ferramenta que existe para
+impedir cartão morto era a causa**.
+
+Duas trancas: `</dev/null` no `no_aparelho` (a raiz) e o laço lendo de um
+descritor dedicado (`read <&3`, `3<<<`). Nenhum outro chamador passa stdin para
+`no_aparelho`, então a raiz é segura.
+
+Depois da correção o catálogo foi para **0 app(s)** — honesto, porque nada estava
+instalado em `/opt`. O jogo entrou pelo caminho certo: `empacotar` →
+`instalar-pacote` → `/user/apps/neon-drift` com `metadata.json`.
+
+### Engine 0.4.0: cinco adições que são **deste vendor**
+
+O upstream foi de `3785a33` (phase-18) para `0fa46ec` (0.4.0) e **o crate 3D
+mudou** — na rodada anterior o diff era vazio. O snapshot foi refeito por cópia.
+
+O vendor local tinha código que o upstream não tem e que o jogo não roda sem:
+
+| Adição | Sem ela |
+| --- | --- |
+| `BuiltinShader::TexturedInstanced` + `textured_instanced.vert` | sprite com textura **e** instância não existe |
+| `draw_instanced_textured` | idem, do lado da `RenderContext3D` |
+| `rebuild_instancing` | trocar de mapa deixa carros e partículas sem desenho |
+| `create_texture_from_rgba_no_mipmap` | mipmap do atlas puxa texel vizinho e cada sprite ganha um risco |
+| `texture::from_rgba8_with(..., mipmaps)` | `LINEAR_MIPMAP_LINEAR` sem mipmap gerado = textura **preta**, sem erro de GL |
+
+Cada uma carrega comentário dizendo que é adição local. Sem isso a próxima
+sincronização apaga, e o sintoma ("os carros sumiram") não aponta para a cópia.
+
+Três quebras de API: `create_texture_rgba` → `create_texture_from_rgba`;
+`draw_mesh_textured` passou a receber a **textura antes** do modelo; e
+`Texture3D.handle` virou `gl_name()`.
+
+### O que a 0.4.0 permitiu acrescentar
+
+| Recurso | Como |
+| --- | --- |
+| texturas de superfície externas | `GIOCHI_TEXTURAS=<dir>`, PNG/BMP/JPG pelo `Texture3D::from_file`, com queda para o procedural **avisada** |
+| folha de sprites em PNG/JPEG | `atlas::ler_com_sdl_image`; a regra de 24 bits continua (sem alfa, a luminância é a máscara) |
+
+`libSDL2_image-2.0.so.0` entrou no `NEEDED`: é dependência de **carga** — sem a
+`.so` o processo não sobe. Já estava na imagem do X55.
+
+### Instalado e medido no X55
+
+```text
+launcher     /opt/giochi/apps/launcher/bin/giochi-launcher  c4d7ced9…  ppid=230 (giochi-init) drm=6
+neon-drift   /user/apps/neon-drift/bin/giochi-neon-drift    c144ddb0…
+catálogo     1 app: neon-drift — dir /user/apps/neon-drift
+rotação      painel 720x1280, Ccw90 (sistema (cmdline; fbcon/rotate dizia 0))
+quadro       84,99 % exatos · 99,49 % dentro de 4 níveis contra o PC
+testes       136 (bin) + 143 (core) = 279 · clippy no patamar de antes
+JS           199/199 · validate-app 11 apps válidos
+```
+
+**O dono confirmou na tela**: o launcher está na posição certa. É a primeira vez
+que a orientação do X55 é verificada por quem olha, e não só por comparação de
+pixels — as duas concordam.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| rotação no **X35H** e no **R35S** com este binário | **não medidas** — os dois são 640×480 e `rotate=0`, o caminho sem `roll`; o risco é baixo e não é zero |
+| FPS depois da sincronização | **não medido no aparelho** nesta rodada (o jogo foi instalado para o dono jogar, não para medir) |
+| a folha de sprites do usuário em PNG **no X55** | o caminho PNG→atlas foi exercitado no PC; no aparelho só o BMP |
+| `--prova-rotacao` noutro painel | só 720×1280/Ccw90 tem previsão escrita |

@@ -5,20 +5,36 @@
 > aqui não são recomendação: são os que o código lê hoje, e mudá-los sem mudar o
 > código faz a textura aparecer esticada, tremida ou invisível.
 
-## Regra que vale para tudo: PNG não carrega
+## Formatos: BMP sempre funciona, PNG depende da imagem
 
-O aparelho **não decodifica PNG**. Medido no R35S: o `libSDL2_image` foi
-compilado sem `--enable-png` e o `IMG_Load` responde *"PNG images are not
-supported"* (ver `AGENTS.md` §24). Por isso:
+O R35S de 07/11 tinha o `libSDL2_image` compilado **sem** `--enable-png` e o
+`IMG_Load` respondia *"PNG images are not supported"* (`AGENTS.md` §24). A
+imagem de 09/11 corrigiu o `defconfig` e passou a trazer `libpng16.so.16`.
 
-| Onde | Formato aceito |
-| --- | --- |
-| texturas de superfície | **só as sete geradas em código** — não há carregamento externo |
-| sprites de partícula | **BMP** 24 ou 32 bits, sem compressão (`GIOCHI_SPRITES`) |
-| captura e conferência | BMP (`--texturas`, `--atlas`, `--quadro`) |
+Por isso o jogo **aceita os dois** e cai para o procedural quando o arquivo não
+carrega — nunca em silêncio, sempre com o motivo no log.
 
-Um PNG no asset não abre no aparelho: o jogo sobe sem a textura e sem erro.
-Quando quiser conferir uma arte, exporte como BMP.
+| Onde | Formato aceito | Variável |
+| --- | --- | --- |
+| texturas de superfície | `png`, `bmp`, `jpg`, `jpeg` | `GIOCHI_TEXTURAS=<dir>` |
+| sprites de partícula | `png`, `bmp`, `jpg`, `jpeg` | `GIOCHI_SPRITES=<arquivo>` |
+| captura e conferência | BMP | `--texturas`, `--atlas`, `--quadro` |
+
+A ordem de preferência é **PNG primeiro** (`texturas::EXTENSOES`): quem exporta
+o mesmo material nos dois formatos quer o PNG, que não perde qualidade. Se o
+aparelho não decodificar PNG, o jogo avisa e usa o procedural — não quebra.
+
+```bash
+GIOCHI_TEXTURAS=~/minhas-texturas giochi-neon-drift      # asfalto.png, rocha.png, ...
+GIOCHI_SPRITES=~/minha-folha.png giochi-neon-drift       # folha 4x2 ou 8x1
+```
+
+O log na abertura diz de onde veio cada coisa:
+
+```text
+neon-drift: 7 textura(s) [...] 3 de arquivo · 4 procedurais, 64 x 64 de receita
+neon-drift: atlas de sprites 128x128 [...] (origem: folha externa (PNG/JPEG/BMP via SDL_image))
+```
 
 ---
 

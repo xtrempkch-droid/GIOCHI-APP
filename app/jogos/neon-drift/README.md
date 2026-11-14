@@ -590,9 +590,14 @@ recusa `--fps-teto` fora de 1..75.
 | `--escala 0.75` | desenha em resolução menor e estica (Upscaler da engine; `GIOCHI_ESCALA`) |
 | `--atlas a.bmp` | grava o atlas de sprites e sai, **sem abrir janela** |
 | `--texturas t.bmp` | grava as 7 texturas lado a lado, **sem abrir janela** — o molde para pintar |
+| `--prova-rotacao b.bmp` | três barras de cor conhecida em coordenadas de projeto, com posição prevista em número. Separa "o mundo girou errado" de "o HUD girou errado" sem olhar a tela |
 | `--json` | estado da corrida em uma linha de máquina, com `fps`, `ms_cpu`, `desenhos`, `malhas`, `vertices`, `mapa`, `altitude`, `impacto`, `fragmentos`, `largou`, `progresso`, `no_ar`, `v_vertical`, `altura_solo`, `nitro`, `nitro_usando`, `derrapando`, `dificuldade`, `posicao`, `gap` e a contagem de cada tipo de partícula. `desenhos`, `malhas` e `vertices` vêm do `frame_counters()` da engine |
 
-`GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro; `GIOCHI_CULL=0`
+`GIOCHI_SEM=carros,particulas,hud` desliga partes do quadro — e **só** essas três
+chaves existem. `GIOCHI_SEM=mundo` não desliga nada e não avisa: o nome da malha
+é outro (`asfalto`, `pedra`, …) e `--so mundo` é a flag que desenha só a
+geometria estática. Confundir os dois já custou duas execuções idênticas
+apresentadas como A/B. `GIOCHI_CULL=0`
 desliga o descarte de faces (para comparar). Os dois existem para **medir**, não
 para jogar: num painel de 720×1280 o quadro é dominado por pixel, e sem separar
 as partes "está lento" não diz o que cortar.
@@ -759,6 +764,140 @@ depois    lanternas 149 px  ·  faróis 54 px    ← de frente
 ```
 
 ![Carro antes e depois](../../../docs/imagens/neon-drift-carro-antes-depois.png)
+
+## Sincronização com a engine 0.4.0 (13/11/2026)
+
+O upstream foi de `3785a33` (phase-18) para `0fa46ec` (release **0.4.0**), e
+desta vez o crate 3D **mudou** — ao contrário da rodada anterior, em que o diff
+do `giochi-engine-3d/` era vazio. O snapshot foi refeito por cópia de
+`giochi-engine/src`, `giochi-engine/tests`, `giochi-engine-3d/src` e
+`giochi-engine-3d/shaders`.
+
+### Cinco adições que são **deste vendor**, não do upstream
+
+O snapshot antigo tinha código que o upstream não tem, e que o jogo **não roda
+sem**. Elas foram reaplicadas e cada uma carrega um comentário dizendo que é
+adição local — senão a próxima sincronização apaga e o sintoma não aponta para
+a cópia:
+
+| Adição | Sem ela |
+| --- | --- |
+| `BuiltinShader::TexturedInstanced` + `textured_instanced.vert` | sprite com textura **e** instância não existe: o atlas não desenha |
+| `draw_instanced_textured` | idem, do lado da `RenderContext3D` |
+| `rebuild_instancing` | trocar de mapa no título deixa carros e partículas sem desenho (§ "trocar de mapa") |
+| `create_texture_from_rgba_no_mipmap` | o mipmap do atlas puxa texel da célula vizinha e cada sprite ganha um risco reto |
+| `texture::from_rgba8_with(..., mipmaps)` | o filtro `LINEAR_MIPMAP_LINEAR` sem mipmap gerado dá textura **preta**, sem erro de GL |
+
+### O que a 0.4.0 trouxe e o jogo passou a usar
+
+- **`Texture3D::from_file`** (PNG/BMP/JPG pelo SDL_image) → `GIOCHI_TEXTURAS=<dir>`
+  permite trocar as sete texturas de superfície sem recompilar. O `NEEDED` do
+  binário ganhou `libSDL2_image-2.0.so.0`: é dependência de **carga** — sem a
+  `.so` o processo não sobe.
+- **`LoadSurface` do SDL_image** → a folha de sprites passou a aceitar PNG e
+  JPEG, não só BMP (`atlas::ler_com_sdl_image`). A regra de 24 bits continua:
+  sem alfa, a **luminância** vira máscara.
+
+### O que a 0.4.0 mudou e quebrou na cópia
+
+Três quebras de API, todas resolvidas no jogo (não no upstream):
+
+| Antes | Agora |
+| --- | --- |
+| `create_texture_rgba` | `create_texture_from_rgba` |
+| `draw_mesh_textured(mesh, shader, model, camera, texture, tint)` | `(mesh, shader, **texture**, model, camera, tint)` — a textura subiu dois argumentos |
+| `Texture3D.handle` (campo) | `Texture3D::gl_name()` |
+
+## Rotação no X55: o mundo e o HUD giravam em sentidos opostos
+
+Relato do dono: *"no x55 tá rolando erro de orientação, o jogo tá de ponta a
+cabeça e as informações estão na vertical"*.
+
+Duas causas, e a segunda só apareceu depois de a primeira ser corrigida.
+
+### 1. O HUD era montado no projeto, não no painel
+
+`camara_hud` recebia `1280×720` (o espaço de projeto) enquanto o alvo de desenho
+era `720×1280` (o painel). O texto saía esticado 1,78× num eixo e 0,56× no
+outro — e, como `hud_matriz` posicionava tudo em espaço de projeto sem girar
+nada, no painel retrato o texto ficava **deitado**.
+
+A correção tem três peças:
+
+| Peça | O que faz |
+| --- | --- |
+| `camara_hud(tela)` | a câmera descreve o **alvo real de desenho**, então recebe o painel |
+| `TelaHud { rotacao, projeto, painel }` | leva os dois espaços juntos, para ninguém confundir de novo |
+| `girar_rect_hud` / `girar_ponto_hud` | delegam a `video::girar_rect` / `video::girar_ponto` — a **mesma** função do launcher |
+
+Delegar não é economia de linha: a orientação do painel é fato do sistema, e dois
+apps que discordam sobre ela mentem um sobre o outro. Foi assim que o launcher
+foi verificado a 99,9 % no X55.
+
+### 2. O `roll` do mundo estava com o sinal trocado
+
+Com o HUD certo, a comparação passou a acusar **7 %** de acerto onde o mundo
+sozinho dava 99,9 %. Os dois giravam, cada um coerente consigo mesmo, e mesmo
+assim **180° em relação ao outro**.
+
+O raciocínio que produziu o erro era este, e é plausível:
+
+> girar a câmera por θ gira a imagem por −θ; `girar_rect(Ccw90)` gira a imagem
+> em −90°; logo a câmera tem de girar +90°... **não**: tem de girar −90°.
+
+A conclusão estava invertida, e nada no código dizia qual das duas era a certa.
+A medida que decidiu foi **separar os dois lados**:
+
+- `--prova-rotacao` desenha três barras de cor conhecida pelo caminho do
+  `girar_rect`, com posição prevista em número. Elas caem onde o launcher manda
+  — logo o HUD está certo, e o mundo é que discorda.
+- Com o sinal do `roll` trocado, o mundo des-rotacionado volta ao projeto a
+  **99,99 %**, e o quadro completo a **99,74 %**.
+
+O sinal agora é uma função com nome, `roll_do_mundo`, e o teste
+`o_roll_do_mundo_e_o_oposto_do_giro_do_hud` amarra a relação: `roll + giro == 0`.
+Trocar o sinal reprova 2 testes — verificado.
+
+### Medido no aparelho, com o binário instalado
+
+```bash
+bash scripts/verificar-rotacao-neon-drift.sh                 # no PC
+bash scripts/verificar-rotacao-neon-drift.sh --aparelho      # ida e volta
+```
+
+```text
+as três barras giram exatamente como o `girar_ponto` manda
+mundo + HUD des-rotacionados: 99.53% idênticos (99.74% dentro de 4 níveis)
+```
+
+E o quadro do **X55** contra o do PC, procurando entre as 8 orientações do
+diedro — a que vence é a única que faz sentido:
+
+```text
+rot90-cw         erro médio  1.0     ← a inversa correta
+rot90-ccw        erro médio 37.2
+identidade       erro médio 36.4
+transposta       erro médio 27.1
+```
+
+Histograma (X55 des-rotacionado × PC): **84,99 %** exatos, **99,49 %** dentro de
+4 níveis. O resíduo é o Mali-G52 × RX 580 (precisão de cor), não desenho.
+
+### A armadilha que custou uma rodada inteira: BMP de 32 bits
+
+Todas as medições desta fase estavam erradas, e o motivo não era o jogo: o
+`gravar_quadro` usa `Surface::save_bmp` em RGBA32, isto é, **32 bpp** — e todos
+os scripts de análise liam 24 bpp (3 bytes + alinhamento). O sintoma era cor
+ciclando a cada pixel (`.0..0 B1..1 G2..2 R3..3`), "0 pixels vermelhos" num
+quadro que visivelmente tinha vermelho, e diffs sem sentido.
+
+A verificação que pega isso em dez segundos: **girar um quadro 90° e girar de
+volta tem de dar 100,00 %**. Deu 0 % até o leitor ser corrigido.
+
+E a segunda armadilha, esta de convenção: desfazer `Ccw90` **não** é "girar para
+o outro lado". `girar_rect(Ccw90)` leva o projeto em `(y, W−x)`; a inversa leva
+o painel em `(y, H−x)` com as medidas trocadas. Girar 90° para o lado errado
+produz uma **transposta**, que num quadro quase simétrico passa despercebida.
 
 ## A engine vendorizada, e o que o phase-18 trouxe
 
