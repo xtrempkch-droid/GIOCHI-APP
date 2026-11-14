@@ -6961,3 +6961,8 @@ binário no aparelho                       sha256 61891a83… igual nas duas pon
 | releitura de `/dev/input` nos dois apps | **feito, com teste e mutação** |
 | esquerda/direita invertidos | **consertado** — `girar_ponto` espelha X, com teste e mutação |
 | o volante com o dedo no controle | **não exercitado** — a cadeia vai do código evdev ao pixel, sem dedo |
+
+**Pedido ao Giochi System, para a próxima janela do canal** (esta rodada fechou
+23:50, fora do horário): `CONFIG_UHID=y` na imagem e `hidp` carregado no boot.
+Sem `/dev/uhid`, o controle que pareia (`Bonded: yes`, medido) **não vira nó de
+entrada** e nenhum app deste repositório consegue lê-lo — não é código do app.
