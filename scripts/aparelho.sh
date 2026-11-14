@@ -241,7 +241,17 @@ no_aparelho() {
   for parte in "$@"; do
     remoto="$remoto$parte"$'\n'
   done
-  "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" "$remoto" 2>&1 | sem_ruido
+  # `</dev/null` porque o `ssh` **lê o stdin** e o repassa ao shell remoto.
+  # Sem isto, qualquer `while read ... ; do no_aparelho ...; done <<< "$lista"`
+  # perde todas as linhas menos a primeira: o `ssh` engole o resto da entrada e
+  # o laço termina. Foi assim que a conferência do catálogo no aparelho passou
+  # a examinar **só o primeiro app** — e os outros três viraram cartões mortos
+  # sem uma linha de aviso (13/11/2026).
+  #
+  # Nenhum chamador passa stdin de propósito: o que o `no_aparelho` executa é o
+  # script que vem nos argumentos. Se algum dia precisar de stdin, que seja
+  # explícito por outro caminho — herdar o do laço é sempre um defeito.
+  "${SSH_BIN[@]}" "${SSH_OPTS[@]}" "root@$HOST" "$remoto" </dev/null 2>&1 | sem_ruido
 }
 
 # Trecho remoto que define `matar_launcher`: derruba a interface e **espera o
@@ -966,12 +976,17 @@ cmd_catalogo() {
   " 2>/dev/null)
 
   local faltando="" linha
-  while IFS='|' read -r _id dir entry; do
+  # Lê de um descritor **dedicado** (3), não do stdin: um comando dentro de
+  # `while read` que leia stdin encerra o laço na primeira linha, e foi
+  # exatamente isso que fez o catálogo examinar só o primeiro app. O
+  # `no_aparelho` já fecha o stdin; esta é a segunda tranca, porque a primeira
+  # protege só quem passa por ele.
+  while IFS='|' read -r _id dir entry <&3; do
     [ -n "${entry:-}" ] || continue
     if ! no_aparelho "[ -x '$dir/$entry' ] && echo SIM" | grep -q SIM; then
       faltando="$faltando $_id"
     fi
-  done <<< "$pares"
+  done 3<<< "$pares"
 
   if [ -n "$faltando" ]; then
     aviso "não instalado(s) no aparelho:$faltando"
