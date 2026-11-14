@@ -1,20 +1,21 @@
 [package]
 name = "giochi-engine"
 description = "GIOCHI-ENGINE core: a C-shaped 2D game engine built on SDL2"
-version = "0.2.2"
-edition = "2021"
-rust-version = "1.82"
-license = "MIT"
-authors = ["GIOCHI-SYSTEM contributors"]
-repository = "https://github.com/xtrempkch-droid/GIOCHI-SYSTEM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
-sdl2 = { version = "0.38", default-features = false }
-log = "0.4"
-thiserror = "2.0"
+sdl2 = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
-default = []
+# Compila o SDL2 do código-fonte — o padrão, e o que o CI usa em x86_64.
+default = ["sdl2-bundled"]
 sdl2-bundled = ["sdl2/bundled"]
 # Usa o SDL2 do sistema via pkg-config. É o caminho para embarcado, cuja imagem
 # já traz o SDL2 com KMSDRM — e é o que permite cross-compilar para aarch64 sem

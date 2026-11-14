@@ -1,99 +1,234 @@
-//! Textures owned by the 3D context.
+//! GL textures for meshes.
 //!
-//! ## Por que esta peça faltava
+//! The vertex format has carried a `uv` attribute since phase 11 and
+//! [`BuiltinShader::Textured`](crate::shader::BuiltinShader::Textured) samples
+//! `u_texture`, but there was no way for a caller to *make* a texture: every draw
+//! bound none, and the shader sampled unit 0 where nothing was bound. This module is
+//! the missing half, so `uv` has something to index.
 //!
-//! A engine 3D já tinha tudo para desenhar textura **menos** a textura: o
-//! `Vertex` carrega `uv`, o `gpu_mesh` liga o atributo `a_uv`, existe
-//! `BuiltinShader::Textured` com os dois shaders compilando, e o `Program` já
-//! tem `set_texture`. O que não havia era um jeito de criar uma textura GL a
-//! partir de pixels e um `draw_*` que a ligasse — então o mundo do jogo era
-//! feito de cor por malha.
+//! # Why SDL_image and not a PNG crate
 //!
-//! ## O que este módulo faz
-//!
-//! Cria a textura a partir de RGBA, guarda o handle atrás de um `u64` (mesma
-//! disciplina do resto da engine: `0` é inválido, handles nunca são reusados) e
-//! apaga quando o chamador pede. **Não** tem `Drop` que fala com o GL: o
-//! contexto pode já ter morrido, e um `Drop` que chama `delete_texture` num
-//! contexto destruído é um erro que só aparece em produção.
-//!
-//! A filtragem é `LINEAR` com `REPEAT`: a alternativa (`NEAREST`/`CLAMP`) faz a
-//! textura de asfalto virar blocos e a de parede mostrar a emenda em cada
-//! extremo de UV. Não há mipmap: o mundo é desenhado a poucos metros e gerar
-//! mipmap de 6 texturas custaria memória sem ganhar nada num painel de 640×480.
+//! The 3D crate already depends on SDL2 for the window and input, and the workspace
+//! enables SDL2's `image` feature for the 2D path. Decoding to a software `Surface`
+//! and uploading the pixels is the same work a PNG crate would do, with no new
+//! dependency and the same format support (PNG, JPEG, BMP, …) the 2D textures have.
+//! The 2D `TextureRegistry` cannot be reused: its textures belong to a
+//! `sdl2::render` canvas, and this crate draws with raw GLES (ADR-037).
+
+use std::path::Path;
 
 use glow::HasContext;
+use sdl2::image::LoadSurface;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::surface::Surface;
 
 use crate::error::{Error3D, Result3D};
 
-/// Maior dimensão aceita. `8192` é o limite do Mali-G52; pedir mais devolve
-/// `GL_INVALID_VALUE` em silêncio e a textura sai preta.
-pub const MAX_DIMENSION: u32 = 8192;
+/// Opens SDL_image with the decoders this build actually has.
+///
+/// `IMG_Init` is idempotent, so the 2D engine opening it too is harmless. Probing PNG and
+/// JPEG separately is what turns "every texture is black on this console" into a warning
+/// at startup: a Buildroot image may ship SDL_image without libpng, and `IMG_Load` then
+/// fails per file with a message that names the format, not the missing library.
+fn ensure_image_subsystem() {
+    use std::sync::OnceLock;
 
-/// Uma textura GL com as suas medidas.
-pub(crate) struct GlTexture {
-    /// Nome GL.
-    pub(crate) handle: glow::Texture,
-    /// Largura em pixels.
-    pub(crate) width: u32,
-    /// Altura em pixels.
-    pub(crate) height: u32,
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        // `std::mem::forget` keeps the context alive for the process: dropping it would
+        // run `IMG_Quit`, and the engine has no shutdown hook that could re-open it.
+        match sdl2::image::init(sdl2::image::InitFlag::empty()) {
+            Ok(context) => std::mem::forget(context),
+            Err(err) => {
+                log::warn!("SDL_image is unavailable; 3D textures from files will fail: {err}");
+                return;
+            }
+        }
+
+        for (flag, name) in [
+            (sdl2::image::InitFlag::PNG, "PNG"),
+            (sdl2::image::InitFlag::JPG, "JPEG"),
+        ] {
+            match sdl2::image::init(flag) {
+                Ok(context) => std::mem::forget(context),
+                Err(_) => log::warn!(
+                    "SDL_image was built without {name} support; {name} textures will not load"
+                ),
+            }
+        }
+    });
 }
 
-impl GlTexture {
-    /// Cria a textura a partir de RGBA8 (linha a linha, `w*h*4` bytes).
-    pub(crate) fn from_rgba(
+/// A GL texture owned by a [`RenderContext3D`](super::RenderContext3D).
+///
+/// Delete it through the renderer, never directly: the texture belongs to the GL
+/// context, and a caller that drops this value without [`RenderContext3D::destroy_texture`]
+/// leaks it exactly as it would a mesh.
+pub struct Texture3D {
+    handle: glow::Texture,
+    width: u32,
+    height: u32,
+}
+
+impl std::fmt::Debug for Texture3D {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Texture3D")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Texture3D {
+    /// Decodes an image file and uploads it.
+    ///
+    /// The format is sniffed by SDL_image, so PNG, JPEG and BMP all work.
+    pub fn from_file(gl: &glow::Context, path: &Path) -> Result3D<Self> {
+        if path.as_os_str().is_empty() {
+            return Err(Error3D::InvalidArgument("texture path is empty".to_owned()));
+        }
+        // `sdl2::image::LoadSurface::from_file` does `to_str().unwrap()`, so a non-UTF-8
+        // path would panic inside the dependency instead of returning the error this
+        // signature promises.
+        if path.to_str().is_none() {
+            return Err(Error3D::InvalidArgument(format!(
+                "texture path is not valid UTF-8: {}",
+                path.display()
+            )));
+        }
+        ensure_image_subsystem();
+
+        let surface = Surface::from_file(path).map_err(|err| {
+            Error3D::Asset(format!(
+                "failed to load texture '{}': {err}",
+                path.display()
+            ))
+        })?;
+
+        // RGBA32 is what both the upload path and `create_texture_from_rgba` use.
+        let surface = surface
+            .convert_format(PixelFormatEnum::RGBA32)
+            .map_err(|err| Error3D::Asset(format!("failed to convert texture format: {err}")))?;
+
+        let (width, height) = (surface.width(), surface.height());
+        let pitch = surface.pitch() as usize;
+        let row_bytes = width as usize * 4;
+
+        // `glTexImage2D` has no pitch parameter, so a surface whose rows are padded
+        // (which RGBA32 can be for odd widths) has to be copied row by row. Feeding
+        // the locked slice straight in would shear the image.
+        let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+        let source = surface
+            .without_lock()
+            .ok_or_else(|| Error3D::Asset("texture surface is locked".to_owned()))?;
+        for row in 0..height as usize {
+            let start = row * pitch;
+            pixels.extend_from_slice(&source[start..start + row_bytes]);
+        }
+
+        Self::from_rgba8(gl, width, height, &pixels)
+    }
+
+    /// Uploads raw RGBA8 pixels.
+    ///
+    /// `pixels` must be exactly `width * height * 4` bytes. This is the path a
+    /// procedural texture (a checkerboard, a gradient, a font atlas) uses, and it lets
+    /// a test build a texture without touching the disk.
+    pub fn from_rgba8(
         gl: &glow::Context,
         width: u32,
         height: u32,
         pixels: &[u8],
+    ) -> Result3D<Self> {
+        Self::from_rgba8_with(gl, width, height, pixels, true)
+    }
+
+    /// [`Texture3D::from_rgba8`] com a geração de mipmap **explícita**.
+    ///
+    /// Acréscimo **deste recorte** (não existe na engine de origem), pela mesma
+    /// razão do `BuiltinShader::TexturedInstanced`: há um caso em que o mipmap da
+    /// 0.4.0 atrapalha.
+    ///
+    /// Mipmap é ganho em superfície — o asfalto visto de raspa para de tremer ao
+    /// longe — e prejuízo em **atlas de sprites**: cada célula é vizinha de outra
+    /// e, num nível reduzido, o filtro trilinear puxa o texel da célula ao lado.
+    /// O inset de 1e-4 do retângulo de UV cobre o nível 0 e não cobre o nível 2,
+    /// onde um texel já vale quatro pixels da célula. O sintoma é o sprite ganhar
+    /// um canto do vizinho, que num atlas de branco-sobre-alfa lê como "borrão
+    /// que não é desta forma".
+    pub fn from_rgba8_no_mipmap(
+        gl: &glow::Context,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result3D<Self> {
+        Self::from_rgba8_with(gl, width, height, pixels, false)
+    }
+
+    fn from_rgba8_with(
+        gl: &glow::Context,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        mipmaps: bool,
     ) -> Result3D<Self> {
         if width == 0 || height == 0 {
             return Err(Error3D::InvalidArgument(
                 "texture width and height must be non-zero".to_owned(),
             ));
         }
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        let Some(expected) = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+        else {
+            return Err(Error3D::InvalidArgument(
+                "texture dimensions overflow the address space".to_owned(),
+            ));
+        };
+        if pixels.len() != expected {
             return Err(Error3D::InvalidArgument(format!(
-                "texture {width}x{height} exceeds the {MAX_DIMENSION} limit"
-            )));
-        }
-        let esperado = width as usize * height as usize * 4;
-        if pixels.len() != esperado {
-            return Err(Error3D::InvalidArgument(format!(
-                "pixel buffer has {} bytes; {width}x{height} RGBA needs {esperado}",
+                "pixel buffer must be exactly width * height * 4 = {expected} bytes, got {}",
                 pixels.len()
             )));
         }
 
-        // SAFETY: `gen_texture`/`tex_image_2d`/`tex_parameter_i32` são GLES 2.0
-        // puro, e o buffer tem exatamente `w*h*4` bytes — conferido acima.
-        let handle = unsafe {
+        // SAFETY: the context is current and the pixel slice is exactly the size
+        // computed above, which is what `RGBA`/`UNSIGNED_BYTE` reads.
+        unsafe {
             let handle = gl
                 .create_texture()
-                .map_err(|e| Error3D::GlObject(format!("create_texture failed: {e}")))?;
+                .map_err(|err| Error3D::GlObject(format!("could not create a texture: {err}")))?;
             gl.bind_texture(glow::TEXTURE_2D, Some(handle));
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
-            );
+
+            // GLES 2.0 only allows mipmaps and `GL_REPEAT` on power-of-two textures.
+            // A non-power-of-two image (which every odd-sized sprite atlas is) would
+            // render black or sample garbage with either, so the two cases get
+            // different parameters rather than the desktop-GL defaults.
+            let power_of_two = width.is_power_of_two() && height.is_power_of_two();
+            let mipmaps = mipmaps && power_of_two;
+            let (wrap, filter) = if power_of_two {
+                (glow::REPEAT, glow::LINEAR)
+            } else {
+                (glow::CLAMP_TO_EDGE, glow::LINEAR)
+            };
+            // `LINEAR_MIPMAP_LINEAR` sem mipmap gerado é textura **preta**, e o
+            // driver não reclama: o min filter só vale para o nível 0, que existe,
+            // mas o `glTexImage2D` não completa a cadeia e o sampler devolve nada.
+            // Por isso o filtro depende de `mipmaps`, e não da potência de dois.
+            let filter = if mipmaps {
+                glow::LINEAR_MIPMAP_LINEAR
+            } else {
+                filter
+            };
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, filter as i32);
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MAG_FILTER,
                 glow::LINEAR as i32,
             );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::REPEAT as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::REPEAT as i32,
-            );
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -103,23 +238,50 @@ impl GlTexture {
                 0,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                Some(pixels),
+                glow::PixelUnpackData::Slice(Some(pixels)),
             );
-            gl.bind_texture(glow::TEXTURE_2D, None);
-            handle
-        };
 
-        Ok(Self {
-            handle,
-            width,
-            height,
-        })
+            if mipmaps {
+                gl.generate_mipmap(glow::TEXTURE_2D);
+            }
+
+            gl.bind_texture(glow::TEXTURE_2D, None);
+
+            let error = gl.get_error();
+            if error != glow::NO_ERROR {
+                gl.delete_texture(handle);
+                return Err(Error3D::GlObject(format!(
+                    "the driver refused the {width}x{height} texture (GL error 0x{error:04x})"
+                )));
+            }
+
+            Ok(Self {
+                handle,
+                width,
+                height,
+            })
+        }
     }
 
-    /// Apaga a textura no contexto dado.
+    /// Width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The raw GL name, for binding through [`Program::set_texture`](crate::shader::Program).
+    pub(crate) fn gl_name(&self) -> glow::Texture {
+        self.handle
+    }
+
+    /// Deletes the GL texture. The context must be current.
     pub(crate) fn destroy(self, gl: &glow::Context) {
-        // SAFETY: a textura pertence a este contexto e `self` é consumido, então
-        // não há como apagar duas vezes.
+        // SAFETY: the handle came from `create_texture` on this context and is not
+        // used after this call.
         unsafe { gl.delete_texture(self.handle) };
     }
 }

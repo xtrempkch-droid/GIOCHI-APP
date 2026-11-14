@@ -189,6 +189,17 @@ impl Window {
     pub fn sdl_window(&self) -> &sdl2::video::Window {
         &self.inner
     }
+
+    /// Splits the wrapper into the raw SDL window and the shared SDL context.
+    ///
+    /// Consumed by [`crate::render::RenderContext`], which must own the SDL window
+    /// because SDL binds a renderer to it.
+    pub(crate) fn into_parts(self) -> (sdl2::video::Window, Rc<SdlContext>) {
+        let Window {
+            inner, _context, ..
+        } = self;
+        (inner, _context)
+    }
 }
 
 #[cfg(test)]

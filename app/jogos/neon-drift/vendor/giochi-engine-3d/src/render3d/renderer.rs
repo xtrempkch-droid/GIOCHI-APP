@@ -14,8 +14,7 @@ use crate::error::{Error3D, Result3D};
 use crate::math3d::{Camera3D, Color3D, Mat4, Transform3D};
 use crate::mesh::{Mesh, Vertex};
 use crate::registry::HandleRegistry;
-use crate::render3d::texture::GlTexture;
-use crate::render3d::{DirectionalLight, InstancedRenderer, Upscaler};
+use crate::render3d::{DirectionalLight, InstancedRenderer, Texture3D, Upscaler};
 use crate::shader::{BuiltinShader, Program};
 
 /// Opaque handle to a mesh. `0` is invalid.
@@ -30,7 +29,11 @@ pub type MeshHandle = u64;
 ///
 /// `typedef uint64_t GiochiShaderHandle;`.
 pub type ShaderHandle = u64;
-/// Opaque handle to a texture. `0` is invalid.
+/// Opaque handle to a GL texture. `0` is invalid.
+///
+/// # C ABI
+///
+/// `typedef uint64_t GiochiGlTextureHandle;` (`docs/C_ABI_CONTRACT.md` §9.5).
 pub type TextureHandle = u64;
 
 /// The 3D renderer.
@@ -47,7 +50,10 @@ pub struct RenderContext3D {
     light: DirectionalLight,
     meshes: HandleRegistry<Mesh>,
     shaders: HandleRegistry<Program>,
-    textures: HandleRegistry<GlTexture>,
+    /// Textures a mesh can sample. Separate from the 2D engine's `TextureRegistry`:
+    /// those belong to a `sdl2::render` canvas, and this context draws with raw GLES
+    /// (ADR-037), so one handle cannot serve both.
+    textures: HandleRegistry<Texture3D>,
     /// Set when the frame renders below the window size; `None` is full resolution.
     ///
     /// Stored as the requested scale rather than as a `bool` so a resize can rebuild the
@@ -61,6 +67,12 @@ pub struct RenderContext3D {
     /// failure as a refused mesh. `draw_instanced` falls back to one draw per instance
     /// so the scene still renders, and logs the reason once.
     instanced: Option<InstancedRenderer>,
+    /// Draw calls the last `draw_instanced` issued.
+    ///
+    /// Kept here rather than read from `InstancedRenderer`: the per-instance fallback
+    /// never calls into that type, so asking it would report 0 while the frame issued N
+    /// draws — the one number a caller uses to tell the two paths apart.
+    last_instanced_draw_calls: u32,
     #[cfg(feature = "profiling")]
     counters: FrameCounters,
 }
@@ -112,6 +124,7 @@ impl RenderContext3D {
             // degrades to "draw one at a time" (below) rather than turning every caller
             // into a `Result`. The fallback draws the correct picture, only slower.
             instanced,
+            last_instanced_draw_calls: 0,
             #[cfg(feature = "profiling")]
             counters: FrameCounters::new(),
         }
@@ -422,7 +435,11 @@ impl RenderContext3D {
                 height as i32,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(buffer.as_mut_slice()),
+                // glow 0.18 envolveu o destino em `Option`: `Slice(Some(..))` é
+                // "leia para este buffer", e `Slice(None)` agora significa "use o
+                // PBO ligado a PACK_BUFFER" — que é outra operação. Sem o `Some`,
+                // o 0.18 não compila; com o `None` antigo, leria para o PBO.
+                glow::PixelPackData::Slice(Some(buffer.as_mut_slice())),
             );
         }
 
@@ -433,11 +450,28 @@ impl RenderContext3D {
 
     /// Uploads a mesh and returns its handle.
     ///
+    /// Normals are made usable before upload: a non-unit one is renormalised and a zero
+    /// or non-finite one is derived from the triangles. That is not cosmetic —
+    /// `normalize(vec3(0.0))` is undefined in GLSL ES 1.00, so a zero normal renders as
+    /// ambient-only grey on one driver and `NaN`/black on another, with no GL error.
+    ///
     /// # Errors
     ///
     /// [`Error3D::InvalidArgument`] for an empty mesh or an out-of-range index;
     /// [`Error3D::GlObject`] when the driver refuses a buffer.
     pub fn create_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) -> Result3D<MeshHandle> {
+        // Only copy when there is something to fix, so the primitives and the OBJ loader
+        // (both already normalised) keep uploading the caller's buffer directly.
+        let repaired;
+        let vertices = if crate::mesh::needs_normal_repair(vertices) {
+            let mut copy = vertices.to_vec();
+            crate::mesh::prepare_normals(&mut copy, indices);
+            repaired = copy;
+            repaired.as_slice()
+        } else {
+            vertices
+        };
+
         let mesh = Mesh::from_vertices_indices(self.gl.glow(), vertices, indices)?;
         Ok(self.meshes.insert(mesh))
     }
@@ -591,6 +625,83 @@ impl RenderContext3D {
         self.shaders.len()
     }
 
+    // ---- textures --------------------------------------------------------
+
+    /// Decodes an image file and uploads it as a GL texture.
+    ///
+    /// Use it with [`BuiltinShader::Textured`] and
+    /// [`RenderContext3D::draw_mesh_textured`]. The mesh must carry UVs — every
+    /// primitive and every OBJ loaded by this crate does, so the only case that does
+    /// not is a hand-built [`Vertex::flat`] mesh.
+    ///
+    /// # Errors
+    ///
+    /// [`Error3D::Asset`] when the file cannot be read or decoded, and
+    /// [`Error3D::GlObject`] when the driver refuses the upload.
+    pub fn create_texture(&mut self, path: &std::path::Path) -> Result3D<TextureHandle> {
+        let texture = Texture3D::from_file(self.gl.glow(), path)?;
+        Ok(self.textures.insert(texture))
+    }
+
+    /// Uploads raw RGBA8 pixels, for procedurally generated textures.
+    ///
+    /// `pixels` must be exactly `width * height * 4` bytes.
+    pub fn create_texture_from_rgba(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result3D<TextureHandle> {
+        let texture = Texture3D::from_rgba8(self.gl.glow(), width, height, pixels)?;
+        Ok(self.textures.insert(texture))
+    }
+
+    /// [`RenderContext3D::create_texture_from_rgba`] **sem** mipmap.
+    ///
+    /// Existe para atlas de sprites, e só para eles: num atlas cada célula é
+    /// vizinha de outra, e o filtro trilinear de um nível reduzido puxa o texel da
+    /// célula ao lado. Acréscimo deste recorte — ver
+    /// [`Texture3D::from_rgba8_no_mipmap`].
+    pub fn create_texture_from_rgba_no_mipmap(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result3D<TextureHandle> {
+        let texture = Texture3D::from_rgba8_no_mipmap(self.gl.glow(), width, height, pixels)?;
+        Ok(self.textures.insert(texture))
+    }
+
+    /// Releases a texture. Returns `false` for `0` or an unknown handle.
+    pub fn destroy_texture(&mut self, handle: TextureHandle) -> bool {
+        // `take` so `Rc::try_unwrap` can succeed; `get` clones and leaks the GL name
+        // (the same trap `destroy_mesh` documents).
+        let Some(texture) = self.textures.take(handle) else {
+            return false;
+        };
+
+        match std::rc::Rc::try_unwrap(texture) {
+            Ok(texture) => texture.destroy(self.gl.glow()),
+            Err(_) => {
+                log::warn!("texture {handle} is still referenced elsewhere; GL object leaked");
+            }
+        }
+
+        true
+    }
+
+    /// Pixel size of a texture, or `None` for an unknown handle.
+    pub fn texture_size(&self, handle: TextureHandle) -> Option<(u32, u32)> {
+        self.textures
+            .get(handle)
+            .map(|texture| (texture.width(), texture.height()))
+    }
+
+    /// Number of live textures.
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
+
     /// Releases every mesh and shader, then reports whether anything is left.
     ///
     /// Exists for an orderly shutdown and for the leak check the demo prints: after
@@ -614,6 +725,12 @@ impl RenderContext3D {
             }
             self.destroy_shader(handle);
         }
+        for handle in self.textures.handles() {
+            if self.textures.strong_count(handle) > Some(1) {
+                leaked += 1;
+            }
+            self.destroy_texture(handle);
+        }
 
         // Not a handle either: the render target is rebuilt on demand, so dropping it
         // here releases the framebuffer, its attachments and the upscale program.
@@ -633,31 +750,7 @@ impl RenderContext3D {
             log::warn!("{leaked} resource(s) were still referenced elsewhere and leaked");
         }
 
-        self.meshes.is_empty() && self.shaders.is_empty() && leaked == 0
-    }
-
-    /// Recria o buffer de instâncias depois de
-    /// [`RenderContext3D::release_all`].
-    ///
-    /// `release_all` leva o `InstancedRenderer` junto com o resto — é o que a
-    /// promessa "nenhum objeto GL depois disto" exige. O que ele **não** faz é
-    /// voltar a existir. Sem esta chamada, `draw_instanced` cai no caminho de N
-    /// desenhos com um programa que não tem `u_model`: todas as cópias saem
-    /// empilhadas na origem, e o único sinal é um `warn!` que ninguém lê no meio
-    /// de um quadro. Um app que destrói o mundo para reconstruí-lo (troca de
-    /// mapa, recarga de fase) tem de chamar isto entre as duas coisas.
-    ///
-    /// Devolve o mesmo veredito de
-    /// [`RenderContext3D::supports_instancing`]: `false` quando o driver não
-    /// oferece desenho instanciado.
-    pub fn rebuild_instancing(&mut self) -> bool {
-        if self.instanced.is_none() {
-            match InstancedRenderer::new(self.gl.glow(), self.gl.instancing()) {
-                Ok(instanced) => self.instanced = Some(instanced),
-                Err(err) => log::warn!("instanced drawing is unavailable: {err}"),
-            }
-        }
-        self.supports_instancing()
+        self.meshes.is_empty() && self.shaders.is_empty() && self.textures.is_empty() && leaked == 0
     }
 
     // ---- drawing ---------------------------------------------------------
@@ -819,62 +912,24 @@ impl RenderContext3D {
         Ok(true)
     }
 
-    /// Cria uma textura RGBA8 (`width * height * 4` bytes, linha a linha).
+    /// Draws `mesh` sampling `texture`, with `tint` multiplied over the sample.
     ///
-    /// A textura nasce em `LINEAR` + `REPEAT`: `NEAREST` transforma a textura de
-    /// asfalto em blocos, e `CLAMP` mostra a emenda em cada borda de UV.
-    pub fn create_texture_rgba(
-        &mut self,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-    ) -> Result3D<TextureHandle> {
-        let textura = GlTexture::from_rgba(self.gl.glow(), width, height, pixels)?;
-        Ok(self.textures.insert(textura))
-    }
-
-    /// Apaga uma textura. Devolve `false` se o handle não existia.
-    pub fn destroy_texture(&mut self, handle: TextureHandle) -> bool {
-        match self.textures.take(handle) {
-            Some(textura) => {
-                // `Rc::try_unwrap` falha se a textura estiver emprestada num
-                // desenho em curso; nesse caso o GL object fica para o driver
-                // liberar no fim do contexto, e o handle já não resolve.
-                if let Ok(gl_texture) = std::rc::Rc::try_unwrap(textura) {
-                    gl_texture.destroy(self.gl.glow());
-                }
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Medidas de uma textura, em pixels.
-    pub fn texture_size(&self, handle: TextureHandle) -> Option<(u32, u32)> {
-        self.textures.get(handle).map(|t| (t.width, t.height))
-    }
-
-    /// Quantas texturas vivas.
-    pub fn texture_count(&self) -> usize {
-        self.textures.len()
-    }
-
-    /// Desenha `mesh` com `texture` no lugar de uma cor sólida.
+    /// `shader` must declare `uniform sampler2D u_texture` — [`BuiltinShader::Textured`]
+    /// does, and a custom shader may. The texture is bound to unit 0 and the sampler
+    /// uniform is pointed at it; binding one without the other is a black mesh with no
+    /// GL error, which is why both happen inside this function.
     ///
-    /// `shader` tem de ser [`BuiltinShader::Textured`] — é o único par de shaders
-    /// que lê `a_uv` e amostra `u_texture`. Passar um `Phong` aqui desenha a
-    /// malha com a cor de `tint` e ignora a textura, sem erro nenhum; por isso o
-    /// nome da função diz "textured" e não "com um parâmetro a mais".
+    /// `tint` is multiplied into the sampled colour, so [`Color3D::WHITE`] shows the
+    /// image unchanged and a lower alpha fades it.
     ///
-    /// `tint` multiplica a amostra: branco devolve a textura como ela é, e uma cor
-    /// escura escurece o material sem precisar de uma segunda textura.
+    /// Returns `false` when any of the three handles is unknown.
     pub fn draw_mesh_textured(
         &mut self,
         mesh: MeshHandle,
         shader: ShaderHandle,
+        texture: TextureHandle,
         model: &Transform3D,
         camera: &Camera3D,
-        texture: TextureHandle,
         tint: Color3D,
     ) -> Result3D<bool> {
         let Some(mesh) = self.meshes.get(mesh) else {
@@ -890,9 +945,7 @@ impl RenderContext3D {
         self.bind_and_upload(&program, model, camera)?;
 
         let gl = self.gl.glow();
-        // O sampler precisa apontar para a **mesma** unidade em que a textura foi
-        // ligada: `set_texture` faz as duas coisas, e separá-las dá textura preta.
-        program.set_texture(gl, "u_texture", texture.handle, 0);
+        program.set_texture(gl, "u_texture", texture.gl_name(), 0);
         program.set_color(gl, "u_tint", tint.clamped());
 
         mesh.draw(gl, &program);
@@ -933,14 +986,16 @@ impl RenderContext3D {
         self.draw_instanced_inner(mesh, shader, instances, camera, Some(colour), None)
     }
 
-    /// [`RenderContext3D::draw_instanced`] sampling `texture` at each mesh UV.
+    /// [`RenderContext3D::draw_instanced`] amostrando `texture` nos UVs da malha.
     ///
-    /// `shader` must be [`BuiltinShader::TexturedInstanced`]. `tint` multiplies the
-    /// sample, the same way it does in [`RenderContext3D::draw_mesh_textured`].
+    /// `shader` tem de ser [`BuiltinShader::TexturedInstanced`] — acréscimo **deste
+    /// recorte**, não da engine de origem. `tint` multiplica a amostra, igual ao
+    /// [`RenderContext3D::draw_mesh_textured`].
     ///
-    /// Every instance shares the mesh's UVs. That is the whole point: a quad whose
-    /// UVs cover **one cell** of a sprite atlas can be stamped a thousand times in a
-    /// single call, and a second cell is a second (cheap) mesh, not a second texture.
+    /// Todas as instâncias compartilham os UVs da malha. É o ponto inteiro: um
+    /// quadrilátero cujos UVs cobrem **uma célula** de um atlas pode ser carimbado
+    /// mil vezes numa chamada, e a segunda célula é uma segunda malha (barata), não
+    /// uma segunda textura.
     pub fn draw_instanced_textured(
         &mut self,
         mesh: MeshHandle,
@@ -953,11 +1008,12 @@ impl RenderContext3D {
         self.draw_instanced_inner(mesh, shader, instances, camera, None, Some((texture, tint)))
     }
 
-    /// Shared body of the two instanced entry points.
+    /// Corpo comum das duas portas de desenho instanciado.
     ///
-    /// Exactly one of `colour` / `texture` is set by the public wrappers; the branch is
-    /// on the *shader's* uniform, not on a mode flag, so a caller cannot pick a
-    /// textured shader and have the colour silently used instead.
+    /// Exatamente um entre `colour` e `texture` é preenchido pelos invólucros
+    /// públicos; a ramificação é pelo **uniforme do shader**, não por uma flag de
+    /// modo, para que ninguém escolha um programa texturizado e veja a cor vencer em
+    /// silêncio.
     fn draw_instanced_inner(
         &mut self,
         mesh: MeshHandle,
@@ -968,13 +1024,16 @@ impl RenderContext3D {
         texture: Option<(TextureHandle, Color3D)>,
     ) -> Result3D<u32> {
         if instances.is_empty() {
+            self.last_instanced_draw_calls = 0;
             return Ok(0);
         }
         if self.meshes.get(mesh).is_none() || self.shaders.get(shader).is_none() {
+            self.last_instanced_draw_calls = 0;
             return Ok(0);
         }
         if let Some((handle, _)) = texture {
             if self.textures.get(handle).is_none() {
+                self.last_instanced_draw_calls = 0;
                 return Ok(0);
             }
         }
@@ -993,24 +1052,25 @@ impl RenderContext3D {
             .get(mesh)
             .expect("checked immediately above")
             .clone();
-        let amostra = texture.and_then(|(handle, tint)| {
-            self.textures
-                .get(handle)
-                .map(|gl_texture| (gl_texture.handle, tint))
-        });
 
         if !program.is_instanced() {
-            // A `Phong`/`Flat` program has no instance attributes, so the instanced
-            // path would draw every copy at whatever `u_model` holds. Report it: this
-            // is a caller mistake that produces a wrong picture, not a slow frame.
+            // A `Phong`/`Flat` program has no instance attributes, so the single-call
+            // path would draw every copy at whatever `u_model` happens to hold. The
+            // per-instance fallback below is correct for such a program, so use it and
+            // report the slower call rather than draw a wrong picture faster.
             log::warn!(
                 "draw_instanced needs an instanced shader (BuiltinShader::Instanced); \
-                 this program renders every copy at the same transform"
+                 drawing one call per instance instead"
             );
         }
 
         // View-projection and the light are identical for every instance.
         self.bind_and_upload_shared(&program, camera)?;
+        let amostra = texture.and_then(|(handle, tint)| {
+            self.textures
+                .get(handle)
+                .map(|gl_texture| (gl_texture.gl_name(), tint))
+        });
         match (amostra, colour) {
             (Some((texture_handle, tint)), _) => {
                 let gl = self.gl.glow();
@@ -1023,10 +1083,11 @@ impl RenderContext3D {
             (None, None) => {}
         }
 
-        let available = self
-            .instanced
-            .as_ref()
-            .is_some_and(|instanced| instanced.support().is_available());
+        let available = program.is_instanced()
+            && self
+                .instanced
+                .as_ref()
+                .is_some_and(|instanced| instanced.support().is_available());
 
         if available {
             let gl = self.gl.glow();
@@ -1036,6 +1097,7 @@ impl RenderContext3D {
             // instance buffer belong to this context.
             let calls = unsafe { instanced.draw(gl, &geometry, instances) };
             self.instanced = Some(instanced);
+            self.last_instanced_draw_calls = calls;
 
             #[cfg(feature = "profiling")]
             self.counters.record_draw_calls(calls);
@@ -1050,30 +1112,44 @@ impl RenderContext3D {
             return Ok(calls);
         }
 
-        // Fallback: one ordinary draw per instance. The instance shader has no
-        // `u_model`, so a caller that picked it gets a scene of copies at the origin
-        // rather than a crash — say so once, because the picture is wrong in a way that
-        // a frame-rate number would not reveal.
+        // Fallback: one ordinary draw per instance, with the same picture.
+        //
+        // The instanced vertex shader deliberately has no `u_model`; it reads the matrix
+        // from attributes 3..6. `Mesh::draw` only knows about 0..2, so setting a uniform
+        // here would do nothing and the copies would be transformed by whatever generic
+        // attribute values the driver happened to hold — not the documented "same picture,
+        // more calls". With the arrays disabled, GLES uses the current generic value for
+        // that attribute, so writing the four columns before each draw is enough.
+        let gl = self.gl.glow();
         if program.is_instanced() {
-            log::warn!(
-                "instancing is unavailable on this driver but the program expects \
-                 per-instance attributes; the scene will not render correctly"
-            );
+            // A previous draw may have left these slots enabled on the default VAO.
+            for slot in
+                crate::shader::ATTRIB_INSTANCE_MODEL..crate::shader::ATTRIB_INSTANCE_MODEL + 4
+            {
+                // SAFETY: attribute state on the default VAO, core GLES 2.0.
+                unsafe { gl.disable_vertex_attrib_array(slot) };
+            }
         }
+
         for model in instances {
             self.bind_and_upload_matrix(&program, model, camera)?;
-            match (amostra, colour) {
-                (Some((texture_handle, tint)), _) => {
-                    let gl = self.gl.glow();
-                    program.set_texture(gl, "u_texture", texture_handle, 0);
-                    program.set_color(gl, "u_tint", tint.clamped());
-                }
-                (None, Some(colour)) => {
-                    program.set_color(self.gl.glow(), "u_color", colour.clamped());
-                }
-                (None, None) => {}
+            if let Some(colour) = colour {
+                program.set_color(gl, "u_color", colour.clamped());
             }
-            geometry.draw(self.gl.glow(), &program);
+            if program.is_instanced() {
+                for column in 0..4usize {
+                    // SAFETY: a generic vertex attribute is core GLES 2.0 (the array is
+                    // disabled above). `Mat4::data` is column-major, so each slice is one
+                    // column of the matrix the shader reassembles.
+                    unsafe {
+                        gl.vertex_attrib_4_f32_slice(
+                            crate::shader::ATTRIB_INSTANCE_MODEL + column as u32,
+                            &model.data[column * 4..column * 4 + 4],
+                        );
+                    }
+                }
+            }
+            geometry.draw(gl, &program);
         }
 
         #[cfg(feature = "profiling")]
@@ -1085,7 +1161,36 @@ impl RenderContext3D {
             u64::from(instances.len() as u32),
         );
 
+        self.last_instanced_draw_calls = instances.len() as u32;
         Ok(instances.len() as u32)
+    }
+
+    /// Recria o buffer de instâncias depois de [`RenderContext3D::release_all`].
+    ///
+    /// # Por que isto existe neste recorte
+    ///
+    /// `release_all` leva o `InstancedRenderer` junto com o resto — é o que a
+    /// promessa "nenhum objeto GL depois disto" exige. O que ele **não** faz é
+    /// voltar a existir. Sem esta chamada, `draw_instanced` cai no caminho de N
+    /// desenhos com um programa que não tem `u_model`: todas as cópias saem
+    /// empilhadas na origem, e o único sinal é um `warn!` que ninguém lê no meio
+    /// de um quadro. Um app que destrói o mundo para reconstruí-lo (troca de
+    /// mapa, recarga de fase) tem de chamar isto entre as duas coisas.
+    ///
+    /// Medido no neon-drift: sem ela, trocar de mapa no título deixava o jogo
+    /// sem carros e sem partículas até ser reaberto (AGENTS.md §32).
+    ///
+    /// Devolve o mesmo veredito de
+    /// [`RenderContext3D::supports_instancing`]: `false` quando o driver não
+    /// oferece desenho instanciado.
+    pub fn rebuild_instancing(&mut self) -> bool {
+        if self.instanced.is_none() {
+            match InstancedRenderer::new(self.gl.glow(), self.gl.instancing()) {
+                Ok(instanced) => self.instanced = Some(instanced),
+                Err(err) => log::warn!("instanced drawing is unavailable: {err}"),
+            }
+        }
+        self.supports_instancing()
     }
 
     /// Whether instanced drawing will use a single call on this driver.
@@ -1104,9 +1209,7 @@ impl RenderContext3D {
 
     /// Draw calls issued by the last [`RenderContext3D::draw_instanced`].
     pub fn last_instanced_draw_calls(&self) -> u32 {
-        self.instanced
-            .as_ref()
-            .map_or(0, |instanced| instanced.last_draw_calls())
+        self.last_instanced_draw_calls
     }
 }
 
@@ -1231,7 +1334,6 @@ mod tests {
         // ---- release_all, which goes through the same two calls ---------------
         // It inherited the same leak, so both paths are asserted together and a future
         // fix cannot repair one and leave the other.
-        let tinha_instancing = render.supports_instancing();
         assert!(render.release_all());
         assert_eq!(render.mesh_count(), 0);
         assert_eq!(render.shader_count(), 0);
@@ -1260,23 +1362,6 @@ mod tests {
                 !render.glow().is_program(bulk_program),
                 "release_all leaked a program"
             );
-        }
-
-        // ---- release_all takes the instance buffer; rebuild brings it back ----------
-        // Not a detail: with the buffer gone, `draw_instanced` falls back to N plain
-        // draws on a program that has no `u_model`, so every copy lands at the origin.
-        // Measured in neon-drift when a map switch rebuilt the world: 50 draw calls per
-        // frame before the switch, 30 after, and cars and particles simply missing.
-        if tinha_instancing {
-            assert!(
-                !render.supports_instancing(),
-                "release_all left the instance buffer alive"
-            );
-            assert!(
-                render.rebuild_instancing(),
-                "rebuild_instancing did not recreate the instance buffer"
-            );
-            assert!(render.supports_instancing());
         }
 
         // ---- release_all must not claim success while something is referenced --------

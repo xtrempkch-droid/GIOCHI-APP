@@ -1,26 +1,36 @@
+# Recorte da GIOCHI-ENGINE-3D, versão 0.4.0 (commit `88741aa`, release "rede,
+# texturas e geometria própria em 3D").
+#
+# `members` reduzido aos dois crates que o jogo usa: `capi`, `lua` e `net` ficam
+# de fora porque o neon-drift não os linka — e um crate que não é usado não pode
+# quebrar o build.
+#
+# As versões de `glam`/`glow` **seguem o código da engine**, não o contrário: em
+# glam 0.34 as projeções saíram de `Mat4` para `camera::rh::proj::opengl`, e o
+# `mat4.rs` da engine chama as novas. Fixar 0.29 aqui (como estava no snapshot
+# 0.2.2) produz um erro de método inexistente que não fala de versão.
 [workspace]
 resolver = "2"
 members = ["giochi-engine", "giochi-engine-3d"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.86"
 license = "MIT"
 authors = ["GIOCHI-SYSTEM contributors"]
-repository = "https://github.com/xtrempkch-droid/GIOCHI-SYSTEM"
+repository = "https://github.com/xtrempkch-droid/GIOCHI-ENGINE-3D"
 
 [workspace.dependencies]
-sdl2 = { version = "0.38", default-features = false }
-glam = "0.29"
+# `image`/`mixer`/`ttf` são exigidos pelo crate, não escolhidos aqui: o
+# `Texture3D::from_file` abre PNG/JPEG pelo `SDL_image`, e o áudio do
+# `giochi-engine` usa o mixer. Eles viram bibliotecas `NEEDED` do binário final —
+# ver `docs/dependencias-aparelho.md` no repositório do app.
+sdl2 = { version = "0.38", default-features = false, features = ["image", "mixer", "ttf", "unsafe_textures"] }
+glam = "0.34"
+glow = "0.18"
 anyhow = "1.0"
 thiserror = "2.0"
 log = "0.4"
-env_logger = "0.11"
-serde = { version = "1", features = ["derive"] }
-mlua = { version = "0.12", features = ["lua54", "vendored"] }
-cbindgen = "0.27"
-criterion = { version = "0.5", features = ["html_reports"] }
-glow = "0.14"
 bytemuck = { version = "1", features = ["derive"] }
 tobj = "4"

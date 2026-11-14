@@ -410,3 +410,116 @@ mod testes {
         assert!(em(8, 8) > 200, "a diagonal devia voltar a ser clara");
     }
 }
+
+// ───────────────────────────── textura vinda de arquivo ─────────────────────
+
+/// Extensões procuradas, **na ordem em que são tentadas**.
+///
+/// `png` primeiro porque é o formato em que se pinta; `bmp` porque é o que o
+/// aparelho desenha sem depender de `libpng` (AGENTS.md §24 — a imagem do R35S
+/// já foi compilada sem `--enable-png`); `jpg`/`jpeg` porque quem faz textura
+/// fotorreferenciada exporta assim.
+pub const EXTENSOES: [&str; 4] = ["png", "bmp", "jpg", "jpeg"];
+
+/// Variável de ambiente com o diretório das texturas de superfície.
+///
+/// Vazia ou ausente = as sete procedurais, que é o comportamento de sempre.
+pub const VARIAVEL: &str = "GIOCHI_TEXTURAS";
+
+/// O diretório pedido por `GIOCHI_TEXTURAS`, se houver um.
+///
+/// Não valida que existe: quem chama precisa distinguir "não pediram" de "pediram
+/// e o caminho está errado", e as duas coisas levam a mensagens diferentes.
+pub fn diretorio() -> Option<std::path::PathBuf> {
+    let valor = std::env::var(VARIAVEL).ok()?;
+    let valor = valor.trim();
+    if valor.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(valor))
+}
+
+/// O arquivo de uma textura num diretório, tentando `EXTENSOES` em ordem.
+///
+/// Devolve `None` quando nenhuma das quatro existe — e isso **não** é erro: usar
+/// a procedural para o material que não veio é o comportamento documentado, e a
+/// queda é avisada por quem chama (a regra do §32: queda silenciosa faz o usuário
+/// concluir que a arte dele não serve, quando o que falhou foi o caminho).
+///
+/// Existe como função pura, e não embutida no upload, porque o upload precisa de
+/// contexto GL e portanto não roda em teste. Resolver caminho é a metade que
+/// pode ser afirmada sem GPU.
+pub fn arquivo_para(diretorio: &std::path::Path, nome: &str) -> Option<std::path::PathBuf> {
+    EXTENSOES.iter().find_map(|ext| {
+        let caminho = diretorio.join(format!("{nome}.{ext}"));
+        caminho.is_file().then_some(caminho)
+    })
+}
+
+
+#[cfg(test)]
+mod testes_de_arquivo {
+    use super::*;
+
+    /// Diretório temporário próprio do teste, sem dependência nova.
+    ///
+    /// `std::env::temp_dir()` + pid: dois testes do mesmo binário não colidem, e
+    /// um teste que falha no meio não deixa lixo no diretório do usuário.
+    fn temp(nome: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("giochi-texturas-{}-{nome}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("criar temp");
+        dir
+    }
+
+    #[test]
+    fn arquivo_para_acha_a_extensao_certa() {
+        // Cada extensão aceita precisa ser encontrada sozinha: procurar só "png"
+        // faria a textura em BMP sumir sem mensagem — e BMP é justamente o que o
+        // aparelho desenha sem depender de `libpng`.
+        for ext in EXTENSOES {
+            let dir = temp(ext);
+            std::fs::write(dir.join(format!("asfalto.{ext}")), b"x").unwrap();
+            let achado = arquivo_para(&dir, "asfalto").expect("extensão aceita");
+            assert_eq!(achado.extension().and_then(|e| e.to_str()), Some(ext));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn arquivo_para_prefere_png_quando_ha_dois() {
+        // A ordem de `EXTENSOES` é contrato: quem exporta PNG e BMP com o mesmo
+        // nome espera que o PNG vença, senão edita o PNG e o jogo mostra o BMP.
+        let dir = temp("ordem");
+        std::fs::write(dir.join("rocha.bmp"), b"bmp").unwrap();
+        std::fs::write(dir.join("rocha.png"), b"png").unwrap();
+        let achado = arquivo_para(&dir, "rocha").expect("achou");
+        assert_eq!(achado.extension().and_then(|e| e.to_str()), Some("png"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arquivo_para_devolve_none_sem_arquivo() {
+        // `None` não é erro: é o material que continua procedural. O que não pode
+        // acontecer é devolver um caminho que não existe — o `create_texture`
+        // devolveria erro e a textura sairia preta.
+        let dir = temp("vazio");
+        assert!(arquivo_para(&dir, "asfalto").is_none());
+        assert!(arquivo_para(&dir.join("nao-existe"), "asfalto").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn o_nome_do_arquivo_e_o_do_material_e_nao_o_do_arquivo_de_origem() {
+        // O nome vem de `todas()`, que é o que o log imprime. Um material com o
+        // nome trocado faria o usuário pintar `asphalt.png` e nada acontecer.
+        let dir = temp("nomes");
+        let nomes: Vec<&str> = todas().iter().map(|t| t.nome).collect();
+        for nome in &nomes {
+            std::fs::write(dir.join(format!("{nome}.bmp")), b"x").unwrap();
+            assert!(arquivo_para(&dir, nome).is_some(), "{nome}");
+        }
+        assert!(arquivo_para(&dir, "asphalt").is_none(), "nome em inglês não é contrato");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

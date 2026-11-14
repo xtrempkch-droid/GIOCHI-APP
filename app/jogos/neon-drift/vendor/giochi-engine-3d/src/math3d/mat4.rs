@@ -9,7 +9,7 @@
 //! Storage is column-major to match GL's uniform layout, so `as_ptr()` can be handed to
 //! `glUniformMatrix4fv` without a transpose.
 
-use glam::{Mat3 as GlamMat3, Mat4 as GlamMat4};
+use glam::{camera, Mat3 as GlamMat3, Mat4 as GlamMat4};
 
 use super::{Quat, Vec3};
 
@@ -103,11 +103,15 @@ impl Mat4 {
             return Err("far plane must be finite and greater than near");
         }
 
-        // `perspective_rh_gl`, not `perspective_rh`: the latter maps depth to 0..1
-        // (Vulkan/D3D convention) while OpenGL ES expects -1..1. Using the wrong one
-        // renders a scene that looks plausible until geometry approaches the near
-        // plane, so the tests below pin the -1..1 behaviour explicitly.
-        Ok(Self::from_glam(GlamMat4::perspective_rh_gl(
+        // `camera::rh::proj::opengl`, not `camera::rh::proj::vulkan`/`directx`: os
+        // dois últimos mapeiam a profundidade para 0..1, enquanto o OpenGL ES usa
+        // -1..1. Com a convenção errada a cena parece plausível até a geometria se
+        // aproximar do plano próximo — por isso os testes abaixo prendem o -1..1.
+        //
+        // glam 0.34 tirou `Mat4::perspective_rh_gl` e moveu as projeções para o
+        // módulo `camera`. O submódulo `opengl` é justamente o que carrega a
+        // convenção de profundidade do OpenGL.
+        Ok(Self::from_glam(camera::rh::proj::opengl::perspective(
             fov_y, aspect, near, far,
         )))
     }
@@ -133,7 +137,7 @@ impl Mat4 {
             return Err("orthographic bounds enclose no volume");
         }
 
-        Ok(Self::from_glam(GlamMat4::orthographic_rh_gl(
+        Ok(Self::from_glam(camera::rh::proj::opengl::orthographic(
             left, right, bottom, top, near, far,
         )))
     }
@@ -145,19 +149,27 @@ impl Mat4 {
     /// straight up with an unmodified up vector.
     pub fn look_at(eye: Vec3, center: Vec3, up: Vec3) -> Result<Self, &'static str> {
         let direction = center.to_glam() - eye.to_glam();
+        let up = up.to_glam();
+        // A NaN camera would otherwise produce a NaN matrix (or trip glam's
+        // `glam_assert` in debug builds) instead of the documented error.
+        if !direction.is_finite() || !up.is_finite() {
+            return Err("eye, center and up must be finite");
+        }
         if direction.length_squared() == 0.0 {
             return Err("eye and center are the same point");
         }
-        let up = up.to_glam();
         if up.length_squared() == 0.0 {
             return Err("up vector has no direction");
         }
         // The cross product vanishes when the two are parallel.
-        if direction.normalize().cross(up.normalize()).length_squared() < 1e-12 {
+        let up = up.normalize();
+        if direction.normalize().cross(up).length_squared() < 1e-12 {
             return Err("up vector is parallel to the view direction");
         }
 
-        Ok(Self::from_glam(GlamMat4::look_at_rh(
+        // glam 0.34 requires a unit `up`: with `glam_assert` it panics, and without
+        // it the unnormalised vector scales the view basis.
+        Ok(Self::from_glam(camera::rh::view::look_at_mat4(
             eye.to_glam(),
             center.to_glam(),
             up,
@@ -248,7 +260,9 @@ impl Mat4 {
     /// Returns normalised device coordinates: `x` and `y` in `-1..=1` inside the frame,
     /// and `z` in `-1..=1` between the near and far planes (OpenGL's convention, which is
     /// what [`Camera3D::projection_matrix`](super::Camera3D::projection_matrix) produces —
-    /// see ADR-038 on why `perspective_rh_gl` and not `perspective_rh`).
+    /// see ADR-038 on why the OpenGL depth range and not the 0..1 one. Em glam 0.34 isso
+    /// é `camera::rh::proj::opengl::perspective`; as versões `directx`/`vulkan` do mesmo
+    /// módulo mapeiam a profundidade para 0..1).
     ///
     /// Returns `None` when `w <= 0`, which is a point at or behind the eye. There the
     /// divide flips the sign, so a point behind the camera would otherwise come back as a
@@ -464,6 +478,24 @@ mod tests {
     }
 
     #[test]
+    fn look_at_accepts_a_non_unit_up_vector() {
+        // glam 0.34 requires a normalised `up`; passing a scaled one through would
+        // panic with `glam_assert` or silently scale the view basis.
+        let unit =
+            Mat4::look_at(Vec3::ZERO, Vec3::new(0.0, 0.0, -10.0), Vec3::UP).expect("valid view");
+        let scaled = Mat4::look_at(
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, -10.0),
+            Vec3::new(0.0, 7.0, 0.0),
+        )
+        .expect("a scaled up vector still has a direction");
+
+        for (a, b) in unit.to_cols_array().iter().zip(scaled.to_cols_array()) {
+            assert_close(*a, b, "scaled up gives the same view");
+        }
+    }
+
+    #[test]
     fn look_at_rejects_a_degenerate_configuration() {
         assert!(
             Mat4::look_at(Vec3::ZERO, Vec3::ZERO, Vec3::UP).is_err(),
@@ -477,6 +509,24 @@ mod tests {
         assert!(
             Mat4::look_at(Vec3::ZERO, Vec3::new(0.0, 5.0, 0.0), Vec3::UP).is_err(),
             "up parallel to the view direction"
+        );
+        assert!(
+            Mat4::look_at(
+                Vec3::new(f32::NAN, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                Vec3::UP
+            )
+            .is_err(),
+            "NaN eye"
+        );
+        assert!(
+            Mat4::look_at(
+                Vec3::ZERO,
+                Vec3::new(0.0, 0.0, -1.0),
+                Vec3::new(f32::INFINITY, 0.0, 0.0)
+            )
+            .is_err(),
+            "infinite up"
         );
     }
 

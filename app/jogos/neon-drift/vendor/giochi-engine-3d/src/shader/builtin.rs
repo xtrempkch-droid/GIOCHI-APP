@@ -33,6 +33,15 @@ pub enum BuiltinShader {
     /// No lighting uniforms, exactly like `Textured`: a smoke puff lit by a
     /// directional sun would go dark on one side, and it is drawn with blending
     /// over the scene anyway.
+    ///
+    /// # Por que este não existe na engine de origem
+    ///
+    /// É acréscimo **deste recorte**, feito para o neon-drift (AGENTS.md §32) e
+    /// não enviado rio acima. A regra do repositório é que `vendor/` é cópia e
+    /// não se edita; a exceção tem de ser reconhecida aqui, no ponto de uso, e
+    /// reaplicada a cada sincronização — senão a atualização apaga o shader e o
+    /// sintoma é o atlas desenhando tudo preto, porque `create_builtin_shader`
+    /// devolve erro e quem chamou pode não olhar.
     TexturedInstanced,
 }
 

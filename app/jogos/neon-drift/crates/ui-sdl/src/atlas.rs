@@ -406,8 +406,16 @@ fn suave(raio: f32, borda: f32, r: f32) -> f32 {
 pub enum Origem {
     /// Formas procedurais (o padrão).
     Procedural,
-    /// Folha externa em BMP.
+    /// Folha externa em BMP, lida pelo parser próprio.
     Folha,
+    /// Folha externa em qualquer formato que o `SDL_image` decodifique.
+    ///
+    /// Existe desde a atualização para a engine 0.4.0, que passou a linkar o
+    /// `SDL_image` (o `Texture3D::from_file` dela precisa dele). Antes disso o
+    /// jogo só sabia ler BMP, e por um motivo: a biblioteca não estava no
+    /// `NEEDED`. Agora está, então exigir BMP seria pedir ao usuário que
+    /// converta a arte para o formato que o programa *consegue* ler.
+    Imagem,
 }
 
 impl Origem {
@@ -416,8 +424,70 @@ impl Origem {
         match self {
             Origem::Procedural => "procedural",
             Origem::Folha => "folha externa (BMP)",
+            Origem::Imagem => "folha externa (PNG/JPEG/BMP via SDL_image)",
         }
     }
+}
+
+/// Decodifica uma imagem por `SDL_image` e devolve no mesmo formato do `ler_bmp`.
+///
+/// É o caminho de PNG e JPEG. BMP não passa por aqui — ele tem parser próprio,
+/// testado byte a byte, e trocá-lo por uma biblioteca só acrescentaria risco.
+///
+/// A regra de alfa do §32 continua valendo, e ela é o detalhe que faz isto
+/// servir: uma folha de 24 bits chega aqui com `amask == 0`, ou seja **sem**
+/// canal alfa, e nesse caso a **luminância** vira alfa (branco opaco, preto
+/// transparente). Sem essa conversão todo sprite de uma folha sem alfa sairia
+/// como retângulo cheio — o mesmo defeito que o leitor de BMP já evita.
+///
+/// Devolve `None` em vez de entrar em pânico: arquivo apontado por engano não
+/// pode derrubar o jogo.
+pub fn ler_com_sdl_image(caminho: &str) -> Option<Imagem> {
+    use sdl2::image::LoadSurface;
+    use sdl2::surface::Surface;
+
+    // `init` pode falhar se a imagem não puder ser decodificada neste build (por
+    // exemplo um `SDL_image` compilado sem PNG); nesse caso `None` é a resposta
+    // honesta e o chamador avisa.
+    sdl2::image::init(sdl2::image::InitFlag::PNG | sdl2::image::InitFlag::JPG).ok()?;
+
+    let superficie = Surface::from_file(std::path::Path::new(caminho)).ok()?;
+    // `SDL_image` entrega a superfície já no formato do arquivo. `PixelMasks` é a
+    // forma pública de perguntar pelos canais nesta versão do crate (`amask` não
+    // existe como campo), e `bpp` diz quantos bits por pixel o arquivo tem.
+    // Arquivo sem canal alfa — um BMP 24 bits, um JPEG — chega com `amask == 0`.
+    let mascaras = superficie.pixel_format_enum().into_masks().ok()?;
+    let tinha_alfa = mascaras.amask != 0;
+    let superficie = superficie.convert_format(sdl2::pixels::PixelFormatEnum::RGBA32).ok()?;
+
+    let largura = superficie.width();
+    let altura = superficie.height();
+    if largura == 0 || altura == 0 {
+        return None;
+    }
+    let passo = superficie.pitch() as usize;
+    let bytes_linha = largura as usize * 4;
+    let origem = superficie.without_lock()?;
+    let mut pixels = vec![0u8; bytes_linha * altura as usize];
+    for y in 0..altura as usize {
+        let inicio = y * passo;
+        pixels[y * bytes_linha..(y + 1) * bytes_linha]
+            .copy_from_slice(&origem[inicio..inicio + bytes_linha]);
+    }
+
+    if !tinha_alfa {
+        for p in pixels.chunks_exact_mut(4) {
+            p[3] = ((0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32)
+                .round()
+                .clamp(0.0, 255.0)) as u8;
+        }
+    }
+
+    Some(Imagem {
+        largura,
+        altura,
+        pixels,
+    })
 }
 
 /// Monta o atlas a partir de `caminho`, caindo no procedural quando não der.
@@ -439,17 +509,26 @@ pub fn carregar_ou_gerar(caminho: Option<&str>, colunas: u32) -> (Vec<u8>, Orige
             )
         }
     };
-    let Some(imagem) = ler_bmp(&dados) else {
-        return (
-            gerar(),
-            Origem::Procedural,
-            Some(format!(
-                "{caminho} não é BMP sem compressão de 24 ou 32 bits"
-            )),
-        );
+    // BMP continua no parser próprio — é o caminho testado byte a byte, e não há
+    // motivo para trocar o que funciona por uma biblioteca. Qualquer outro
+    // formato vai pelo `SDL_image`.
+    let (imagem, origem) = match ler_bmp(&dados) {
+        Some(imagem) => (imagem, Origem::Folha),
+        None => match ler_com_sdl_image(caminho) {
+            Some(imagem) => (imagem, Origem::Imagem),
+            None => {
+                return (
+                    gerar(),
+                    Origem::Procedural,
+                    Some(format!(
+                        "{caminho} não é BMP sem compressão nem imagem que o SDL_image decodifique"
+                    )),
+                )
+            }
+        },
     };
     match normalizar_folha(&imagem, colunas) {
-        Some(pixels) => (pixels, Origem::Folha, None),
+        Some(pixels) => (pixels, origem, None),
         None => (
             gerar(),
             Origem::Procedural,
@@ -791,5 +870,82 @@ mod tests {
         // ser o mesmo nos dois. Não há sorteio aqui, mas o teste fica para o dia
         // em que alguém acrescentar ruído a uma forma.
         assert_eq!(gerar(), gerar());
+    }
+
+    /// Escreve um BMP 24 ou 32 bits num arquivo temporário próprio do teste.
+    fn bmp_temporario(nome: &str, largura: u32, altura: u32, bpp: u16, pixel: impl Fn(u32, u32) -> [u8; 4]) -> String {
+        let passo = ((largura as usize * (bpp as usize / 8) + 3) / 4) * 4;
+        let deslocamento = 54usize;
+        let mut dados = vec![0u8; deslocamento + passo * altura as usize];
+        dados[0] = b'B';
+        dados[1] = b'M';
+        dados[10..14].copy_from_slice(&(deslocamento as u32).to_le_bytes());
+        dados[14..18].copy_from_slice(&40u32.to_le_bytes());
+        dados[18..22].copy_from_slice(&(largura as i32).to_le_bytes());
+        dados[22..26].copy_from_slice(&(altura as i32).to_le_bytes());
+        dados[26..28].copy_from_slice(&1u16.to_le_bytes());
+        dados[28..30].copy_from_slice(&bpp.to_le_bytes());
+        let bytes = bpp as usize / 8;
+        for y in 0..altura {
+            for x in 0..largura {
+                let [r, g, b, a] = pixel(x, y);
+                let i = deslocamento + (altura as usize - 1 - y as usize) * passo + x as usize * bytes;
+                dados[i] = b;
+                dados[i + 1] = g;
+                dados[i + 2] = r;
+                if bytes == 4 {
+                    dados[i + 3] = a;
+                }
+            }
+        }
+        let caminho = std::env::temp_dir().join(format!("giochi-atlas-{}-{nome}.bmp", std::process::id()));
+        std::fs::write(&caminho, &dados).expect("escrever bmp");
+        caminho.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn folha_sem_canal_alfa_usa_a_luminancia_como_alfa() {
+        // A regra do §32, agora no caminho do `SDL_image`: um PNG/BMP de 24 bits
+        // não tem alfa, e sem esta conversão **todo** sprite sairia como
+        // retângulo cheio — o defeito é silencioso e parece "arte ruim".
+        let caminho = bmp_temporario("luminancia", 4, 1, 24, |x, _| {
+            let v = if x < 2 { 0 } else { 255 };
+            [v, v, v, 255]
+        });
+        let imagem = ler_com_sdl_image(&caminho).expect("SDL_image lê BMP");
+        assert_eq!(imagem.largura, 4);
+        assert_eq!(imagem.altura, 1);
+        assert_eq!(imagem.pixels[3], 0, "preto deve ser transparente");
+        assert_eq!(imagem.pixels[7], 0);
+        assert_eq!(imagem.pixels[11], 255, "branco deve ser opaco");
+        assert_eq!(imagem.pixels[15], 255);
+        let _ = std::fs::remove_file(&caminho);
+    }
+
+    #[test]
+    fn folha_com_canal_alfa_preserva_o_alfa_do_arquivo() {
+        // 32 bits: o alfa do arquivo manda. Derivar luminância aqui apagaria a
+        // borda suave de um puff pintado à mão.
+        let caminho = bmp_temporario("alfa", 2, 1, 32, |x, _| {
+            if x == 0 {
+                [255, 255, 255, 40]
+            } else {
+                [255, 255, 255, 200]
+            }
+        });
+        let imagem = ler_com_sdl_image(&caminho).expect("SDL_image lê BMP 32");
+        assert_eq!(imagem.pixels[3], 40);
+        assert_eq!(imagem.pixels[7], 200);
+        let _ = std::fs::remove_file(&caminho);
+    }
+
+    #[test]
+    fn arquivo_que_nao_e_imagem_devolve_none_e_nao_entra_em_panico() {
+        // Um caminho apontado por engano não pode derrubar o jogo, e o chamador
+        // precisa poder **dizer** por que caiu no procedural.
+        let caminho = std::env::temp_dir().join(format!("giochi-atlas-{}-lixo.png", std::process::id()));
+        std::fs::write(&caminho, b"isto nao e uma imagem").unwrap();
+        assert!(ler_com_sdl_image(&caminho.to_string_lossy()).is_none());
+        let _ = std::fs::remove_file(&caminho);
     }
 }
