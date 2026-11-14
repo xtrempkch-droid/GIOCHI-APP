@@ -32,7 +32,7 @@ use giochi_neon_drift_core::{COR_JOGADOR, CORES_ADVERSARIOS, NOME};
 use crate::efeitos::{self, Particulas, Tipo};
 use crate::malha::{self, Construtor};
 use crate::vetor::{direcao_normalizada, misturar, somar, subtrair};
-use crate::video::Rotacao;
+use crate::video::{girar_ponto as girar_ponto_do_painel, girar_rect, Rotacao};
 
 // ════════════════════════════════════════════════════════════
 // PALETA
@@ -198,22 +198,82 @@ struct TexturasGpu {
 }
 
 impl TexturasGpu {
+    /// Sobe as sete texturas de superfície, **de arquivo quando houver**.
+    ///
+    /// `GIOCHI_TEXTURAS=<dir>` faz o jogo procurar `<dir>/<nome>.<png|bmp|jpg|jpeg>`
+    /// para cada material; o que não existir sai da receita procedural, como
+    /// sempre. É o caminho que a engine 0.4.0 abriu com o `Texture3D::from_file`
+    /// (o `SDL_image` que ele usa decodifica PNG, JPEG e BMP) e que
+    /// [`TEXTURAS.md`](../../TEXTURAS.md) registrava como inexistente.
+    ///
+    /// A mistura é deliberada: pedir textura de asfalto não deve obrigar a pintar
+    /// as outras seis. Mas cada material que **não** veio de arquivo é dito no
+    /// log, com o motivo — cair em silêncio faria o usuário concluir que a arte
+    /// dele não serve quando o que falhou foi o nome do arquivo (§32).
     fn criar(render: &mut RenderContext3D) -> Result<Self, Box<dyn Error>> {
         let mut handles = Vec::new();
         let mut total = 0usize;
         let mut nomes = Vec::new();
+        let mut de_arquivo = 0usize;
+        let mut ausentes = Vec::new();
+        let dir = crate::texturas::diretorio();
+        if let Some(dir) = dir.as_deref() {
+            if !dir.is_dir() {
+                eprintln!(
+                    "neon-drift: {} aponta para '{}', que não é diretório — usando as sete procedurais",
+                    crate::texturas::VARIAVEL,
+                    dir.display()
+                );
+            }
+        }
         for t in crate::texturas::todas() {
-            let h = render.create_texture_rgba(t.largura, t.altura, &t.pixels)?;
-            total += t.bytes();
+            let arquivo = match dir.as_deref().filter(|d| d.is_dir()) {
+                Some(d) => crate::texturas::arquivo_para(d, t.nome),
+                None => None,
+            };
+            let h = match arquivo {
+                Some(caminho) => {
+                    let h = render.create_texture(&caminho)?;
+                    let (l, a) = render.texture_size(h).unwrap_or((0, 0));
+                    eprintln!(
+                        "neon-drift: textura '{}' de arquivo: {} ({l}x{a})",
+                        t.nome,
+                        caminho.display()
+                    );
+                    total += (l * a * 4) as usize;
+                    de_arquivo += 1;
+                    h
+                }
+                None => {
+                    if dir.is_some() {
+                        ausentes.push(t.nome);
+                    }
+                    let h = render.create_texture_from_rgba(t.largura, t.altura, &t.pixels)?;
+                    total += t.bytes();
+                    h
+                }
+            };
             nomes.push(t.nome);
             handles.push(h);
+        }
+        if let Some(dir) = dir.as_deref() {
+            if !ausentes.is_empty() {
+                eprintln!(
+                    "neon-drift: {} material(is) sem arquivo em '{}': {} — usados os procedurais",
+                    ausentes.len(),
+                    dir.display(),
+                    ausentes.join(", ")
+                );
+            }
         }
         // Uma textura que falha em subir não tem sintoma visível: o material
         // desenha preto e o quadro continua "funcionando". Dizer o que subiu, o
         // tamanho e quantas são é o que transforma "está preto" em diagnóstico.
         eprintln!(
-            "neon-drift: {} textura(s) {nomes:?} {total} bytes, {} x {}",
+            "neon-drift: {} textura(s) {nomes:?} {total} bytes, {} de arquivo · {} procedurais, {} x {} de receita",
             handles.len(),
+            de_arquivo,
+            handles.len() - de_arquivo,
             crate::texturas::LADO,
             crate::texturas::LADO
         );
@@ -299,6 +359,12 @@ pub struct Cena3D {
     /// Medidas da tela de projeto no quadro corrente (paisagem nos dois sentidos).
     largura_projeto: f32,
     altura_projeto: f32,
+    /// Medidas **reais** do alvo de desenho (o painel), no quadro corrente.
+    ///
+    /// Diferente de `largura_projeto` sempre que há giro: o projeto é paisagem
+    /// (1280×720) e o painel é retrato (720×1280). O HUD se posiciona no projeto
+    /// e é **desenhado** no painel, e é a rotação que faz a ponte.
+    painel: (u32, u32),
     camera: CameraJogo,
     particulas: Particulas,
     /// Malhas de instância para os efeitos e para o HUD.
@@ -324,6 +390,15 @@ pub struct Cena3D {
 }
 
 impl Cena3D {
+    /// O espaço do HUD no quadro corrente.
+    fn tela_hud(&self) -> TelaHud {
+        TelaHud {
+            rotacao: self.rotacao,
+            projeto: (self.largura_projeto, self.altura_projeto),
+            painel: self.painel,
+        }
+    }
+
     /// Restringe o desenho a uma malha, pelo nome do diagnóstico.
     pub fn so(&mut self, nome: Option<String>) {
         self.so = nome;
@@ -404,7 +479,12 @@ impl Cena3D {
             .unwrap_or(crate::atlas::COLUNAS);
         let (atlas_pixels, origem_atlas, problema_folha) =
             crate::atlas::carregar_ou_gerar(caminho_folha.as_deref(), colunas_folha);
-        let atlas_t = render.create_texture_rgba(
+        // O atlas sai **sem mipmap**, e as superfícies saem com: num atlas cada
+        // célula é vizinha de outra, e o filtro trilinear de um nível reduzido
+        // puxa o texel da célula ao lado — o sprite ganha um canto do vizinho. O
+        // inset de 1e-4 do retângulo de UV cobre o nível 0 e não o nível 2. Já a
+        // superfície de chão, vista de raspa a 200 m, ganha muito em não tremer.
+        let atlas_t = render.create_texture_from_rgba_no_mipmap(
             crate::atlas::LADO,
             crate::atlas::LADO,
             &atlas_pixels,
@@ -513,6 +593,7 @@ impl Cena3D {
             rotacao,
             largura_projeto: 640.0,
             altura_projeto: 480.0,
+            painel: (640, 480),
             camera: CameraJogo::nova(pista, rotacao),
             particulas: Particulas::nova(),
             malhas_efeito: Vec::with_capacity(1024),
@@ -608,12 +689,16 @@ impl Cena3D {
             ("xadrez_t", self.xadrez_t, self.texturas.xadrez, LARGADA_A),
         ] {
             if self.quero(nome) && !self.desligado(parte_de_textura(nome)) {
+                // A ordem é a da engine 0.4.0: textura antes do modelo. Na 0.2.2 era
+                // `(malha, shader, modelo, camera, textura, tint)`; trocar sem avisar
+                // daria erro de tipo, mas a mensagem fala de `Transform3D` esperado
+                // onde veio `TextureHandle` — não de versão.
                 render.draw_mesh_textured(
                     malha,
                     self.texturizado,
+                    textura,
                     &ident,
                     &camera,
-                    textura,
                     tint,
                 )?;
             }
@@ -795,13 +880,7 @@ impl Cena3D {
             Vec3::ZERO
         };
 
-        // `roll` = girar a câmera em torno do próprio eixo de visão. É o que faz
-        // um painel retrato mostrar a cena paisagem sem tocar em nenhum vértice.
-        let roll = match self.rotacao {
-            Rotacao::Nenhuma => self.camera.roll,
-            Rotacao::Cw90 => std::f32::consts::FRAC_PI_2 + self.camera.roll,
-            Rotacao::Ccw90 => -std::f32::consts::FRAC_PI_2 + self.camera.roll,
-        };
+        let roll = roll_do_mundo(self.rotacao, self.camera.roll);
         let frente = direcao_normalizada(subtrair(self.camera.alvo, self.camera.pos));
         let up = Quat::from_axis_angle(frente, roll).rotate_vec3(Vec3::UP);
 
@@ -1169,6 +1248,7 @@ impl Cena3D {
         };
         self.largura_projeto = projeto.0 as f32;
         self.altura_projeto = projeto.1 as f32;
+        self.painel = tela;
 
         // O HUD não é iluminado: com `ambient = 1` e luz direta zero, a cor sai
         // exatamente como pedida. Sem isso o texto sairia 47 % mais escuro e
@@ -1181,7 +1261,11 @@ impl Cena3D {
             shininess: 1.0,
             _reserved: [0; 4],
         });
-        let camera = camara_hud(projeto);
+        // A câmera do HUD é montada no **painel**, não no projeto: ela descreve
+        // o alvo real de desenho, e a rotação entra na matriz de cada elemento
+        // (`hud_matriz`). Montá-la no projeto foi o defeito que deixava o texto
+        // esticado e deitado no X55.
+        let camera = camara_hud(tela);
         let largura = projeto.0 as f32;
         let altura = projeto.1 as f32;
 
@@ -1614,13 +1698,8 @@ impl Cena3D {
             } else {
                 largura * 0.92 + aleatorio * largura * 0.06
             };
-            self.instancias.push(hud_matriz(
-                (largura, altura),
-                x,
-                y,
-                comprimento,
-                1.5 + intensidade * 1.5,
-            ));
+            self.instancias
+                .push(hud_matriz(self.tela_hud(), x, y, comprimento, 1.5 + intensidade * 1.5));
         }
         let cor = Color3D::new(0.75, 0.92, 1.0, 0.10 + intensidade * 0.22);
         render.draw_instanced(self.quad, inst, &self.instancias, camera, cor)?;
@@ -1673,7 +1752,7 @@ impl Cena3D {
             let x = cx + c * (inicio + comprimento * 0.5);
             let y = cy + s * (inicio + comprimento * 0.5);
             self.instancias.push(hud_matriz_girada(
-                (largura, altura),
+                self.tela_hud(),
                 x,
                 y,
                 angulo,
@@ -1706,7 +1785,7 @@ impl Cena3D {
         let pulso = 0.55 + 0.45 * (self.tempo * 18.0).sin();
         self.instancias.clear();
         self.instancias
-            .push(hud_matriz((largura, altura), 0.0, 0.0, largura, altura));
+            .push(hud_matriz(self.tela_hud(), 0.0, 0.0, largura, altura));
         render.draw_instanced(
             self.quad,
             inst,
@@ -1714,6 +1793,77 @@ impl Cena3D {
             camera,
             Color3D::new(0.35, 0.75, 1.0, 0.05 + 0.05 * pulso),
         )?;
+        Ok(())
+    }
+
+    /// Desenha a **prova de rotação**: três barras de cor sobre fundo preto.
+    ///
+    /// ## Por que existe
+    ///
+    /// "O jogo está de ponta a cabeça" e "as informações estão na vertical" são
+    /// relatos que não dizem **qual** peça girou errado: o mundo, o HUD, ou os
+    /// dois em sentidos opostos. Olhar a tela não separa os casos, e comparar o
+    /// aparelho com o PC não ajuda quando os dois erram igual (AGENTS.md §24).
+    ///
+    /// A sonda elimina a dúvida por construção: três retângulos em posições
+    /// conhecidas do **projeto** (vermelho no topo, verde à esquerda, azul no
+    /// canto superior esquerdo) e uma predição numérica de onde cada um tem de
+    /// cair no **painel**. Quem medir o BMP confere a predição ou não.
+    ///
+    /// A predição para `Ccw90` num painel 720×1280 com projeto 1280×720:
+    ///
+    /// ```text
+    /// vermelho (0,0,1280,24)  -> (0, 0, 24, 1280)     borda ESQUERDA, vertical
+    /// verde    (0,0,24,720)   -> (0, 1256, 720, 24)   borda INFERIOR, horizontal
+    /// azul     (40,40,64,64)  -> (40, 1176, 64, 64)   perto do canto inferior esquerdo
+    /// ```
+    pub fn desenhar_prova_rotacao(
+        &mut self,
+        render: &mut RenderContext3D,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(inst) = self.instanciado else {
+            return Err("sem shader instanciado: a prova de rotação não roda neste driver".into());
+        };
+        let tela = render.drawable_size();
+        let projeto = match self.rotacao {
+            Rotacao::Nenhuma => tela,
+            _ => (tela.1, tela.0),
+        };
+        self.painel = tela;
+        self.largura_projeto = projeto.0 as f32;
+        self.altura_projeto = projeto.1 as f32;
+        let (l, a) = (projeto.0 as f32, projeto.1 as f32);
+        let hud = self.tela_hud();
+        let camera = camara_hud(tela);
+
+        render.set_light(DirectionalLight {
+            direction: Vec3::new(0.0, 0.0, -1.0),
+            color: Color3D::BLACK,
+            ambient: 1.0,
+            specular: 0.0,
+            shininess: 1.0,
+            _reserved: [0; 4],
+        });
+
+        for (rect, cor) in [
+            ((0.0, 0.0, l, 24.0), Color3D::new(1.0, 0.0, 0.0, 1.0)),
+            ((0.0, 0.0, 24.0, a), Color3D::new(0.0, 1.0, 0.0, 1.0)),
+            ((40.0, 40.0, 64.0, 64.0), Color3D::new(0.0, 0.0, 1.0, 1.0)),
+        ] {
+            self.instancias.clear();
+            self.instancias
+                .push(hud_matriz(hud, rect.0, rect.1, rect.2, rect.3));
+            render.draw_instanced(self.quad, inst, &self.instancias, &camera, cor)?;
+        }
+        eprintln!(
+            "neon-drift: prova de rotação — {} ({:?}), projeto {}x{}, painel {}x{}",
+            self.rotacao.nome(),
+            self.rotacao,
+            projeto.0,
+            projeto.1,
+            tela.0,
+            tela.1
+        );
         Ok(())
     }
 
@@ -1732,7 +1882,7 @@ impl Cena3D {
         self.instancias.clear();
         // A tela do HUD é o projeto: `hud_matriz` recebe as medidas em pixels.
         self.instancias.push(hud_matriz(
-            (self.largura_projeto, self.altura_projeto),
+            self.tela_hud(),
             x,
             y,
             w,
@@ -1760,7 +1910,7 @@ impl Cena3D {
             return Ok(());
         }
         self.instancias.clear();
-        let tela = (self.largura_projeto, self.altura_projeto);
+        let tela = self.tela_hud();
         // 1.06 de sobreposição: sem ela, cada ponto fica com uma fresta de fundo e
         // o texto parece serrilhado a partir de longe.
         let ponto = escala * 1.06;
@@ -3018,28 +3168,99 @@ fn achatar(m: Mat4, largura: f32, comprimento: f32, y: f32) -> Mat4 {
 
 /// Retângulo do HUD **girado** no plano da tela, centrado em `(cx, cy)` pixels.
 ///
+/// O que o HUD precisa saber para desenhar: onde se posiciona e onde cai.
+///
+/// ## Por que isto existe
+///
+/// O HUD se posiciona em **pixels de projeto** (paisagem, 1280×720 no X55) e é
+/// desenhado no **painel** (720×1280). Com giro, essas duas coisas não são a
+/// mesma, e durante muito tempo este arquivo tratou como se fossem: a câmera do
+/// HUD era montada com as medidas do projeto, então o texto saía esticado 3,2×
+/// na horizontal e **deitado** em relação ao mundo — o relato do dono no X55 foi
+/// exatamente "as informações estão na vertical".
+///
+/// A ponte é a mesma que o launcher usa (`video::girar_rect` / `girar_ponto`),
+/// porque a orientação do painel é fato do sistema e os dois apps têm de
+/// concordar com ela.
+#[derive(Clone, Copy, Debug)]
+struct TelaHud {
+    rotacao: Rotacao,
+    /// Medidas do espaço de projeto, em pixels. Paisagem nos dois sentidos.
+    projeto: (f32, f32),
+    /// Medidas reais do alvo de desenho, em pixels.
+    painel: (u32, u32),
+}
+
+impl TelaHud {
+    /// Quanto o ângulo de um elemento gira junto com o painel.
+    fn giro_do_angulo(self) -> f32 {
+        // `girar_rect(Cw90)` leva (dx, dy) em (-dy, dx), que é `angulo + 90°`;
+        // `Ccw90` leva em (dy, -dx), que é `angulo - 90°`. Em radianos.
+        match self.rotacao {
+            Rotacao::Nenhuma => 0.0,
+            Rotacao::Cw90 => std::f32::consts::FRAC_PI_2,
+            Rotacao::Ccw90 => -std::f32::consts::FRAC_PI_2,
+        }
+    }
+}
+
+/// Retângulo de projeto → retângulo de painel, arredondado ao pixel.
+///
+/// Delega a `video::girar_rect` em vez de repetir a fórmula: duas fórmulas para
+/// a mesma rotação divergem em silêncio, e a UI já saiu de cabeça para baixo uma
+/// vez por isso.
+fn girar_rect_hud(tela: TelaHud, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    if tela.rotacao == Rotacao::Nenhuma {
+        return (x, y, w, h);
+    }
+    let design = (tela.projeto.0 as i32, tela.projeto.1 as i32);
+    let (dx, dy, dw, dh) = girar_rect(
+        tela.rotacao,
+        design,
+        x.round() as i32,
+        y.round() as i32,
+        w.round().max(1.0) as i32,
+        h.round().max(1.0) as i32,
+    );
+    (dx as f32, dy as f32, dw as f32, dh as f32)
+}
+
+/// Ponto de projeto → ponto de painel.
+fn girar_ponto_hud(tela: TelaHud, x: f32, y: f32) -> (f32, f32) {
+    if tela.rotacao == Rotacao::Nenhuma {
+        return (x, y);
+    }
+    let design = (tela.projeto.0 as i32, tela.projeto.1 as i32);
+    let (dx, dy) = girar_ponto_do_painel(tela.rotacao, design, x.round() as i32, y.round() as i32);
+    (dx as f32, dy as f32)
+}
+
 /// `hud_matriz` só faz retângulo alinhado aos eixos; os raios de velocidade
 /// precisam apontar para fora do centro. A rotação é feita em espaço de pixel e
 /// depois convertida, porque girar em espaço de NDC distorceria o ângulo quando
 /// a tela não é quadrada.
 fn hud_matriz_girada(
-    tela: (f32, f32),
+    tela: TelaHud,
     cx: f32,
     cy: f32,
     angulo: f32,
     comprimento: f32,
     espessura: f32,
 ) -> Mat4 {
-    let aspecto = tela.0 / tela.1.max(1.0);
-    let ndc_x = cx / tela.0 * 2.0 - 1.0;
-    let ndc_y = 1.0 - cy / tela.1 * 2.0;
+    // Mesma ponte do `hud_matriz`: centro em projeto → centro no painel, e o
+    // ângulo ganha o quarto de volta que a rotação do painel impõe.
+    let (dx, dy) = girar_ponto_hud(tela, cx, cy);
+    let angulo = angulo + tela.giro_do_angulo();
+    let aspecto = tela.painel.0 as f32 / tela.painel.1.max(1) as f32;
+    let ndc_x = dx / tela.painel.0.max(1) as f32 * 2.0 - 1.0;
+    let ndc_y = 1.0 - dy / tela.painel.1.max(1) as f32 * 2.0;
     let (s, c) = angulo.sin_cos();
     // Eixos em pixel: o curto é perpendicular ao raio, o longo aponta para fora.
     let (curto_x, curto_y) = (-s * espessura, c * espessura);
     let (longo_x, longo_y) = (c * comprimento, s * comprimento);
     // Pixel → unidades da câmera do HUD (ver `hud_matriz`).
-    let kx = PROFUNDIDADE_HUD * aspecto / tela.0;
-    let ky = PROFUNDIDADE_HUD / tela.1;
+    let kx = PROFUNDIDADE_HUD * aspecto / tela.painel.0.max(1) as f32;
+    let ky = PROFUNDIDADE_HUD / tela.painel.1.max(1) as f32;
 
     let mut m = Mat4::IDENTITY.to_cols_array();
     m[0] = curto_x * kx;
@@ -3072,10 +3293,15 @@ fn feixe(m: Mat4) -> Mat4 {
 }
 
 /// Matriz de um retângulo de HUD, posicionado em **pixels** da tela de projeto.
-fn hud_matriz(tela: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> Mat4 {
-    let aspecto = tela.0 / tela.1.max(1.0);
-    let ndc_x = (x + w * 0.5) / tela.0 * 2.0 - 1.0;
-    let ndc_y = 1.0 - (y + h * 0.5) / tela.1 * 2.0;
+fn hud_matriz(tela: TelaHud, x: f32, y: f32, w: f32, h: f32) -> Mat4 {
+    // Retângulo do **projeto** → retângulo do **painel**. É a mesma função que o
+    // launcher usa (`video::girar_rect`), de propósito: um comando que gira um
+    // app tem de girar o outro, senão o teste mente sobre um deles
+    // (AGENTS.md §12).
+    let (dx, dy, dw, dh) = girar_rect_hud(tela, x, y, w, h);
+    let aspecto = tela.painel.0 as f32 / tela.painel.1.max(1) as f32;
+    let ndc_x = (dx + dw * 0.5) / tela.painel.0.max(1) as f32 * 2.0 - 1.0;
+    let ndc_y = 1.0 - (dy + dh * 0.5) / tela.painel.1.max(1) as f32 * 2.0;
     Transform3D::new(
         Vec3::new(
             ndc_x * PROFUNDIDADE_HUD * aspecto,
@@ -3084,12 +3310,46 @@ fn hud_matriz(tela: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> Mat4 {
         ),
         Quat::IDENTITY,
         Vec3::new(
-            (w / tela.0) * PROFUNDIDADE_HUD * aspecto,
-            (h / tela.1) * PROFUNDIDADE_HUD,
+            (dw / tela.painel.0.max(1) as f32) * PROFUNDIDADE_HUD * aspecto,
+            (dh / tela.painel.1.max(1) as f32) * PROFUNDIDADE_HUD,
             1.0,
         ),
     )
     .matrix()
+}
+
+/// Inclinação da câmera do mundo, já com a rotação do sistema.
+///
+/// `roll` gira a câmera em torno do próprio eixo de visão — é o que faz um
+/// painel retrato mostrar a cena paisagem sem tocar em nenhum vértice.
+///
+/// ## O sinal, e por que ele é o **oposto** do HUD
+///
+/// Girar a **câmera** por θ gira a **imagem** por −θ. O HUD é posicionado por
+/// `video::girar_rect`, a mesma função do launcher (99,9 % no aparelho), e
+/// `giro_do_angulo` diz qual é o giro da imagem que ela produz: `Ccw90` leva
+/// `(dx, dy)` em `(dy, −dx)`, que é **−90°**. Logo o `roll` da câmera tem de ser
+/// **+90°** — exatamente o oposto.
+///
+/// ## O defeito que isto corrige
+///
+/// Durante uma rodada inteira o sinal esteve trocado, e o argumento parecia
+/// certo ("a consequência aritmética da convenção do launcher"). O que faltava
+/// era **medir os dois lados**: com o sinal antigo o mundo exigia a rotação
+/// contrária à do HUD para voltar ao espaço de projeto — 180° de diferença — e
+/// o X55 mostrou "o jogo de ponta a cabeça" enquanto as barras do
+/// `--prova-rotacao` (que passam pelo `girar_rect`) caíam no lugar certo.
+///
+/// Medido agora, no PC: o quadro `Ccw90` desfeito com a inversa correta dá
+/// **99,99 %** no mundo e **99,74 %** no quadro completo. O teste
+/// `o_roll_do_mundo_e_o_oposto_do_giro_do_hud` amarra a relação, para o sinal
+/// não voltar a ser escolhido por raciocínio.
+fn roll_do_mundo(rotacao: Rotacao, roll_da_derrapagem: f32) -> f32 {
+    match rotacao {
+        Rotacao::Nenhuma => roll_da_derrapagem,
+        Rotacao::Cw90 => -std::f32::consts::FRAC_PI_2 + roll_da_derrapagem,
+        Rotacao::Ccw90 => std::f32::consts::FRAC_PI_2 + roll_da_derrapagem,
+    }
 }
 
 /// Câmera ortográfica-de-fato do HUD: `fov` de 90° e plano a `PROFUNDIDADE_HUD`.
@@ -3113,7 +3373,11 @@ mod testes {
     fn a_matriz_do_hud_mapeia_os_cantos_da_tela() {
         // Canto superior esquerdo de uma tela 640×480, um retângulo de 1 px: o
         // centro tem de cair no NDC (-1, 1) e o tamanho tem de ser 1 px.
-        let tela = (640.0, 480.0);
+        let tela = TelaHud {
+            rotacao: Rotacao::Nenhuma,
+            projeto: (640.0, 480.0),
+            painel: (640, 480),
+        };
         let m = hud_matriz(tela, 0.0, 0.0, 1.0, 1.0);
         let x = m.data[12];
         let y = m.data[13];
@@ -3126,9 +3390,172 @@ mod testes {
         assert!((m.data[14] + PROFUNDIDADE_HUD).abs() < 1e-5);
     }
 
+    /// Tela do X55: projeto paisagem 1280×720, painel retrato 720×1280.
+    fn tela_x55(rotacao: Rotacao) -> TelaHud {
+        TelaHud {
+            rotacao,
+            projeto: (1280.0, 720.0),
+            painel: (720, 1280),
+        }
+    }
+
+    /// Posição em **unidades de câmera do HUD** de um ponto do painel.
+    ///
+    /// É a conversão inversa de `hud_matriz`, e é a unidade em que `m.data[12]`
+    /// e `m.data[13]` vêm — comparar com NDC cru daria erro de fator.
+    fn camera_do_painel(tela: TelaHud, x: f32, y: f32) -> (f32, f32) {
+        let aspecto = tela.painel.0 as f32 / tela.painel.1 as f32;
+        (
+            (x / tela.painel.0 as f32 * 2.0 - 1.0) * PROFUNDIDADE_HUD * aspecto,
+            (1.0 - y / tela.painel.1 as f32 * 2.0) * PROFUNDIDADE_HUD,
+        )
+    }
+
+    /// Tamanho em pixels do painel que a escala local `m.data[0]`/`m.data[5]`
+    /// cobre. O quad do HUD é 1×1, então a escala **é** o tamanho.
+    fn pixels_do_painel(tela: TelaHud, escala_x: f32, escala_y: f32) -> (f32, f32) {
+        let aspecto = tela.painel.0 as f32 / tela.painel.1 as f32;
+        (
+            escala_x.abs() / (PROFUNDIDADE_HUD * aspecto) * tela.painel.0 as f32,
+            escala_y.abs() / PROFUNDIDADE_HUD * tela.painel.1 as f32,
+        )
+    }
+
+    #[test]
+    fn com_giro_o_hud_cai_onde_o_launcher_poria() {
+        // A regra é a do launcher: `girar_rect(Ccw90)` leva o canto superior
+        // esquerdo do projeto para o canto inferior esquerdo do painel. Se o HUD
+        // não fizer isso, ele fica **deitado** em relação ao mundo — foi o
+        // relato do dono no X55 ("as informações estão na vertical").
+        let tela = tela_x55(Rotacao::Ccw90);
+        // Um elemento no canto superior esquerdo do projeto (10, 10) medindo 100×20.
+        let m = hud_matriz(tela, 10.0, 10.0, 100.0, 20.0);
+        // `girar_rect(Ccw90, (1280,720), 10, 10, 100, 20)` = (10, 1280-10-100, 20, 100)
+        // = (10, 1170, 20, 100): um retângulo **alto e estreito** no painel, que é
+        // como um elemento horizontal de projeto aparece num buffer retrato girado.
+        let (largura_px, altura_px) = pixels_do_painel(tela, m.data[0], m.data[5]);
+        assert!(
+            (largura_px - 20.0).abs() < 1.0 && (altura_px - 100.0).abs() < 1.0,
+            "com Ccw90 um elemento 100x20 de projeto tem de virar 20x100 no painel; veio {largura_px}x{altura_px}"
+        );
+        // E o centro tem de cair em (20, 1220), que é embaixo à esquerda.
+        let cento = camera_do_painel(tela, 20.0, 1220.0);
+        assert!(
+            (m.data[12] - cento.0).abs() < 1.0 && (m.data[13] - cento.1).abs() < 1.0,
+            "centro em câmera ({}, {}) contra ({}, {})",
+            m.data[12],
+            m.data[13],
+            cento.0,
+            cento.1
+        );
+    }
+
+    #[test]
+    fn com_giro_o_hud_nao_fica_esticado_pelo_aspecto_errado() {
+        // O outro sintoma era o texto 3,2× mais largo que alto: a câmera do HUD
+        // era montada com as medidas do **projeto** (1280×720) enquanto o alvo
+        // real era o painel (720×1280). Este teste mede a **proporção** de um
+        // quadrado de projeto depois de girado: ele continua quadrado.
+        for rotacao in [Rotacao::Cw90, Rotacao::Ccw90] {
+            let tela = tela_x55(rotacao);
+            let m = hud_matriz(tela, 100.0, 100.0, 50.0, 50.0);
+            let (largura_px, altura_px) = pixels_do_painel(tela, m.data[0], m.data[5]);
+            assert!(
+                (largura_px - altura_px).abs() < 1.0,
+                "{rotacao:?}: quadrado 50x50 saiu {largura_px}x{altura_px} no painel"
+            );
+        }
+    }
+
+    #[test]
+    fn sem_giro_o_hud_continua_em_pixels_de_projeto() {
+        // O caminho sem giro é o de todos os aparelhos de 640×480, e não pode
+        // mudar com a correção do giro.
+        let tela = TelaHud {
+            rotacao: Rotacao::Nenhuma,
+            projeto: (640.0, 480.0),
+            painel: (640, 480),
+        };
+        let m = hud_matriz(tela, 10.0, 20.0, 30.0, 40.0);
+        let esperado = camera_do_painel(tela, 25.0, 40.0);
+        assert!((m.data[12] - esperado.0).abs() < 1e-3);
+        assert!((m.data[13] - esperado.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn o_angulo_dos_raios_gira_com_o_painel() {
+        // Um raio apontando para a direita no projeto (angulo 0) tem de apontar
+        // para **cima** no painel girado 90° anti-horário. `girar_rect(Ccw90)`
+        // leva (dx,dy) em (dy,-dx), então o ângulo cai 90° no espaço de tela (y
+        // para baixo).
+        let sem = TelaHud {
+            rotacao: Rotacao::Nenhuma,
+            projeto: (1280.0, 720.0),
+            painel: (1280, 720),
+        };
+        assert_eq!(sem.giro_do_angulo(), 0.0);
+        assert!((tela_x55(Rotacao::Ccw90).giro_do_angulo() + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((tela_x55(Rotacao::Cw90).giro_do_angulo() - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_camera_do_hud_e_montada_no_painel_e_nao_no_projeto() {
+        // A câmera descreve o alvo real de desenho: o que entra é o **painel**.
+        // Montá-la com as medidas do projeto num painel retrato é o que esticava
+        // o texto 3,2× na horizontal. A prova é a projeção: o canto superior
+        // direito do NDC tem de cair no canto do painel, não no do projeto.
+        let painel = camara_hud((720, 1280));
+        let m = painel.projection_matrix().expect("projeção válida");
+        // `m[0]` = 1/(aspecto·tan(fov/2)); com fov de 90° e aspecto 720/1280,
+        // `m[0]` = 1280/720 = 1,78. Se a câmera tivesse sido montada com o
+        // projeto, daria 720/1280 = 0,5625 — exatamente o inverso.
+        assert!(
+            (m.data[0] - 1280.0 / 720.0).abs() < 1e-3,
+            "m[0] = {} (esperado {})",
+            m.data[0],
+            1280.0 / 720.0
+        );
+    }
+
+    /// O mundo e o HUD têm de girar no mesmo sentido — e não giravam.
+    ///
+    /// Foi o defeito do X55: "o jogo de ponta a cabeça e as informações na
+    /// vertical". Cada lado estava coerente sozinho (o HUD pelo `girar_rect`, o
+    /// mundo pelo `roll`) e mesmo assim discordavam 180°.
+    ///
+    /// A regra que os amarra: girar a **câmera** por θ gira a **imagem** por −θ.
+    /// O HUD diz quanto a imagem gira (`giro_do_angulo`); o `roll` tem de ser o
+    /// oposto. Trocar o sinal de `roll_do_mundo` reprova aqui.
+    #[test]
+    fn o_roll_do_mundo_e_o_oposto_do_giro_do_hud() {
+        for rotacao in [Rotacao::Nenhuma, Rotacao::Cw90, Rotacao::Ccw90] {
+            let tela = tela_x55(rotacao);
+            let roll = roll_do_mundo(rotacao, 0.0);
+            let giro = tela.giro_do_angulo();
+            assert!(
+                (roll + giro).abs() < 1e-6,
+                "{rotacao:?}: roll {roll} e giro do HUD {giro} — tinham de ser opostos"
+            );
+        }
+    }
+
+    /// A derrapagem soma ao `roll` do sistema, não o substitui.
+    #[test]
+    fn a_derrapagem_soma_ao_roll_do_sistema() {
+        assert!((roll_do_mundo(Rotacao::Nenhuma, 0.07) - 0.07).abs() < 1e-6);
+        assert!(
+            (roll_do_mundo(Rotacao::Ccw90, 0.07) - (std::f32::consts::FRAC_PI_2 + 0.07)).abs()
+                < 1e-6
+        );
+    }
+
     #[test]
     fn um_retangulo_do_tamanho_da_tela_cobre_o_ndc_inteiro() {
-        let tela = (640.0, 480.0);
+        let tela = TelaHud {
+            rotacao: Rotacao::Nenhuma,
+            projeto: (640.0, 480.0),
+            painel: (640, 480),
+        };
         let m = hud_matriz(tela, 0.0, 0.0, 640.0, 480.0);
         let aspecto = 640.0 / 480.0;
         // Largura em NDC = escala_x / (PROF * aspecto) * 2
@@ -3149,7 +3576,6 @@ mod testes {
         assert_eq!(m.data[5], 0.5);
     }
 
-    #[test]
     #[test]
     fn o_quad_deitado_do_carro_fica_com_a_normal_para_cima() {
         // A aura e o feixe do farol são quads no chão. Normal para baixo + face

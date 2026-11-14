@@ -157,10 +157,12 @@ pub fn projetar(rot: Rotacao, painel: (u32, u32)) -> (u32, u32) {
 /// Ponto do espaço de projeto → espaço de dispositivo.
 ///
 /// É a implementação de referência: [`girar_rect`] tem de concordar com ela nos
-/// dois cantos, e o teste compara as duas. Só o teste a chama — duas fórmulas
-/// para a mesma rotação divergem em silêncio, e foi assim que a UI já saiu de
-/// cabeça para baixo uma vez.
-#[allow(dead_code)]
+/// dois cantos, e o teste compara as duas. Duas fórmulas para a mesma rotação
+/// divergem em silêncio, e foi assim que a UI já saiu de cabeça para baixo uma
+/// vez.
+///
+/// Quem chama hoje: o `cena3d` do neon-drift, para girar o HUD junto com o
+/// painel (os raios de velocidade usam o ponto; o resto, o retângulo).
 pub fn girar_ponto(rot: Rotacao, design: (i32, i32), x: i32, y: i32) -> (i32, i32) {
     match rot {
         Rotacao::Nenhuma => (x, y),
@@ -173,7 +175,9 @@ pub fn girar_ponto(rot: Rotacao, design: (i32, i32), x: i32, y: i32) -> (i32, i3
 ///
 /// Retângulo alinhado aos eixos continua retângulo sob múltiplo de 90°, então
 /// largura e altura trocam e o canto é reposicionado.
-#[allow(dead_code)]
+///
+/// É a regra que o launcher usa para a UI inteira e que o neon-drift usa para
+/// cada elemento do HUD. Uma casa, uma regra.
 pub fn girar_rect(
     rot: Rotacao,
     design: (i32, i32),

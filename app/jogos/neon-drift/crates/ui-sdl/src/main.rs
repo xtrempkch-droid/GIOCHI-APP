@@ -54,6 +54,13 @@ struct Opcoes {
     texturas: Option<String>,
     /// Grava o atlas de sprites em BMP e sai, sem abrir janela.
     atlas: Option<String>,
+    /// Grava a prova de rotação e sai (`--prova-rotacao arquivo.bmp`).
+    ///
+    /// Três barras em posições conhecidas do **projeto**, com predição numérica do
+    /// lugar de cada uma no **painel**. Existe porque "está de ponta a cabeça" e
+    /// "as informações na vertical" não dizem qual peça girou errado, e comparar
+    /// aparelho com PC não separa os casos quando os dois erram igual.
+    prova_rotacao: Option<String>,
     tamanho: Option<(u32, u32)>,
     quadros: Option<u32>,
     passos: u32,
@@ -80,6 +87,7 @@ impl Default for Opcoes {
         Self {
             quadro: None,
             atlas: None,
+            prova_rotacao: None,
             tamanho: None,
             quadros: None,
             passos: 0,
@@ -119,6 +127,17 @@ fn opcoes(argv: Vec<String>) -> Result<Opcoes, String> {
             // asfalto?" só se responde lendo o código.
             "--texturas" => {
                 o.texturas = Some(argv.get(i + 1).ok_or("--texturas sem caminho")?.clone());
+                i += 2;
+            }
+            "--prova-rotacao" => {
+                o.prova_rotacao = Some(
+                    argv.get(i + 1)
+                        .ok_or("--prova-rotacao sem caminho")?
+                        .clone(),
+                );
+                // Sem este avanço o laço relê a mesma flag para sempre: o
+                // processo gira em silêncio, sem imprimir nada e sem abrir
+                // janela. Custou uma rodada de diagnóstico.
                 i += 2;
             }
             "--atlas" => {
@@ -357,6 +376,7 @@ Uso:
   giochi-neon-drift --so asfalto            desenha uma malha só (diagnóstico)
   giochi-neon-drift --texturas t.bmp        grava a folha das 7 texturas e sai
   giochi-neon-drift --atlas a.bmp           grava o atlas de sprites e sai
+  giochi-neon-drift --prova-rotacao r.bmp   grava a prova de orientação e sai
   GIOCHI_SPRITES=x.bmp GIOCHI_SPRITES_COLUNAS=8
                                             usa a sua folha de sprites (BMP)
   giochi-neon-drift --json                  saída de máquina (stdout é só o JSON)
@@ -772,6 +792,24 @@ fn principal() -> Result<i32, Box<dyn std::error::Error>> {
     let mut ultima_dificuldade = 0i32;
     let mut relogio = Relogio::com_ritmo(TIQUE, o.fps);
 
+    // Prova de rotação: desenha três barras e sai. Roda antes de tudo porque não
+    // depende de estado de partida nenhum — é o teste da **geometria** da tela.
+    if let Some(caminho) = &o.prova_rotacao {
+        cena.preparar(&mut render);
+        render.begin_frame(&janela);
+        cena.desenhar_prova_rotacao(&mut render)?;
+        let (w, h) = gravar_quadro(&render, caminho)?;
+        render.end_frame(&janela);
+        if o.json {
+            println!(
+                "{{\"prova\":\"gravada\",\"largura\":{w},\"altura\":{h},\"rotacao\":\"{}\",\"fonte\":\"{}\"}}",
+                rotacao.nome(),
+                fonte_rotacao
+            );
+        }
+        return Ok(0);
+    }
+
     // Quadro único: captura e sai, sem laço de eventos.
     if let Some(caminho) = &o.quadro {
         cena.preparar(&mut render);
@@ -1083,6 +1121,50 @@ mod testes {
 
     #[test]
     fn tela_desconhecida_e_erro() {
+        // Toda flag que consome um valor tem de avançar o índice. Faltar o
+        // `i += 2` num braço não dá erro de compilação nem mensagem: o laço relê
+        // a mesma flag para sempre, e o sintoma é um processo que não imprime
+        // nada e não termina. Aconteceu com `--prova-rotacao`.
+        for flag in [
+            "--quadro",
+            "--texturas",
+            "--atlas",
+            "--prova-rotacao",
+            "--tamanho",
+            "--mapa",
+            "--config",
+            "--classe",
+            "--perfil",
+            "--em",
+            "--teclas",
+            "--tela",
+            "--fps-teto",
+            "--escala",
+        ] {
+            let valor = if flag == "--tamanho" {
+                "640x480"
+            } else if flag == "--fps-teto" {
+                "60"
+            } else if flag == "--escala" {
+                "0.5"
+            } else if flag == "--em" {
+                "100"
+            } else if flag == "--tela" {
+                "titulo"
+            } else if flag == "--mapa" {
+                "avenida"
+            } else if flag == "--classe" {
+                "soldado"
+            } else if flag == "--perfil" {
+                "balanceado"
+            } else {
+                "x"
+            };
+            // Se o braço não avançar, esta chamada nunca retorna — por isso ela
+            // roda com um valor que o braço precisa consumir.
+            let r = opcoes(vec![flag.into(), valor.into()]);
+            assert!(r.is_ok() || r.is_err(), "{flag} não terminou");
+        }
         assert!(opcoes(vec!["--tela".into(), "inexistente".into()]).is_err());
         assert_eq!(
             opcoes(vec!["--tela".into(), "resultado".into()]).unwrap().tela,
