@@ -1909,6 +1909,208 @@ cmd_verificar_teste() {
   return "$falhas"
 }
 
+# ── bluetooth ───────────────────────────────────────────────
+#
+# A pergunta que esta função responde não é "o pareamento funcionou?" — é
+# "**o sistema tem pilha HCI?**". As duas se confundem o tempo todo, e o
+# remédio é diferente em cada caso: rádio sem firmware é imagem, pareamento
+# que falha é timing, e controle que pareia e não vira `/dev/input` é perfil
+# HID do kernel.
+#
+# Medido no X55 em 13/11/2026: `hci0` presente, rfkill liberado, firmware
+# `rtl8821cs_fw.bin` carregado (ver `dmesg`), `bluetoothd` no ar e controlador
+# com MAC. Ou seja, **a pilha HCI existe** — o que falta é outra coisa.
+cmd_bluetooth() {
+  exigir_aparelho
+
+  titulo "pilha HCI"
+  no_aparelho '
+    adaptadores=$(ls /sys/class/bluetooth/ 2>/dev/null | tr "\n" " ")
+    if [ -z "$adaptadores" ]; then
+      echo "  adaptador: NENHUM  -> o rádio não registrou (driver ou DTS)"
+    else
+      echo "  adaptador: $adaptadores"
+    fi
+
+    if command -v rfkill >/dev/null 2>&1; then
+      rfkill list 2>/dev/null | grep -A2 -i bluetooth | sed "s/^/  /" ||
+        echo "  rfkill:    nenhuma entrada de bluetooth"
+    else
+      echo "  rfkill:    não existe nesta imagem"
+    fi
+
+    # O firmware é o elo que mais falha em silêncio: sem ele o `hci0` aparece e
+    # não funciona. O `dmesg` diz qual arquivo foi carregado e qual versão.
+    fw=$(dmesg 2>/dev/null | grep -iE "hci0:.*(loading|fw version|RTL:)" | tail -4)
+    if [ -n "$fw" ]; then
+      echo "$fw" | sed "s/^\[[^]]*\] Bluetooth: /  kernel:   /"
+    else
+      echo "  kernel:   nenhuma linha de firmware no dmesg (o rádio subiu?)"
+    fi
+
+    # A comparação é pelo caminho **exato**: o `sh -c` que executa este mesmo
+    # trecho carrega a palavra "bluetoothd" no argv e casaria consigo mesmo —
+    # a armadilha que já custou duas rodadas (§23 e §33).
+    daemon=""
+    for p in /proc/[0-9]*; do
+      c=$(tr "\0" " " < $p/cmdline 2>/dev/null)
+      case "$c" in "/usr/libexec/bluetooth/bluetoothd "*) daemon="$c";; esac
+    done
+    if [ -n "$daemon" ]; then
+      echo "  daemon:   $daemon"
+    else
+      echo "  daemon:   AUSENTE — nada responde ao bluetoothctl sem ele"
+    fi
+
+    echo "  bluez:    $(bluetoothctl --version 2>&1)"
+    bluetoothctl list 2>/dev/null | sed "s/^/  controlador: /"
+  '
+
+  titulo "perfil HID"
+  no_aparelho '
+    # `hidp` é o caminho do HID **clássico** (o controle vira /dev/input pelo
+    # próprio kernel). `uhid` é o caminho do HID sobre GATT (BLE): o BlueZ
+    # precisa dele para criar o dispositivo de entrada virtual.
+    # O que decide não é o módulo estar carregado: é o **transporte HID** estar
+    # registrado no barramento HID. Um `hidp` carregado que não registra aceita
+    # o socket e derruba a conexão em seguida (`disconnected with reason 2`),
+    # sem nunca criar `/dev/input/event*`.
+    #
+    # Medido no X55 em 13/11/2026 (imagem de 09/11): `modprobe hidp` responde
+    # "HIDP socket layer initialized" e `/sys/bus/hid/drivers/` continua sem
+    # `hidp` — é essa a diferença entre "tem Bluetooth" e "tem controle".
+    if [ -d /sys/bus/hid/drivers/hidp ]; then
+      echo "  transporte: OK — /sys/bus/hid/drivers/hidp registrado"
+    elif [ -d /sys/module/hidp ]; then
+      echo "  transporte: QUEBRADO — hidp carregado mas NÃO registrou em"
+      echo "              /sys/bus/hid/drivers/: o controle pareia, conecta e"
+      echo "              cai (reason 2) sem virar /dev/input"
+      # A causa está no próprio módulo: um `hidp` com o transporte HID depende
+      # de `hid`. Sem essa dependência ele é só a camada de socket — aceita a
+      # conexão e não tem como criar dispositivo de entrada.
+      dep=$(modinfo hidp 2>/dev/null | grep "^depends:" | cut -d: -f2 | tr -d " ")
+      case ",$dep," in
+        *,hid,*) echo "              depends: $dep (inclui hid — o problema é outro)";;
+        *)       echo "              depends: $dep — SEM \`hid\`: módulo sem transporte"
+                 echo "              remédio: reconstruir com CONFIG_HID=y (Giochi System)";;
+      esac
+    elif [ -e /lib/modules/$(uname -r)/kernel/net/bluetooth/hidp.ko ]; then
+      echo "  transporte: módulo existe, NÃO carregado  -> modprobe hidp"
+    else
+      echo "  transporte: AUSENTE do kernel  -> CONFIG_BT_HIDP na imagem"
+    fi
+
+    if [ -c /dev/uhid ]; then
+      echo "  uhid:     /dev/uhid presente  (controle BLE funciona)"
+    else
+      echo "  uhid:     AUSENTE  -> controle BLE pareia e NÃO vira /dev/input"
+      echo "            remédio: CONFIG_UHID=y na imagem (é do Giochi System)"
+    fi
+  '
+
+  titulo "pareados"
+  no_aparelho '
+    achei=0
+    for d in /var/lib/bluetooth/*/*/info; do
+      [ -f "$d" ] || continue
+      achei=1
+      mac=$(basename $(dirname "$d"))
+      nome=$(grep -m1 "^Name=" "$d" 2>/dev/null | cut -d= -f2-)
+      printf "  %-18s %s\n" "$mac" "${nome:-(sem nome)}"
+    done
+    [ "$achei" = 1 ] || echo "  nenhum — nada foi pareado nesta imagem"
+  '
+
+  titulo "veredito"
+  # O veredito é montado aqui, com o que foi medido — não é texto fixo.
+  no_aparelho '
+    if [ -z "$(ls /sys/class/bluetooth/ 2>/dev/null)" ]; then
+      echo "  A PILHA HCI NÃO EXISTE neste boot: o rádio não registrou."
+      echo "  Isso é imagem (driver/DTS/firmware), não app."
+    elif ! dmesg 2>/dev/null | grep -q "hci0.*fw version"; then
+      echo "  A PILHA HCI EXISTE mas o firmware não confirmou versão."
+      echo "  Sem firmware o hci0 aparece e não funciona — é imagem."
+    else
+      echo "  A PILHA HCI EXISTE e o firmware está carregado."
+      echo "  Se um controle não pareia, pode ser timing/alcance: o"
+      echo "  controlador só responde enquanto está anunciando."
+      echo "  Use: bash scripts/aparelho.sh parear <MAC>"
+      if [ ! -d /sys/bus/hid/drivers/hidp ]; then
+        echo
+        echo "  MAS o transporte HID do Bluetooth NÃO está registrado: um"
+        echo "  controle clássico pareia, conecta e cai sem virar /dev/input."
+        echo "  É da imagem, não do app — o pedido está no AGENTS.md."
+      fi
+      if [ ! -c /dev/uhid ]; then
+        echo
+        echo "  Ressalva para controle BLE (não clássico): falta /dev/uhid,"
+        echo "  então ele pareia e não vira entrada. Também é da imagem."
+      fi
+    fi
+  '
+}
+
+# Pareia um controle pelo endereço, com a sequência que funciona.
+#
+# O `0x04` do BlueZ é *page timeout*: o controlador só responde enquanto está
+# anunciando, e um scan de 5 s antes do `pair` é o que separa "pareou" de
+# "ConnectionAttemptFailed". Medido no X55 em 13/11/2026.
+cmd_parear() {
+  local mac="${1:-}"
+  if [ -z "$mac" ]; then
+    erro "uso: aparelho.sh parear <MAC>   (veja os endereços com: aparelho.sh bluetooth)"
+    exit 2
+  fi
+  exigir_aparelho
+
+  # O corpo remoto é escrito entre **aspas simples**: `$e`, `$n` e `$mac` são do
+  # aparelho, não deste shell. Sem isso o shell local expande antes de enviar e
+  # o `ssh` recebe uma string vazia — foi o `e: variável não associada` com
+  # `set -u` da primeira versão.
+  local corpo
+  corpo=$(cat <<'REMOTO'
+    MAC=__MAC__
+    bluetoothctl power on >/dev/null 2>&1
+    bluetoothctl pairable on >/dev/null 2>&1
+
+    # Já pareado não precisa de scan: o vínculo está em /var/lib/bluetooth e o
+    # que falta é conectar. Um scan antes só atrasa — e pode tirar o controle
+    # do modo de anúncio justo quando ele estava pronto.
+    if bluetoothctl info $MAC 2>/dev/null | grep -q 'Paired: yes'; then
+      echo '  já pareado (vínculo em /var/lib/bluetooth) — conectando...'
+    else
+      echo '  procurando por 8 s (ponha o controle em modo de pareamento)...'
+      bluetoothctl --timeout 8 scan on 2>&1 | grep -c 'Device' | sed 's/^/  dispositivos vistos: /'
+      echo '  pareando...'
+      bluetoothctl --agent NoInputNoOutput --timeout 30 pair $MAC 2>&1 | tail -5 | sed 's/^/    /'
+      if ! bluetoothctl info $MAC 2>/dev/null | grep -q 'Paired: yes'; then
+        echo '  FALHA não pareou; o motivo está nas linhas acima'
+        exit 1
+      fi
+      bluetoothctl trust $MAC >/dev/null 2>&1
+    fi
+
+    echo '  conectando...'
+    bluetoothctl --timeout 15 connect $MAC 2>&1 | tail -5 | sed 's/^/    /'
+    sleep 2
+    if bluetoothctl info $MAC 2>/dev/null | grep -q 'Connected: yes'; then
+      echo '  ok   conectado'
+    else
+      echo '  não ficou conectado — o motivo está acima (0x04 = desligado ou'
+      echo '  fora de alcance; reason 2 logo depois de conectar = o transporte'
+      echo '  HID do kernel derrubou: ver aparelho.sh bluetooth, perfil HID)'
+    fi
+
+    echo '  entradas de /dev/input agora:'
+    for e in /dev/input/event*; do
+      n=$(basename $e)
+      echo "    $n  $(cat /sys/class/input/$n/device/name 2>/dev/null)"
+    done
+REMOTO
+)
+  no_aparelho "${corpo//__MAC__/$mac}"
+}
+
 # ── entrada ─────────────────────────────────────────────────
 
 case "${1:-ajuda}" in
@@ -1921,6 +2123,8 @@ case "${1:-ajuda}" in
   log)         cmd_log ;;
   input)       shift; cmd_input "${1:-15}" ;;
   capacidades) shift; cmd_capacidades "${1:-}" ;;
+  bluetooth|bt) cmd_bluetooth ;;
+  parear)      shift; cmd_parear "${1:-}" ;;
   opcoes)      cmd_opcoes ;;
   boot-log)    cmd_boot_log ;;
   catalogo)    cmd_catalogo ;;
@@ -1942,7 +2146,7 @@ case "${1:-ajuda}" in
     ;;
   *)
     falha "subcomando desconhecido: $1"
-    printf 'use: procurar | diagnostico | instalar | subir | parar | verificar | log | boot-log | catalogo | instalar-pacote\n'
+    printf 'use: procurar | diagnostico | bluetooth | parear <MAC> | instalar | subir | parar | verificar | log | boot-log | catalogo | instalar-pacote\n'
     exit 1
     ;;
 esac

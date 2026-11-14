@@ -6957,12 +6957,85 @@ binário no aparelho                       sha256 61891a83… igual nas duas pon
 | Alegação | Estado |
 | --- | --- |
 | pareamento Bluetooth pelo launcher | **consertado e medido no aparelho** |
-| o controle vira dispositivo de entrada | **bloqueado na imagem** (falta `uhid`) |
+| o controle vira dispositivo de entrada | **bloqueado na imagem** — `hidp` sem transporte HID, e sem `uhid` para BLE |
 | releitura de `/dev/input` nos dois apps | **feito, com teste e mutação** |
 | esquerda/direita invertidos | **consertado** — `girar_ponto` espelha X, com teste e mutação |
 | o volante com o dedo no controle | **não exercitado** — a cadeia vai do código evdev ao pixel, sem dedo |
 
-**Pedido ao Giochi System, para a próxima janela do canal** (esta rodada fechou
-23:50, fora do horário): `CONFIG_UHID=y` na imagem e `hidp` carregado no boot.
-Sem `/dev/uhid`, o controle que pareia (`Bonded: yes`, medido) **não vira nó de
-entrada** e nenhum app deste repositório consegue lê-lo — não é código do app.
+### A pergunta do dono: "o sistema realmente tem suporte a HCI?"
+
+**Tem.** Medido no X55 uma a uma: `/sys/class/bluetooth/hci0` presente, rfkill
+liberado, firmware `rtl8821cs_fw.bin` carregado (`fw version 0x75b8f098`),
+`bluetoothd` no ar, controlador `A8:4F:A4:C9:98:4C` respondendo, BlueZ 5.72.
+O rádio funciona.
+
+**O que não existe é o transporte HID do kernel** — e essa é uma pergunta
+diferente, que a primeira escondia:
+
+```text
+$ modinfo hidp
+depends:  bluetooth          ← e NÃO `hid`
+$ strings hidp.ko | grep hid_register_driver
+(nada)
+$ ls /sys/bus/hid/drivers/
+a4tech apple belkin … hid-generic … redragon     ← sem `hidp`
+```
+
+O `hidp.ko` desta imagem traz **só a camada de socket**: ele carrega, imprime
+*"HIDP socket layer initialized"* e não tem como criar dispositivo de entrada.
+Consequência medida, com o controle ligado ao lado do aparelho:
+
+```text
+hci0 98:B6:E9:9C:46:65 type BR/EDR connected eir_len 21
+[CHG] Device 98:B6:E9:9C:46:65 Connected: yes
+hci0 98:B6:E9:9C:46:65 type BR/EDR disconnected with reason 2
+[CHG] Device 98:B6:E9:9C:46:65 Connected: no
+```
+
+Conectou na HCI e caiu em seguida, sem criar `/dev/input/event*`. Antes disso já
+aparecia o primeiro sintoma: `connect failed (status 0x04)` — *page timeout*,
+porque o controle só responde enquanto está anunciando.
+
+**E o `Pro Controller` pareado nesta imagem é HID clássico**, não BLE: UUID
+`00001124-0000-1000-8000-00805f9b34fb`. Ou seja, `uhid` **não** era o bloqueio
+dele — o meu diagnóstico anterior estava incompleto. `uhid` continua sendo
+necessário para controles BLE, mas este precisa do `hidp` com transporte.
+
+### Duas ferramentas novas, e a pergunta que cada uma responde
+
+```bash
+bash scripts/aparelho.sh bluetooth      # a pilha inteira, com veredito
+bash scripts/aparelho.sh parear <MAC>   # parear/conectar com a sequência que funciona
+```
+
+`bluetooth` mede adaptador, rfkill, firmware pelo `dmesg`, daemon, BlueZ,
+transporte HID (com o `depends` do módulo), `uhid` e os aparelhos já pareados —
+e termina dizendo **de quem é o problema**. `parear` pula o scan quando o
+vínculo já existe (o `pair` de algo já pareado só atrasa e pode tirar o controle
+do modo de anúncio) e traduz o resultado: `0x04` é desligado/fora de alcance,
+`reason 2` logo depois de conectar é o transporte HID que não existe.
+
+#### A armadilha do `sh -c` apareceu uma terceira vez
+
+O primeiro `bluetooth` procurava o daemon com `case "$c" in *bluetoothd*)` e
+listou **o próprio comando** que fazia a busca — exatamente o que já tinha
+acontecido com o `giochi-init` (§23) e com o launcher (§33). A comparação passou
+a ser pelo caminho exato (`"/usr/libexec/bluetooth/bluetoothd "*`).
+
+E o `parear` caiu em outra do mesmo tipo: o corpo remoto entre **aspas duplas**
+fazia o shell local expandir `$e`/`$n` antes de enviar, e com `set -u` isso vira
+`e: variável não associada`. O corpo agora é escrito entre **aspas simples** com
+um marcador `__MAC__` trocado no PC.
+
+### Pedido ao Giochi System
+
+Esta rodada fechou 00:10, fora da janela do canal (08:00–18:50). O pedido,
+para a próxima:
+
+1. **`CONFIG_HID=y` com o transporte BT-HIDP no `hidp.ko`** — é o que faz um
+   controle Bluetooth clássico virar `/dev/input/event*`. Verificação objetiva:
+   `modinfo hidp` tem de listar `hid` em `depends`, e `/sys/bus/hid/drivers/hidp`
+   tem de existir.
+2. **`CONFIG_UHID=y`** — para controles BLE (HOGP), que são os que anunciam como
+   `KeyLinkerBLE-*`. Sem `/dev/uhid` eles pareiam e não viram entrada.
+3. `hidp` carregado no boot (hoje só carrega por `modprobe`).
