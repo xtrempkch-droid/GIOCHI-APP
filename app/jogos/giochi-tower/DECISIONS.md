@@ -43,6 +43,9 @@ Estado: **M1 (Fundação) entregue.** M2–M6 pendentes.
 | D-041 | O chão repete a cada 12 m por limite do interpolador do GLES 2 | arte |
 | D-042 | O cenário sai fundido em uma malha por modelo, não instanciado | performance |
 | D-043 | `--vitrine` desenha os 20 modelos num quadro | ferramenta |
+| D-044 | A mira vem do estado, e o retículo sai com as duas faces | jogabilidade |
+| D-045 | O chão perdeu contraste, não ganhou padrão novo | arte |
+| D-046 | A linha da mira é 40 % transparente; o retículo não | jogabilidade |
 
 ---
 
@@ -787,3 +790,88 @@ alguém acrescentar.
 **A ferramenta paga por si:** os quatro defeitos de arte desta rodada foram
 encontrados olhando o quadro dela, e nenhum aparecia em teste, log ou contagem de
 arquivos.
+
+## D-044 — A mira vem do estado, e o retículo sai com as duas faces
+
+**Decisão:** a marcação de alvo é produzida por `GameState::alvo_em_mira()`, que
+chama a **mesma** `target_in_aim_de()` que o disparo usa. `main.rs` desenha o que
+ela devolve; não recalcula o cone.
+
+O relato do dono foi *"a visão de onde se está atirando está impossível"*. O jogo
+não atira para onde o analógico aponta: atira no inimigo **mais próximo dentro de
+um cone de ~70°**. Sem marcar quem o cone pegou, o gatilho parece aleatório — e
+"parece" é o problema, porque a regra é determinística.
+
+Recalcular o cone no desenho seria a segunda verdade desta casa (`AGENTS.md` §12,
+o carrossel que dessincronizou do foco). O teste
+`o_alvo_em_mira_e_o_mesmo_que_o_tiro_atinge` amarra as duas pontas: o alvo
+exposto tem de perder HP no passo seguinte.
+
+### O retículo desenhava zero pixels, e nada avisava
+
+A primeira versão emitia **uma** face do decalque e `cull_face: true` é o padrão
+do `GlState` da engine. Resultado: o retículo era inteiramente descartado, o
+`draw` devolvia `Ok` e `take_gl_error()` devolvia 0. Falha completamente muda —
+a mesma classe da parede do morro do `neon-drift` (`AGENTS.md` §31).
+
+A correção é emitir as duas faces, e o teste
+`o_reticulo_e_plano_e_sai_com_as_duas_faces` reprova se a linha dos índices
+espelhados sumir. Verificado: removendo-a, o teste falha.
+
+## D-045 — O chão perdeu contraste, não ganhou padrão novo
+
+**Decisão:** a textura de regolito foi **regenerada com metade do contraste**:
+grão ±11 → ±5, pedrinhas 120 → 44, delta de mancha ±22..48 → ±7..16.
+
+O relato foi *"a textura do mapa está sobresaindo muito"*. A tentação é mexer no
+tile ou trocar o padrão; nenhuma das duas era o problema. O tile já estava em
+12 m por limite do interpolador (`D-041`), e o padrão é grão de rocha — correto
+para um planeta morto.
+
+O que "sobressaía" era a **amplitude**. Medido nos dois quadros:
+
+| | desvio-padrão da textura | contraste local no quadro |
+| --- | --- | --- |
+| antes | 17,98 | 6,20 |
+| depois | **3,99** | **4,82** |
+
+A textura continua sendo a mesma família de ruído, com a mesma semente — o que
+mudou é que ela parou de competir com os personagens. Uma textura que chama mais
+atenção que o soldado está no lugar errado da hierarquia visual, e num painel de
+3,5" isso é ainda mais grave.
+
+## D-046 — A linha da mira é 40 % transparente; o retículo não
+
+**Decisão:** só a **linha** leva alfa `0,60`. O retículo em volta do inimigo e a
+ponta de alcance continuam **opacos**.
+
+Pedido do dono, logo depois da primeira entrega: *"a linha que mostra a direção
+do tiro deixe 40 % de transparência"*.
+
+O motivo é o mesmo que originou a camada: opaca, a linha cobria o cenário **e o
+próprio inimigo** — e um traço que esconde o alvo é pior que nenhum, porque o
+jogador precisa ver o que está atrás para decidir se vale atirar. Translúcida ela
+marca o caminho e deixa o terreno aparecer.
+
+**Por que só a linha:** o retículo é o marcador que diz *qual* inimigo vai levar
+o tiro. Deixá-lo translúcido o faria sumir justamente sobre a pedra clara, que é
+onde ele mais importa. São duas perguntas diferentes — "para onde eu aponto" e
+"quem vai levar" — e cada uma pede uma resposta visual distinta.
+
+### O valor chega ao pixel, e isso foi medido nos dois lados
+
+O blend do quadro é `SRC_ALPHA/ONE_MINUS_SRC_ALPHA` e o `phong.frag` escreve
+`u_color.a`, então o alfa não é decorativo. Resolvido por mínimos quadrados
+pixel a pixel contra o mesmo quadro com `--sem-mira`:
+
+| quadro | α = 1,00 (retículo) | α = 0,60 (linha) |
+| --- | --- | --- |
+| PC, 1280×720 | 754 px | 665 px |
+| R35S, 640×480 | 347 px | 283 px |
+
+Duas populações limpas, sem valores intermediários. Com `LINHA_TRANSPARENCIA =
+0,00` os mesmos 1 419 px saem todos em `240,40,40` — é o A/B que prova que o
+número medido é o que o código diz.
+
+Efeito colateral esperado: onde a linha cruza a si mesma ela clareia. É alfa
+normal, não defeito.

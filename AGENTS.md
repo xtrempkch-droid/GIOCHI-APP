@@ -6487,3 +6487,139 @@ boss — e é o que revelou os quatro defeitos acima.
 ![Vitrine dos 20 modelos](docs/imagens/giochi-tower-vitrine-pc.png)
 
 ![A batalha pelo posto no R35S](docs/imagens/giochi-tower-planeta-r35s.png)
+
+## 46. Tower Defense: mirar, sair do menu e o chão que competia (13/11/2026)
+
+Três relatos do dono depois de jogar, e um ajuste pedido no meio da rodada:
+
+> "a visão de onde se está atirando está impossível (recomendo um alvo no inimigo
+> que será atingido e uma linha vermelha linkando o personagem e o alvo), quando
+> abro menu e tento o 'sair para o menu' não acontece nada. a textura do mapa
+> está sobressaindo muito (não sei o que fazer rs)."
+>
+> "a linha que mostra a direção do tiro deixe 40 % de transparência"
+
+Os três eram invisíveis para as 258 provas que existiam. Nenhum era falta de
+código: eram **ausências de contrato entre o que o jogo faz e o que a tela diz**.
+
+### 1. O tiro tem uma regra que a tela não contava
+
+O jogo não atira para onde o analógico aponta — atira no inimigo mais próximo
+dentro de um **cone de ~70°** e do alcance da classe (`target_in_aim_de`). Sem
+marcar quem o cone pegou, o gatilho parece aleatório, e "parece" é o problema
+porque a regra é determinística.
+
+A camada desenha três coisas, e cada uma responde uma pergunta diferente:
+
+| Na tela | Responde |
+| --- | --- |
+| retículo vermelho em volta de um bug | **quem** o próximo `A` acerta |
+| linha soldado→bug, 40 % transparente | de **onde** sai |
+| traço + ponta, sem retículo | nada no cone: é **para cá** que se aponta |
+
+**`GameState::alvo_em_mira()` chama a mesma função que o disparo.** Derivar o
+cone no desenho seria a segunda verdade que já dessincronizou o carrossel do
+launcher (§12), e aqui o sintoma seria o pior possível: retículo num inimigo e
+tiro em outro. `o_alvo_em_mira_e_o_mesmo_que_o_tiro_atinge` amarra as duas pontas
+exigindo que o alvo exposto perca HP no passo seguinte.
+
+### 2. O retículo desenhava zero pixels, e nada avisava
+
+A primeira versão emitia **uma** face do decalque. `cull_face: true` é o padrão do
+`GlState` da engine, então o retículo era inteiramente descartado — `draw`
+devolvia `Ok` e `take_gl_error()` devolvia **0**. Falha muda, com o alvo sendo
+encontrado corretamente.
+
+É a mesma classe da parede do morro do `neon-drift` (§31), e por isso o teste
+`o_reticulo_e_plano_e_sai_com_as_duas_faces` foi verificado **por remoção**: tirar
+a linha dos índices espelhados faz o teste falhar.
+
+### 3. "Sair para o menu" trocava o estado e não a tela
+
+`Menu::confirmar` na pausa devolvia `Acao::MenuPrincipal`, e o `main.rs` só fazia
+`modo = Modo::Menu`. A tela continuava `Tela::Pausa` e o laço redesenhava **o
+mesmo painel de pausa** com o cursor parado onde estava: a impressão exata de
+botão morto.
+
+A correção move as duas coisas para o menu — `sair_da_partida()` faz
+`marcar_partida(false)` **e** `abrir(Tela::Principal)` — porque navegação é do
+menu e o `main.rs` só executa. A/B medido:
+
+```text
+sem a correção   --teclas start,baixo,baixo,baixo,a
+                 -> tela pausa | cursor 3 | Sair para o menu      ← nada aconteceu
+com a correção   -> tela principal | cursor 0 | Jogar
+```
+
+Dois testes fixam a regra, um para a pausa e outro para a tela de fim (que tinha o
+mesmo defeito, com o cursor em 2). É a terceira vez que este repositório tropeça
+na mesma família: **ação que muda o estado e não muda o que se vê**.
+
+### 4. A textura não sobressaía pelo padrão — pelo contraste
+
+A tentação era mexer no tile ou trocar o padrão. O tile já estava em 12 m pelo
+limite do `mediump` (§45) e o padrão (grão de rocha) é o certo para um planeta
+morto. O que "sobressaía" era a **amplitude**:
+
+| | desvio-padrão da textura | contraste local no quadro |
+| --- | --- | --- |
+| antes | 17,98 | 6,20 |
+| depois | **3,99** | **4,82** |
+
+Mesma família de ruído, mesma semente. O que mudou é que a textura parou de
+competir com os personagens — e num painel de 3,5" isso decide qual é o assunto do
+quadro.
+
+### 5. A linha a 40 %: o alfa foi medido, não presumido
+
+Resolvido por mínimos quadrados pixel a pixel contra o mesmo quadro com
+`--sem-mira`:
+
+| quadro | α = 1,00 (retículo) | α = 0,60 (linha) |
+| --- | --- | --- |
+| PC, 1280×720 | 754 px | 665 px |
+| R35S, 640×480 | 347 px | 283 px |
+
+Duas populações limpas, sem intermediários — o valor chega ao pixel porque o blend
+do quadro é `SRC_ALPHA/ONE_MINUS_SRC_ALPHA` e o `phong.frag` escreve `u_color.a`.
+O controle é o A/B com `LINHA_TRANSPARENCIA = 0,00`: os mesmos 1 419 px caem
+**todos** em `240,40,40`, o vermelho puro.
+
+**Só a linha recebeu alfa.** O retículo translúcido sumiria justamente sobre a
+pedra clara, que é onde ele mais importa.
+
+### 6. `--sem-entrada`: descoberto por medição, não por desenho
+
+O aparelho tem controle conectado e o analógico parado **emite ruído**. Esse
+ruído move o `aim` do soldado, o alvo da mira muda, e o mesmo `--frames` capturado
+no PC e no R35S divergia em **273 387 px — 68 % do quadro**. A comparação de
+quadro deixava de medir qualquer coisa, e o sintoma parecia diferença de driver.
+
+Com `--sem-entrada` dos dois lados: **13 inimigos, 0 gold** nos dois, mira no
+mesmo lugar. A lição é a de sempre, agora com entrada: **uma variável que ninguém
+controla não é ruído, é a medida.**
+
+Junto veio `--posicionar x,z`, que existe porque capturar um quadro **com alvo
+marcado** exigia jogar até a horda encostar — e os inimigos de longo alcance param
+a 17 m da torre, fora dos 14 m do Soldado.
+
+### Números
+
+```text
+cargo test                        265 (229 lib + 36 integração)   ← eram 258
+cargo clippy -D warnings          limpo
+validate-app.mjs --all            11 apps válidos
+R35S, 640×480                     binário instalado, sha256 conferido nas duas pontas
+                                  quadro 640x480 · 630 px avermelhados, duas populações de alfa
+```
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| o retículo com **o dedo no controle** | **não exercitado** — a cadeia vai do estado ao pixel, sem entrada humana |
+| FPS com a horda cheia (100 inimigos) | **não medido** nesta rodada |
+| 40 % é o número **certo** num painel de 3,5" | medido que **chega ao pixel**; se é o valor ideal, não — gosto não se mede |
+| a mira em **multijogador** | desenha só para `state.local_id`; para os outros jogadores não |
+
+![A mira antes e depois](docs/imagens/giochi-tower-mira-antes-depois.png)

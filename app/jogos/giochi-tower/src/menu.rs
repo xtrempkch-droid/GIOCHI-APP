@@ -462,7 +462,10 @@ impl Menu {
                     self.abrir(Tela::Configuracoes);
                     Acao::Nada
                 }
-                _ => Acao::MenuPrincipal,
+                _ => {
+                    self.sair_da_partida();
+                    Acao::MenuPrincipal
+                }
             },
             Tela::Fim { .. } => match self.cursor {
                 0 => Acao::Reiniciar,
@@ -470,9 +473,30 @@ impl Menu {
                     self.abrir(Tela::Configuracoes);
                     Acao::Nada
                 }
-                _ => Acao::MenuPrincipal,
+                _ => {
+                    self.sair_da_partida();
+                    Acao::MenuPrincipal
+                }
             },
         }
+    }
+
+    /// Volta ao menu principal **e** larga a partida.
+    ///
+    /// # O bug que isto conserta (relato do dono, 10/11/2026)
+    ///
+    /// "Sair para o menu" devolvia `Acao::MenuPrincipal`, e o `main.rs` só zerava
+    /// o `modo`. O menu continuava em `Tela::Pausa`: a mesma pausa era desenhada
+    /// de novo, com as mesmas quatro linhas, sobre o mesmo mundo congelado. Do
+    /// lado de fora, **nada acontecia** — e apertar a linha outra vez repetia o
+    /// nada.
+    ///
+    /// A navegação é do menu; o `main.rs` executa a ação. Deixar a troca de tela
+    /// só no `main.rs` é o mesmo erro de contrato do `A — Jogar` na Home do
+    /// launcher (`AGENTS.md` §12): a ação existe, o desenho não acompanha.
+    fn sair_da_partida(&mut self) {
+        self.marcar_partida(false);
+        self.abrir(Tela::Principal);
     }
 
     /// "Voltar" (B): um nível acima, sem nunca encerrar o processo por engano.
@@ -674,6 +698,39 @@ mod tests {
             let ultimo = menu.itens().len() - 1;
             menu.cursor = ultimo;
             assert_eq!(passo(&mut menu, Direcao::Confirma), Acao::MenuPrincipal);
+        }
+    }
+
+    #[test]
+    fn sair_para_o_menu_muda_de_tela_e_nao_so_de_estado() {
+        // O bug relatado em 11/11/2026: a linha devolvia `Acao::MenuPrincipal` e o
+        // `main.rs` só zerava o `modo`. O menu ficava em `Tela::Pausa` e redesenhava
+        // a mesma pausa sobre o mesmo mundo congelado — **nada** mudava na tela.
+        //
+        // Este teste olha a tela, não a ação: era exatamente a diferença que faltava
+        // no teste acima, que só comparava `Acao::MenuPrincipal`.
+        let mut menu = Menu::novo(true);
+        menu.marcar_partida(true);
+        menu.abrir(Tela::Pausa);
+        menu.cursor = menu.itens().len() - 1;
+        assert_eq!(passo(&mut menu, Direcao::Confirma), Acao::MenuPrincipal);
+        assert_eq!(menu.tela, Tela::Principal);
+        // Sem partida em curso, "Jogar" é a primeira linha — e não "Continuar".
+        assert!(!menu.em_partida);
+        assert_eq!(menu.item_atual().expect("linha").rotulo, "Jogar");
+        // E apertar de novo começa uma partida nova em vez de repetir o nada.
+        assert_eq!(passo(&mut menu, Direcao::Confirma), Acao::Jogar);
+    }
+
+    #[test]
+    fn sair_para_o_menu_depois_do_fim_tambem_muda_de_tela() {
+        for venceu in [true, false] {
+            let mut menu = Menu::novo(true);
+            menu.abrir(Tela::Fim { venceu });
+            menu.cursor = menu.itens().len() - 1;
+            assert_eq!(passo(&mut menu, Direcao::Confirma), Acao::MenuPrincipal);
+            assert_eq!(menu.tela, Tela::Principal);
+            assert_eq!(menu.item_atual().expect("linha").rotulo, "Jogar");
         }
     }
 

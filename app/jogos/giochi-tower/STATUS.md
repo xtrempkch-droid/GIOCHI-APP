@@ -9,17 +9,134 @@ cada decisão está em [`DECISIONS.md`](DECISIONS.md), o design em
 
 | | |
 | --- | --- |
-| testes | **258** (`cargo test`), sendo 222 na lib e 36 de integração; `clippy -D warnings` limpo |
+| testes | **265** (`cargo test`), sendo 229 na lib e 36 de integração; `clippy -D warnings` limpo |
 | binário aarch64 | 2,0 MB, **6** bibliotecas `NEEDED` (SDL2, SDL2_mixer, **SDL2_image**, libgcc_s, libm, libc) |
 | aparelho | R35S / RK3326, 640×480, **GLES 2 no Mali-G31** (Panfrost) |
 | modelos no aparelho | **20/20 carregados** (15 personagens + 5 do cenário), **22 texturas** na GPU |
 | FPS no aparelho | **59,6** (vblank) sem UI **com o cenário** · **59,7** com UI e HUD |
 | trabalho por quadro | **2,56 ms** sem UI (com cenário) · **6,19 ms** com UI + HUD |
 | cenário | 473 peças em **5 malhas fundidas**: custa **0,76 ms** por quadro |
+| mira | linha **40 % transparente** (α 0,60 medido nos dois lados), retículo opaco |
 | pixel a pixel | 4 254 cores no PC contra **4 807 no R35S**; **0,00 %** de quase-preto nos dois |
 | multiplicador | host e cliente em dois processos, `jogador 1 entrou` dos dois lados |
 
-## O que foi feito nesta rodada (13/11/2026, noite)
+## O que foi feito nesta rodada (13/11/2026, madrugada)
+
+Três relatos do dono depois de jogar, mais um ajuste pedido no meio da rodada:
+
+> "a visão de onde se está atirando está impossível (recomendo um alvo no inimigo
+> que será atingido e uma linha vermelha linkando o personagem e o alvo), quando
+> abro menu e tento o 'sair para o menu' não acontece nada. a textura do mapa
+> está sobressaindo muito (não sei o que fazer rs)."
+>
+> "a linha que mostra a direção do tiro deixe 40 % de transparência"
+
+| Relato | Causa | Como ficou |
+| --- | --- | --- |
+| atirar é ilegível | o tiro vai no inimigo **mais próximo dentro de um cone de ~70°**, e nada na tela dizia qual | linha vermelha soldado→alvo + **retículo em volta do escolhido**; sem alvo, traço de alcance na direção da mira |
+| "Sair para o menu" não faz nada | a ação trocava `modo` e **não trocava a tela**: o menu continuava em `Tela::Pausa` e redesenha o mesmo painel | `Menu::sair_da_partida()` faz as duas coisas, e é o único lugar que faz |
+| textura sobressai | não era o tile nem o padrão: era a **amplitude** (desvio 17,98) | textura regerada com metade do contraste (desvio **3,99**) |
+| linha muito forte | opaca cobria o cenário e o próprio inimigo | alfa **0,60** só na linha; retículo e ponta continuam opacos |
+
+![A mira antes e depois: linha opaca à esquerda, 40 % transparente à direita](../../../docs/imagens/giochi-tower-mira-antes-depois.png)
+
+### O bug que a imagem pegou: o retículo desenhava zero pixels
+
+A primeira versão do retículo emitia **uma** face do decalque, e `cull_face:
+true` é o padrão do `GlState` da engine. O resultado foi o pior tipo de defeito:
+`draw` devolvia `Ok`, `take_gl_error()` devolvia 0, o alvo estava sendo
+encontrado — e nada aparecia na tela.
+
+Corrigido emitindo as duas faces, com teste (`o_reticulo_e_plano_e_sai_com_as_duas_faces`)
+verificado contra a remoção da linha dos índices espelhados. É a mesma classe da
+parede do morro do `neon-drift` (`AGENTS.md` §31).
+
+### A mira não recalcula o cone
+
+`GameState::alvo_em_mira()` chama a **mesma** `target_in_aim_de()` que o disparo
+usa. Recalcular no desenho seria a segunda verdade que já dessincronizou o
+carrossel do launcher (`AGENTS.md` §12), e o sintoma seria o pior possível: um
+retículo que marca um inimigo e um tiro que acerta outro.
+
+O teste `o_alvo_em_mira_e_o_mesmo_que_o_tiro_atinge` amarra as duas pontas — o
+alvo exposto tem de perder HP no passo seguinte.
+
+### O "Sair para o menu" trocava o estado e não a tela
+
+`Menu::confirmar` na pausa devolvia `Acao::MenuPrincipal`, e `main.rs` só fazia
+`modo = Modo::Menu`. A tela ficava em `Tela::Pausa`, então o laço redesenhava o
+**mesmo painel de pausa** com o cursor onde estava: a impressão exata de botão
+morto.
+
+A correção move as duas coisas para dentro do menu (`sair_da_partida()`:
+`marcar_partida(false)` + `abrir(Tela::Principal)`), porque navegação é do menu e
+o `main.rs` só executa. A/B medido:
+
+```text
+sem a correção   --teclas start,baixo,baixo,baixo,a
+                 -> tela pausa | cursor 3 | Sair para o menu      (nada aconteceu)
+com a correção   -> tela principal | cursor 0 | Jogar
+```
+
+Dois testes fixam a regra: um para a pausa e outro para a tela de fim (que tinha
+o mesmo defeito, com o cursor em 2).
+
+### A textura: era contraste, não padrão
+
+A tentação é mexer no tile ou trocar o padrão. Nenhuma das duas era o problema —
+o tile já estava em 12 m por limite do interpolador do `mediump` (`D-041`), e o
+padrão (grão de rocha) é o certo para um planeta morto.
+
+O que "sobressaía" era a **amplitude**:
+
+| | desvio-padrão da textura | contraste local no quadro |
+| --- | --- | --- |
+| antes | 17,98 | 6,20 |
+| depois | **3,99** | **4,82** |
+
+Mesma família de ruído, mesma semente. O que mudou é que a textura parou de
+competir com os personagens — e num painel de 3,5" isso decide se o soldado ou o
+chão é o assunto do quadro.
+
+### A linha a 40 %: o número foi medido, não presumido
+
+Alfa resolvido por mínimos quadrados pixel a pixel contra o mesmo quadro com
+`--sem-mira`, nos dois lados:
+
+| quadro | α = 1,00 (retículo) | α = 0,60 (linha) |
+| --- | --- | --- |
+| PC, 1280×720 | 754 px | 665 px |
+| R35S, 640×480 | 347 px | 283 px |
+
+Duas populações limpas, sem intermediários. O controle é o A/B com
+`LINHA_TRANSPARENCIA = 0,00`: os mesmos 1 419 px caem **todos** em `240,40,40`,
+que é o vermelho puro do `TARGET_COLOR`. Só a linha recebeu alfa — o retículo
+translúcido sumiria justamente sobre a pedra clara, que é onde ele mais importa
+(`D-046`).
+
+### Duas ferramentas novas de bancada
+
+`--posicionar x,z` e `--sem-entrada`. A primeira porque capturar um quadro **com
+alvo marcado** exigia jogar até a horda encostar, e os inimigos de longo alcance
+param a 17 m da torre, fora dos 14 m do Soldado.
+
+A segunda foi descoberta por medição, não por desenho: o aparelho tem controle
+conectado, e o analógico parado emite ruído. Esse ruído move o `aim` do soldado e
+o alvo da mira muda — o mesmo `--frames` capturado no PC e no R35S divergia em
+**273 387 px (68 % do quadro)**, e a comparação de quadro deixava de medir
+qualquer coisa. Com `--sem-entrada` dos dois lados: **13 inimigos, 0 gold** nos
+dois, e a mira no mesmo lugar.
+
+### O que continua sendo afirmação
+
+| Alegação | Estado |
+| --- | --- |
+| o retículo marca o alvo **com o dedo no controle** | **não exercitado** — a cadeia vai do estado ao pixel, mas sem aparelho de entrada humano |
+| FPS **com a horda cheia** de 100 inimigos | **não medido** nesta rodada |
+| 40 % é o valor certo num painel de 3,5" | **medido que chega ao pixel**; se 40 % é o número ideal, não — não há como medir gosto |
+| a mira em **multijogador** | desenha só para `state.local_id`; para os outros jogadores não |
+
+## O que foi feito na rodada anterior (13/11/2026, noite)
 
 O pedido do dono foi de **arte e de cenário**:
 
@@ -283,3 +400,10 @@ Três armadilhas que custaram rodada, as três já conhecidas do repositório:
 - Não editar `vendor/`: é cópia do upstream (regra R1). Atualizar é copiar de
   novo, e o `glam` do jogo segue o que o código da engine chama (0.34).
 - Não tratar "compila" como "roda": a regra do repositório vale aqui.
+
+### A mira no aparelho
+
+Captura de `/tmp` no R35S, 640×480, GLES 2 no Mali-G31 — o retículo desenha
+sozinho em volta do bug mais próximo e a linha sai translúcida:
+
+![A mira no R35S](../../../docs/imagens/giochi-tower-mira-r35s.png)

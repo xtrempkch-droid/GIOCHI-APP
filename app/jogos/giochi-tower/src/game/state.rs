@@ -109,6 +109,23 @@ impl Phase {
     }
 }
 
+/// O inimigo que o próximo tiro vai acertar.
+///
+/// Carrega **posição e tipo**, e não o índice sozinho: quem desenha precisa do
+/// modelo para saber a altura, e o índice sozinho obrigaria o `main.rs` a
+/// conhecer a tabela de tipos do núcleo para escolher o tamanho do retículo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlvoEmMira {
+    /// Índice no vetor `enemies` — o mesmo que o ataque usa.
+    pub indice: usize,
+    /// Posição no plano XZ (o `y` é o chão).
+    pub x: f32,
+    /// Posição no plano XZ.
+    pub z: f32,
+    /// Tipo do inimigo, no mesmo byte do snapshot (`Enemy::kind_byte`).
+    pub tipo: u8,
+}
+
 /// Estado completo de uma partida local (o host).
 #[derive(Debug, Clone)]
 pub struct GameState {
@@ -412,7 +429,26 @@ impl GameState {
         }
     }
 
-    /// Inimigo mais próximo dentro do alcance e à frente da mira do jogador `id`.
+    /// O inimigo que o **próximo tiro** do jogador `id` vai acertar.
+    ///
+    /// Existe para a mira ser visível: quem desenha precisa do alvo antes de o
+    /// tiro sair, e derivar isso de novo no `main.rs` seria uma segunda verdade
+    /// sobre o cone — exatamente o que fez o carrossel do launcher dessincronizar
+    /// do foco (`AGENTS.md` §12). A regra fica aqui e o desenho a consome.
+    ///
+    /// Não depende do tempo de recarga: com o gatilho solto, o alvo continua
+    /// sendo o que seria atingido, e é isso que o jogador precisa enxergar.
+    pub fn alvo_em_mira(&self, id: u8, config: &GameConfig) -> Option<AlvoEmMira> {
+        let (indice, _) = self.target_in_aim_de(id, config)?;
+        let enemy = self.enemies.get(indice)?;
+        Some(AlvoEmMira {
+            indice,
+            x: enemy.position.x,
+            z: enemy.position.z,
+            tipo: enemy.kind_byte(),
+        })
+    }
+
     /// Inimigo mais próximo dentro do alcance e à frente da mira do local.
     #[cfg(test)]
     fn target_in_aim(&self, config: &GameConfig) -> Option<(usize, f32)> {
@@ -1362,6 +1398,99 @@ mod tests {
         assert_eq!(s.tick, tick);
         assert_eq!(s.phase_timer_s, 0.0);
     }
+
+    #[test]
+    fn o_alvo_em_mira_e_o_mesmo_que_o_tiro_atinge() {
+        // A mira desenhada e o tiro saem da **mesma** função (`target_in_aim_de`).
+        // Se alguém reimplementar o cone no desenho, o retículo passa a marcar um
+        // bug que o gatilho não acerta — o jogador vê a marca e não acontece nada.
+        // Este teste amarra as duas pontas: o que `alvo_em_mira` devolve é quem
+        // perde HP no passo seguinte.
+        let c = config();
+        let mut s = combat_sem_inimigos(&c);
+        s.phase = Phase::Combat;
+        let def = c.enemy(EnemyKind::Grunt).expect("grunt");
+        // Dois Grunts à frente; o mais perto é o que o cone deve escolher.
+        for (id, x) in [(1u16, 3.0f32), (2, 9.0)] {
+            let mut enemy = Enemy::spawn(id, def, Vec3::new(x, 0.0, 0.0), c.scaling_for_wave(1));
+            enemy.position = Vec3::new(x, 0.0, 0.0);
+            s.enemies.push(enemy);
+        }
+        s.local_mut().aim = Vec3::new(1.0, 0.0, 0.0);
+
+        let alvo = s.alvo_em_mira(s.local_id, &c).expect("há alvo no cone");
+        assert_eq!(s.enemies[alvo.indice].id, 1, "o cone escolhe o mais perto");
+        assert!((alvo.x - 3.0).abs() < 1.0e-3, "x do alvo: {}", alvo.x);
+        assert_eq!(alvo.tipo, s.enemies[alvo.indice].kind_byte());
+
+        let hp_antes: Vec<f32> = s.enemies.iter().map(|e| e.hp).collect();
+        let input = InputFrame {
+            buttons: Buttons {
+                attack: true,
+                ..Buttons::default()
+            },
+            ..InputFrame::default()
+        };
+        s.step(TICK_DT, &input, &c);
+        assert!(
+            s.enemies[alvo.indice].hp < hp_antes[alvo.indice],
+            "o alvo marcado não foi o atingido"
+        );
+        let outro = 1 - alvo.indice;
+        assert!(
+            (s.enemies[outro].hp - hp_antes[outro]).abs() < 1.0e-3,
+            "o tiro acertou dois inimigos"
+        );
+    }
+
+    #[test]
+    fn sem_alvo_no_cone_a_mira_nao_marca_ninguem() {
+        let c = config();
+        let mut s = combat_sem_inimigos(&c);
+        s.phase = Phase::Combat;
+        let def = c.enemy(EnemyKind::Grunt).expect("grunt");
+        // Atrás do soldado: o cone não pega, e o desenho tem de cair no traço de
+        // régua em vez de prometer um alvo.
+        let mut enemy = Enemy::spawn(1, def, Vec3::new(-3.0, 0.0, 0.0), c.scaling_for_wave(1));
+        enemy.position = Vec3::new(-3.0, 0.0, 0.0);
+        s.enemies.push(enemy);
+        s.local_mut().aim = Vec3::new(1.0, 0.0, 0.0);
+        assert!(s.alvo_em_mira(s.local_id, &c).is_none());
+
+        // E longe demais também não: o Soldado alcança 14 m.
+        s.enemies[0].position = Vec3::new(60.0, 0.0, 0.0);
+        assert!(s.alvo_em_mira(s.local_id, &c).is_none());
+    }
+
+    #[test]
+    fn a_regua_de_alcance_da_mira_cobre_o_que_o_tiro_pega() {
+        // O traço de régua é desenhado até `attack_range`. Se o alcance efetivo
+        // fosse outro, a régua mentiria: o jogador veria o bug "dentro" e nada
+        // aconteceria — que é metade do relato de 11/11/2026.
+        let c = config();
+        let mut s = combat_sem_inimigos(&c);
+        s.phase = Phase::Combat;
+        let alcance = s.local().attack_range(&c);
+        let def = c.enemy(EnemyKind::Grunt).expect("grunt");
+        s.local_mut().aim = Vec3::new(1.0, 0.0, 0.0);
+
+        let mut dentro = Enemy::spawn(
+            1,
+            def,
+            Vec3::new(alcance - 0.5, 0.0, 0.0),
+            c.scaling_for_wave(1),
+        );
+        dentro.position = Vec3::new(alcance - 0.5, 0.0, 0.0);
+        s.enemies.push(dentro);
+        assert!(
+            s.alvo_em_mira(s.local_id, &c).is_some(),
+            "dentro do alcance"
+        );
+
+        s.enemies[0].position = Vec3::new(alcance + 0.5, 0.0, 0.0);
+        assert!(s.alvo_em_mira(s.local_id, &c).is_none(), "meio metro além");
+    }
+
 
     #[test]
     fn the_aim_cone_keeps_the_shooter_from_firing_backwards() {

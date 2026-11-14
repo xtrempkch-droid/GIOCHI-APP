@@ -800,6 +800,18 @@ const LADO_TEXTURA = 64;
  *
  * As pedrinhas são sorteadas com `% LADO`, que faz o desenho atravessar a borda
  * e a emenda sumir.
+ *
+ * # O contraste foi reduzido à metade (11/11/2026)
+ *
+ * Relato do dono: *"a textura do mapa está sobresaindo muito"*. Ela estava: grão
+ * de ±11 e 120 pedrinhas de ±22..48 sobre um tile de 12 m. A 640×480 cada
+ * pedrinha ocupa 3–8 px e há uma a cada metro — o chão ficava mais barulhento que
+ * os personagens, e o olho lia a repetição do tile pelos calhaus brilhantes.
+ *
+ * O que muda o quanto ela "salta" é o **contraste**, não o tamanho do tile: um
+ * tile maior só repete menos vezes, e a 12 m o limite é o interpolador
+ * `mediump` do GLES 2 (UV acima de ~50 perde precisão e aparece uma grade).
+ * Medido no quadro: ver DECISIONS.md (D-045).
  */
 function texturaRegolito(semente) {
   const px = new Uint8Array(LADO_TEXTURA * LADO_TEXTURA * 3);
@@ -811,19 +823,19 @@ function texturaRegolito(semente) {
   const base = [122, 105, 88];
   for (let y = 0; y < LADO_TEXTURA; y++) {
     for (let x = 0; x < LADO_TEXTURA; x++) {
-      const grao = (sorteio() - 0.5) * 22;
+      const grao = (sorteio() - 0.5) * 10;
       const i = (y * LADO_TEXTURA + x) * 3;
       px[i] = Math.max(0, Math.min(255, Math.round(base[0] + grao)));
       px[i + 1] = Math.max(0, Math.min(255, Math.round(base[1] + grao * 0.94)));
       px[i + 2] = Math.max(0, Math.min(255, Math.round(base[2] + grao * 0.86)));
     }
   }
-  for (let pedra = 0; pedra < 120; pedra++) {
+  for (let pedra = 0; pedra < 44; pedra++) {
     const cx = Math.floor(sorteio() * LADO_TEXTURA);
     const cy = Math.floor(sorteio() * LADO_TEXTURA);
-    const raio = 0.5 + sorteio() * 2.0;
+    const raio = 0.5 + sorteio() * 1.6;
     const claro = sorteio() < 0.42;
-    const delta = claro ? 26 + sorteio() * 22 : -(22 + sorteio() * 20);
+    const delta = claro ? 9 + sorteio() * 7 : -(7 + sorteio() * 6);
     for (let dy = -Math.ceil(raio); dy <= Math.ceil(raio); dy++) {
       for (let dx = -Math.ceil(raio); dx <= Math.ceil(raio); dx++) {
         if (dx * dx + dy * dy > raio * raio) continue;

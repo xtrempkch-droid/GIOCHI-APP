@@ -19,7 +19,6 @@
 
 use std::path::Path;
 
-use glam::Vec3 as GlamVec3;
 use giochi_engine::platform::window::{Window, WindowConfig};
 use giochi_engine::platform::Platform;
 use giochi_engine_3d::context::{self, GlState, GlesVersion};
@@ -27,6 +26,7 @@ use giochi_engine_3d::math3d::{Camera3D, Color3D, Quat, Transform3D, Vec3 as Eng
 use giochi_engine_3d::render3d::DirectionalLight;
 use giochi_engine_3d::shader::BuiltinShader;
 use giochi_engine_3d::{MeshHandle, RenderContext3D, ShaderHandle, TextureHandle};
+use glam::Vec3 as GlamVec3;
 
 use crate::engine_bridge::modelos::{self, Catalogo};
 use crate::errors::{GameError, Result};
@@ -51,6 +51,40 @@ pub const TOWER_COLOR: Color3D = Color3D::new(0.290, 0.520, 0.860, 1.0);
 
 /// Cor do marcador do jogador.
 pub const PLAYER_COLOR: Color3D = Color3D::new(0.950, 0.820, 0.300, 1.0);
+
+/// Cor do traço de mira quando **não há** alvo no cone.
+///
+/// Branco-quente e não vermelho: o jogador precisa distinguir "estou apontando"
+/// de "vou acertar aquilo". Pintar os dois de vermelho faria a mira prometer um
+/// alvo que o cone não pegou — o mesmo defeito do rodapé que anunciava `A —
+/// Jogar` onde `A` abria a ficha (`AGENTS.md` §12).
+pub const AIM_COLOR: Color3D = Color3D::new(0.980, 0.930, 0.760, 1.0);
+
+/// Cor do alvo: traço, linha e retículo.
+///
+/// Vermelho puro é o que o dono pediu, e é o que menos se confunde com o
+/// regolito (laranja-acinzentado) e com o chitinoso dos bugs (marrom). Emissivo,
+/// então não escurece com a luz do sol.
+pub const TARGET_COLOR: Color3D = Color3D::new(0.960, 0.180, 0.140, 1.0);
+
+/// O quanto a **linha** da mira é transparente.
+///
+/// Pedido do dono (11/11/2026): 40 % de transparência. Opaca ela cobria o
+/// cenário e o próprio inimigo — e um traço que esconde o alvo é pior que nenhum,
+/// porque o jogador precisa ver o que está atrás para decidir se vale atirar.
+/// Translúcida ela ainda marca o caminho e deixa o terreno aparecer.
+///
+/// Só a linha: o retículo e a ponta continuam opacos, senão o marcador que diz
+/// **qual** inimigo vai levar o tiro some justamente sobre a pedra clara.
+///
+/// O valor chega ao pixel: o blend do quadro é `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`
+/// (`context::state`) e o `phong.frag` escreve `u_color.a`. Efeito colateral
+/// esperado: onde a linha cruza outra linha ela clareia, porque o traço se
+/// sobrepõe a si mesmo — é o comportamento normal de alfa, não um defeito.
+pub const LINHA_TRANSPARENCIA: f32 = 0.40;
+
+/// Alfa da linha da mira: `1 - transparência`.
+pub const LINHA_ALFA: f32 = 1.0 - LINHA_TRANSPARENCIA;
 
 /// Luz que faz a cor chegar à tela sem atenuação.
 ///
@@ -120,6 +154,62 @@ fn malha_do_chao(
     render.create_mesh(&vertices, &indices)
 }
 
+/// Malha do retículo de mira: quatro arcos com vão nas diagonais.
+///
+/// A unidade é **raio 1**: quem desenha escala pelo raio do inimigo, então uma
+/// peça só serve para o bug pequeno e para o boss. Arcos (e não um anel fechado)
+/// porque um círculo completo lê como "área" e quatro cantos leem como "mira" —
+/// e porque o vão deixa o corpo do inimigo aparecer no meio.
+///
+/// Fica no plano XZ, em `y = 0`: é um decalque no chão, e o `y` de quem chama é
+/// que o levanta o suficiente para vencer o z-buffer do próprio chão.
+fn geometria_do_alvo() -> (Vec<giochi_engine_3d::mesh::Vertex>, Vec<u32>) {
+    use giochi_engine_3d::mesh::Vertex;
+    /// Segmentos por arco: 8 dá 28° por passo, e a 640×480 a corda fica abaixo
+    /// de um pixel. Menos que isso e o arco vira um octógono visível.
+    const PASSOS: usize = 8;
+    /// Quanto do círculo cada arco cobre, em fração de volta.
+    const ARCO: f32 = 0.20;
+    const INTERNO: f32 = 0.70;
+    const EXTERNO: f32 = 1.00;
+    let normal = [0.0, 1.0, 0.0];
+    let mut vertices = Vec::with_capacity(4 * PASSOS * 4);
+    let mut indices = Vec::with_capacity(4 * PASSOS * 6);
+    for canto in 0..4 {
+        let centro = canto as f32 * std::f32::consts::FRAC_PI_2;
+        let inicio = centro - ARCO * std::f32::consts::TAU * 0.5;
+        for passo in 0..PASSOS {
+            let a0 = inicio + ARCO * std::f32::consts::TAU * (passo as f32 / PASSOS as f32);
+            let a1 = inicio + ARCO * std::f32::consts::TAU * ((passo + 1) as f32 / PASSOS as f32);
+            let base = vertices.len() as u32;
+            for (angulo, raio) in [(a0, INTERNO), (a0, EXTERNO), (a1, EXTERNO), (a1, INTERNO)] {
+                vertices.push(Vertex::new(
+                    [raio * angulo.cos(), 0.0, raio * angulo.sin()],
+                    normal,
+                    [0.0, 0.0],
+                ));
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            // As duas faces: um decalque no chão é plano, e `cull_face` está ligado
+            // no estado padrão da engine. Uma face só aposta que o sentido dos
+            // arcos está certo — e quando não está o retículo **não aparece**, sem
+            // erro nenhum. Foi assim que a parede da serra do `neon-drift` sumiu
+            // (AGENTS.md §31), e aqui o sintoma foi medido: 0 pixel vermelho com a
+            // mira encontrando alvo (10/11/2026).
+            indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        }
+    }
+    (vertices, indices)
+}
+
+/// Sobe o retículo para a GPU.
+fn malha_do_alvo(
+    render: &mut RenderContext3D,
+) -> std::result::Result<MeshHandle, giochi_engine_3d::Error3D> {
+    let (vertices, indices) = geometria_do_alvo();
+    render.create_mesh(&vertices, &indices)
+}
+
 /// Funde as peças do cenário em **uma malha por modelo**, no espaço do mundo.
 ///
 /// # Por que fundir, em vez de instanciar
@@ -154,7 +244,10 @@ fn malhas_do_cenario(
         let (vertices, indices) = match load_obj(&caminho) {
             Ok(par) => par,
             Err(erro) => {
-                log::warn!("cenário '{nome}' indisponível ({}): {erro}", caminho.display());
+                log::warn!(
+                    "cenário '{nome}' indisponível ({}): {erro}",
+                    caminho.display()
+                );
                 continue;
             }
         };
@@ -212,6 +305,8 @@ pub struct RenderBridge {
     /// onde `draw_instanced` cai no caminho de uma chamada por instância.
     cenario: Vec<(MeshHandle, Color3D)>,
     cube: MeshHandle,
+    /// Retículo de mira (quatro arcos) desenhado sobre o inimigo em foco.
+    alvo: MeshHandle,
     /// Quadrilátero unitário do HUD: a geometria não muda por quadro, só as
     /// matrizes de instância.
     hud_quad: MeshHandle,
@@ -305,10 +400,15 @@ impl RenderBridge {
             crate::game::cenario::LADO_DO_CHAO_M,
             crate::game::cenario::LADO_DO_CHAO_M,
             crate::game::cenario::TILE_DO_CHAO_M,
-            if textura_chao.is_some() { "regolito" } else { "cor plana" }
+            if textura_chao.is_some() {
+                "regolito"
+            } else {
+                "cor plana"
+            }
         );
         let (hud_vertices, hud_indices) = ui::quad_da_hud();
         let hud_quad = render.create_mesh(&hud_vertices, &hud_indices)?;
+        let alvo = malha_do_alvo(&mut render)?;
         let hud_shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
         let instanced_shader = render.create_builtin_shader(BuiltinShader::Instanced)?;
 
@@ -316,7 +416,9 @@ impl RenderBridge {
         // unidade com `u_tint`, e um modelo sem textura precisa de algo ligado —
         // sem textura o shader amostra o que estiver na unidade 0, que num driver
         // pode ser lixo do quadro anterior.
-        let textura_reserva = render.create_texture_from_rgba(1, 1, &[255, 255, 255, 255]).ok();
+        let textura_reserva = render
+            .create_texture_from_rgba(1, 1, &[255, 255, 255, 255])
+            .ok();
 
         // Os modelos são opcionais: um pacote sem `assets/` continua jogável com
         // os cubos, e o log diz por quê. Ficar sem desenhar nada seria pior.
@@ -356,6 +458,7 @@ impl RenderBridge {
             shader_texturado,
             cenario,
             cube,
+            alvo,
             hud_quad,
             hud_shader,
             modelos,
@@ -424,7 +527,10 @@ impl RenderBridge {
         self.frames += 1;
         let error = self.render.take_gl_error();
         if error != 0 {
-            return Err(GameError::message(format!("GL 0x{error:04x} no quadro {}", self.frames)));
+            return Err(GameError::message(format!(
+                "GL 0x{error:04x} no quadro {}",
+                self.frames
+            )));
         }
         Ok(())
     }
@@ -502,6 +608,64 @@ impl RenderBridge {
         self.draw(self.cube, model, camera, color)
     }
 
+    /// Retículo no chão, centrado em `pos`, com `raio` em metros.
+    ///
+    /// Emissivo de propósito: um retículo sombreado pelo sol fica marrom sobre o
+    /// regolito e some justamente na hora em que o jogador precisa dele. A luz é
+    /// trocada e restaurada no mesmo lugar, como o HUD faz — deixá-la trocada
+    /// apagaria a cena seguinte.
+    pub fn draw_alvo(
+        &mut self,
+        camera: &Camera3D,
+        pos: GlamVec3,
+        raio: f32,
+        color: Color3D,
+    ) -> Result<()> {
+        let escala = raio.max(0.2);
+        let model = Transform3D::new(
+            EngineVec3::from_glam(pos),
+            Quat::IDENTITY,
+            EngineVec3::new(escala, 1.0, escala),
+        );
+        self.render.set_light(luz_do_hud());
+        let resultado = self.draw(self.alvo, &model, camera, color);
+        self.render.set_light(luz_do_planeta());
+        resultado
+    }
+
+    /// Faixa no chão de `origem` até `origem + direcao * comprimento`.
+    ///
+    /// É o traço da mira: um cubo fino deitado, girado no plano XZ. Não é uma
+    /// linha de verdade porque a engine só tem `draw_line` no renderer 2D, e um
+    /// primitivo novo pelo desenho do mundo custaria mais que reaproveitar o
+    /// cubo — 12 triângulos contra 2, num único objeto por quadro.
+    pub fn draw_mira(
+        &mut self,
+        camera: &Camera3D,
+        origem: GlamVec3,
+        direcao: GlamVec3,
+        comprimento: f32,
+        largura: f32,
+        color: Color3D,
+    ) -> Result<()> {
+        let comprimento = comprimento.max(0.05);
+        let plano = GlamVec3::new(direcao.x, 0.0, direcao.z);
+        if plano.length_squared() < 1.0e-8 {
+            return Ok(());
+        }
+        let plano = plano.normalize();
+        let centro = origem + plano * (comprimento * 0.5);
+        let model = Transform3D::new(
+            EngineVec3::from_glam(centro),
+            Quat::from_axis_angle(EngineVec3::UP, plano.x.atan2(plano.z)),
+            EngineVec3::new(largura.max(0.02), 0.02, comprimento),
+        );
+        self.render.set_light(luz_do_hud());
+        let resultado = self.draw(self.cube, &model, camera, color);
+        self.render.set_light(luz_do_planeta());
+        resultado
+    }
+
     fn draw(
         &mut self,
         mesh: MeshHandle,
@@ -546,7 +710,12 @@ impl RenderBridge {
         cor: Color3D,
     ) -> Result<()> {
         let Some(catalogo) = self.modelos.as_ref() else {
-            return self.draw_cube(camera, GlamVec3::new(pos.x, altura_no_mundo * 0.5, pos.z), altura_no_mundo * 0.62, cor);
+            return self.draw_cube(
+                camera,
+                GlamVec3::new(pos.x, altura_no_mundo * 0.5, pos.z),
+                altura_no_mundo * 0.62,
+                cor,
+            );
         };
         // `pos` é a **base**: o modelo é medido a partir do pé, então o cubo de
         // reserva sobe meia altura. Passar `pos.y` direto afundaria o personagem.
@@ -574,7 +743,14 @@ impl RenderBridge {
             return Ok(0);
         };
         catalogo
-            .desenhar_lote(&mut self.render, camera, nome, matrizes, cor, self.instanced_shader)
+            .desenhar_lote(
+                &mut self.render,
+                camera,
+                nome,
+                matrizes,
+                cor,
+                self.instanced_shader,
+            )
             .map_err(|erro| GameError::message(format!("lote de '{nome}': {erro}")))
     }
 
@@ -583,7 +759,11 @@ impl RenderBridge {
     /// Pública porque quem monta a lista da horda é `main.rs`, que conhece a
     /// altura de cada tipo — e a matriz é a única coisa que os dois lados precisam
     /// combinar.
-    pub fn matriz_de_modelo(pos: GlamVec3, giro: f32, escala: f32) -> giochi_engine_3d::math3d::Mat4 {
+    pub fn matriz_de_modelo(
+        pos: GlamVec3,
+        giro: f32,
+        escala: f32,
+    ) -> giochi_engine_3d::math3d::Mat4 {
         Transform3D::new(
             EngineVec3::from_glam(pos),
             Quat::from_axis_angle(EngineVec3::UP, giro),
@@ -677,6 +857,7 @@ impl RenderBridge {
         }
         let _ = self.render.destroy_mesh(self.plane);
         let _ = self.render.destroy_mesh(self.cube);
+        let _ = self.render.destroy_mesh(self.alvo);
         let _ = self.render.destroy_mesh(self.hud_quad);
         let _ = self.render.destroy_shader(self.shader);
         let _ = self.render.destroy_shader(self.hud_shader);
@@ -744,6 +925,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn o_reticulo_e_plano_e_sai_com_as_duas_faces() {
+        // O bug medido em 11/11/2026: o retículo era desenhado, a mira achava o
+        // alvo, o GL não dava erro — e **nenhum pixel** aparecia. Causa: os arcos
+        // saíam numa face só e o `cull_face` do estado padrão descartava todos.
+        // A guarda é o índice espelhado, que não depende de GPU para ser conferido.
+        let (vertices, indices) = geometria_do_alvo();
+        assert_eq!(indices.len() % 3, 0, "índices não formam triângulos");
+        for tri in indices.chunks(3) {
+            // Um triângulo por aresta, e o espelho dele existe.
+            let espelho = [tri[0], tri[2], tri[1]];
+            assert!(
+                indices.chunks(3).any(|t| t == espelho),
+                "triângulo {tri:?} não tem face oposta — some com cull_face ligado"
+            );
+        }
+        // Plano no chão e dentro do raio 1: quem desenha escala pelo inimigo.
+        for v in &vertices {
+            assert!(
+                v.position[1].abs() < 1.0e-6,
+                "retículo fora do chão: {:?}",
+                v.position
+            );
+            let raio = (v.position[0] * v.position[0] + v.position[2] * v.position[2]).sqrt();
+            assert!((0.5..=1.001).contains(&raio), "raio {raio} fora de 0,5..1");
+            assert_eq!(v.normal, [0.0, 1.0, 0.0], "normal do decalque");
+        }
+    }
+
+    #[test]
+    fn o_reticulo_tem_quatro_arcos_com_vao_entre_eles() {
+        // Quatro arcos de 20% da volta centrados em 0°/90°/180°/270°: as
+        // diagonais ficam abertas para o corpo do inimigo aparecer no meio.
+        let (vertices, _) = geometria_do_alvo();
+        assert_eq!(vertices.len(), 4 * 8 * 4, "4 arcos × 8 passos × 4 cantos");
+        for quadrante in 0..4 {
+            let centro = quadrante as f32 * std::f32::consts::FRAC_PI_2;
+            let diagonal = centro + std::f32::consts::FRAC_PI_4;
+            let raio = 0.85;
+            let alvo = [raio * diagonal.cos(), raio * diagonal.sin()];
+            let perto = vertices.iter().any(|v| {
+                (v.position[0] - alvo[0]).abs() < 0.08 && (v.position[2] - alvo[1]).abs() < 0.08
+            });
+            assert!(
+                !perto,
+                "há vértice na diagonal do quadrante {quadrante}: o vão sumiu"
+            );
+        }
+    }
+
+    #[test]
     fn the_bmp_header_is_a_24_bit_windows_bitmap() {
         let dir = std::env::temp_dir().join("giochi-tower-bmp");
         std::fs::create_dir_all(&dir).expect("tmp");
@@ -753,7 +984,10 @@ mod tests {
 
         let bytes = std::fs::read(&path).expect("ler bmp");
         assert_eq!(&bytes[0..2], b"BM");
-        assert_eq!(u32::from_le_bytes(bytes[2..6].try_into().unwrap()) as usize, bytes.len());
+        assert_eq!(
+            u32::from_le_bytes(bytes[2..6].try_into().unwrap()) as usize,
+            bytes.len()
+        );
         assert_eq!(u16::from_le_bytes(bytes[28..30].try_into().unwrap()), 24);
         // 2 px de largura = 6 bytes por linha, mais 2 de padding.
         let row_size = 8;

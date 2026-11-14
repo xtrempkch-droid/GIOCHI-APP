@@ -31,7 +31,9 @@ use giochi_engine_3d::math3d::Color3D;
 
 use giochi_tower::config::{ClassId, GameConfig, ProfileId};
 use giochi_tower::engine_bridge::cena;
-use giochi_tower::engine_bridge::render::PLAYER_COLOR;
+use giochi_tower::engine_bridge::render::{
+    AIM_COLOR, LINHA_ALFA, PLAYER_COLOR, TARGET_COLOR,
+};
 use giochi_tower::engine_bridge::{AudioBridge, InputBridge, InputFrame, RenderBridge};
 use giochi_tower::errors::{GameError, Result};
 use giochi_tower::game::cenario;
@@ -52,6 +54,43 @@ const FRAME_MS: u32 = 1000 / 60;
 
 /// Porta UDP padrão do hospedeiro (a mesma da descoberta na rede local).
 const PORTA_PADRAO: u16 = 7777;
+
+/// Onde o traço de mira começa, em metros à frente do soldado.
+///
+/// Não em cima dele: o modelo ocupa ~1 m e o traço saía metade escondido atrás
+/// do corpo e da base da torre. Medido em 640×480, dos ~400 px que o traço
+/// deveria pintar só ~110 apareciam.
+const MIRA_INICIO_M: f32 = 1.2;
+
+/// Comprimento mínimo do traço de mira, em metros.
+///
+/// O traço normal vai até o **alcance da classe** (`attack_range`): ele é uma
+/// régua, não um enfeite. Foi o que respondeu à segunda metade do relato — o
+/// jogador via o bug a 15 m, atirava, e nada acontecia, porque o Soldado alcança
+/// 14 m e não havia nada na tela dizendo isso. Agora o inimigo fora do traço
+/// está fora de alcance, e a linha vermelha só aparece quando ele entra.
+const MIRA_CURTA_MIN_M: f32 = 3.0;
+
+/// Lado do losango na ponta do traço, em metros.
+///
+/// Uma ponta é o que transforma um risco em vetor. Sem ela o traço some entre as
+/// pedras do cenário e o jogador não sabe onde ele termina.
+const MIRA_PONTA_M: f32 = 0.8;
+
+/// Largura do traço de mira e da linha do alvo, em metros.
+///
+/// A 52 m da câmera e 32° de FOV vertical, 1 m ≈ 16 px em 640×480; 0,30 m dá
+/// ~5 px, que é a espessura em que uma linha de mira lê como linha e não como
+/// risco de formiga. Abaixo de 0,2 m ela desaparece no quadro do aparelho.
+const MIRA_LARGURA_M: f32 = 0.30;
+
+/// Raio do retículo, em múltiplos da altura do inimigo.
+///
+/// 1,05 dá um diâmetro de ~2× a altura: fecha em volta do corpo inteiro e ainda
+/// deixa ver o próximo bug da fila, que é quem o jogador quer escolher depois.
+/// Abaixo de 0,8 o anel encosta no corpo e as quatro aberturas somem no meio da
+/// silhueta — medido em 640×480, onde o retículo tem ~36 px.
+const RAIO_DO_ALVO: f32 = 1.05;
 
 /// Modo do laço: menu na frente, ou mundo simulado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +157,29 @@ struct Options {
     /// seria preciso jogar até a onda dele, e o Coronel só aparece no meio da
     /// horda. Aqui os vinte cabem num quadro.
     vitrine: bool,
+    /// Posição inicial do jogador local, em metros (`--posicionar x,z`).
+    ///
+    /// Ferramenta de bancada, como o `--em` do `neon-drift`: sem ela, capturar um
+    /// quadro **com alvo marcado** exigiria jogar até a horda encostar — e os
+    /// inimigos de longo alcance param a 17 m da torre, fora dos 14 m do Soldado.
+    /// A posição vale só no primeiro quadro: o jogador anda a partir dali.
+    posicionar: Option<(f32, f32)>,
+    /// Desenhar a mira (traço de alcance, linha do alvo e retículo).
+    ///
+    /// Desligado com `--sem-mira`, pela mesma razão de `--sem-cenario`: é o A/B
+    /// que responde "quanto custa" e que permite mostrar o antes e o depois no
+    /// mesmo comando, sem guardar um binário antigo.
+    mira: bool,
+    /// Ignorar controle, teclado e mouse: só `--teclas` move alguma coisa.
+    ///
+    /// No aparelho há **controle de verdade conectado**, e o analógico parado
+    /// ainda emite ruído. Esse ruído muda o `aim` do soldado e, com ele, o alvo
+    /// da mira — então o mesmo `--frames` capturado no PC e no aparelho diverge
+    /// por inteiro (medido: 273 mil pixels de diferença, 68 % do quadro) e a
+    /// comparação de quadro deixa de significar qualquer coisa.
+    ///
+    /// Desligado por padrão: quem joga quer o controle.
+    sem_entrada: bool,
     /// Sequência de teclas aplicada **antes** do primeiro desenho.
     ///
     /// Existe pela mesma razão do `--teclas` do launcher e do `neon-drift`:
@@ -145,6 +207,9 @@ impl Default for Options {
             hospedar: None,
             entrar: None,
             vitrine: false,
+            posicionar: None,
+            mira: true,
+            sem_entrada: false,
             teclas: Vec::new(),
         }
     }
@@ -172,6 +237,9 @@ OPÇÕES:
   --menu               abre no menu principal (o padrão é entrar direto na partida)
   --hospedar [porta]   hospeda uma partida em rede (padrão 7777)
   --entrar <ip:porta>  entra numa partida em rede
+  --posicionar <x,z>   começa com o soldado em x,z metros (ferramenta de captura)
+  --sem-mira           não desenha traço de alcance, linha do alvo nem retículo
+  --sem-entrada        ignora controle/teclado/mouse (captura determinística)
   --teclas <lista>     aplica teclas antes do primeiro quadro, separadas por vírgula
                        (cima, baixo, esq, dir, a, b) — para verificar o menu sem dedo
   --ajuda              esta mensagem
@@ -219,6 +287,16 @@ fn run() -> Result<()> {
         state.phase = Phase::Shop;
         state.local_mut().gold = 120;
         log::info!("demo: loja aberta na abertura (--demo-loja)");
+    }
+    if let Some((x, z)) = options.posicionar {
+        let mapa = state.map;
+        state.local_mut().position = mapa.clamp(glam::Vec3::new(x, 0.0, z));
+        state.camera.focus = state.local_mut().position;
+        log::info!(
+            "bancada: soldado posicionado em ({:.1}, {:.1})",
+            state.local().position.x,
+            state.local().position.z
+        );
     }
 
     banner(&render, &input, &config, &state, options.frames.is_some());
@@ -289,7 +367,11 @@ fn run() -> Result<()> {
         "configurações: volume {}%, câmera {:.0} m, fps {}",
         config_jogo.volume,
         config_jogo.camera_dist_m,
-        if config_jogo.mostrar_fps { "sim" } else { "não" }
+        if config_jogo.mostrar_fps {
+            "sim"
+        } else {
+            "não"
+        }
     );
     audio.definir_volume(config_jogo.volume_fracao());
     state.camera.distance_m = config_jogo.camera_dist_m;
@@ -383,7 +465,15 @@ fn run() -> Result<()> {
 
         // --- entrada ----------------------------------------------------
         let (drawable_w, drawable_h) = render.drawable_size();
-        let mut frame_input = input.update(&events, (drawable_w as f32, drawable_h as f32));
+        // `--sem-entrada`: o aparelho tem controle conectado e o analógico parado
+        // emite ruído; ler isso faria o mesmo `--frames` divergir do PC (medido:
+        // 273 mil pixels, 68 % do quadro) e a comparação de quadro não mediria
+        // nada. A fila de `--teclas` continua valendo — é entrada sintética.
+        let mut frame_input = if options.sem_entrada {
+            InputFrame::default()
+        } else {
+            input.update(&events, (drawable_w as f32, drawable_h as f32))
+        };
         // Uma tecla da fila por quadro: dá tempo de a borda ser consumida e
         // reproduz o que o dedo faz, em vez de aplicar três comandos no mesmo
         // instante (o que o menu leria como uma tecla só, por causa da borda).
@@ -407,7 +497,8 @@ fn run() -> Result<()> {
             );
             teclas_logadas = true;
         }
-        if !announced_source && frame_input.source != giochi_tower::engine_bridge::InputSource::None {
+        if !announced_source && frame_input.source != giochi_tower::engine_bridge::InputSource::None
+        {
             log::info!(
                 "entrada: {:?}{}",
                 frame_input.source,
@@ -450,29 +541,51 @@ fn run() -> Result<()> {
                     game_loop = GameLoop::new();
                     menu.marcar_partida(true);
                     modo = Modo::Jogando;
-                    log::info!("partida: {}", if acao == menu::Acao::Jogar { "nova" } else { "reiniciada" });
+                    log::info!(
+                        "partida: {}",
+                        if acao == menu::Acao::Jogar {
+                            "nova"
+                        } else {
+                            "reiniciada"
+                        }
+                    );
                 }
                 menu::Acao::MenuPrincipal => {
                     // A sessão de rede morre com a partida: manter o socket aberto
                     // deixaria o host publicando um mundo que ninguém vê.
+                    //
+                    // A **tela** quem troca é o menu (`Menu::sair_da_partida`):
+                    // antes isso era feito só aqui, zerando o `modo`, e o painel
+                    // continuava desenhando a pausa — "Sair para o menu" não fazia
+                    // nada visível (relato do dono, 11/11/2026).
                     sessao = None;
                     menu.marcar_partida(false);
                     modo = Modo::Menu;
-                    log::info!("menu: sessão encerrada");
+                    log::info!("menu: partida encerrada — de volta ao menu principal");
                 }
                 menu::Acao::Sair => {
                     log::info!("sair pedido pelo menu");
                     break;
                 }
                 menu::Acao::Hospedar => {
-                    iniciar_rede(&mut menu, &mut sessao, Papel::Host, options.hospedar.unwrap_or(PORTA_PADRAO));
+                    iniciar_rede(
+                        &mut menu,
+                        &mut sessao,
+                        Papel::Host,
+                        options.hospedar.unwrap_or(PORTA_PADRAO),
+                    );
                 }
                 menu::Acao::ProcurarSalas => {
                     procurar_salas(&mut menu, options.hospedar.unwrap_or(PORTA_PADRAO));
                 }
-                menu::Acao::EntrarSala(indice) => {
-                    entrar_em_sala(&mut menu, &mut sessao, &mut state, &options, &config, indice)
-                }
+                menu::Acao::EntrarSala(indice) => entrar_em_sala(
+                    &mut menu,
+                    &mut sessao,
+                    &mut state,
+                    &options,
+                    &config,
+                    indice,
+                ),
                 menu::Acao::Abrir(_) | menu::Acao::Pausar => {}
             }
 
@@ -518,7 +631,11 @@ fn run() -> Result<()> {
         if let Some(rede) = sessao.as_mut() {
             visible = rede.passo(&mut state, &frame_input, &config, fixed_step);
             if !anunciou_rede {
-                log::info!("rede: {:?} com {} jogador(es)", rede.papel(), rede.jogadores());
+                log::info!(
+                    "rede: {:?} com {} jogador(es)",
+                    rede.papel(),
+                    rede.jogadores()
+                );
                 anunciou_rede = true;
             }
             jogadores_rede = rede.jogadores();
@@ -611,6 +728,88 @@ fn run() -> Result<()> {
             }
         }
 
+        // --- de onde se está atirando ----------------------------------
+        //
+        // Relato do dono (10/11/2026): *"a visão de onde se está atirando está
+        // impossível"*. O jogo não atira para onde o analógico aponta: atira no
+        // inimigo **mais próximo** dentro de um cone de ~70° (`GameState::
+        // target_in_aim_de`). Sem marcar quem o cone pegou, o gatilho parece
+        // aleatório — e "parece" é o problema, porque a regra é determinística.
+        //
+        // Três peças, e cada uma responde uma pergunta diferente:
+        //   1. com alvo: linha vermelha do soldado até ele e retículo em volta;
+        //   2. sem alvo: traço curto e claro na direção da mira — "é para cá que
+        //      eu aponto", que é a única informação disponível quando nada está
+        //      ao alcance;
+        //   3. o retículo acompanha o **tamanho do corpo**, então o mesmo código
+        //      marca bug pequeno e boss.
+        //
+        // Custo: 1 chamada sem alvo, 2 com. O cenário inteiro custa 5.
+        if options.mira {
+            if let Some(local) = state.players.iter().find(|p| p.id == state.local_id) {
+                if local.can_act() {
+                    let alvo = state.alvo_em_mira(state.local_id, &config);
+                    match alvo {
+                        Some(alvo) => {
+                            let altura = cena::do_byte_de_inimigo(
+                                alvo.tipo,
+                                state.boss.as_ref().map(|b| b.kind),
+                            )
+                            .altura;
+                            let origem = glam::Vec3::new(local.position.x, 0.06, local.position.z);
+                            let destino = glam::Vec3::new(alvo.x, 0.06, alvo.z);
+                            let delta = destino - origem;
+                            render.draw_mira(
+                                &camera,
+                                origem,
+                                delta,
+                                delta.length(),
+                                MIRA_LARGURA_M,
+                                TARGET_COLOR.with_alpha(LINHA_ALFA),
+                            )?;
+                            render.draw_alvo(
+                                &camera,
+                                glam::Vec3::new(alvo.x, 0.07, alvo.z),
+                                altura * RAIO_DO_ALVO,
+                                TARGET_COLOR,
+                            )?;
+                        }
+                        None => {
+                            // Traço + ponta: um risco sozinho some no meio das pedras,
+                            // e a ponta diz onde ele acaba. Duas chamadas, como o par
+                            // linha+retículo do caso com alvo.
+                            let frente = glam::Vec3::new(local.aim.x, 0.0, local.aim.z);
+                            let inicio = glam::Vec3::new(
+                                local.position.x + frente.x * MIRA_INICIO_M,
+                                0.05,
+                                local.position.z + frente.z * MIRA_INICIO_M,
+                            );
+                            let alcance =
+                                (local.attack_range(&config) - MIRA_INICIO_M).max(MIRA_CURTA_MIN_M);
+                            render.draw_mira(
+                                &camera,
+                                inicio,
+                                frente,
+                                alcance,
+                                MIRA_LARGURA_M,
+                                AIM_COLOR.with_alpha(LINHA_ALFA),
+                            )?;
+                            render.draw_cube(
+                                &camera,
+                                glam::Vec3::new(
+                                    inicio.x + frente.x * alcance,
+                                    0.05,
+                                    inicio.z + frente.z * alcance,
+                                ),
+                                MIRA_PONTA_M,
+                                AIM_COLOR,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
         // Inimigos: desenhados do **snapshot**, não do mundo do host. Se a AOI
         // filtrar demais, a tela mostra menos inimigos — que é a falha que se
         // quer ver acontecendo, e não um silêncio.
@@ -621,7 +820,8 @@ fn run() -> Result<()> {
         // só para submeter no Cortex-A35.
         let mut horda: Vec<cena::Copia> = Vec::with_capacity(visible.len());
         for enemy in &visible {
-            let aparencia = cena::do_byte_de_inimigo(enemy.tipo, state.boss.as_ref().map(|b| b.kind));
+            let aparencia =
+                cena::do_byte_de_inimigo(enemy.tipo, state.boss.as_ref().map(|b| b.kind));
             let pos = glam::Vec3::new(enemy.x, 0.0, enemy.z);
             // O giro é **derivado**: o snapshot não carrega orientação, e todo
             // inimigo caminha para a torre. Apontar para o centro é exatamente o
@@ -778,7 +978,11 @@ fn run() -> Result<()> {
 
     if let Some(limite) = options.benchmark {
         let total = inicio_benchmark.elapsed().as_secs_f64();
-        let fps = if total > 0.0 { frames as f64 / total } else { 0.0 };
+        let fps = if total > 0.0 {
+            frames as f64 / total
+        } else {
+            0.0
+        };
         let por_quadro = |d: std::time::Duration| {
             if frames > 0 {
                 d.as_secs_f64() * 1000.0 / frames as f64
@@ -841,7 +1045,6 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-
 /// Imprime o que está de fato aberto, não o que foi pedido.
 ///
 /// A lição de `docs/ferramentas.md`: pedir um backend não prova que ele abriu —
@@ -869,7 +1072,9 @@ fn banner(
     );
     log::info!(
         "gamepad: {}",
-        input.pad_name().unwrap_or("nenhum (teclado/mouse ou touch emulado)")
+        input
+            .pad_name()
+            .unwrap_or("nenhum (teclado/mouse ou touch emulado)")
     );
     log::info!(
         "perfil de host: {} — teto de {} inimigos, IA {} Hz, AOI ×{}",
@@ -1061,8 +1266,8 @@ fn iniciar_rede(
                     *sessao = Some(nova);
                     menu.aviso = Some(format!("hospedando na porta {porta}"));
                     // Anunciar é o que faz a sala aparecer na procura dos outros.
-                    if let Err(erro) = giochi_tower::net::descoberta::Anunciante::novo(porta, TITLE)
-                        .iniciar()
+                    if let Err(erro) =
+                        giochi_tower::net::descoberta::Anunciante::novo(porta, TITLE).iniciar()
                     {
                         log::warn!("descoberta indisponível: {erro}");
                         menu.aviso = Some(format!("hospedando (sem anúncio: {erro})"));
@@ -1266,6 +1471,28 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
                 }
                 options.hospedar = Some(porta.unwrap_or(PORTA_PADRAO));
             }
+            "--sem-mira" => options.mira = false,
+            "--sem-entrada" => options.sem_entrada = true,
+            "--posicionar" => {
+                let par = args
+                    .next()
+                    .ok_or_else(|| GameError::message("--posicionar precisa de x,z"))?;
+                let (x, z) = par.split_once(',').ok_or_else(|| {
+                    GameError::message(format!("--posicionar espera x,z — veio '{par}'"))
+                })?;
+                let x = x
+                    .trim()
+                    .parse::<f32>()
+                    .map_err(|_| GameError::message(format!("x inválido: '{x}'")))?;
+                let z = z
+                    .trim()
+                    .parse::<f32>()
+                    .map_err(|_| GameError::message(format!("z inválido: '{z}'")))?;
+                if !x.is_finite() || !z.is_finite() {
+                    return Err(GameError::message("--posicionar com valor não finito"));
+                }
+                options.posicionar = Some((x, z));
+            }
             "--teclas" => {
                 let lista = args
                     .next()
@@ -1280,9 +1507,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
                 }
             }
             "--entrar" => {
-                let endereco = args
-                    .next()
-                    .ok_or_else(|| GameError::message("--entrar precisa de um endereço ip:porta"))?;
+                let endereco = args.next().ok_or_else(|| {
+                    GameError::message("--entrar precisa de um endereço ip:porta")
+                })?;
                 options.entrar = Some(endereco);
             }
             "--sem-ui" => options.ui = false,
@@ -1293,9 +1520,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options> {
                 let value = args
                     .next()
                     .ok_or_else(|| GameError::message("--benchmark precisa de um número"))?;
-                let quadros = value.parse::<u64>().map_err(|_| {
-                    GameError::message(format!("--benchmark inválido: '{value}'"))
-                })?;
+                let quadros = value
+                    .parse::<u64>()
+                    .map_err(|_| GameError::message(format!("--benchmark inválido: '{value}'")))?;
                 if quadros == 0 {
                     return Err(GameError::message("--benchmark 0 não mede nada"));
                 }
@@ -1342,7 +1569,6 @@ fn parse_size(value: &str) -> Result<(u32, u32)> {
     Ok((width, height))
 }
 
-
 /// Desenha os 20 modelos em quatro fileiras, sob uma câmera própria.
 ///
 /// # O que esta função responde
@@ -1377,8 +1603,16 @@ fn vitrine(render: &mut RenderBridge) -> Result<()> {
     let fileiras: [(&[&str], f32, f32); 4] = [
         (&["soldado", "guerreiro", "sniper", "medico"], 6.0, 2.4),
         (&["grunt", "tank", "ranged", "swarm", "flying"], 2.0, 2.2),
-        (&["tanker", "plasma", "brain", "queen", "coronel"], -2.0, 3.4),
-        (&["torre", "rocha", "espigao", "cratera", "destroco"], -7.0, 4.0),
+        (
+            &["tanker", "plasma", "brain", "queen", "coronel"],
+            -2.0,
+            3.4,
+        ),
+        (
+            &["torre", "rocha", "espigao", "cratera", "destroco"],
+            -7.0,
+            4.0,
+        ),
     ];
 
     for (nomes, z, altura) in fileiras {
@@ -1438,9 +1672,15 @@ mod tests {
 
     #[test]
     fn classes_and_profiles_are_accepted_in_portuguese_and_english() {
-        assert_eq!(args(&["--classe", "guerreiro"]).unwrap().class, ClassId::Warrior);
+        assert_eq!(
+            args(&["--classe", "guerreiro"]).unwrap().class,
+            ClassId::Warrior
+        );
         assert_eq!(args(&["--classe", "medic"]).unwrap().class, ClassId::Medic);
-        assert_eq!(args(&["--perfil", "rk3326"]).unwrap().profile, ProfileId::Rk3326);
+        assert_eq!(
+            args(&["--perfil", "rk3326"]).unwrap().profile,
+            ProfileId::Rk3326
+        );
         assert!(args(&["--classe", "ninja"]).is_err());
     }
 

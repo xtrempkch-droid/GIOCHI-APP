@@ -59,6 +59,10 @@ torre), minimapa e tela da loja. É fonte de 5×7 em dados + câmera de 90° sob
   conferir arte sem jogar até a onda do boss (D-043).
 - **Menu** com cinco telas (Principal, Multijogador, Configurações, Pausa, Fim),
   estado puro em `src/menu.rs`, `settings.json` persistido em `--config`.
+- **A mira visível**: retículo vermelho opaco no inimigo que o próximo `A` acerta,
+  linha soldado→alvo a 40 % de transparência e, sem alvo no cone, traço de alcance
+  na direção do analógico. Tudo vem de `GameState::alvo_em_mira()`, a mesma função
+  que o disparo usa (D-044, D-046).
 - **Rede real sempre compilada** (`net/sessao.rs`, `net/descoberta.rs`): host
   escuta e anuncia por UDP broadcast, cliente procura e entra. O id do jogador
   vem do handshake e vira o `local_id` do mundo.
@@ -201,6 +205,9 @@ Flags:
 --sem-ui            sem HUD (para isolar o custo da UI)
 --sem-cenario       sem pedras, crateras, mesas e destroços (A/B do cenário)
 --vitrine           desenha os 20 modelos lado a lado e sai (confere a arte)
+--sem-mira          sem linha do alvo, retículo e traço de alcance (A/B da mira)
+--posicionar <x,z>  começa com o soldado em x,z metros (captura com alvo marcado)
+--sem-entrada       ignora controle, teclado e mouse (captura determinística)
 --demo-loja         abre a loja na abertura (para capturar a tela)
 --ajuda
 ```
@@ -239,6 +246,40 @@ Gamepad tem prioridade sobre teclado (GDD §14).
 
 Touch é a terceira opção: joystick virtual no canto inferior esquerdo e quatro
 botões à direita, emulados por mouse (o prompt proíbe `SDL_Finger`).
+
+## Como se sabe onde o tiro vai
+
+O jogo **não** atira para onde o analógico aponta: atira no inimigo mais próximo
+dentro de um cone de ~70° e dentro do alcance da classe. Isso é o "auto-aim" do
+GDD (§14), e é o que permite o Soldado acertar com o analógico "quase" certo.
+
+Como a regra é determinística mas invisível, a tela mostra as duas respostas:
+
+| Na tela | Significa |
+| --- | --- |
+| **retículo vermelho** em volta de um bug | é **este** que o próximo `A` acerta |
+| **linha vermelha** soldado→bug, 40 % transparente | de onde sai o tiro |
+| traço claro + ponta, sem retículo | nada no cone: é para cá que você aponta |
+
+A linha é translúcida para não esconder o alvo (nem o cenário atrás dele); o
+retículo é opaco porque ele é o marcador que precisa ser lido sobre a pedra clara.
+
+Os dois vêm de `GameState::alvo_em_mira()`, que chama a **mesma** função que o
+disparo usa — não há como o retículo marcar um inimigo e o tiro acertar outro.
+
+Para conferir sem jogar:
+
+```bash
+# posiciona o soldado onde há alvo e captura com a mira ligada
+giochi-tower --frames 1900 --posicionar 12,0 --sem-entrada --quadro /tmp/mira.bmp
+
+# o mesmo quadro sem a mira: é o A/B que prova que ela desenha
+giochi-tower --frames 1900 --posicionar 12,0 --sem-entrada --sem-mira --quadro /tmp/sem.bmp
+```
+
+`--sem-entrada` existe porque no aparelho há controle conectado e o analógico
+parado emite ruído: sem ele o `aim` muda, o alvo da mira muda, e o mesmo `--frames`
+no PC e no R35S divergia em **68 % dos pixels** (medido).
 
 ## Verificar
 
