@@ -1162,6 +1162,20 @@ atrasadas do Star Dust (§7).
 no inicializador do `Painter` na ramificação `not(feature = "texto")`) porque só o
 build padrão rodava. O CI constrói as duas combinações.
 
+### `--instalar <ip>` sem usuário vira `charles@<ip>`
+
+`ssh root@aparelho` é o único login que existe lá. Um `--instalar 10.55.0.2` sem
+`@` faz o `ssh` usar o usuário **deste PC**, e a resposta é
+
+```text
+charles@10.55.0.2: Permission denied (publickey,password,keyboard-interactive)
+```
+
+que manda procurar chave SSH — e o errado era o nome do usuário. O
+`compilar-launcher-teste-arm64.sh` já fazia certo; o
+`compilar-launcher-arm64.sh` não fazia, e os dois divergiram. Hoje ambos usam
+`INSTALAR="${2#root@}"` no parse e `root@$INSTALAR` nos comandos.
+
 ### Ferramenta de build que sai calada
 
 `INSTALAR="${2:-}"; shift 2` com um argumento só: o `shift 2` falha e `set -e`
