@@ -5,6 +5,8 @@
 //! (navegação, pilha, permissões) vive no crate `core`, que é testável sem
 //! placa.
 
+use giochi_launcher_core::idioma::Idioma;
+use giochi_launcher_core::tema::Tema;
 use giochi_launcher_core::{
     Cmd, Dir, GamepadFrame, Mapper, Screen, State, Tab, Zone,
 };
@@ -102,7 +104,22 @@ impl App {
         self.painter.save_frame(path)
     }
 
-    pub fn new(painter: Painter, mut state: State, evdev: EvdevInput) -> Self {
+    /// Constrói o app.
+    ///
+    /// `idioma_forcado` vem de `--idioma`: existe para o diagnóstico poder abrir
+    /// qualquer idioma sem tocar em `/user/.config/giochi/language`. Ele precisa
+    /// ser **parâmetro** e não estado do `State`, porque `App::new` é quem lê o
+    /// arquivo — e ler o arquivo depois do pedido o sobrescreveria em silêncio.
+    /// A primeira versão desta mudança fazia isso: `--idioma pt` abria em inglês
+    /// e o log dizia `idioma: English (en) — primeira abertura, o padrão é
+    /// inglês`, logo abaixo de `--idioma: Portuguese (pt)`. Duas linhas
+    /// contraditórias no mesmo log, que é a ferramenta medindo a intenção.
+    pub fn new(
+        painter: Painter,
+        mut state: State,
+        evdev: EvdevInput,
+        idioma_forcado: Option<Idioma>,
+    ) -> Self {
         // O `giochi-init` já restaurou o brilho salvo no boot. Ler o hardware
         // evita a UI mostrar um número que não corresponde à tela — e evita o
         // app sobrescrever a escolha do usuário com um padrão de código.
@@ -169,8 +186,64 @@ impl App {
             sem_fio.pedir(crate::semfio::Pedido::EscanearBt);
         }
 
+        // ── idioma e tema ────────────────────────────────────
+        //
+        // A ordem importa: o idioma é lido **antes** de qualquer tela, porque
+        // toda linha de log e todo rótulo dependem dele. `None` não é "inglês":
+        // é "ninguém escolheu ainda", e é isso que autoriza a tela de
+        // boas-vindas. Devolver o padrão aqui tornaria primeira abertura e
+        // escolha explícita indistinguíveis.
+        match idioma_forcado.or_else(crate::preferencias::carregar_idioma) {
+            Some(idioma) => {
+                state.settings.idioma = idioma;
+                state.idioma_definido = true;
+            }
+            None => {
+                state.settings.idioma = Idioma::PADRAO;
+                state.idioma_definido = false;
+            }
+        }
+        state.settings.tema = crate::preferencias::carregar_tema().unwrap_or(Tema::PADRAO);
+        eprintln!(
+            "idioma: {} ({}){}",
+            state.settings.idioma.nome(),
+            state.settings.idioma.codigo(),
+            if state.idioma_definido {
+                ""
+            } else {
+                " — primeira abertura, o padrão é inglês"
+            }
+        );
+        // Direções RTL: o `SDL2_ttf` sem HarfBuzz não junta letras árabes nem
+        // aplica bidi. Dizer isso no log evita que "o árabe aparece com letras
+        // soltas" seja tratado como regressão de desenho — ver `docs/idiomas.md`.
+        if state.settings.idioma.dir() == giochi_launcher_core::idioma::Dir::Rtl {
+            eprintln!(
+                "aviso: {} é escrita da direita para a esquerda e o SDL2_ttf sem \
+                 HarfBuzz não faz shaping; as letras aparecem isoladas e na ordem \
+                 do código (limitação declarada, não regressão)",
+                state.settings.idioma.nome()
+            );
+        }
+        eprintln!("tema: {}", state.settings.tema.rotulo());
+
         let mut state = state;
         state = giochi_launcher_core::update(state, capacidades);
+
+        // Primeira abertura: a escolha do idioma vem antes de tudo.
+        //
+        // Empilhado **antes** de qualquer outra coisa e com o foco já na linha
+        // do idioma atual (inglês), então quem aperta `A` sem mexer em nada
+        // confirma o padrão comercial. Durante o `Screen::Boot` o overlay fica
+        // atrás da tela de boot — mas ele não é desenhado até `BootDone`, que é
+        // quando a interface passa a existir.
+        if !state.idioma_definido && !state.has_overlay() {
+            state.overlays.push(giochi_launcher_core::Overlay::BoasVindas);
+            state.focus = giochi_launcher_core::focus::Focus::at(
+                giochi_launcher_core::Zone::IdiomaLista,
+                state.settings.idioma.indice(),
+            );
+        }
 
         Self {
             state,
@@ -218,8 +291,9 @@ impl App {
         state: State,
         evdev: EvdevInput,
         efeitos: bool,
+        idioma_forcado: Option<Idioma>,
     ) -> Self {
-        let mut app = Self::new(painter, state, evdev);
+        let mut app = Self::new(painter, state, evdev, idioma_forcado);
         app.efeitos = Efeitos::novo(efeitos);
         if efeitos {
             let (l, a) = app.painter.logical_size();
@@ -324,6 +398,8 @@ impl App {
         let tela_antes = self.state.screen;
         let brilho_antes = self.state.settings.brightness;
         let volume_antes = self.state.settings.volume;
+        let idioma_antes = self.state.settings.idioma;
+        let tema_antes = self.state.settings.tema;
         let before = self.state.clone();
 
         // O pedido que só a UI sabe executar é lido **antes** do reducer: são
@@ -355,6 +431,8 @@ impl App {
         self.sync_backlight(tela_antes, self.state.screen);
         self.sync_brilho(brilho_antes, self.state.settings.brightness);
         self.sync_volume(volume_antes, self.state.settings.volume);
+        self.sync_idioma(idioma_antes, self.state.settings.idioma);
+        self.sync_tema(tema_antes, self.state.settings.tema);
         self.sync_sistema(tela_antes, self.state.screen);
     }
 
@@ -424,7 +502,7 @@ impl App {
     /// congelada no menu de energia durante todo o desligamento — o usuário
     /// acharia que travou. Aqui ele lê o que está acontecendo.
     fn avisar_antes_de_executar(&mut self, mensagem: &str) {
-        self.painter.clear(theme::BG);
+        self.painter.clear(theme::bg());
         views::mensagem_central(&mut self.painter, mensagem);
         self.painter.present();
         eprintln!("sistema: {mensagem}");
@@ -469,6 +547,43 @@ impl App {
                 self.dirty = true;
             }
             _ => {}
+        }
+    }
+
+    /// Grava o idioma escolhido.
+    ///
+    /// Compara antes e depois pelo mesmo motivo de `sync_volume`: o `dispatch`
+    /// roda em **todo** comando, e escrever o arquivo a cada quadro gastaria o
+    /// cartão SD à toa (uma escrita por tecla, para sempre).
+    ///
+    /// Falha na gravação **avisa**: a escolha continua valendo nesta sessão, mas
+    /// some no próximo boot. Silêncio aqui é a mesma família do `save_config` do
+    /// Wi-Fi que respondia `FAIL` só no stderr.
+    fn sync_idioma(&mut self, antes: Idioma, agora: Idioma) {
+        if antes == agora {
+            return;
+        }
+        match crate::preferencias::salvar_idioma(agora) {
+            Ok(()) => eprintln!(
+                "idioma: {} -> {} ({})",
+                antes.codigo(),
+                agora.codigo(),
+                agora.nome()
+            ),
+            Err(e) => eprintln!(
+                "aviso: idioma não salvo ({e}) — a escolha vale até o próximo boot"
+            ),
+        }
+    }
+
+    /// Grava o tema escolhido. Ver `sync_idioma` para o "porquê comparar".
+    fn sync_tema(&mut self, antes: Tema, agora: Tema) {
+        if antes == agora {
+            return;
+        }
+        match crate::preferencias::salvar_tema(agora) {
+            Ok(()) => eprintln!("tema: {} -> {}", antes.id(), agora.id()),
+            Err(e) => eprintln!("aviso: tema não salvo ({e}) — a escolha vale até o próximo boot"),
         }
     }
 
@@ -621,6 +736,13 @@ impl App {
             }
             Hit::PasswordConfirm => {
                 self.dispatch(Cmd::FocusAt(Zone::PasswordActions, 0));
+                self.dispatch(Cmd::Confirm);
+            }
+            Hit::Idioma(index) => {
+                // Tocar no idioma é escolher o idioma: na tela de boas-vindas a
+                // lista tem uma decisão só, e pedir dois toques ("focar" e
+                // "confirmar") num aparelho de toque seria passos sem motivo.
+                self.dispatch(Cmd::FocusAt(Zone::IdiomaLista, index));
                 self.dispatch(Cmd::Confirm);
             }
             Hit::BtDevice(index) => {
@@ -971,7 +1093,11 @@ impl App {
         }
         self.dirty = false;
 
-        self.painter.clear(theme::BG);
+        // A paleta do tema escolhido vale para o quadro inteiro. Trocar de tema
+        // com a tela aberta muda as cores no quadro seguinte, então a decisão é
+        // refeita a cada quadro em vez de fixada na abertura.
+        theme::definir_tema(self.state.settings.tema);
+        self.painter.clear(theme::bg());
 
         // Brilho ambiente no topo, na cor do jogo em foco. Faixas de alfa
         // decrescente: sem shader, e o custo é uma dúzia de retângulos.
@@ -1007,7 +1133,7 @@ impl App {
         // Aviso de falha de desligar/reiniciar. Fica por cima da tela preta para
         // que o usuário saiba por que o aparelho continua ligado.
         if let Some(msg) = self.aviso_sistema.clone() {
-            views::aviso_sistema(&mut self.painter, &msg);
+            views::aviso_sistema(&mut self.painter, &msg, self.state.settings.idioma);
         }
         views::overlays(&mut self.painter, &self.state, &mut self.layout);
         views::toast(&mut self.painter, &self.state);

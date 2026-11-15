@@ -5,8 +5,17 @@ Este repositório **não escreve** nos repos vizinhos — regra do dono do proje
 conclui que a correção mora em repo alheio, ela vira **issue**, com o medido, o
 arquivo e a linha, a consequência e o que a correção provavelmente é.
 
-**Estado em 15/11/2026:** os quatro corpos abaixo estão prontos e **nenhum foi
-aberto ainda**. A criação pelo MCP do GitHub autentica (`POST` responde 404 para
+**Estado em 15/11/2026:** os cinco corpos abaixo estão prontos e **nenhuma das
+cinco existe no GitHub ainda**. A **nº 5** (fontes) foi submetida ao MCP: o
+`issue_write` renderizou o formulário de confirmação no VS Code e ficou aguardando
+o clique — conferido depois por `list_issues`, que devolve ainda as mesmas 3
+issues de Bluetooth. Ou seja: **a issue não foi criada**, e este arquivo é o
+entregável até o clique acontecer.
+
+Não há atalho neste PC: `gh` não está instalado e não há `GITHUB_TOKEN` no
+ambiente, então o MCP com formulário é o único caminho de escrita. O corpo abaixo
+está no formato que o `issues/new` aceita — cole, ou peça ao agente para
+renderizar o formulário outra vez. A criação pelo MCP do GitHub autentica (`POST` responde 404 para
 issue inexistente, não 401) mas exige **confirmação num formulário do VS Code** —
 o agente não consegue clicar. Enquanto o clique não vier, o artefato é este
 arquivo: cole o bloco no `issues/new` do repo indicado, ou peça ao agente para
@@ -18,11 +27,17 @@ renderizar o formulário de novo.
 | 2 | `GIOCHI-SYSTEM` | Wi-Fi não sobrevive ao reboot | **defeito visível ao usuário** |
 | 3 | `GIOCHI-SYSTEM` | Raízes `/opt|/user/games` e o `giochi-selftest` | aviso falso no aparelho |
 | 4 | `GIOCHI-OS` | `runAppsPhase` grava todo app em `/opt/giochi/apps` | **latente** |
+| 5 | `GIOCHI-SYSTEM` | fontes das escritas do launcher (chinês, hindi, bengali) | **o launcher multi-idioma só desenha 7 dos 10** |
 
 A ordem é por gravidade: a **#2** é a mais grave (a documentação atual deixa o
 aparelho pior do que estava), a #1 cobre só BLE depois da correção, e a #4 hoje
 acerta por acidente (só há um app `image`) e passa a errar quando houver o
 segundo.
+
+A **#5** é a mais visível para o usuário final: três dos dez idiomas que o
+launcher oferece não têm fonte na imagem, e o sintoma é uma tela de quadradinhos.
+Ela também é a **mais barata** de corrigir: metade do pedido é ligar um pacote
+(`BR2_PACKAGE_WQY_ZENHEI`) que **já está na árvore** e só está desligado.
 
 **Duas destas issues corrigem pedidos anteriores deste repositório**, e isso está
 dito dentro de cada uma: a #1 pedia `CONFIG_HID=y` (que já existia, com três
@@ -428,3 +443,133 @@ O caso de teste que falta em `tests/pipeline.test.mjs`: um app `kind: "app"` e u
 `kind: "game"`, ambos `distribution: "image"`, e a asserção de que o overlay tem
 `opt/giochi/apps/<app>` **e** `opt/giochi/games/<jogo>`, com o `index.json`
 declarando o `dir` e o `kind` de cada um.
+
+---
+
+## 5. `GIOCHI-SYSTEM` — fontes para chinês, hindi e bengali (o launcher fala 10 idiomas)
+
+**Título:** launcher multi-idioma: faltam fontes de CJK, devanágari e bengali — `zh`/`hi`/`bn` saem em quadradinhos
+
+### O que mudou deste lado
+
+O launcher passou a ter os **dez idiomas do site** em 15/11/2026
+([idiomas.md](idiomas.md)). A escolha funciona, a interface traduz e o desenho
+escolhe a fonte **por string**: a principal (DejaVu) desenha o latim, e a fonte da
+escrita entra só no texto que ela não cobre. Nada disso precisa de mudança no
+sistema — **desde que as fontes existam na imagem**. Três não existem.
+
+### Medido no R35S, imagem `built_at_utc=2026-11-15T21:00:56Z`
+
+```console
+$ find /usr/share/fonts -type f | wc -l
+21
+$ find / -name 'Noto*' -maxdepth 6 2>/dev/null | head -5
+$ find / -name '*wqy*' -o -name '*Droid*' 2>/dev/null | head -5
+```
+
+Vinte e uma fontes, **todas DejaVu**. Nenhuma Noto, nenhuma WenQuanYi.
+
+E o veredito, medido com o `TTF_GlyphIsProvided` do próprio aparelho (comando
+novo `giochi-launcher --fontes`, que roda por SSH sem tela):
+
+```console
+$ giochi-launcher --fontes --idioma pt
+veredito: 15/15 caractere(s) cobertos por /usr/share/fonts/dejavu/DejaVuSans.ttf
+$ giochi-launcher --fontes --idioma zh
+veredito: 5/8 caractere(s) cobertos por /usr/share/fonts/dejavu/DejaVuSans.ttf
+$ giochi-launcher --fontes --idioma hi
+veredito: 1/11 caractere(s) cobertos por /usr/share/fonts/dejavu/DejaVuSans.ttf
+$ giochi-launcher --fontes --idioma bn
+veredito: 1/10 caractere(s) cobertos por /usr/share/fonts/dejavu/DejaVuSans.ttf
+```
+
+| Idioma | Cobertura medida | Efeito na tela |
+| --- | --- | --- |
+| `en`, `es`, `fr`, `pt` | **15/15** | legível |
+| `ru` | **10/10** | legível |
+| `ar`, `ur` | **10/10** | legível — e com shaping correto (abaixo) |
+| `zh` | **5/8** | quadradinho nos caracteres que faltam |
+| `hi` | **1/11** | praticamente tudo quadradinho |
+| `bn` | **1/10** | idem |
+
+O log avisa uma vez por execução:
+
+```text
+aviso: nenhuma das 1 fonte(s) cobre "中文" — o texto sai com glifo faltando
+       (instale a fonte do idioma; ver docs/idiomas.md)
+```
+
+### A consequência
+
+O usuário escolhe हिन्दी na tela de boas-vindas e recebe uma interface de
+quadradinhos. **Não é falha do launcher** — ele traduziu e pede a fonte certa; a
+imagem é que não tem a fonte. Hoje o app **degrada e avisa**, o que é melhor que
+não abrir e pior que funcionar. A lista de idiomas continua utilizável porque cada
+linha mostra o nome nativo **e** o nome em inglês à direita.
+
+### O pedido — e ele é barato, porque metade já está na árvore
+
+**O `BR2_PACKAGE_WQY_ZENHEI` já existe no Buildroot de vocês e está desligado.**
+Medido nos três `buildroot.config` gerados:
+
+```console
+$ grep -n WQY out/_local-r35s-*/buildroot.config out/powkiddy-x55/buildroot.config out/powkiddy-x35h/buildroot.config
+995:# BR2_PACKAGE_WQY_ZENHEI is not set      ← r35s
+1000:# BR2_PACKAGE_WQY_ZENHEI is not set     ← x55
+956:# BR2_PACKAGE_WQY_ZENHEI is not set      ← x35h
+```
+
+Ou seja: para o **chinês**, a correção é **uma linha por defconfig**, sem baixar
+nada novo.
+
+| Escrita | Como obter | Custo |
+| --- | --- | --- |
+| CJK (chinês) | `BR2_PACKAGE_WQY_ZENHEI=y` — **já na árvore** | poucos MB, sem fonte nova no repositório |
+| devanágari (hindi) | `BR2_PACKAGE_NOTO` + família devanágari, **ou** copiar `NotoSansDevanagari-Regular.ttf` para `/usr/share/fonts/truetype/noto/` | **224 KB** (medido) |
+| bengali | idem, `NotoSansBengali-Regular.ttf` | **200 KB** (medido) |
+| árabe (opcional) | `NotoNaskhArabic-Regular.ttf` | 172 KB — **não é necessário**: o DejaVu cobre o alfabeto árabe (10/10 medido) |
+
+Tamanhos conferidos no PC com `du -h`, para não pedir "um pacote de fontes" sem
+número: `NotoSansCJK-Regular.ttc` = **19 MB** (por isso o `wqy-zenhei`, que é bem
+menor, é a escolha certa para uma imagem de console).
+
+### Um detalhe que precisa acompanhar, senão o pacote não resolve
+
+O Buildroot instala cada fonte na **sua própria** pasta
+(`wqy-zenhei` → `/usr/share/fonts/wqy-zenhei/`), e não numa comum. O app passou a
+procurar também em `/usr/share/fonts/wqy-zenhei`,
+`/usr/share/fonts/wqy-microhei` e `/usr/share/fonts/truetype/wqy` **neste mesmo
+commit** — então ligar o pacote já funciona, sem segunda rodada.
+
+Se preferirem um caminho único, `/usr/share/fonts/truetype/noto/` também está na
+lista e é o que o Debian usa.
+
+### Como conferir (sem precisar de tela)
+
+```bash
+giochi-launcher --fontes --idioma zh     # tem de dar 8/8
+giochi-launcher --fontes --idioma hi     # tem de dar 11/11
+giochi-launcher --fontes --idioma bn     # tem de dar 10/10
+```
+
+O comando sai com o veredito medido, então a conferência é uma linha por idioma.
+
+### O que **não** é pedido para o System (e este arquivo já errou nisso)
+
+A versão anterior desta issue dizia "`SDL2_ttf` sem HarfBuzz, as letras árabes
+saem isoladas". **Estava errado, e era suposição.** Medido no R35S:
+
+```console
+$ readelf -d /usr/lib/libSDL2_ttf-2.0.so.0 | grep -i needed
+ (NEEDED)  Shared library: [libharfbuzz.so.0]
+```
+
+O `defconfig` de vocês liga `BR2_PACKAGE_HARFBUZZ=y` — e ele chega ao `SDL2_ttf`
+de fato. A contraprova visual: o mesmo texto árabe no aparelho (KMSDRM) e no PC
+dá **99,8%** de identidade; se um dos dois não fizesse shaping, as formas isoladas
+contra as conectadas derrubariam esse número.
+
+O que **continua** faltando em `ar`/`ur` é **bidi de parágrafo misto** (árabe +
+número + latino na mesma linha) e layout espelhado — e isso é do `SDL2_ttf` (que
+faz shaping por *run*, não reordena parágrafo) e do layout do app, **não da
+imagem**. Fonte não conserta, e por isso não entra neste pedido.

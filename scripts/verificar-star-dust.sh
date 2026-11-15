@@ -74,7 +74,7 @@ export GIOCHI_TEMPERATURA_FIXA="40"
 desenhar() { # <destino> [flags extras...]
   local destino="$1"; shift
   SDL_VIDEODRIVER=dummy "$BIN" --tamanho "$TAMANHO" ${ROTACAO:+--rotacao "$ROTACAO"} \
-    --demo "$@" --dump-frame "$destino" >"$TMP/log" 2>&1 || {
+    --demo --idioma en "$@" --dump-frame "$destino" >"$TMP/log" 2>&1 || {
       printf '%sFALHA%s o binário saiu com erro:\n' "$VERMELHO" "$ZERA"
       sed 's/^/  /' "$TMP/log"
       exit 1

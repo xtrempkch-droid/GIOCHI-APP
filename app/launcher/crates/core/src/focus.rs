@@ -40,6 +40,13 @@ pub enum Zone {
     QuickSettings,
     GameDetailActions,
     PowerActions,
+    /// Lista de idiomas da tela de boas-vindas.
+    ///
+    /// Zona própria em vez de reaproveitar `SettingsContent`: a lista existe
+    /// **antes** de existir aba (a escolha acontece na primeira abertura), e
+    /// amarrá-la ao índice de uma linha de configuração faria a boas-vindas
+    /// depender de uma categoria que o usuário ainda nem viu.
+    IdiomaLista,
 }
 
 impl Zone {
@@ -61,6 +68,7 @@ impl Zone {
             Zone::QuickSettings => 1,
             Zone::GameDetailActions => 4,
             Zone::PowerActions => 1,
+            Zone::IdiomaLista => 1,
         }
     }
 

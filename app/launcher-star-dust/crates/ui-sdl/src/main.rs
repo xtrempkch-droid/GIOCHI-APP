@@ -16,6 +16,14 @@
 //!                                   mostra cada tecla que chega do kernel
 //!   giochi-launcher --checar-energia
 //!                                   mostra o que o device tree declara sobre energia
+//!   giochi-launcher --idioma zh     abre já no idioma pedido (não grava)
+//!   giochi-launcher --boas-vindas   força a tela de escolha de idioma
+//!   giochi-launcher --fontes        lista a cadeia de fontes do idioma e sai
+//!
+//! `--idioma` e `--boas-vindas` existem para **medir** o que é difícil de medir
+//! no aparelho: fotografar a mesma tela em dez idiomas no PC, e ver a primeira
+//! abertura sem apagar `/user/.config/giochi/language`. O primeiro **não grava**
+//! a escolha — se gravasse, cada foto mudaria o estado do aparelho.
 //!
 //! ## Star Dust
 //!
@@ -66,6 +74,12 @@ mod icons;
 mod input_evdev;
 #[path = "../../../../launcher/crates/ui-sdl/src/power.rs"]
 mod power;
+// Idioma e tema gravados em `/user/.config/giochi/`: o mesmo arquivo do
+// launcher de produção, apontado por caminho. Uma cópia aqui faria o Star Dust
+// esquecer o idioma que o launcher gravou — e o usuário veria a interface voltar
+// ao inglês só neste app.
+#[path = "../../../../launcher/crates/ui-sdl/src/preferencias.rs"]
+mod preferencias;
 #[path = "../../../../launcher/crates/ui-sdl/src/semfio.rs"]
 mod semfio;
 #[path = "../../../../launcher/crates/ui-sdl/src/system.rs"]
@@ -137,6 +151,29 @@ fn main() -> Result<(), String> {
         .and_then(|i| args.get(i + 1))
         .cloned()
         .unwrap_or_else(default_font);
+
+    // `--idioma <codigo>`: abre neste idioma sem gravar nada.
+    //
+    // Aceita o código curto e a etiqueta BCP-47, pela mesma função que lê o
+    // arquivo. Um código inválido **falha** com a lista em vez de abrir em
+    // inglês: quem digitou `--idioma pt-BR ` esperando português e recebeu
+    // inglês procuraria o defeito na tradução.
+    let idioma_forcado = match args.iter().position(|a| a == "--idioma") {
+        Some(i) => {
+            let codigo = args
+                .get(i + 1)
+                .ok_or("--idioma precisa de um código (en, zh, hi, es, fr, ar, bn, pt, ru, ur)")?;
+            Some(
+                giochi_launcher_core::idioma::Idioma::de_codigo(codigo).ok_or_else(|| {
+                    format!(
+                        "--idioma {codigo:?} não é um dos dez: en, zh, hi, es, fr, ar, bn, pt, ru, ur"
+                    )
+                })?,
+            )
+        }
+        None => None,
+    };
+    let forcar_boas_vindas = args.iter().any(|a| a == "--boas-vindas");
 
     // `--catalogo-adicionar <dir>`: põe um app instalado no índice do aparelho.
     //
@@ -305,6 +342,71 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
 
+    // `--fontes` sai **antes** de pedir um dispositivo de vídeo.
+    //
+    // É um diagnóstico para rodar por SSH num aparelho sem tela: a primeira
+    // versão imprimia depois de `video.window(...)`, e no R35S em 15/11/2026 o
+    // comando respondeu `Error: "No available video device"` — a ferramenta que
+    // responde "por que o chinês sai como quadradinhos?" recusava-se a rodar
+    // justamente onde a pergunta aparece. Mesma família do `--tamanho` que não
+    // conferia o drawable (§13): a ferramenta medindo a intenção.
+    if args.iter().any(|a| a == "--fontes") {
+        let idioma = idioma_forcado
+            .or_else(crate::preferencias::carregar_idioma)
+            .unwrap_or(giochi_launcher_core::idioma::Idioma::PADRAO);
+        let cadeia = draw::cadeia_de_fontes(idioma, &font_path);
+        println!("idioma: {} ({})", idioma.nome(), idioma.codigo());
+        println!(
+            "escritas deste idioma: {}",
+            idioma.fontes().join(", ")
+        );
+        println!("cadeia resolvida neste aparelho:");
+        for (i, caminho) in cadeia.iter().enumerate() {
+            let existe = std::path::Path::new(caminho).exists();
+            println!(
+                "  {i}: {caminho}{}",
+                if existe { "" } else { "   [NÃO EXISTE]" }
+            );
+        }
+        // O veredito é **medido**, e não deduzido do tamanho da lista: a
+        // primeira versão dizia "sem fonte" para o português porque a cadeia
+        // tinha um elemento, e a escrita latina está no DejaVu. Ver
+        // `draw::cobertura_da_fonte`.
+        let amostra = idioma.amostra();
+        let mut melhor: Option<(usize, usize, &str)> = None;
+        for caminho in &cadeia {
+            if let Some((cobertos, total)) = draw::cobertura_da_fonte(caminho, amostra) {
+                // `map_or` e não `is_none_or`: este último é 1.82 e o MSRV do
+                // workspace é 1.75. Clippy com `-D warnings` reprova a diferença.
+                if melhor.map_or(true, |(c, _, _)| cobertos > c) {
+                    melhor = Some((cobertos, total, caminho));
+                }
+                if cobertos == total {
+                    break;
+                }
+            }
+        }
+        println!("amostra da escrita: {amostra:?}");
+        match melhor {
+            Some((cobertos, total, fonte)) => {
+                println!(
+                    "veredito: {cobertos}/{total} caractere(s) cobertos por {fonte}"
+                );
+                if cobertos < total {
+                    println!(
+                        "          o texto deste idioma sai com glifo faltando — \
+                         instale a fonte da escrita (docs/idiomas.md)"
+                    );
+                }
+            }
+            None => println!(
+                "veredito: não consegui abrir nenhuma fonte da cadeia; \
+                 nada de texto será desenhado"
+            ),
+        }
+        return Ok(());
+    }
+
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
 
@@ -346,7 +448,15 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| format!("janela: {e}"))?;
 
-    let painter = draw::Painter::new(window, &font_path)?;
+    // A cadeia de fontes depende do idioma: a principal desenha o latim, e as
+    // seguintes só entram quando ela não cobre a escrita. Ver
+    // `draw::cadeia_de_fontes`.
+    let idioma_das_fontes = idioma_forcado
+        .or_else(crate::preferencias::carregar_idioma)
+        .unwrap_or(giochi_launcher_core::idioma::Idioma::PADRAO);
+    let cadeia = draw::cadeia_de_fontes(idioma_das_fontes, &font_path);
+
+    let painter = draw::Painter::new(window, &cadeia)?;
     informar_projecao(&painter);
 
     // ── detecção ────────────────────────────────────────────
@@ -400,8 +510,50 @@ fn main() -> Result<(), String> {
         }
     };
 
+    // Idioma forçado pela linha de comando: muda a interface desta sessão e
+    // **não** grava. `idioma_definido` fica `true` porque a pergunta "primeira
+    // abertura?" já foi respondida por quem passou a chave — senão a tela de
+    // boas-vindas cobriria justamente a foto que se queria tirar.
+    if let Some(idioma) = idioma_forcado {
+        state.settings.idioma = idioma;
+        state.idioma_definido = true;
+        state.overlays.retain(|o| *o != giochi_launcher_core::Overlay::BoasVindas);
+        eprintln!("--idioma: {} ({}) — não grava", idioma.nome(), idioma.codigo());
+    }
+
+    // `--boas-vindas`: força a tela, mesmo com idioma já escolhido ou forçado.
+    // É a única forma de conferir o layout dela numa máquina que já respondeu.
+    if forcar_boas_vindas {
+        state.idioma_definido = false;
+        if !state.overlays.contains(&giochi_launcher_core::Overlay::BoasVindas) {
+            state.overlays.push(giochi_launcher_core::Overlay::BoasVindas);
+        }
+        state.focus = giochi_launcher_core::focus::Focus::at(
+            giochi_launcher_core::Zone::IdiomaLista,
+            state.settings.idioma.indice(),
+        );
+        eprintln!("--boas-vindas: tela de escolha de idioma forçada");
+    }
+
     if let Some(tela) = tela_inicial.as_deref() {
         abrir_tela(&mut state, tela)?;
+        // O foco acompanha a zona da tela. Na lista de idiomas o índice inicial
+        // é o idioma em vigor, e não a linha 0: o título das boas-vindas é
+        // desenhado no idioma em foco, então `--tela idiomas --idioma pt` com
+        // índice 0 fotografava um painel em inglês.
+        state.focus = giochi_launcher_core::focus::Focus::at(
+            state
+                .top_overlay()
+                .map(|o| o.zone())
+                .unwrap_or_else(|| state.tab.zone()),
+            0,
+        );
+        if state.focus.zone == giochi_launcher_core::Zone::IdiomaLista {
+            state.focus = giochi_launcher_core::focus::Focus::at(
+                giochi_launcher_core::Zone::IdiomaLista,
+                state.settings.idioma.indice(),
+            );
+        }
         eprintln!("tela forcada por --tela: {tela}");
     }
 
@@ -581,7 +733,7 @@ fn main() -> Result<(), String> {
         );
     }
 
-    let mut app = app::App::com_efeitos(painter, state, evdev, efeitos);
+    let mut app = app::App::com_efeitos(painter, state, evdev, efeitos, idioma_forcado);
 
     // Captura: adiantar a animação **antes** do primeiro desenho. O caminho de
     // dump avança um número fixo de quadros, então o BMP não depende de quanto
@@ -614,7 +766,7 @@ fn main() -> Result<(), String> {
             lista,
             estado.focus.zone,
             estado.focus.index,
-            estado.library_filter.label(),
+            estado.library_filter.label(estado.settings.idioma),
             giochi_launcher_core::SETTINGS_CATEGORIES
                 .get(estado.settings_category)
                 .copied()
@@ -714,13 +866,16 @@ fn main() -> Result<(), String> {
 
             // Reabre a tela — o jogo pode ter deixado o conector em qualquer
             // modo, então a janela é criada do zero, não "reaproveitada".
-            let painter = criar_painter(&video, largura, altura, fullscreen, &font_path)?;
+            // A cadeia segue o idioma **atual**: ele pode ter mudado enquanto o
+            // jogo rodava, e a tela que volta tem de abrir na escrita nova.
+            let cadeia = draw::cadeia_de_fontes(estado.settings.idioma, &font_path);
+            let painter = criar_painter(&video, largura, altura, fullscreen, &cadeia)?;
             informar_projecao(&painter);
             let evdev = input_evdev::EvdevInput::open(
                 std::path::Path::new("/dev/input"),
                 map.clone(),
             );
-            app = app::App::com_efeitos(painter, estado, evdev, efeitos);
+            app = app::App::com_efeitos(painter, estado, evdev, efeitos, idioma_forcado);
             if let Some(msg) = recado {
                 app.avisar(&msg);
             }
@@ -902,7 +1057,7 @@ fn criar_painter(
     largura: u32,
     altura: u32,
     fullscreen: bool,
-    font_path: &str,
+    fontes: &[String],
 ) -> Result<draw::Painter, String> {
     let mut builder = video.window("Giochi Launcher", largura, altura);
     if fullscreen {
@@ -913,7 +1068,7 @@ fn criar_painter(
         .resizable()
         .build()
         .map_err(|e| format!("janela: {e}"))?;
-    draw::Painter::new(window, font_path)
+    draw::Painter::new(window, fontes)
 }
 
 /// Registra no log o par painel × projeto.
@@ -990,6 +1145,17 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
             state.overlays.push(Overlay::PowerPopup);
         }
         "sono" | "sleeping" => state.screen = Screen::Sleeping,
+        // Tela de escolha de idioma. Entra por aqui **e** por `--boas-vindas`:
+        // a chave força a tela em qualquer estado, o nome permite fotografá-la
+        // junto das outras com `--tela`.
+        "idiomas" | "welcome" | "boas-vindas" => {
+            state.idioma_definido = false;
+            state.overlays.push(Overlay::BoasVindas);
+            state.focus = giochi_launcher_core::focus::Focus::at(
+                giochi_launcher_core::Zone::IdiomaLista,
+                state.settings.idioma.indice(),
+            );
+        }
         // Telas de rede. Vêm com dados de exemplo porque a lista vazia esconde
         // justamente o que interessa conferir: truncamento de SSID longo,
         // muitas redes empilhadas, senha comprida demais para o campo.
@@ -1017,7 +1183,7 @@ fn abrir_tela(state: &mut State, nome: &str) -> Result<(), String> {
             return Err(format!(
                 "tela desconhecida: {outro}\n\
                  use: home, biblioteca, apps, ajustes, busca, rapido, detalhe, \
-                 energia, sono, wifi, senha, bluetooth"
+                 energia, sono, idiomas, wifi, senha, bluetooth"
             ))
         }
     }

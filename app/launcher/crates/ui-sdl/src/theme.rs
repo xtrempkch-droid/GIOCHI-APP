@@ -23,19 +23,134 @@ pub const fn rgba(hex: u32, a: u8) -> Color {
     }
 }
 
-pub const BG: Color = rgb(0x070a12);
-pub const PANEL: Color = rgb(0x0f1621);
-pub const PANEL2: Color = rgb(0x1a2436);
-pub const CARD: Color = rgb(0x22304a);
-pub const LINE: Color = rgba(0x78a0c8, 30);
-pub const LINE2: Color = rgba(0x78a0c8, 76);
-pub const ACCENT: Color = rgb(0x66c0f4);
-pub const OK: Color = rgb(0x10b981);
-pub const WARN: Color = rgb(0xf59e0b);
-pub const DANGER: Color = rgb(0xef4444);
-pub const TEXT: Color = rgb(0xf1f5f9);
-pub const DIM: Color = rgb(0x94a3b8);
-pub const FAINT: Color = rgba(0x94a3b8, 140);
+/// Cores de um tema.
+///
+/// ## Por que uma struct, e não constantes soltas
+///
+/// Enquanto houver **um** tema, constantes bastam — e é o que existia. A partir
+/// do momento em que a troca de tema é uma linha da aba Config, a pergunta
+/// "qual é a cor de destaque?" deixa de ter uma resposta só, e quem desenha
+/// precisa perguntar ao tema **ativo**.
+///
+/// A struct é o contrato: um tema novo preenche estes campos e o desenho
+/// inteiro o acompanha, sem que ninguém precise lembrar de onde há `ACCENT`
+/// escrito. Os nomes continuam os do CSS do protótipo, para a comparação entre
+/// o HTML original e o binário seguir óbvia.
+#[derive(Clone, Copy, Debug)]
+pub struct Paleta {
+    pub bg: Color,
+    pub panel: Color,
+    pub panel2: Color,
+    pub card: Color,
+    pub line: Color,
+    pub line2: Color,
+    pub accent: Color,
+    pub ok: Color,
+    pub warn: Color,
+    pub danger: Color,
+    pub text: Color,
+    pub dim: Color,
+    pub faint: Color,
+}
+
+/// O tema padrão, transcrito do protótipo. Único por enquanto.
+pub const GIOCCHI_DARK: Paleta = Paleta {
+    bg: rgb(0x070a12),
+    panel: rgb(0x0f1621),
+    panel2: rgb(0x1a2436),
+    card: rgb(0x22304a),
+    line: rgba(0x78a0c8, 30),
+    line2: rgba(0x78a0c8, 76),
+    accent: rgb(0x66c0f4),
+    ok: rgb(0x10b981),
+    warn: rgb(0xf59e0b),
+    danger: rgb(0xef4444),
+    text: rgb(0xf1f5f9),
+    dim: rgb(0x94a3b8),
+    faint: rgba(0x94a3b8, 140),
+};
+
+/// Paleta de um tema.
+///
+/// `match` exaustivo de propósito: acrescentar variante em `core::tema::Tema`
+/// **não compila** até existir paleta para ela. É o degrau que faltava para a
+/// troca de tema funcionar de fato, e é o que o compilador cobra.
+pub const fn paleta(tema: giochi_launcher_core::tema::Tema) -> &'static Paleta {
+    match tema {
+        giochi_launcher_core::tema::Tema::GiochiDark => &GIOCCHI_DARK,
+    }
+}
+
+thread_local! {
+    /// Paleta do quadro que está sendo desenhado.
+    ///
+    /// `thread_local` e não campo do `Painter`: o desenho acontece todo na
+    /// thread principal, e um campo obrigaria toda chamada de cor a passar pelo
+    /// `p` — inclusive as que calculam a cor **antes** de desenhar
+    /// (`let cor = if focado { … }`). O SDL2_ttf já usa `thread_local` pelo
+    /// mesmo motivo (ver `draw.rs`).
+    ///
+    /// O valor é trocado **uma vez por quadro**, em `App::render`.
+    static ATUAL: std::cell::Cell<&'static Paleta> = const { std::cell::Cell::new(&GIOCCHI_DARK) };
+}
+
+/// Passa a desenhar com a paleta deste tema.
+///
+/// Chamado no começo de cada quadro: o usuário pode trocar de tema com a tela
+/// aberta, e um valor fixado na abertura deixaria a metade da interface com as
+/// cores antigas.
+pub fn definir_tema(tema: giochi_launcher_core::tema::Tema) {
+    ATUAL.with(|c| c.set(paleta(tema)));
+}
+
+/// Paleta ativa.
+pub fn atual() -> &'static Paleta {
+    ATUAL.with(|c| c.get())
+}
+
+pub fn accent() -> Color {
+    atual().accent
+}
+pub fn dim() -> Color {
+    atual().dim
+}
+pub fn text() -> Color {
+    atual().text
+}
+pub fn faint() -> Color {
+    atual().faint
+}
+pub fn panel() -> Color {
+    atual().panel
+}
+pub fn panel2() -> Color {
+    atual().panel2
+}
+pub fn card() -> Color {
+    atual().card
+}
+pub fn line() -> Color {
+    atual().line
+}
+pub fn line2() -> Color {
+    atual().line2
+}
+pub fn ok() -> Color {
+    atual().ok
+}
+pub fn warn() -> Color {
+    atual().warn
+}
+pub fn danger() -> Color {
+    atual().danger
+}
+pub fn bg() -> Color {
+    atual().bg
+}
+
+// Branco e preto puros **não** são do tema: são usados em camadas de alfa por
+// cima de qualquer cor (sombra, brilho, letra d'água do cartão). Um tema claro
+// continua querendo preto a 140 para a sombra do mesmo jeito.
 pub const BLACK: Color = rgb(0x000000);
 pub const WHITE: Color = rgb(0xffffff);
 
@@ -106,4 +221,53 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
 
 pub fn with_alpha(color: Color, a: u8) -> Color {
     Color { a, ..color }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use giochi_launcher_core::tema::Tema;
+
+    /// Os valores do tema padrão são os do protótipo, e continuam iguais.
+    ///
+    /// A paleta foi extraída das constantes em 15/11/2026 para a troca de tema
+    /// funcionar. Uma extração que mexesse num número mudaria a tela inteira em
+    /// um pixel de cada vez — e a comparação de quadro acusaria "regressão de
+    /// desenho" de 0,3 %, que manda procurar no lugar errado. Estes números são
+    /// os medidos em 06/11/2026 e usados na comparação.
+    #[test]
+    fn o_tema_padrao_tem_os_valores_do_prototipo() {
+        let p = paleta(Tema::GiochiDark);
+        assert_eq!(p.bg, rgb(0x070a12));
+        assert_eq!(p.panel, rgb(0x0f1621));
+        assert_eq!(p.panel2, rgb(0x1a2436));
+        assert_eq!(p.card, rgb(0x22304a));
+        assert_eq!(p.line, rgba(0x78a0c8, 30));
+        assert_eq!(p.line2, rgba(0x78a0c8, 76));
+        assert_eq!(p.accent, rgb(0x66c0f4));
+        assert_eq!(p.ok, rgb(0x10b981));
+        assert_eq!(p.warn, rgb(0xf59e0b));
+        assert_eq!(p.danger, rgb(0xef4444));
+        assert_eq!(p.text, rgb(0xf1f5f9));
+        assert_eq!(p.dim, rgb(0x94a3b8));
+        assert_eq!(p.faint, rgba(0x94a3b8, 140));
+    }
+
+    /// O que o desenho lê é o que `definir_tema` pôs.
+    ///
+    /// É a ligação que faz "trocar de tema" deixar de ser decorativo: as
+    /// funções `accent()`, `text()` e companhia devolvem a paleta **do quadro**,
+    /// não uma constante. Com um tema só o valor não muda, e é justamente por
+    /// isso que a ligação precisa de teste — sem ele, um desenho que ignorasse a
+    /// paleta continuaria idêntico e só apareceria quando o segundo tema
+    /// entrasse.
+    #[test]
+    fn definir_tema_define_o_que_o_desenho_le() {
+        definir_tema(Tema::GiochiDark);
+        assert_eq!(accent(), paleta(Tema::GiochiDark).accent);
+        assert_eq!(text(), paleta(Tema::GiochiDark).text);
+        assert_eq!(panel(), paleta(Tema::GiochiDark).panel);
+        assert_eq!(danger(), paleta(Tema::GiochiDark).danger);
+        assert_eq!(atual().accent, paleta(Tema::GiochiDark).accent);
+    }
 }

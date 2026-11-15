@@ -106,7 +106,7 @@ impl Telas {
         let l = Layout::de(w, h);
         self.quadro = self.quadro.wrapping_add(1);
 
-        pintor.clear(theme::BG);
+        pintor.clear(theme::bg());
         fundo(pintor, &l);
 
         topo(pintor, &l, estado);
@@ -150,7 +150,7 @@ impl Telas {
             if let Some(textura) = self.capa(pintor, indice, faixa) {
                 let _ = pintor.desenhar_textura(textura, x, y, tam, tam);
             } else {
-                pintor.fill_rect(x, y, tam, tam, theme::PANEL2);
+                pintor.fill_rect(x, y, tam, tam, theme::panel2());
             }
 
             // Escurecimento por profundidade: `draw_texture_ex` não aceita
@@ -161,7 +161,7 @@ impl Telas {
 
             if posicao == 0 {
                 let e = (l.capa / 64).max(2);
-                pintor.rect_border(x - e, y - e, tam + 2 * e, tam + 2 * e, e, theme::ACCENT);
+                pintor.rect_border(x - e, y - e, tam + 2 * e, tam + 2 * e, e, theme::accent());
             }
 
             // Selo de "esta é a que está no mixer": separado do foco, porque
@@ -169,7 +169,7 @@ impl Telas {
             if estado.indice_tocando() == Some(indice) {
                 let raio = (tam / 7).max(9);
                 let (cx, cy) = (x + raio + 4, y + raio + 4);
-                pintor.fill_rect(cx - raio, cy - raio, raio * 2, raio * 2, theme::OK);
+                pintor.fill_rect(cx - raio, cy - raio, raio * 2, raio * 2, theme::ok());
                 pintor.icon("play", cx, cy, raio + 2, theme::BLACK);
             }
         }
@@ -183,10 +183,10 @@ impl Telas {
         let titulo = encurtar(&faixa.titulo, largura, |t| {
             pintor.text_size(t, l.fonte_nome).0
         });
-        pintor.text_center(l.largura / 2, y, &titulo, l.fonte_nome, theme::TEXT);
+        pintor.text_center(l.largura / 2, y, &titulo, l.fonte_nome, theme::text());
 
         let ficha = format!("{} · {}", faixa.formato.rotulo(), faixa.duracao_legivel());
-        pintor.text_center(l.largura / 2, y + l.fonte_nome as i32 + 4, &ficha, l.fonte_corpo, theme::DIM);
+        pintor.text_center(l.largura / 2, y + l.fonte_nome as i32 + 4, &ficha, l.fonte_corpo, theme::dim());
     }
 }
 
@@ -200,22 +200,22 @@ fn fundo(pintor: &mut Pintor, l: &Layout) {
     }
     // Uma única chamada: `draw_rect` é chamada de backend por retângulo, e 12
     // retângulos separados custariam 12 — a lição medida no Star Dust.
-    pintor.fill_rects(&faixas, theme::PANEL);
-    pintor.fill_rect(0, 0, l.largura, altura * 2, theme::with_alpha(theme::ACCENT, 10));
-    pintor.fill_rect(0, 0, l.largura, altura, theme::with_alpha(theme::ACCENT, 8));
+    pintor.fill_rects(&faixas, theme::panel());
+    pintor.fill_rect(0, 0, l.largura, altura * 2, theme::with_alpha(theme::accent(), 10));
+    pintor.fill_rect(0, 0, l.largura, altura, theme::with_alpha(theme::accent(), 8));
 }
 
 fn topo(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
     let y = (l.topo - pintor.text_size("Ag", l.fonte_titulo).1) / 2;
     let icone = l.fonte_titulo as i32 + 6;
 
-    pintor.icon("nota", l.margem + icone / 2, l.topo / 2, icone, theme::ACCENT);
+    pintor.icon("nota", l.margem + icone / 2, l.topo / 2, icone, theme::accent());
     pintor.text_left(
         l.margem + icone + 8,
         y,
         "Música",
         l.fonte_titulo,
-        theme::TEXT,
+        theme::text(),
     );
 
     // À direita, a pasta e a contagem: o dado que responde "de onde vêm essas
@@ -229,7 +229,7 @@ fn topo(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
         (l.topo - altura_mini) / 2 - l.fonte_mini as i32 - 2,
         &pasta,
         l.fonte_mini,
-        theme::DIM,
+        theme::dim(),
     );
 
     let contagem = match estado.biblioteca.esta_vazia() {
@@ -241,10 +241,10 @@ fn topo(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
         (l.topo - altura_mini) / 2 + l.fonte_mini as i32,
         &contagem,
         l.fonte_mini,
-        theme::FAINT,
+        theme::faint(),
     );
 
-    pintor.fill_rect(0, l.topo - 1, l.largura, 1, theme::LINE);
+    pintor.fill_rect(0, l.topo - 1, l.largura, 1, theme::line());
 }
 
 /// Tela de ausência: o motivo, a pasta e o que fazer.
@@ -252,18 +252,18 @@ fn tela_vazia(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
     let centro = l.largura / 2;
     let y0 = l.topo + (l.barra_y() - l.topo) / 3;
 
-    pintor.icon("search", centro, y0, (l.altura / 7).clamp(32, 96), theme::FAINT);
+    pintor.icon("search", centro, y0, (l.altura / 7).clamp(32, 96), theme::faint());
 
     let largura = l.largura - 2 * l.margem;
     let mensagem = encurtar(&estado.biblioteca.mensagem(), largura, |t| {
         pintor.text_size(t, l.fonte_nome).0
     });
     let y = y0 + (l.altura / 7).clamp(32, 96) / 2 + l.altura / 30;
-    pintor.text_center(centro, y, &mensagem, l.fonte_nome, theme::TEXT);
+    pintor.text_center(centro, y, &mensagem, l.fonte_nome, theme::text());
 
     let formatos = format!("formatos: {}", extensoes_aceitas());
     let formatos = encurtar(&formatos, largura, |t| pintor.text_size(t, l.fonte_mini).0);
-    pintor.text_center(centro, y + l.fonte_nome as i32 + 6, &formatos, l.fonte_mini, theme::DIM);
+    pintor.text_center(centro, y + l.fonte_nome as i32 + 6, &formatos, l.fonte_mini, theme::dim());
 
     let dica = "copie as músicas para essa pasta · SELECT Recarregar";
     let dica = encurtar(dica, largura, |t| pintor.text_size(t, l.fonte_corpo).0);
@@ -272,7 +272,7 @@ fn tela_vazia(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
         y + l.fonte_nome as i32 + l.fonte_mini as i32 + 14,
         &dica,
         l.fonte_corpo,
-        theme::FAINT,
+        theme::faint(),
     );
 }
 
@@ -285,8 +285,8 @@ fn transporte(
     quadro: u64,
 ) {
     let y0 = l.barra_y();
-    pintor.fill_rect(0, y0, l.largura, l.barra, theme::PANEL2);
-    pintor.fill_rect(0, y0, l.largura, 1, theme::LINE2);
+    pintor.fill_rect(0, y0, l.largura, l.barra, theme::panel2());
+    pintor.fill_rect(0, y0, l.largura, 1, theme::line2());
 
     let meio = y0 + l.barra / 2;
     let altura_texto = pintor.text_size("Ag", l.fonte_corpo).1;
@@ -294,9 +294,9 @@ fn transporte(
 
     // Estado da reprodução, com a cor dizendo o mesmo que a palavra.
     let (rotulo, cor) = match estado.transporte.estado {
-        EstadoPlay::Tocando => ("Tocando", theme::OK),
-        EstadoPlay::Pausado => ("Pausado", theme::WARN),
-        EstadoPlay::Parado => ("Parado", theme::DIM),
+        EstadoPlay::Tocando => ("Tocando", theme::ok()),
+        EstadoPlay::Pausado => ("Pausado", theme::warn()),
+        EstadoPlay::Parado => ("Parado", theme::dim()),
     };
     pintor.fill_rect(l.margem, meio - altura_texto / 2, 3, altura_texto, cor);
     pintor.text_left(l.margem + 10, base, rotulo, l.fonte_corpo, cor);
@@ -320,18 +320,18 @@ fn transporte(
             let x = x_estado + 10 + b as i32 * (largura_barra + 2);
             barras.push((x, meio - altura / 2, largura_barra, altura));
         }
-        pintor.fill_rects(&barras, theme::OK);
+        pintor.fill_rects(&barras, theme::ok());
     }
 
     // O que está no mixer — ou o motivo de nada estar.
     let x_texto = x_estado + 40;
     let espaco = (l.largura / 2 - x_texto).max(40);
     let (texto, cor_texto) = match (recado, estado.faixa_tocando()) {
-        (Some(erro), _) => (erro.to_string(), theme::WARN),
-        (None, Some(faixa)) => (faixa.titulo.clone(), theme::TEXT),
+        (Some(erro), _) => (erro.to_string(), theme::warn()),
+        (None, Some(faixa)) => (faixa.titulo.clone(), theme::text()),
         (None, None) => match som.aviso() {
-            Some(motivo) => (motivo.to_string(), theme::WARN),
-            None => ("—".to_string(), theme::FAINT),
+            Some(motivo) => (motivo.to_string(), theme::warn()),
+            None => ("—".to_string(), theme::faint()),
         },
     };
     let texto = encurtar(&texto, espaco, |t| pintor.text_size(t, l.fonte_corpo).0);
@@ -343,26 +343,26 @@ fn transporte(
     let barra_w = (l.largura / 6).clamp(40, 160);
     let barra_x = l.largura - l.margem - largura_porcento - 8 - barra_w;
 
-    pintor.icon("vol", barra_x - 12, meio, l.fonte_corpo as i32 + 2, theme::DIM);
+    pintor.icon("vol", barra_x - 12, meio, l.fonte_corpo as i32 + 2, theme::dim());
     let altura_barra = (l.fonte_mini as i32 / 2).max(4);
-    pintor.fill_rect(barra_x, meio - altura_barra / 2, barra_w, altura_barra, theme::CARD);
+    pintor.fill_rect(barra_x, meio - altura_barra / 2, barra_w, altura_barra, theme::card());
     let preenchido = (barra_w as f32 * estado.transporte.fracao_do_volume()).round() as i32;
     if preenchido > 0 {
-        pintor.fill_rect(barra_x, meio - altura_barra / 2, preenchido, altura_barra, theme::ACCENT);
+        pintor.fill_rect(barra_x, meio - altura_barra / 2, preenchido, altura_barra, theme::accent());
     }
     pintor.text_right(
         l.largura - l.margem,
         base,
         &porcento,
         l.fonte_mini,
-        theme::DIM,
+        theme::dim(),
     );
 }
 
 fn rodape(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
     let y0 = l.rodape_y();
-    pintor.fill_rect(0, y0, l.largura, l.rodape, theme::PANEL);
-    pintor.fill_rect(0, y0, l.largura, 1, theme::LINE);
+    pintor.fill_rect(0, y0, l.largura, l.rodape, theme::panel());
+    pintor.fill_rect(0, y0, l.largura, 1, theme::line());
 
     let mut lista = dicas(l.largura - 2 * l.margem, |t| pintor.text_size(t, l.fonte_mini).0);
     // Na tela vazia a única ação que interessa é reler a pasta.
@@ -386,9 +386,9 @@ fn rodape(pintor: &mut Pintor, l: &Layout, estado: &Estado) {
     let y = y0 + (l.rodape - pintor.text_size("Ag", l.fonte_mini).1) / 2;
 
     for (dica, largura) in lista.iter().zip(larguras) {
-        pintor.text_left(x, y, dica.tecla, l.fonte_mini, theme::ACCENT);
+        pintor.text_left(x, y, dica.tecla, l.fonte_mini, theme::accent());
         let x_rotulo = x + pintor.text_size(dica.tecla, l.fonte_mini).0 + 4;
-        pintor.text_left(x_rotulo, y, dica.rotulo, l.fonte_mini, theme::DIM);
+        pintor.text_left(x_rotulo, y, dica.rotulo, l.fonte_mini, theme::dim());
         x += largura + 18;
     }
 }

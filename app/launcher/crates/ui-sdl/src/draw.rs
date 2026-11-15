@@ -77,6 +77,117 @@ pub const CANDIDATOS_FONTE: [&str; 6] = [
     "app/launcher/assets/fonts/DejaVuSans.ttf",
 ];
 
+/// Diretórios onde as fontes de escrita não-latina costumam estar.
+///
+/// A ordem é "do mais específico do projeto para o mais genérico do sistema", e
+/// cobre Buildroot, Debian/Ubuntu e Arch — o Buildroot é o que importa, porque é
+/// o aparelho. Se nenhum deles tiver a fonte do idioma, a cadeia simplesmente
+/// não cresce: o texto daquele idioma sai com glifo faltando e o log avisa uma
+/// vez, em vez de o app recusar-se a abrir.
+pub const DIRETORIOS_FONTE: [&str; 11] = [
+    "assets/fonts",
+    "app/launcher/assets/fonts",
+    "/usr/share/fonts/truetype/noto",   // Debian/Ubuntu (Noto por escrita)
+    "/usr/share/fonts/noto",            // Arch
+    "/usr/share/fonts/opentype/noto",   // CJK costuma ser .ttc aqui
+    // O Buildroot instala cada pacote de fonte na **sua própria** pasta, não
+    // numa comum: `wqy-zenhei` vai para `/usr/share/fonts/wqy-zenhei/`. Sem
+    // estas três entradas, ligar `BR2_PACKAGE_WQY_ZENHEI=y` na imagem não
+    // mudaria nada no app — ele procuraria o arquivo num diretório onde o
+    // pacote nunca o põe, e o chinês continuaria em quadradinhos **sem nenhum
+    // erro**. É a classe de defeito do `--fontes` deduzindo em vez de medir.
+    "/usr/share/fonts/wqy-zenhei",
+    "/usr/share/fonts/wqy-microhei",
+    "/usr/share/fonts/truetype/wqy",
+    "/usr/share/fonts/truetype/dejavu", // o que o Buildroot tem hoje
+    "/usr/share/fonts/dejavu",
+    "/usr/share/fonts/TTF",
+];
+
+/// Monta a cadeia de fontes para um idioma: a principal primeiro, e depois as
+/// que o idioma declara e que **existem** neste sistema.
+///
+/// ## Por que a principal continua na frente
+///
+/// O `DejaVuSans.ttf` é a fonte do resto da interface — títulos de jogo, números,
+/// relógio. Trocá-la pela fonte do idioma mudaria o desenho de tudo que é latino.
+/// A escolha é **por string**, em `Painter::fonte_para`: um texto em chinês não é
+/// coberto pela principal e desce a cadeia; um título de jogo em latim é coberto
+/// pela principal e fica exatamente como era.
+///
+/// ## O que ela garante
+///
+/// A lista nunca é vazia e nunca repete caminho. `principal` está sempre na
+/// posição 0, mesmo que não exista — é o caminho que o aviso de "fonte não
+/// carregada" imprime, e é o que o operador precisa ver para corrigir.
+pub fn cadeia_de_fontes(idioma: giochi_launcher_core::idioma::Idioma, principal: &str) -> Vec<String> {
+    use giochi_launcher_core::idioma::Idioma;
+
+    let mut cadeia = vec![principal.to_string()];
+    // As fontes do idioma escolhido vêm primeiro: é o texto que o usuário lê o
+    // tempo todo, e a ordem decide qual fonte desenha quando mais de uma cobre
+    // o mesmo caractere.
+    acrescentar_fontes(&mut cadeia, idioma);
+    // E as dos outros nove **também**, porque a lista de idiomas mostra todos os
+    // nomes nativos o tempo todo — nas boas-vindas e em Config › Aparência. Sem
+    // isto, a lista de quem está em inglês desenha „中文" como quadradinhos, e
+    // justamente a linha que a pessoa precisa escolher fica ilegível. Medido no
+    // PC em 15/11/2026: `nenhuma das 1 fonte(s) cobre "中文"`.
+    for outra in Idioma::TODOS {
+        if outra != idioma {
+            acrescentar_fontes(&mut cadeia, outra);
+        }
+    }
+    cadeia
+}
+
+/// Acrescenta à cadeia as fontes que `idioma` declara e que existem no sistema.
+fn acrescentar_fontes(cadeia: &mut Vec<String>, idioma: giochi_launcher_core::idioma::Idioma) {
+    for nome in idioma.fontes() {
+        for dir in DIRETORIOS_FONTE {
+            let caminho = format!("{dir}/{nome}");
+            if std::path::Path::new(&caminho).exists() && !cadeia.iter().any(|c| c == &caminho) {
+                cadeia.push(caminho);
+                break;
+            }
+        }
+    }
+}
+
+/// Mede quantos caracteres de `amostra` a fonte `caminho` desenha.
+///
+/// ## Por que medir, e não deduzir
+///
+/// A primeira versão de `--fontes` decidia pelo **tamanho da cadeia**: cadeia de
+/// um elemento virava "pode sair com glifo faltando". Medido no R35S em
+/// 15/11/2026, isso dava o veredito errado para o **português** — a escrita
+/// latina está no DejaVu, e o app dizia que faltava fonte. Deduzir do tamanho é
+/// a ferramenta medindo a configuração em vez do efeito (§13 do AGENTS.md).
+///
+/// Aqui a pergunta é feita ao próprio `TTF_GlyphIsProvided`, que é quem responde
+/// `true` ou `false` por caractere. `None` = não deu para abrir a fonte.
+///
+/// `sdl2::ttf::init()` **não** exige dispositivo de vídeo: é isso que permite
+/// rodar o diagnóstico por SSH num aparelho sem tela.
+pub fn cobertura_da_fonte(caminho: &str, amostra: &str) -> Option<(usize, usize)> {
+    #[cfg(feature = "texto")]
+    {
+        let ttf = sdl2::ttf::init().ok()?;
+        let fonte = ttf.load_font(caminho, 14).ok()?;
+        let total = amostra.chars().count();
+        let cobertos = amostra
+            .chars()
+            .filter(|c| c.is_whitespace() || fonte.find_glyph(*c).is_some())
+            .count();
+        Some((cobertos, total))
+    }
+    #[cfg(not(feature = "texto"))]
+    {
+        let _ = (caminho, amostra);
+        None
+    }
+}
+
 /// Espaço de projeto de referência — a proporção (16:9), não o tamanho.
 ///
 /// O espaço de projeto **real** é o do painel: ver [`projecao`]. Estas
@@ -247,17 +358,33 @@ pub struct Painter {
     /// Fonte por tamanho. Guardadas sem empréstimo do `Painter`, por isso
     /// `'static`: ver `take_font`.
     #[cfg(feature = "texto")]
-    fonts: HashMap<u16, Font<'static, 'static>>,
-    #[cfg(feature = "texto")]
-    font_path: &'static str,
-    /// Já reclamamos da fonte que não carrega?
+    fonts: HashMap<(u16, usize), Font<'static, 'static>>,
+    /// Cadeia de fontes, em ordem de preferência. A primeira é a principal.
     ///
-    /// `take_font` é chamado por tamanho de texto, a cada quadro. Sem esta
-    /// marca, um caminho errado imprime o mesmo aviso dezenas de vezes por
-    /// segundo e soterra o resto do log — no X35H foram 12 linhas iguais antes
-    /// de qualquer outra informação.
+    /// Existe porque **uma fonte não cobre dez idiomas**: o `DejaVuSans.ttf` do
+    /// aparelho não tem glifos de chinês, devanágari nem bengali. Em vez de
+    /// trocar a fonte do app inteiro por idioma (o que mudaria também os títulos
+    /// dos jogos, em latim), a cadeia é consultada **por string**: a primeira
+    /// fonte que cobre todos os caracteres daquele texto desenha aquele texto.
     #[cfg(feature = "texto")]
-    avisou_fonte: bool,
+    fontes: Vec<&'static str>,
+    /// Memória de cobertura por (fonte, caractere).
+    ///
+    /// `TTF_GlyphIsProvided` é uma chamada em C por caractere por string por
+    /// quadro. Guardar a resposta mantém o custo no primeiro quadro de cada
+    /// texto novo — e o texto da interface muda muito mais por tradução do que
+    /// por quadro.
+    #[cfg(feature = "texto")]
+    cobertura: HashMap<(usize, char), bool>,
+    /// Já reclamamos de quais pares (fonte, tamanho) que não carregam?
+    ///
+    /// `take_font` é chamado por texto, a cada quadro. Sem esta marca, um
+    /// caminho errado imprime o mesmo aviso dezenas de vezes por segundo e
+    /// soterra o resto do log — no X35H foram 12 linhas iguais antes de qualquer
+    /// outra informação. É um conjunto, e não um booleano, desde que a cadeia
+    /// passou a ter mais de uma fonte: só a que falta precisa ser anunciada.
+    #[cfg(feature = "texto")]
+    fontes_reclamadas: std::collections::HashSet<(usize, u16)>,
     clip_stack: Vec<Option<Clip>>,
     rot: Rotation,
     /// Tamanho do espaço de projeto, em paisagem. Acompanha o painel: ver
@@ -266,10 +393,17 @@ pub struct Painter {
 }
 
 impl Painter {
-    pub fn new(window: Window, font_path: &str) -> Result<Self, String> {
-        // Sem a feature `texto`, o parâmetro existe só para manter a mesma
-        // assinatura nos dois builds.
-        let _ = font_path;
+    /// Constrói o painter com uma **cadeia** de fontes (a primeira é a
+    /// principal).
+    ///
+    /// A lista vem de [`cadeia_de_fontes`], que resolve o que existe no sistema
+    /// para o idioma escolhido. Uma cadeia de um elemento é o caso de sempre:
+    /// fonte principal e mais nada.
+    pub fn new(window: Window, font_paths: &[String]) -> Result<Self, String> {
+        // Sem a feature `texto` a lista existe só para manter a mesma assinatura
+        // nos dois builds; o `cfg` evita o aviso de variável não usada.
+        #[cfg(not(feature = "texto"))]
+        let _ = font_paths;
 
         let mut canvas = window
             .into_canvas()
@@ -364,16 +498,31 @@ impl Painter {
                 *guardado
             });
 
-            // O caminho precisa ser `'static` para a `Font` ser `'static`.
-            let font_path: &'static str = Box::leak(font_path.to_string().into_boxed_str());
+            // Os caminhos precisam ser `'static` para a `Font` ser `'static`.
+            let fontes: Vec<&'static str> = font_paths
+                .iter()
+                .filter(|c| !c.is_empty())
+                .map(|c| Box::leak(c.clone().into_boxed_str()) as &'static str)
+                .collect();
+            let fontes = if fontes.is_empty() {
+                vec!["assets/fonts/DejaVuSans.ttf"]
+            } else {
+                fontes
+            };
+            eprintln!(
+                "fontes: {} candidata(s) — {}",
+                fontes.len(),
+                fontes.join(", ")
+            );
 
             Ok(Self {
                 canvas,
                 creator,
                 ttf,
                 fonts: HashMap::new(),
-                font_path,
-                avisou_fonte: false,
+                fontes,
+                cobertura: HashMap::new(),
+                fontes_reclamadas: std::collections::HashSet::new(),
                 clip_stack: Vec::new(),
                 rot,
                 design: proj.design,
@@ -395,24 +544,83 @@ impl Painter {
         }
     }
 
+    /// Carrega (ou reaproveita) a fonte `indice` no tamanho `size`.
     #[cfg(feature = "texto")]
-    fn take_font(&mut self, size: u16) -> Option<Font<'static, 'static>> {
-        if let Some(font) = self.fonts.remove(&size) {
+    fn take_font(&mut self, size: u16, indice: usize) -> Option<Font<'static, 'static>> {
+        let chave = (size, indice);
+        if let Some(font) = self.fonts.remove(&chave) {
             return Some(font);
         }
         let ttf = self.ttf?;
-        match ttf.load_font(self.font_path, size) {
+        let caminho = *self.fontes.get(indice)?;
+        match ttf.load_font(caminho, size) {
             Ok(font) => Some(font),
             Err(e) => {
-                if !self.avisou_fonte {
-                    self.avisou_fonte = true;
-                    eprintln!("aviso: fonte não carregada ({e})");
+                // Uma vez por par (fonte, tamanho): `take_font` é chamado a cada
+                // texto, a cada quadro, e o aviso repetido soterra o log.
+                if self.fontes_reclamadas.insert((indice, size)) {
+                    eprintln!("aviso: fonte não carregada ({e}) em {caminho}");
                     eprintln!("  procurei em: {}", CANDIDATOS_FONTE.join(", "));
                     eprintln!("  passe --font <caminho> ou ponha o .ttf em assets/fonts/");
                 }
                 None
             }
         }
+    }
+
+    /// `true` se a fonte `indice` tem glifo para `c`.
+    ///
+    /// Sem a feature `texto` não há fonte: responde `true` para o layout não
+    /// depender de cobertura, que ali não existe.
+    #[cfg(feature = "texto")]
+    fn cobre(&mut self, indice: usize, c: char) -> bool {
+        if let Some(sabido) = self.cobertura.get(&(indice, c)) {
+            return *sabido;
+        }
+        // Espaço e quebra de linha não precisam de glifo para o layout.
+        let resposta = if c.is_whitespace() {
+            true
+        } else {
+            match self.take_font(12, indice) {
+                Some(font) => {
+                    let tem = font.find_glyph(c).is_some();
+                    // Devolve ao cache: sem isto, cada consulta recarregaria a
+                    // fonte do disco e o quadro cairia de 60 para poucos fps.
+                    self.fonts.insert((12, indice), font);
+                    tem
+                }
+                None => false,
+            }
+        };
+        self.cobertura.insert((indice, c), resposta);
+        resposta
+    }
+
+    /// Índice da primeira fonte da cadeia que cobre **todos** os caracteres.
+    ///
+    /// Cair na principal quando nenhuma cobre é o comportamento certo: melhor um
+    /// texto com glifos faltando na fonte que o resto do app usa do que trocar a
+    /// fonte da string e mudar o peso visual do parágrafo inteiro.
+    #[cfg(feature = "texto")]
+    fn fonte_para(&mut self, texto: &str, size: u16) -> usize {
+        let total = self.fontes.len();
+        for indice in 0..total {
+            if texto.chars().all(|c| self.cobre(indice, c)) {
+                return indice;
+            }
+        }
+        let indice = 0;
+        // Um aviso por par (fonte, tamanho) já é suficiente para o operador
+        // saber que aquele idioma não tem fonte no aparelho.
+        if self.fontes_reclamadas.insert((indice, size)) {
+            let amostra: String = texto.chars().take(24).collect();
+            eprintln!(
+                "aviso: nenhuma das {} fonte(s) cobre \"{amostra}\" — o texto sai \
+                 com glifo faltando (instale a fonte do idioma; ver docs/idiomas.md)",
+                total
+            );
+        }
+        indice
     }
 
     // ── quadro ───────────────────────────────────────────────
@@ -893,11 +1101,12 @@ impl Painter {
 
     #[cfg(feature = "texto")]
     pub fn text_size(&mut self, text: &str, size: u16) -> (i32, i32) {
-        let Some(font) = self.take_font(size) else {
+        let indice = self.fonte_para(text, size);
+        let Some(font) = self.take_font(size, indice) else {
             return (0, 0);
         };
         let measured = font.size_of(text).unwrap_or((0, 0));
-        self.fonts.insert(size, font);
+        self.fonts.insert((size, indice), font);
         (measured.0 as i32, measured.1 as i32)
     }
 
@@ -915,7 +1124,8 @@ impl Painter {
         if text.is_empty() {
             return 0;
         }
-        let Some(font) = self.take_font(size) else {
+        let indice = self.fonte_para(text, size);
+        let Some(font) = self.take_font(size, indice) else {
             return 0;
         };
 
@@ -979,7 +1189,7 @@ impl Painter {
             }
         }
 
-        self.fonts.insert(size, font);
+        self.fonts.insert((size, indice), font);
         width
     }
 
@@ -1189,5 +1399,90 @@ mod tests {
         let p = projecao(Rotation::None, (1280, 720));
         assert_eq!(p.design, (1280, 720));
         assert_eq!(p.logico, (1280, 720));
+    }
+
+    /// A cadeia nunca é vazia, começa pela principal e não repete caminho.
+    ///
+    /// Ela é **maior** que as fontes do idioma escolhido de propósito: a lista
+    /// de idiomas desenha os dez nomes nativos, com quatro escritas diferentes.
+    ///
+    /// Começar pela principal é o que mantém o desenho latino idêntico: a fonte
+    /// do idioma só entra quando a principal **não** cobre aquele texto.
+    #[test]
+    fn cadeia_de_fontes_comeca_pela_principal() {
+        use giochi_launcher_core::idioma::Idioma;
+
+        let principal = "/nao/existe/DejaVuSans.ttf";
+        for idioma in Idioma::TODOS {
+            let cadeia = cadeia_de_fontes(idioma, principal);
+            assert_eq!(cadeia[0], principal, "{} perdeu a principal", idioma.nome());
+            let mut vistos = cadeia.clone();
+            vistos.sort();
+            vistos.dedup();
+            assert_eq!(vistos.len(), cadeia.len(), "{} repetiu fonte", idioma.nome());
+        }
+    }
+
+    /// Cada arquivo que a cadeia aponta **existe** — é o contrato de
+    /// `cadeia_de_fontes`, que só acrescenta o que encontrou no disco.
+    ///
+    /// Se a lista trouxesse um caminho inexistente, `take_font` falharia em
+    /// silêncio para aquela entrada e o idioma voltaria a sair com glifo
+    /// faltando, agora com uma fonte "configurada" no log.
+    #[test]
+    fn cadeia_so_aponta_arquivo_que_existe() {
+        use giochi_launcher_core::idioma::Idioma;
+
+        for idioma in Idioma::TODOS {
+            let cadeia = cadeia_de_fontes(idioma, "/nao/existe/DejaVuSans.ttf");
+            for caminho in cadeia.iter().skip(1) {
+                assert!(
+                    std::path::Path::new(caminho).exists(),
+                    "{}: {caminho} não existe",
+                    idioma.nome()
+                );
+            }
+        }
+    }
+    /// A lista de diretórios tem de conter os caminhos **do Buildroot**, e não só
+    /// os das distros de PC.
+    ///
+    /// O Buildroot instala cada pacote de fonte na sua própria pasta
+    /// (`wqy-zenhei` → `/usr/share/fonts/wqy-zenhei/`), diferente do Debian, que
+    /// usa `/usr/share/fonts/truetype/noto/`. Quando os diretórios do Buildroot
+    /// faltavam aqui, ligar `BR2_PACKAGE_WQY_ZENHEI=y` na imagem **não mudaria
+    /// nada**: o app procuraria o arquivo onde o pacote nunca o põe, o chinês
+    /// continuaria em quadradinhos, e nenhum erro apareceria em lugar nenhum —
+    /// nem no app, nem no log, nem no build. É a mesma família do `--fontes` que
+    /// deduzia cobertura (medir a configuração em vez do efeito).
+    ///
+    /// Este teste é o elo que faltava: ele não prova que a fonte existe no
+    /// aparelho (isso é `--fontes`), mas prova que o **app sabe onde procurar**
+    /// quando a imagem passar a trazê-la.
+    #[test]
+    fn a_lista_cobre_os_diretorios_do_buildroot() {
+        let do_buildroot = [
+            "/usr/share/fonts/wqy-zenhei",
+            "/usr/share/fonts/wqy-microhei",
+            "/usr/share/fonts/truetype/wqy",
+            "/usr/share/fonts/dejavu",
+        ];
+        for dir in do_buildroot {
+            assert!(
+                DIRETORIOS_FONTE.contains(&dir),
+                "{dir} saiu de DIRETORIOS_FONTE: um pacote de fonte do Buildroot \
+                 instalado ali deixa de ser encontrado, sem erro nenhum"
+            );
+        }
+        // E os das distros de PC continuam, senão o desenvolvimento local (e o
+        // `--dump-frame` que gera a referência) perde as fontes.
+        for dir in [
+            "/usr/share/fonts/truetype/noto",
+            "/usr/share/fonts/opentype/noto",
+        ] {
+            assert!(DIRETORIOS_FONTE.contains(&dir), "{dir} saiu da lista");
+        }
+        // `assets/fonts` primeiro: é onde o app empacotado pode trazer a fonte.
+        assert_eq!(DIRETORIOS_FONTE[0], "assets/fonts");
     }
 }

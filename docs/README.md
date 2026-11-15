@@ -13,6 +13,7 @@
 - [Apps de PC](pc.md) — a loja e o forge nos três sistemas: um `.pyz` determinístico, matriz Windows/Linux/macOS e o que ainda não foi executado.
 - [Loja e multi-lojas](loja.md) — o que funciona, o que não existe e as decisões que faltam antes de escrever a loja.
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
+- [Idiomas do launcher](idiomas.md) — os dez idiomas do site, a tela de boas-vindas da primeira abertura, a troca em Config › Aparência e a cadeia de fontes por escrita; o que **não** está pronto (shaping árabe) e por quê.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
 - [Launcher sobre a GIOCHI-ENGINE](launcher-teste.md) — o mesmo launcher desenhado na engine própria: 100% idêntico pixel a pixel em 4 painéis, 4 abas e 4 overlays, e as cinco primitivas que a engine ganhou por causa do porte.
 - [Música](musica.md) — o primeiro app de imagem que não é tema: carrossel de capas geradas do nome, transporte completo pelo mixer da engine, 120 testes sem SDL e **100,00%** de identidade de quadro entre PC e R35S.

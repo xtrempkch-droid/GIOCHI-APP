@@ -34,19 +34,22 @@ launcher/
     │       ├── state.rs        # estado completo
     │       ├── focus.rs        # zonas e navegação espacial
     │       ├── reduce.rs       # estado + comando → estado
+    │       ├── idioma.rs       # os 10 idiomas: tabela de textos e nomes
+    │       ├── tema.rs         # temas registrados (um hoje) e o ciclo
     │       ├── gamepad.rs      # controle → comandos
     │       └── viewport.rs     # escala e área segura
     └── ui-sdl/                 # SDL2 + renderer próprio
         └── src/
             ├── main.rs         # janela, laço, controle
             ├── app.rs          # eventos → comandos → desenho
-            ├── theme.rs        # paleta e métricas
+            ├── theme.rs        # paleta por tema e métricas
             ├── draw.rs         # primitivas: retângulo, gradiente, círculo, texto
             ├── icons.rs        # ícones vetoriais (dados, não PNG)
             ├── views.rs        # telas + áreas tocáveis
             ├── backlight.rs    # brilho do painel: dormir, acordar, persistir
             ├── display.rs      # orientação declarada pelo sistema
             ├── power.rs        # botão de energia: toque dorme, segurar abre menu
+            ├── preferencias.rs # idioma e tema em /user/.config/giochi
             ├── system.rs       # poweroff/reboot de verdade, e diagnóstico
             └── volume.rs       # teclas de volume → mixer ALSA, com repetição
 ```
@@ -68,6 +71,20 @@ O protótipo calculava à mão e cortava 106 px de cada lado em 640×480.
 durante o desenho; o toque consulta essa lista. Quem desenha sabe onde o
 elemento está, então é quem registra — separar os dois garante que fiquem
 dessincronizados.
+
+## Idiomas e tema
+
+Dez idiomas (os mesmos do site), com **inglês** como padrão: a escolha acontece
+na primeira abertura e depois em **Config › Aparência**, onde o tema também se
+troca. `--idioma <código>` abre em outro idioma sem gravar nada, e `--fontes`
+mostra a cadeia de fontes resolvida para a escrita escolhida.
+
+O texto sai de uma tabela em `core/src/idioma.rs` — uma linha por chave, dez
+colunas — e o desenho pede a chave (`views::t`). A escolha de fonte é **por
+string**, porque uma fonte não cobre as quatro escritas da lista.
+
+Detalhes, limites declarados (shaping árabe, teclado de senha) e como acrescentar
+um tema: [`docs/idiomas.md`](../../docs/idiomas.md).
 
 ## Rodar
 

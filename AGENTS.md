@@ -11,12 +11,13 @@
 | apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + **`musica`** (image, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **222/222** JS |
-| `compilar-launcher.sh --testes` | **289** Rust (151 ui-sdl + 138 core) |
-| Star Dust / launcher-teste | **159** / **91** Rust |
+| `compilar-launcher.sh --testes` | **321** Rust (162 ui-sdl + 159 core) |
+| Star Dust / launcher-teste | **169** / **95** Rust |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
 | apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§6.9) |
+| idiomas da interface | **10** (os do site), padrão **inglês**, escolhidos na primeira abertura e em Config › Aparência (§6.10) |
 
 O que roda no aparelho hoje é **o launcher** e o **app de música**, que ele
 detecta. Até 15/11/2026 o catálogo saía vazio por construção (os sete apps eram
@@ -123,7 +124,7 @@ schemas/                   # metadata.schema.json + forge.schema.json
 /user/apps/<id>            # apps instalados pela loja / cartão
 scripts/                   # validador, empacotadores, ferramentas do aparelho
 tests/                     # 222 testes JS + suites Python de forge e painel
-docs/                      # 28 páginas (inclui issues-para-outros-repos.md, §1.1)
+docs/                      # 29 páginas (inclui idiomas.md e issues-para-outros-repos.md, §1.1)
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
 
@@ -285,7 +286,7 @@ node tests/run-all.mjs                      # 222 testes JS (lista vem de readdi
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 257 testes
+bash scripts/compilar-launcher.sh --testes  # 321 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 bash scripts/compilar-musica.sh --testes    # 158 testes (120 núcleo + 38 binário)
 bash scripts/compilar-musica.sh --clippy    # -D warnings nos dois crates
@@ -835,6 +836,205 @@ inicialização **não** pode ficar. Seguir o aviso quebraria o boot.
 | `empacotar.mjs` | não muda: o `kind` viaja dentro do pacote |
 | `--catalogo-adicionar` (o próprio aparelho) | recebe o `dir` de quem chama e grava o `kind` junto |
 
+### 6.10 Idioma e tema — os dez do site, e o degrau que faltava no tema
+
+Pedido do dono em 15/11/2026: *"o site já está no ar (fonte giochi-os) lá está
+traduzido para 10 idiomas e sua missão é fazer o launcher multi idiomas. lá onde
+troca o tema terá a opção de trocar o idioma… o tema inicial será inglês (padrão
+comercial) e a troca de tema tem que deixar a base pronta para funcionar."*
+
+Status: os dez existem (§`docs/idiomas.md`), o tema está **ligado ao desenho** e
+tem **um** tema registrado.
+
+#### Os dez são os do site, na ordem do site
+
+`en`, `zh`, `hi`, `es`, `fr`, `ar`, `bn`, `pt`, `ru`, `ur` — os mais falados por
+número total de falantes (Ethnologue), com os mesmos `nome_proprio` do
+`GIOCHI-OS/scripts/lib/i18n.mjs`. Lista diferente obrigaria a mesma pessoa a
+aprender duas, e o idioma escolhido no site não estaria no aparelho.
+
+#### O padrão é inglês, e "não escolhido" ≠ "escolhido como inglês"
+
+`Idioma::PADRAO` é `En`; `Settings::idioma` nasce nele. Mas quem decide a tela de
+boas-vindas é `State::idioma_definido`, e não o idioma em si: um aparelho novo e
+um aparelho configurado em inglês têm o **mesmo** `settings.idioma` e vidas
+diferentes. Devolver o padrão em `preferencias::carregar_idioma()` apagaria essa
+diferença e a boas-vindas nunca apareceria — ou apareceria sempre, que é a mesma
+cegueira com outro sintoma.
+
+#### A tabela fica no núcleo; o desenho pede a chave
+
+Uma linha por chave, dez colunas, em `core/src/idioma.rs`:
+
+```rust
+("set.language", ["Language", "语言", "भाषा", "Idioma", "Langue",
+                  "اللغة", "ভাষা", "Idioma", "Язык", "زبان"]),
+```
+
+`Chave` é `#[repr(usize)]`, então `chave.indice()` é o próprio discriminante e a
+consulta é `O(1)` — e a linha `i` da tabela **tem** de ser a chave `i` do enum. O
+teste `toda_chave_da_tabela_bate_com_o_enum` existe porque consulta por índice
+fora de ordem traduziria a frase errada em silêncio: `Ajustes` aparecendo onde
+devia estar `Idioma`.
+
+A tradução **não** é um `match` por idioma espalhado nas telas: `views` chama
+`t(state, Chave::X)`, e nada mais. É o que permite testar a tabela sem SDL (e é
+o que impede a décima-primeira tradução de nascer num arquivo só).
+
+`Perf::label`, `Filter::label` e `Tab::label` passaram a receber o idioma. Sem
+isso, a aba Jogos ficava com três palavras em português no meio de uma interface
+em chinês — e o rodapé mostrava `Equilibrado` num aparelho em russo.
+
+#### O idioma mora onde se troca o tema, e é dado como o volume
+
+`Config › Aparência` ganhou a linha `Idioma`, entre `Tema` e `Escala`:
+
+| Linha | Ajustável? | O que a seta faz |
+| --- | --- | --- |
+| 0 Tema | **sim** | percorre `Tema::TODOS`; com um tema só, **avisa** que há um |
+| 1 Idioma | **sim** | percorre os dez, com volta, e a interface muda na hora |
+| 2 Escala | não | informa que acompanha o painel |
+
+`settings_rows("appearance")` foi de 2 para 3 e `settings_ajustavel` cobre as
+linhas 0 e 1 — as duas listas continuam sendo consultadas pelo desenho e pelo
+reducer, e o teste `foco_e_desenho_concordam_no_numero_de_linhas` reprova se
+divergirem.
+
+#### A vista de quadros passou a ter **quatro** coisas para congelar
+
+O idioma é a quarta, junto de relógio, bateria e temperatura (§11). Um PC sem
+`/user/.config/giochi/language` desenha a **tela de boas-vindas**; um aparelho
+que já escolheu desenha a Home. Comparar os dois daria uns 60 % e mandaria
+procurar defeito de desenho — exatamente a família de erro que já custou três
+rodadas (§13, "a referência do `verificar` vinha de um binário velho").
+
+Por isso `aparelho.sh` (captura **e** referência), `comparar-launcher-teste.sh`,
+`verificar-star-dust.sh` e `verificar-efeitos.sh` passam `--idioma en` dos dois
+lados. `--idioma` **não grava** nada: se gravasse, cada foto mudaria o estado do
+aparelho.
+
+#### Uma fonte não cobre dez idiomas — e a escolha é por string
+
+O `DejaVuSans.ttf` do aparelho cobre latim, cirílico e parte do árabe; **não**
+cobre chinês, devanágari nem bengali. Trocar a fonte do app por idioma mudaria
+também título de jogo, relógio e número. A saída foi escolher a fonte **por
+texto**: `Painter::fonte_para` usa a primeira da cadeia que tem glifo para todos
+os caracteres, com a resposta memorizada por `(fonte, caractere)` —
+`TTF_GlyphIsProvided` a cada texto, a cada quadro, seria trabalho repetido.
+
+Duas medições mandaram no desenho:
+
+1. **A cadeia tem de incluir as fontes dos dez**, e não só a do idioma escolhido.
+   Medido no PC em 15/11/2026 com a cadeia só do inglês:
+   `aviso: nenhuma das 1 fonte(s) cobre "中文"`. A lista de idiomas desenha os dez
+   nomes nativos o tempo todo — nas boas-vindas e em Config › Aparência —, e é
+   justamente a linha que a pessoa precisa escolher que saía como quadradinhos.
+2. **A principal continua na frente.** Ela cobre o latim, então o título do jogo
+   e o relógio saem exatamente como antes; a fonte da escrita entra só para o
+   texto que a principal não cobre. Sem isso, entrar em chinês mudaria o desenho
+   de tudo que é latino.
+
+Fonte ausente **degrada e avisa**, não impede o app de abrir, e `--fontes` mostra
+a cadeia resolvida com `[NÃO EXISTE]` no que o idioma pede e a imagem não tem.
+
+#### `ar` e `ur`: shaping **funciona**, bidi de parágrafo não
+
+> **Esta seção afirmou o contrário e está corrigida.** Dizia "`SDL2_ttf` sem
+> HarfBuzz, letras isoladas". Era **suposição** — a mesma família das três provas
+> falsas do §13: ninguém tinha rodado `readelf` nem comparado o quadro.
+
+Medido no R35S em 15/11/2026:
+
+```console
+$ readelf -d /usr/lib/libSDL2_ttf-2.0.so.0 | grep -i needed
+ (NEEDED)  Shared library: [libharfbuzz.so.0]
+```
+
+O `defconfig` do R35S liga `BR2_PACKAGE_HARFBUZZ=y` (e o comentário lá já explica
+por quê), e o `SDL2_ttf` o puxa de fato. A contraprova visual: o mesmo texto
+árabe no aparelho por KMSDRM e no PC dá **99,8%** de identidade — se um dos dois
+não fizesse shaping, as formas isoladas contra as conectadas derrubariam esse
+número como a rotação oposta derruba para 10,9%.
+
+| O que | Estado |
+| --- | --- |
+| shaping (`ar`/`ur`): ligaduras e formas inicial/medial/final | **funciona** |
+| bidi de parágrafo misto (árabe + número + latino na mesma linha) | **não existe** — o `SDL2_ttf` faz shaping por *run*, não reordena parágrafo |
+| layout espelhado (margens, âncoras) | **não existe** — `Idioma::dir()` devolve `Rtl` e nenhuma tela inverte |
+
+A distinção importa: rótulo curto puramente árabe sai correto; `launcher 0.1.0`
+dentro de uma linha árabe pode sair com os pedaços fora de ordem, e **fonte não
+conserta bidi** — quem consertaria é o layout honrando `dir`. O `App` avisa no log
+ao abrir num idioma RTL. **Não** tratar isso como regressão de desenho.
+
+#### Tema: a base existe, e é o compilador que cobra o resto
+
+Até 15/11/2026 a linha `Tema` dizia `Giochi Dark (único)` e a seta não fazia
+nada — não por bug, mas porque **nada havia para trocar**. O texto "único" era o
+substituto honesto de uma lista inexistente.
+
+Hoje:
+
+| Peça | Onde |
+| --- | --- |
+| escolha | `core::tema::Tema` (`TODOS`, `proximo`, `anterior`, `ha_escolha`), em `Settings::tema` |
+| paleta | `ui-sdl::theme::Paleta` + `paleta(Tema)` com `match` **exaustivo** |
+| desenho | `theme::accent()`, `theme::text()`, … leem a paleta do quadro (`thread_local`, trocada uma vez por quadro em `App::render`) |
+| persistência | `/user/.config/giochi/theme`, por diferença de estado (`App::sync_tema`) |
+
+Acrescentar um tema agora é: variante em `Tema` + entrada em `TODOS` + um
+`Paleta` novo em `theme.rs`. **Nada mais** — e o `match` de `paleta()` não deixa
+compilar sem a paleta. Foi por isso que as 39 cores de `views.rs` e as de
+`efeitos.rs` deixaram de ser constantes: com uma constante, um segundo tema
+mudaria "algumas" cores, que é pior que nenhuma.
+
+O que **não** é do tema continua constante: `WHITE` e `BLACK` puros (camadas de
+alafa por cima de qualquer cor) e as métricas.
+
+#### Medido no R35S em 15/11/2026, imagem `built_at_utc=2026-11-15T21:00:56Z`
+
+| O que | Resultado |
+| --- | --- |
+| primeira abertura | boas-vindas com **inglês em foco**, sem arquivo de idioma |
+| escolher português (`↓`×7 + `A`) | `idioma: en -> pt` e `/user/.config/giochi/language` = `pt` |
+| segunda abertura | `Portuguese (pt)`, **sem** boas-vindas |
+| Home `pt` por KMSDRM × PC | **99,6%** (antialiasing de glifo) |
+| Config `pt` × PC | **99,7%** |
+| quadro `en` × `pt` no aparelho | **98,4%** — a tradução chega à tela |
+| `aparelho.sh verificar` | **100,0%** |
+| as dez abrem | 10/10 |
+| escolher com **botão físico** (não `--teclas`) | a boas-vindas ficou na tela real e um toque no controle escolheu a linha em foco (inglês) e gravou `en\n`; a execução seguinte abriu sem boas-vindas |
+| trocar idioma com **botão físico** | `GIOCHI_DEBUG_CMDS=1` registrou 8× `Cmd::Nav(Left)` de `evdev` e o arquivo andou `zh`→`en`→`ur`→`ru`→`pt`→`bn`→`ar`→`fr`→`es` — cada troca tem uma tecla como causa |
+| nenhuma escrita espontânea | 15 s de amostragem sem entrada ⇒ arquivo parado; 10 s de trace ⇒ nenhum `TrocarIdioma` sem `Nav`. `sync_idioma` só grava quando o valor muda de fato, que é o que poupa o cartão SD |
+
+**A imagem não tem fonte para três dos dez idiomas.** `find /usr/share/fonts
+-type f | wc -l` = **21**, todas DejaVu, nenhuma Noto/WenQuanYi. O `--fontes`
+mede (não deduz) a cobertura por `TTF_GlyphIsProvided`:
+
+```text
+en/es/fr/pt 15/15 · ru 10/10 · ar 10/10 · zh 5/8 · hi 1/11 · bn 1/10
+```
+
+Chinês, hindi e bengali saem com quadradinho **no R35S de hoje**. O app degrada e
+avisa; o pedido de fonte para a imagem é a issue nº 5 de
+`docs/issues-para-outros-repos.md`. A lista de idiomas continua utilizável porque
+cada linha mostra o nome nativo **e** o nome em inglês à direita — onde a escrita
+não tem glifo, a coluna da direita identifica a linha.
+
+`--fontes` também já esteve errado de dois jeitos, e os dois são reutilizáveis:
+**deduzia** cobertura pelo tamanho da cadeia (dava "sem fonte" para o português) e
+**pedia dispositivo de vídeo** antes de imprimir (`Error: "No available video
+device"` por SSH — a ferramenta se recusava a rodar onde o problema aparece). Hoje
+ele sai antes de `video.window(...)` e mede o glifo.
+
+#### O teclado de senha é QWERTY em qualquer idioma
+
+`KEYBOARD` tem 26 letras latinas fixas. Uma senha de rede em cirílico ou árabe
+não é digitável no aparelho hoje — e o teclado de senha **não pode** virar o
+teclado do idioma por dedução, porque a senha é da rede e não da interface.
+Registrado como limite em `docs/idiomas.md`; a saída é mapear `KEYBOARD` por
+idioma quando houver aparelho com essas redes.
+
 ## 7. Apps sobre a engine: launcher-teste, Star Dust e Música
 
 ### `launcher-teste` (scaffold)
@@ -1295,18 +1495,25 @@ A comparação só vale com a **mesma entrada dos dois lados**: catálogo igual 
 referência no espaço de projeto. As duas coisas já faltaram, e das duas vezes o
 launcher pareceu pior sem ter regredido.
 
-**Três coisas do ambiente mudam e precisam ser congeladas dos dois lados**, senão
-a comparação reprova por hardware: relógio (aparelho sem NTP), bateria e
-temperatura.
+**Quatro coisas do ambiente mudam e precisam ser congeladas dos dois lados**,
+senão a comparação reprova por hardware: relógio (aparelho sem NTP), bateria,
+temperatura e **idioma**.
 
 | Variável | Onde | Efeito |
 | --- | --- | --- |
 | `GIOCHI_HORA_FIXA` | `views::current_clock` | desenha o texto dado |
 | `GIOCHI_BATERIA_FIXA` | `app::tick_energia` | nível fixo |
 | `GIOCHI_TEMPERATURA_FIXA` | idem | °C fixo |
+| `--idioma en` (argumento novo) | `main.rs` → `App::new` | abre no idioma dado e **não** grava |
 
-Antes delas cada uma derrubava a comparação para 99,5–99,9 % e nenhuma era
-regressão de desenho. Depois: **100,0 %** nos dois aparelhos.
+Antes das três primeiras cada uma derrubava a comparação para 99,5–99,9 % e
+nenhuma era regressão de desenho. Depois: **100,0 %** nos dois aparelhos.
+
+O idioma entrou nesta lista em 15/11/2026 por um motivo diferente dos outros três:
+ele não muda sozinho, mas muda **por escolha**, e um PC sem
+`/user/.config/giochi/language` desenha a tela de boas-vindas enquanto o aparelho
+já configurado desenha a Home. Por isso os scripts de captura passam `--idioma en`
+dos dois lados (§6.10).
 
 O `retry` de 99,5 % também já esteve **invertido**:
 `awk 'exit !(p < 99.5)' && break` quebrava o laço quando o resultado era **bom**,
@@ -1675,6 +1882,33 @@ erro**, e a correção certa é converter para o sentinela (`unwrap_or(0)`) em v
 comparar tipos diferentes. O teste que fecha é o do caso silencioso — "sem
 sensor, não registra de novo" — porque o caso barulhento já aparecia na tela.
 
+### A flag de diagnóstico aplicada antes de quem a sobrescreve
+
+`--idioma pt` era lido em `main`, gravado no `State` — e o `App::new`, que roda
+depois, lia `/user/.config/giochi/language`, não achava nada e escrevia o padrão
+**por cima**. O log da mesma execução dizia as duas coisas, em duas linhas
+seguidas:
+
+```text
+--idioma: Portuguese (pt) — não grava
+idioma: English (en) — primeira abertura, o padrão é inglês
+```
+
+E o sintoma que denunciou foi o quadro: `--dump-frame` em `en`, `pt`, `zh` e `ar`
+saía **idêntico pixel a pixel** (0 de 307.200). Um número que não muda quando a
+entrada muda é a definição de ferramenta que não mede o efeito.
+
+A correção não foi reordenar as escritas: foi tornar a sobreposição **parâmetro**
+(`App::new(..., idioma_forcado: Option<Idioma>)`), para não existir ordem em que
+o arquivo vença um pedido explícito. Mesma família do `INSTALAR`/`HOST_SSH` com
+dois significados (§13): enquanto a informação puder chegar por dois caminhos,
+um deles vai vencer sem avisar.
+
+Sanidade que ficou: comparar dois idiomas diferentes **precisa** dar quadros
+diferentes — medido em 15/11/2026, `en × pt` = 7.351 px, `en × zh` = 11.293 px,
+`en × ar` = 13.993 px na tela de Config. Se der zero, o caminho do idioma
+quebrou antes de chegar ao desenho.
+
 ### Ferramenta de diagnóstico que não alcança a tela que diz fotografar
 
 `--tela senha` empilhava o overlay à mão (`overlays.push`) sem passar por
@@ -1734,6 +1968,9 @@ E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtr
 | launcher-teste 100 % pixel a pixel | **medido**, 4 tamanhos + 6 telas |
 | `.pyz` e loja nos três sistemas | **medido** no CI (7 e 4 jobs verdes) |
 | assinatura verificada no aparelho | **medido**: 20 MB de RSS, 0,01 s |
+| launcher multi-idioma (10 idiomas) | **medido** no R35S em 15/11/2026: boas-vindas na 1ª abertura, `en -> pt` pelo caminho real, 2ª abertura sem boas-vindas, Home `pt` **99,6%** e Config `pt` **99,7%** contra o PC, `verificar` **100,0%**, os dez abrem |
+| escolha do idioma por **botão físico** | **medido**: um toque no controle na boas-vindas gravou `en\n` e a execução seguinte abriu sem perguntar — o caminho `input_evdev`, não o `--teclas` |
+| cobertura de fonte por idioma no aparelho | **medido** com `--fontes` (`TTF_GlyphIsProvided`): `pt/ru/ar` completos, `zh` 5/8, `hi` 1/11, `bn` 1/10 — falta fonte na imagem (issue nº 5) |
 
 **Regra de honestidade:** nada aqui pode ser declarado "funciona" sem ter sido
 executado. "Compila" e "roda" são afirmações diferentes — e o `poweroff` já caiu
@@ -1765,7 +2002,12 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta só o `update_config=1` na imagem (§17) |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
 | analógico | **não lido** — normalizar exige `absinfo` por ioctl |
-| tema em tempo de execução | **não existe** — `theme::ACCENT` é `const` em centenas de lugares, e há **um** tema |
+| tema em tempo de execução | **a base existe** (15/11/2026): `Tema` no estado, `Paleta` + `theme::accent()` lendo o tema do quadro, arquivo em `/user/.config/giochi/theme`. Falta o **segundo** tema — hoje há **um**, e a linha da Config o anuncia como único |
+| idioma | **feito**: os dez do site, padrão inglês, boas-vindas na primeira abertura e troca em Config › Aparência (§6.10) |
+| fonte para `zh`/`hi`/`bn` | **falta na imagem** — medido no R35S: `zh` 5/8, `hi` 1/11, `bn` 1/10 de cobertura. Pedido nº 5 em `docs/issues-para-outros-repos.md` |
+| shaping de `ar`/`ur` | **funciona** — HarfBuzz presente no R35S (`readelf` medido) e 99,8% de identidade contra o PC |
+| bidi de parágrafo misto / layout espelhado | **não existe** — `SDL2_ttf` não reordena parágrafo e nenhuma tela inverte âncora. Fonte não conserta |
+| teclado de senha em outros alfabetos | **não existe** — `KEYBOARD` é QWERTY latino fixo; senha cirílica/árabe só pelo PC |
 | `bash -n` no `build-device.sh` | fica no **Giochi System**, outro repositório |
 
 ## 17. Canal com o Giochi System
@@ -1787,6 +2029,13 @@ prontos, com medição, arquivo e linha, consequência e como conferir. Resumo:
 | 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** |
 | 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso |
 | 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente |
+| 5 | System | fontes de CJK/devanágari/bengali — `BR2_PACKAGE_WQY_ZENHEI=y` (já na árvore) + 2 arquivos de 224/200 KB | **o mais visível**: 3 dos 10 idiomas em quadradinhos |
+
+A #5 é a mais barata das cinco e a única com **verificação ponta a ponta do lado
+de cá**: simulando o que o pacote faria (fonte em `/usr/share/fonts/wqy-zenhei/`),
+o `--fontes` no R35S foi de **5/8 para 8/8** e o quadro mudou 8.557 px, com 4.760
+no texto chinês — e **0** na linha do hindi, que é o controle negativo. Ligar o
+pacote resolve sem segunda rodada do app.
 
 **O pedido #2 CORRIGE o anterior, e a correção é do meu lado.** Até 15/11/2026
 esta seção pedia "`update_config=1` em `/etc/wpa_supplicant.conf`" como se o

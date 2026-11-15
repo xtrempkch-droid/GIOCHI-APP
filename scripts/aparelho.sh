@@ -446,6 +446,14 @@ gerar_referencia() {
   rm -f "$destino"
   local args=(--dump-frame "$destino")
   [ -n "$tamanho" ] && args+=(--tamanho "$tamanho")
+  # Idioma congelado dos dois lados, como o relógio, a bateria e a temperatura.
+  #
+  # Desde 15/11/2026 o idioma é escolha gravada em `/user/.config/giochi/language`
+  # e, sem arquivo, o launcher abre na tela de boas-vindas. Um PC sem esse arquivo
+  # desenharia a boas-vindas enquanto o aparelho desenha a Home — e o número
+  # (uns 60 %) mandaria procurar defeito de desenho. `--idioma en` é o mesmo dos
+  # dois lados e não grava nada.
+  args+=(--idioma en)
   # O catálogo entra na referência.
   #
   # Sem isto os dois lados desenham catálogos diferentes: o aparelho usa
@@ -1486,7 +1494,7 @@ cmd_verificar() {
       mkdir -p /run/giochi; touch /run/giochi/dev-free-console
       matar_launcher || true
       rm -f /tmp/verif.bmp
-      env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 $DESTINO_BIN --dump-frame /tmp/verif.bmp >/dev/null 2>&1
+      env SDL_VIDEODRIVER=kmsdrm SDL_RENDER_DRIVER=software GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 $DESTINO_BIN --idioma en --dump-frame /tmp/verif.bmp >/dev/null 2>&1
       [ -s /tmp/verif.bmp ] && echo GERADO
     " | grep -q GERADO; then
     if "${SCP_BIN[@]}" "${SCP_OPTS[@]}" -q "root@$HOST:/tmp/verif.bmp" "$tmp_captura/frame.bmp" 2>/dev/null; then
@@ -1721,7 +1729,7 @@ cmd_verificar_teste() {
       exit 0
     fi
     for t in$lista; do
-      GIOCHI_GLES=0 GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 SDL_VIDEODRIVER=kmsdrm $remoto --demo --tela \$t \
+      GIOCHI_GLES=0 GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 SDL_VIDEODRIVER=kmsdrm $remoto --demo --idioma en --tela \$t \
         --dump-frame /tmp/teste-\$t.bmp >/tmp/teste-\$t.log 2>&1
       echo \"\$t: status=\$? \$(grep -c . /tmp/teste-\$t.bmp 2>/dev/null; ls -l /tmp/teste-\$t.bmp 2>/dev/null | awk '{print \$5\" bytes\"}')\"
     done
@@ -1773,7 +1781,7 @@ cmd_verificar_teste() {
       # `LD_LIBRARY_PATH`, não acha `libSDL2` e não grava BMP. O sintoma era
       # "comparação ?%", que manda procurar defeito no aparelho.
       env SDL_VIDEODRIVER=dummy GIOCHI_HORA_FIXA=12:00 GIOCHI_BATERIA_FIXA=50 GIOCHI_TEMPERATURA_FIXA=40 LD_LIBRARY_PATH="$libs" "$referencia" \
-        --tamanho "$painel" --demo --tela "$tela" \
+        --tamanho "$painel" --demo --idioma en --tela "$tela" \
         --dump-frame "$ref" >/dev/null 2>&1
       if [ ! -s "$ref" ]; then
         falha "$tela: não gerei a referência no PC (binário sem texto?)"

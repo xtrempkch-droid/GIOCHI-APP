@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 use crate::deteccao::Tipo;
 use crate::focus::{Focus, Zone};
+use crate::idioma::Idioma;
+use crate::tema::Tema;
 
 /// Abas do topo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,13 +32,17 @@ impl Tab {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Tab::Home => "Home",
-            Tab::Library => "Jogos",
-            Tab::Apps => "Apps",
-            Tab::Settings => "Config",
-        }
+    pub fn label(self, idioma: Idioma) -> &'static str {
+        use crate::idioma::Chave;
+        crate::idioma::texto(
+            idioma,
+            match self {
+                Tab::Home => Chave::TabHome,
+                Tab::Library => Chave::TabLibrary,
+                Tab::Apps => Chave::TabApps,
+                Tab::Settings => Chave::TabSettings,
+            },
+        )
     }
 
     /// Aba vizinha, com wrap. `delta` só faz sentido em -1 ou 1.
@@ -79,6 +85,14 @@ pub enum Overlay {
     WifiPassword,
     /// Dispositivos Bluetooth descobertos.
     BtList,
+    /// Escolha do idioma na primeira abertura.
+    ///
+    /// Existe porque um aparelho que sai da caixa em inglês sem perguntar nada
+    /// deixa o comprador que não lê inglês parado na primeira tela. A escolha
+    /// acontece **antes** de o resto da interface aparecer traduzido: o
+    /// overlay é desenhado já no idioma que está em foco na lista, então quem
+    /// está escolhendo vê o próprio idioma antes de confirmar.
+    BoasVindas,
 }
 
 impl Overlay {
@@ -91,6 +105,7 @@ impl Overlay {
             Overlay::WifiList => Zone::WifiNetworks,
             Overlay::WifiPassword => Zone::PasswordKeys,
             Overlay::BtList => Zone::BtDevices,
+            Overlay::BoasVindas => Zone::IdiomaLista,
         }
     }
 }
@@ -113,12 +128,14 @@ impl Perf {
         all[(current + delta).rem_euclid(len) as usize]
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Perf::Eco => "Eco",
-            Perf::Balanced => "Balanced",
-            Perf::Boost => "Boost",
-        }
+    pub fn label(self, idioma: Idioma) -> &'static str {
+        use crate::idioma::Chave;
+        let chave = match self {
+            Perf::Eco => Chave::PerfEco,
+            Perf::Balanced => Chave::PerfBalanced,
+            Perf::Boost => Chave::PerfBoost,
+        };
+        crate::idioma::texto(idioma, chave)
     }
 }
 
@@ -133,12 +150,21 @@ pub enum Filter {
 impl Filter {
     pub const ALL: [Filter; 3] = [Filter::All, Filter::Favorites, Filter::Recent];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Filter::All => "Todos",
-            Filter::Favorites => "Favoritos",
-            Filter::Recent => "Recentes",
-        }
+    /// Rótulo no idioma da interface.
+    ///
+    /// Era `&'static str` em português fixo. Com dez idiomas, o rótulo tem de
+    /// passar pelo mesmo caminho de todo o resto — senão a aba Jogos fica com
+    /// três palavras em português no meio de uma interface em chinês.
+    pub fn label(self, idioma: Idioma) -> &'static str {
+        use crate::idioma::Chave;
+        crate::idioma::texto(
+            idioma,
+            match self {
+                Filter::All => Chave::FilterAll,
+                Filter::Favorites => Chave::FilterFavorites,
+                Filter::Recent => Chave::FilterRecent,
+            },
+        )
     }
 }
 
@@ -318,6 +344,10 @@ pub struct Settings {
     pub wifi: bool,
     pub bluetooth: bool,
     pub hud: bool,
+    /// Idioma da interface. Padrão **inglês** — ver [`crate::idioma`].
+    pub idioma: Idioma,
+    /// Tema visual. A paleta é do `ui-sdl`; aqui mora a escolha.
+    pub tema: Tema,
 }
 
 impl Default for Settings {
@@ -329,6 +359,8 @@ impl Default for Settings {
             wifi: true,
             bluetooth: true,
             hud: false,
+            idioma: Idioma::PADRAO,
+            tema: Tema::PADRAO,
         }
     }
 }
@@ -410,6 +442,14 @@ pub struct State {
     pub grade_biblioteca: crate::viewport::Grade,
     /// Idem para a aba Apps.
     pub grade_apps: crate::viewport::Grade,
+    /// O idioma já foi escolhido por alguém (ou veio do arquivo)?
+    ///
+    /// `false` só na primeira abertura de um aparelho sem
+    /// `/user/.config/giochi/language` (e sem `--idioma` na linha de comando).
+    /// É o que autoriza a tela de boas-vindas: reapresentá-la a cada boot
+    /// obrigaria quem já escolheu a escolher de novo, e um overlay que
+    /// reaparece é indistinguível de um app que esqueceu a configuração.
+    pub idioma_definido: bool,
 }
 
 impl State {
@@ -436,7 +476,20 @@ impl State {
             lancar: None,
             grade_biblioteca: crate::viewport::Grade::default(),
             grade_apps: crate::viewport::Grade::default(),
+            idioma_definido: false,
         }
+    }
+
+    /// Estado de teste/desenvolvimento: idioma já definido.
+    ///
+    /// Os testes de núcleo descrevem o launcher **em uso**, não a primeira
+    /// abertura; quem exercita as boas-vindas diz isso explicitamente com
+    /// `idioma_definido: false`.
+    pub fn new_com_idioma(games: Vec<Game>, apps: Vec<App>, idioma: Idioma) -> Self {
+        let mut s = Self::new(games, apps);
+        s.settings.idioma = idioma;
+        s.idioma_definido = true;
+        s
     }
 
     /// Overlay no topo da pilha, se houver.
@@ -509,6 +562,10 @@ impl State {
             Zone::QuickSettings => QUICK_SETTINGS_ROWS,
             Zone::GameDetailActions => GAME_DETAIL_ACTIONS,
             Zone::PowerActions => POWER_ACTIONS,
+            // Uma linha por idioma: a lista **é** o `Idioma::TODOS`, então não
+            // há número escrito à mão para envelhecer quando o décimo primeiro
+            // idioma entrar.
+            Zone::IdiomaLista => Idioma::TODOS.len(),
         }
     }
 }
@@ -520,7 +577,10 @@ impl State {
 /// carrossel dessincronizado: dois lugares descrevendo a mesma lista.
 pub fn settings_rows(category: usize) -> usize {
     match SETTINGS_CATEGORIES.get(category).copied().unwrap_or("about") {
-        "appearance" => 2,
+        // Tema, Idioma e Escala. O idioma entrou aqui junto com o tema porque é
+        // onde a pessoa procura: a linha de aparência é a mesma que se abre
+        // para trocar o visual.
+        "appearance" => 3,
         "sound" => 2,
         "network" => 2,
         "controller" => 7,
@@ -547,8 +607,13 @@ pub fn settings_ajustavel(category: usize, index: usize) -> bool {
     let categoria = SETTINGS_CATEGORIES.get(category).copied().unwrap_or("");
     matches!(
         (categoria, index),
+        // Tema: ← → percorre `Tema::TODOS`. Com um tema só o valor não muda,
+        // mas a linha continua sendo a mesma quando o segundo entrar.
+        ("appearance", 0)
+        // Idioma: ← → percorre os dez e o efeito é imediato na tela inteira.
+        | ("appearance", 1)
         // Volume geral: ±5 por passo.
-        ("sound", 0)
+        | ("sound", 0)
         // Desempenho: Eco ↔ Balanceado ↔ Boost.
         | ("system", 1)
     )

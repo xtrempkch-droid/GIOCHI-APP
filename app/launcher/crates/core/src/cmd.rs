@@ -169,6 +169,20 @@ pub enum Cmd {
     /// Escolheu um dispositivo da lista para parear.
     ParearBt(usize),
     ResultadoBt(Option<String>),
+
+    // ── idioma e tema ────────────────────────────────────────
+    //
+    // Os dois são escolha do usuário e persistem em `/user/.config/giochi/`.
+    // Viajam como comando porque quem grava o arquivo é o `ui-sdl` — o núcleo
+    // não toca em disco, e o reducer continua puro.
+    //
+    // O idioma tem **dois** comandos de propósito: `TrocarIdioma` é a linha da
+    // aba Config, e `IdiomaEscolhido` é a tela de boas-vindas. Separados porque
+    // a boas-vindas fecha ao escolher e a linha de Config não muda de tela; um
+    // comando só obrigaria o reducer a adivinhar onde estava o usuário.
+    TrocarIdioma(crate::idioma::Idioma),
+    IdiomaEscolhido(crate::idioma::Idioma),
+    TrocarTema(crate::tema::Tema),
 }
 
 impl Cmd {
@@ -237,7 +251,10 @@ impl Cmd {
             | Cmd::ConectarSenha
             | Cmd::CancelarSenha
             | Cmd::MostrarSenha
-            | Cmd::ParearBt(_) => true,
+            | Cmd::ParearBt(_)
+            | Cmd::TrocarIdioma(_)
+            | Cmd::IdiomaEscolhido(_)
+            | Cmd::TrocarTema(_) => true,
 
             // Relógio do HUD, bateria, temperatura, presença de controle, boot
             // e o próprio despertar não vêm de um dedo ou de um botão.

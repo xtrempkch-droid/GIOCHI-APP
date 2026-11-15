@@ -603,7 +603,7 @@ pub fn destaque(state: &State) -> Color {
             return theme::game_accent(game.id);
         }
     }
-    theme::ACCENT
+    theme::accent()
 }
 
 /// Converte a zona em foco no `Hit` correspondente, e o índice em posição.
@@ -632,6 +632,11 @@ fn alvo_em_foco(zone: Zone, indice: usize) -> views::Hit {
         Zone::QuickSettings => views::Hit::QsRow(indice),
         Zone::GameDetailActions => views::Hit::DetailButton(indice),
         Zone::PowerActions => views::Hit::PowerButton(indice),
+        // A lista de idiomas das boas-vindas. Entrou em 15/11/2026 e foi o
+        // compilador que apontou a falta: `match` exaustivo sobre `Zone` é o que
+        // impede a camada de efeitos de envelhecer sem ninguém notar — o mesmo
+        // motivo pelo qual a zona nova não pode ser acrescentada em silêncio.
+        Zone::IdiomaLista => views::Hit::Idioma(indice),
     }
 }
 
@@ -726,7 +731,7 @@ mod testes {
         // Sem `desenhar` a camada não faz nada; o que dá para provar sem GL é
         // que ela se declara inativa e não acumula partícula.
         e.rajada(640, 480);
-        e.avancar(10, 640, 480, theme::ACCENT);
+        e.avancar(10, 640, 480, theme::accent());
         assert_eq!(e.desenhos(), 0);
         assert!(e.riscos.is_empty(), "rajada desligada não pode criar risco");
     }
@@ -767,7 +772,7 @@ mod testes {
         let mut e = Efeitos::novo(true);
         e.semear(640, 480);
         for _ in 0..2000 {
-            e.avancar(1, 640, 480, theme::ACCENT);
+            e.avancar(1, 640, 480, theme::accent());
         }
         assert!(e.brasas() <= 130, "sem teto: {}", e.brasas());
     }
@@ -778,7 +783,7 @@ mod testes {
         e.rajada(640, 480);
         assert_eq!(e.riscos.len(), 10, "a rajada é de 10 riscos");
         for _ in 0..20 {
-            e.avancar(1, 640, 480, theme::ACCENT);
+            e.avancar(1, 640, 480, theme::accent());
         }
         assert!(e.riscos.is_empty(), "risco sobreviveu à vida de 14 quadros");
     }

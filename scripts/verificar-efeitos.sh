@@ -27,6 +27,15 @@
 #
 # `dummy` não tem OpenGL e o launcher-teste pede um contexto; `offscreen` tem
 # EGL por software e desenha de verdade.
+# ## Aqui o idioma **não** se congela com `--idioma en` (e os outros três scripts
+# ## congelam)
+#
+# Este script exercita o `launcher-teste`, que não tem i18n: ele usa o
+# `views.rs` do launcher por `#[path]` e o estado nasce com `Idioma::PADRAO` —
+# desenha em inglês sempre. Passar `--idioma` ali não é "inofensivo": o binário
+# não conhece a chave, imprime a ajuda e sai com erro, e o script reprovaria por
+# um argumento que ele mesmo inventou. Medido em 15/11/2026, logo depois de eu
+# acrescentar a chave aos quatro scripts de captura.
 set -uo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

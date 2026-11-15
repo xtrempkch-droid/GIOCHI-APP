@@ -36,6 +36,15 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
     match cmd {
         Cmd::Nav(dir) => nav(state, dir),
         Cmd::Confirm => confirm(state),
+        // `B` nas boas-vindas **escolhe o inglês** em vez de não fazer nada.
+        //
+        // O rodapé anuncia "B mantém inglês": é a saída de quem não quer
+        // escolher agora, e sem ela a única tecla que sai da tela seria o `A` —
+        // deixando `B` morto numa tela onde ele aparece escrito. Com a escolha
+        // gravada, a tela não volta no próximo boot.
+        Cmd::Back if state.top_overlay() == Some(Overlay::BoasVindas) => {
+            escolher_idioma(state, crate::idioma::Idioma::PADRAO)
+        }
         Cmd::Back => go_back(state),
         // `X` no teclado de senha mostra o que foi digitado.
         //
@@ -107,6 +116,10 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
             },
             ..state
         },
+        // ── idioma e tema ────────────────────────────────────
+        Cmd::TrocarIdioma(idioma) => trocar_idioma(state, idioma),
+        Cmd::IdiomaEscolhido(idioma) => escolher_idioma(state, idioma),
+        Cmd::TrocarTema(tema) => trocar_tema(state, tema),
         Cmd::AdjustVolume(delta) => {
             let value = state.settings.volume as i16 + delta as i16 * 5;
             set_volume(state, value)
@@ -158,7 +171,7 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
                     };
                     let mut s = go_back(s);
                     s.sem_fio.limpar_senha();
-                    toast(s, "Conectado")
+                    toast_chave(s, crate::idioma::Chave::ToastConnected)
                 }
                 Some(motivo) => toast(s, &motivo),
             }
@@ -188,7 +201,12 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
             if ssid.is_empty() {
                 s
             } else {
-                toast(s, &format!("Conectando a {ssid}..."))
+                let msg = crate::idioma::texto_com(
+                    s.settings.idioma,
+                    crate::idioma::Chave::ToastConnecting,
+                    &ssid,
+                );
+                toast(s, &msg)
             }
         }
         // Conectou, mas não deu para salvar: o próximo boot pede a senha de
@@ -206,10 +224,12 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
                 },
                 ..s
             };
-            toast(
-                s,
-                &format!("Conectado a {ssid} — a rede não foi salva: vai pedir a senha de novo"),
-            )
+            let msg = crate::idioma::texto_com(
+                s.settings.idioma,
+                crate::idioma::Chave::ToastNotSaved,
+                &ssid,
+            );
+            toast(s, &msg)
         }
         Cmd::CancelarSenha => {
             let mut s = go_back(state);
@@ -249,7 +269,7 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
                     },
                     ..state
                 };
-                toast(s, "Pareado")
+                toast_chave(s, crate::idioma::Chave::ToastPaired)
             }
             Some(motivo) => toast(state, &motivo),
         },
@@ -346,7 +366,14 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         Cmd::OpenApp(index) => {
             let title = state.apps.get(index).map(|app| app.title.clone());
             match title {
-                Some(title) => toast(state, &format!("Abrindo {title}...")),
+                Some(title) => {
+                    let msg = crate::idioma::texto_com(
+                        state.settings.idioma,
+                        crate::idioma::Chave::ToastOpening,
+                        &title,
+                    );
+                    toast(state, &msg)
+                }
                 None => state,
             }
         }
@@ -479,6 +506,31 @@ fn nav(state: State, dir: Dir) -> State {
                     ..state.settings
                 },
                 ..state
+            },
+            // Aparência: linha 0 é o tema, linha 1 é o idioma. As duas já
+            // existiam na tela como texto ("Giochi Dark (único)"); agora a seta
+            // age nelas pelo mesmo caminho de dado que o volume, e o valor é
+            // lido do estado — não de uma cópia na view.
+            "appearance" => match state.focus.index {
+                0 => {
+                    let atual = state.settings.tema;
+                    let novo = if passo > 0 {
+                        atual.proximo()
+                    } else {
+                        atual.anterior()
+                    };
+                    trocar_tema(state, novo)
+                }
+                1 => {
+                    let atual = state.settings.idioma;
+                    let novo = if passo > 0 {
+                        atual.proximo()
+                    } else {
+                        atual.anterior()
+                    };
+                    trocar_idioma(state, novo)
+                }
+                _ => state,
             },
             _ => state,
         };
@@ -643,7 +695,12 @@ fn confirm(state: State) -> State {
             let alvo = state.focused_game().map(|game| (game.id, game.title.clone()));
             match alvo {
                 Some((id, title)) => {
-                    let s = toast(state, &format!("Iniciando {title}..."));
+                    let msg = crate::idioma::texto_com(
+                        state.settings.idioma,
+                        crate::idioma::Chave::ToastStarting,
+                        &title,
+                    );
+                    let s = toast(state, &msg);
                     State {
                         lancar: Some(Pedido::jogo(id)),
                         ..s
@@ -679,7 +736,12 @@ fn confirm(state: State) -> State {
             let alvo = state.apps.get(index).map(|app| (index, app.title.clone()));
             match alvo {
                 Some((indice, title)) => {
-                    let s = toast(state, &format!("Abrindo {title}..."));
+                    let msg = crate::idioma::texto_com(
+                        state.settings.idioma,
+                        crate::idioma::Chave::ToastOpening,
+                        &title,
+                    );
+                    let s = toast(state, &msg);
                     State {
                         lancar: Some(Pedido::app(indice as u32)),
                         ..s
@@ -712,14 +774,46 @@ fn confirm(state: State) -> State {
                     // Volume não abre tela: o ajuste é aqui mesmo, com ← →.
                     // Um overlay para um número seria mais passos, não menos.
                     let atual = state.settings.volume;
-                    toast(state, &format!("Volume: {atual}% — use ← →"))
+                    let msg = crate::idioma::texto_com(
+                        state.settings.idioma,
+                        crate::idioma::Chave::ToastVolume,
+                        &atual.to_string(),
+                    );
+                    toast(state, &msg)
                 }
-                ("appearance", 0) => toast(state, "Tema único por enquanto"),
-                ("appearance", 1) => toast(state, "A escala acompanha o painel"),
+                // Aparência: 0 é o tema, 1 é o idioma, 2 é a escala.
+                //
+                // A linha do idioma **não abre lista**: ← → já percorre os dez
+                // e o efeito é imediato, então uma tela a mais só acrescentaria
+                // passos entre a tecla e o resultado.
+                ("appearance", 0) => {
+                    let chave = if state.settings.tema.ha_escolha() {
+                        crate::idioma::Chave::ToastUseArrows
+                    } else {
+                        crate::idioma::Chave::ToastThemeSingle
+                    };
+                    toast_chave(state, chave)
+                }
+                ("appearance", 1) => {
+                    toast_chave(state, crate::idioma::Chave::ToastUseArrows)
+                }
+                ("appearance", _) => {
+                    toast_chave(state, crate::idioma::Chave::ToastScaleFollows)
+                }
                 ("system", 0) => toast(state, "launcher 0.1.0"),
-                _ => toast(state, "Use ← → para ajustar"),
+                _ => toast_chave(state, crate::idioma::Chave::ToastUseArrows),
             }
         }
+
+        // Boas-vindas: `A` escolhe o idioma em foco.
+        //
+        // A lista é `Idioma::TODOS`, a mesma que a view desenha — dois lugares
+        // descrevendo a mesma lista é como o carrossel ficou dessincronizado do
+        // foco; aqui o índice vem do enum e a view só desenha a mesma ordem.
+        Zone::IdiomaLista => match crate::idioma::Idioma::TODOS.get(index) {
+            Some(idioma) => escolher_idioma(state, *idioma),
+            None => state,
+        },
 
         // Lista de redes: a última linha é "procurar de novo".
         Zone::WifiNetworks => {
@@ -881,7 +975,12 @@ fn confirm(state: State) -> State {
                     .map(|game| (game.id, game.title.clone()));
                 match alvo {
                     Some((id, title)) => {
-                        let s = toast(go_back(state), &format!("Iniciando {title}..."));
+                        let msg = crate::idioma::texto_com(
+                            state.settings.idioma,
+                            crate::idioma::Chave::ToastStarting,
+                            &title,
+                        );
+                        let s = toast(go_back(state), &msg);
                         State {
                             lancar: Some(Pedido::jogo(id)),
                             ..s
@@ -891,7 +990,7 @@ fn confirm(state: State) -> State {
                 }
             }
             1 => toggle_favorite(state),
-            2 => toast(state, "Opções do jogo"),
+            2 => toast_chave(state, crate::idioma::Chave::ToastGameOptions),
             3 => go_back(state),
             _ => state,
         },
@@ -1191,6 +1290,74 @@ fn set_brightness(state: State, value: i16) -> State {
     }
 }
 
+// ── idioma e tema ────────────────────────────────────────────
+//
+// As duas escolhas se parecem e **não** são iguais:
+//
+// - o idioma muda a tela inteira na hora e tem dois caminhos de chegada (linha
+//   da aba Config e tela de boas-vindas); quem grava o arquivo é o `ui-sdl`,
+//   porque o núcleo não toca em disco;
+// - o tema muda a paleta e, com um tema só, não muda nada — a resposta certa
+//   ali é **avisar** que há um tema, como já fazia o "Giochi Dark (único)", em
+//   vez de deixar a seta sem efeito nenhum.
+
+/// Troca o idioma pela linha da aba Config (a tela de boas-vindas não abre).
+fn trocar_idioma(state: State, idioma: crate::idioma::Idioma) -> State {
+    let s = State {
+        settings: Settings { idioma, ..state.settings },
+        idioma_definido: true,
+        ..state
+    };
+    let nome = idioma.nome_proprio();
+    let msg = crate::idioma::texto_com(s.settings.idioma, crate::idioma::Chave::ToastLanguage, nome);
+    toast(s, &msg)
+}
+
+/// Escolhe o idioma na tela de boas-vindas e fecha a tela.
+///
+/// Fecha **porque a escolha acabou de ser feita**: manter a boas-vindas aberta
+/// depois do `A` faria o usuário apertar de novo para nada, e a interface já
+/// está traduzida atrás do painel.
+fn escolher_idioma(state: State, idioma: crate::idioma::Idioma) -> State {
+    let s = State {
+        settings: Settings { idioma, ..state.settings },
+        idioma_definido: true,
+        overlays: state
+            .overlays
+            .iter()
+            .copied()
+            .filter(|o| *o != Overlay::BoasVindas)
+            .collect(),
+        ..state
+    };
+    let s = if s.top_overlay().is_some() {
+        s
+    } else {
+        State {
+            focus: Focus::new(s.tab.zone()),
+            ..s
+        }
+    };
+    let nome = idioma.nome_proprio();
+    let msg = crate::idioma::texto_com(s.settings.idioma, crate::idioma::Chave::ToastLanguage, nome);
+    toast(s, &msg)
+}
+
+/// Troca o tema; com um tema só, diz que há um.
+fn trocar_tema(state: State, tema: crate::tema::Tema) -> State {
+    let s = State {
+        settings: Settings { tema, ..state.settings },
+        ..state
+    };
+    if !tema.ha_escolha() {
+        let msg = crate::idioma::texto(s.settings.idioma, crate::idioma::Chave::ToastThemeSingle);
+        return toast(s, msg);
+    }
+    // Com duas opções o toast passa a nomear o tema escolhido, que é a
+    // informação que a tela não dá sozinha numa lista curta.
+    toast(s, tema.rotulo())
+}
+
 /// Digita um caractere no campo **visível**.
 ///
 /// Quando o teclado de senha está aberto, o campo visível é a senha e a busca
@@ -1240,6 +1407,17 @@ fn toast(state: State, message: &str) -> State {
         toast: Toast::show(message),
         ..state
     }
+}
+
+/// Toast com uma chave traduzida, lendo o idioma **antes** de consumir o estado.
+///
+/// `toast(state, texto(state.settings.idioma, …))` não compila: a ordem de
+/// avaliação move o estado para `toast` primeiro. E `&'static str` de retorno de
+/// `texto` não segura empréstimo, então duas linhas resolvem sem clonar o
+/// estado inteiro — que tem o catálogo dentro.
+fn toast_chave(state: State, chave: crate::idioma::Chave) -> State {
+    let msg = crate::idioma::texto(state.settings.idioma, chave);
+    toast(state, msg)
 }
 
 /// Constrói um estado pronto para teste.
@@ -2067,10 +2245,20 @@ mod tests {
                         Zone::SettingsContent,
                         "categoria {cat} linha {linha}: ajustável, ← deve ajustar"
                     );
-                    assert_ne!(
-                        s.settings, antes.settings,
+                    // O efeito tem de ser **visível**: ou o valor mudou, ou a
+                    // tela disse por que não mudou.
+                    //
+                    // O tema é o caso do segundo tipo — há **um** tema, então
+                    // nenhuma seta muda a paleta, e a resposta certa é o aviso
+                    // "tema único" em vez de silêncio. Foi o silêncio que gerou
+                    // a queixa original ("aperto a seta e não faz nada"); um
+                    // teste que exigisse mudança de valor reprovaria a única
+                    // resposta honesta possível com um tema só.
+                    assert!(
+                        s.settings != antes.settings || s.toast.visible,
                         "categoria {cat} linha {linha}: declarada ajustável, mas ← \
-                         não mudou nada — é o 'aperto e não faz nada' de novo"
+                         não mudou o valor nem avisou nada — é o 'aperto e não faz \
+                         nada' de novo"
                     );
                     continue;
                 }
@@ -2212,16 +2400,23 @@ mod tests {
     #[test]
     fn linha_nao_ajustavel_nao_tem_rodape_de_ajuste() {
         // `settings_ajustavel` é consultada pelo rodapé; se ela dissesse "sim"
-        // para o tema, a tela voltaria a prometer um ajuste que não existe.
-        for (cat, _) in crate::state::SETTINGS_CATEGORIES.iter().enumerate() {
-            let nome = crate::state::SETTINGS_CATEGORIES[cat];
-            for linha in 0..crate::state::settings_rows(cat) {
-                let ajustavel = crate::state::settings_ajustavel(cat, linha);
-                if nome == "appearance" {
-                    assert!(!ajustavel, "aparência não tem valor ajustável");
-                }
-            }
-        }
+        // numa linha que não ajusta nada, a tela voltaria a prometer um ajuste
+        // que não existe.
+        //
+        // Aparência passou a ter **duas** linhas ajustáveis em 15/11/2026 —
+        // tema e idioma —, pelo pedido do dono: o idioma mora onde se troca o
+        // visual. O que continua valendo é a regra: a terceira linha (escala)
+        // não ajusta nada e o rodapé não anuncia `← →` nela.
+        let aparência = crate::state::SETTINGS_CATEGORIES
+            .iter()
+            .position(|c| *c == "appearance")
+            .expect("a categoria aparência existe");
+        assert!(crate::state::settings_ajustavel(aparência, 0), "tema ajusta");
+        assert!(crate::state::settings_ajustavel(aparência, 1), "idioma ajusta");
+        assert!(
+            !crate::state::settings_ajustavel(aparência, 2),
+            "escala acompanha o painel: anunciar ajuste nela seria promessa vazia"
+        );
     }
 
     #[test]
@@ -2316,9 +2511,18 @@ mod tests {
             "o alvo fica: é ele que `ResultadoWifi` usa para dizer qual rede conectou"
         );
         assert!(
-            format!("{:?}", s3.toast).contains("Conectando"),
+            !s3.toast.message.is_empty() && s3.toast.visible,
             "sem um aviso, fechar a tela pareceria desistência: {:?}",
             s3.toast
+        );
+        assert_eq!(
+            s3.toast.message,
+            crate::idioma::texto_com(
+                s3.settings.idioma,
+                crate::idioma::Chave::ToastConnecting,
+                "Kill.exe"
+            ),
+            "e o aviso nomeia a rede, no idioma escolhido"
         );
     }
 
@@ -2425,9 +2629,177 @@ mod tests {
         assert_eq!(s.top_overlay(), Some(Overlay::WifiList), "volta para a lista");
         assert!(s.sem_fio.senha.is_empty(), "a senha não fica no estado");
         assert_eq!(s.sem_fio.conectado.as_deref(), Some("Kill.exe"));
-        let msg = format!("{:?}", s.toast);
-        assert!(msg.contains("não foi salva"), "o aviso tem de estar no toast: {msg}");
-        assert!(msg.contains("Kill.exe"), "e nomear a rede: {msg}");
+        // A mensagem é comparada com **a tradução da chave**, não com um texto
+        // fixo: o padrão do aparelho é inglês, e amarrar o teste a uma frase
+        // faria a tradução para os dez idiomas reprovar o reducer sem que ele
+        // tivesse mudado de comportamento.
+        let esperado = crate::idioma::texto_com(
+            s.settings.idioma,
+            crate::idioma::Chave::ToastNotSaved,
+            "Kill.exe",
+        );
+        assert_eq!(s.toast.message, esperado, "o aviso tem de estar no toast");
+    }
+
+    // ── idioma e tema ────────────────────────────────────────
+
+    /// Estado da **primeira abertura**: idioma ainda não escolhido e a tela de
+    /// boas-vindas aberta, como `App::new` monta num aparelho novo.
+    fn primeira_abertura() -> State {
+        let mut s = demo();
+        s.settings.idioma = crate::idioma::Idioma::PADRAO;
+        s.idioma_definido = false;
+        s.overlays.push(Overlay::BoasVindas);
+        s.focus = Focus::at(Zone::IdiomaLista, 0);
+        s
+    }
+
+    /// `A` na lista de boas-vindas escolhe o idioma em foco e fecha a tela.
+    ///
+    /// Sem isto, o overlay ficaria aberto depois da escolha e o usuário apertaria
+    /// `A` de novo para nada — e a interface traduzida ficaria atrás do painel.
+    #[test]
+    fn confirmar_na_boas_vindas_escolhe_o_idioma_em_foco() {
+        let mut s = primeira_abertura();
+        // Linha 7 é português, na ordem de `Idioma::TODOS`.
+        s.focus = Focus::at(Zone::IdiomaLista, 7);
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(s.settings.idioma, crate::idioma::Idioma::Pt);
+        assert!(s.idioma_definido, "a escolha tem de ficar registrada");
+        assert!(
+            !s.overlays.contains(&Overlay::BoasVindas),
+            "a tela de boas-vindas não pode ficar aberta depois da escolha"
+        );
+        assert_eq!(
+            s.focus.zone,
+            s.tab.zone(),
+            "o foco volta para a aba, senão o d-pad fica preso numa zona que saiu da tela"
+        );
+        // O aviso nomeia o idioma já no idioma novo.
+        assert_eq!(
+            s.toast.message,
+            crate::idioma::texto_com(
+                crate::idioma::Idioma::Pt,
+                crate::idioma::Chave::ToastLanguage,
+                "Português"
+            )
+        );
+    }
+
+    /// `B` não deixa a tela sem saída: escolhe o inglês, que é o padrão.
+    #[test]
+    fn voltar_na_boas_vindas_escolhe_ingles() {
+        let mut s = primeira_abertura();
+        s.focus = Focus::at(Zone::IdiomaLista, 8); // russo em foco
+
+        let s = reduce(s, Cmd::Back);
+
+        assert_eq!(s.settings.idioma, crate::idioma::Idioma::En);
+        assert!(s.idioma_definido);
+        assert!(!s.overlays.contains(&Overlay::BoasVindas));
+    }
+
+    /// A lista de idiomas tem exatamente uma linha por idioma.
+    ///
+    /// Dois lugares descrevendo a mesma lista foi como o carrossel ficou
+    /// dessincronizado do foco; aqui o número vem do enum, e o teste garante que
+    /// o foco não anda para fora do que a tela desenha.
+    #[test]
+    fn zona_da_lista_de_idiomas_tem_uma_linha_por_idioma() {
+        let s = primeira_abertura();
+        assert_eq!(
+            s.zone_len(Zone::IdiomaLista),
+            crate::idioma::Idioma::TODOS.len()
+        );
+        assert_eq!(s.expected_zone(), Zone::IdiomaLista);
+    }
+
+    /// ← → na linha do idioma percorre os dez, com volta.
+    #[test]
+    fn seta_em_aparencia_percorre_os_dez_idiomas() {
+        let aparência = crate::state::SETTINGS_CATEGORIES
+            .iter()
+            .position(|c| *c == "appearance")
+            .expect("a categoria aparência existe");
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = aparência;
+        s.focus = Focus::at(Zone::SettingsContent, 1);
+
+        let mut vistos = vec![s.settings.idioma];
+        for _ in 0..crate::idioma::Idioma::TODOS.len() - 1 {
+            s = reduce(s, Cmd::Nav(Dir::Right));
+            vistos.push(s.settings.idioma);
+        }
+        assert_eq!(vistos.len(), 10, "dez passos visitam os dez idiomas");
+        let mut unicos = vistos.clone();
+        unicos.sort_by_key(|i| i.indice());
+        unicos.dedup();
+        assert_eq!(unicos.len(), 10, "nenhum idioma pode ficar de fora");
+
+        // A décima seta dá a volta e volta ao primeiro.
+        s = reduce(s, Cmd::Nav(Dir::Right));
+        assert_eq!(s.settings.idioma, vistos[0]);
+
+        // E ← desfaz.
+        let antes = s.settings.idioma;
+        s = reduce(s, Cmd::Nav(Dir::Left));
+        assert_eq!(s.settings.idioma, antes.anterior());
+    }
+
+    /// Trocar o idioma pela aba Config também marca "definido".
+    ///
+    /// É o caminho de quem já escolheu uma vez e muda de ideia: a tela de
+    /// boas-vindas não pode reaparecer, nem a escolha pode deixar de ser gravada
+    /// (é a diferença entre `TrocarIdioma` e `IdiomaEscolhido` no `Cmd`).
+    #[test]
+    fn trocar_idioma_pela_config_marca_definido() {
+        let mut s = demo();
+        s.idioma_definido = false;
+
+        let s = reduce(s, Cmd::TrocarIdioma(crate::idioma::Idioma::Ru));
+
+        assert_eq!(s.settings.idioma, crate::idioma::Idioma::Ru);
+        assert!(s.idioma_definido);
+        assert!(!s.toast.message.is_empty(), "a troca tem de ser anunciada");
+    }
+
+    /// Com **um** tema, a seta avisa em vez de não fazer nada.
+    ///
+    /// É a contraprova do defeito que o dono relatou: "aperto a seta para trocar
+    /// o tema e não faz nada". Com um tema só não há o que trocar — mas a tela
+    /// tem de dizer isso, e o estado não pode ficar idêntico ao de antes.
+    #[test]
+    fn tema_com_uma_opcao_avisa_em_vez_de_silenciar() {
+        let mut s = demo();
+        s.tab = Tab::Settings;
+        s.settings_category = 0; // aparência
+        s.focus = Focus::at(Zone::SettingsContent, 0);
+        s.toast = Toast::default();
+
+        let s = reduce(s, Cmd::Nav(Dir::Right));
+
+        assert_eq!(s.settings.tema, crate::tema::Tema::GiochiDark);
+        assert!(s.toast.visible, "silêncio é o defeito que isto corrige");
+        assert_eq!(
+            s.toast.message,
+            crate::idioma::texto(s.settings.idioma, crate::idioma::Chave::ToastThemeSingle)
+        );
+        assert_eq!(
+            s.focus.zone,
+            Zone::SettingsContent,
+            "linha ajustável não devolve o foco para a coluna"
+        );
+    }
+
+    /// `Cmd::TrocarTema` guarda a escolha — é o gancho do tema novo.
+    #[test]
+    fn trocar_tema_guarda_a_escolha() {
+        let s = demo();
+        let s = reduce(s, Cmd::TrocarTema(crate::tema::Tema::GiochiDark));
+        assert_eq!(s.settings.tema, crate::tema::Tema::GiochiDark);
     }
 
     #[test]

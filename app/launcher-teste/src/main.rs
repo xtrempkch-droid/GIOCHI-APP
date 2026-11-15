@@ -291,7 +291,7 @@ fn principal() -> Result<(), String> {
         );
         // Adiantar antes do primeiro desenho é o que torna `--dump-frame`
         // reprodutível: o BMP não depende de quanto o processo demorou.
-        let cor = theme::ACCENT;
+        let cor = theme::accent();
         camada.semear(l as i32, a as i32);
         camada.avancar(opcoes.efeitos_quadros, l as i32, a as i32, cor);
     }
@@ -497,7 +497,10 @@ fn criar_painter(
 /// porte está fiel. `Some` entra depois do `hud()` e antes do `present()`, então
 /// nada do desenho das telas muda.
 fn desenhar_com(painter: &mut Painter, state: &mut State, mut efeitos: Option<&mut Efeitos>) {
-    painter.clear(theme::BG);
+    // Mesma paleta do launcher de produção, para o quadro continuar idêntico
+    // mesmo quando a configuração do aparelho aponta outro tema.
+    theme::definir_tema(state.settings.tema);
+    painter.clear(theme::bg());
 
     // Brilho ambiente no topo, na cor do jogo em foco, em faixas de alfa
     // decrescente. As medidas vêm de `Moldura`, não de 1280×720 fixo.

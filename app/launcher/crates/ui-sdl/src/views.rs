@@ -6,11 +6,13 @@
 //! Separar "desenhar" de "calcular posições" seria a receita para os dois
 //! saírem de sincronia.
 
+use giochi_launcher_core::idioma::{self, Chave, Idioma};
 use giochi_launcher_core::state::{
     settings_ajustavel, Filter, Overlay, Tab, KEYBOARD, KEYBOARD_COLS, QUICK_SETTINGS_ROWS,
     SETTINGS_CATEGORIES,
 };
-use giochi_launcher_core::{State, Zone};
+use giochi_launcher_core::State;
+use giochi_launcher_core::Zone;
 use sdl2::rect::Rect;
 
 use crate::draw::{Clip, Painter};
@@ -125,6 +127,8 @@ pub enum Hit {
     PasswordKey(usize),
     /// Botão "Conectar" do teclado de senha.
     PasswordConfirm,
+    /// Idioma na lista de boas-vindas.
+    Idioma(usize),
     /// Dispositivo Bluetooth na lista.
     BtDevice(usize),
     QsRow(usize),
@@ -170,12 +174,27 @@ fn vcenter(y: i32, h: i32, text_h: i32) -> i32 {
     y + (h - text_h) / 2 - 1
 }
 
+/// Texto de uma chave no idioma escolhido.
+///
+/// Três letras em vez de `idioma::texto(state.settings.idioma, …)` em cada uma
+/// das ~90 chamadas de desenho: a linha de desenho fica legível, e trocar o
+/// tipo de retorno da tradução (para `Cow`, por exemplo) não vira uma edição em
+/// cada tela.
+fn t(state: &State, chave: Chave) -> &'static str {
+    idioma::texto(state.settings.idioma, chave)
+}
+
+/// Idem, com um valor no lugar de `{}` (SSID, título do app, contagem).
+fn tv(state: &State, chave: Chave, valor: &str) -> String {
+    idioma::texto_com(state.settings.idioma, chave, valor)
+}
+
 // ════════════════════════════════════════════════════════════
 // BARRA SUPERIOR
 // ════════════════════════════════════════════════════════════
 pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     let m = Moldura::de(p);
-    p.fill_rect(m.safe_x, m.top - 1, m.safe_w, 1, theme::LINE);
+    p.fill_rect(m.safe_x, m.top - 1, m.safe_w, 1, theme::line());
     // Origem da barra: as medidas internas são em pixels de device (chip de
     // 36, ícone de 14), então tudo é deslocado por y0 em vez de começar em 10.
     let y0 = m.top - theme::TOPBAR_H;
@@ -189,16 +208,16 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     let com_icone = !m.compacto;
 
     for tab in Tab::ALL {
-        let label = tab.label();
+        let label = tab.label(state.settings.idioma);
         let text_w = p.text_size(label, theme::F_SMALL).0;
         let w = if com_icone { text_w + 34 + 22 } else { text_w + 24 };
         let active = tab == state.tab;
 
         if active {
-            p.fill_round_rect(x, y0 + 10, w, 36, theme::RADIUS_CHIP, theme::CARD);
-            p.stroke_round_rect(x, y0 + 10, w, 36, theme::RADIUS_CHIP, theme::LINE2);
+            p.fill_round_rect(x, y0 + 10, w, 36, theme::RADIUS_CHIP, theme::card());
+            p.stroke_round_rect(x, y0 + 10, w, 36, theme::RADIUS_CHIP, theme::line2());
         }
-        let color = if active { theme::TEXT } else { theme::DIM };
+        let color = if active { theme::text() } else { theme::dim() };
         let icon_name = match tab {
             Tab::Home => "home",
             Tab::Library => "gamepad",
@@ -229,9 +248,9 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     // Botão de energia.
     let power_w = 34;
     rx -= power_w;
-    p.fill_round_rect(rx, y0 + 11, power_w, 34, 6, theme::with_alpha(theme::DANGER, 30));
-    p.stroke_round_rect(rx, y0 + 11, power_w, 34, 6, theme::with_alpha(theme::DANGER, 90));
-    p.icon("power", rx + power_w / 2, y0 + 28, 16, theme::DANGER);
+    p.fill_round_rect(rx, y0 + 11, power_w, 34, 6, theme::with_alpha(theme::danger(), 30));
+    p.stroke_round_rect(rx, y0 + 11, power_w, 34, 6, theme::with_alpha(theme::danger(), 90));
+    p.icon("power", rx + power_w / 2, y0 + 28, 16, theme::danger());
     layout
         .hits
         .push((Rect::new(rx, y0 + 11, power_w as u32, 34), Hit::PowerTap));
@@ -242,14 +261,14 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     let clock_w = p.text_size(&clock, theme::F_BODY).0;
     if cabe(rx, clock_w) {
         rx -= clock_w;
-        p.text_right(rx + clock_w, y0 + 22, &clock, theme::F_BODY, theme::TEXT);
+        p.text_right(rx + clock_w, y0 + 22, &clock, theme::F_BODY, theme::text());
         rx -= 10;
     }
 
     // Bateria.
     let battery = state.battery.map(|b| format!("{b}%")).unwrap_or_else(|| "—".into());
     if cabe(rx, p.text_size(&battery, theme::F_TINY).0 + 22) {
-        rx = badge(p, layout, rx, &battery, theme::TEXT, None);
+        rx = badge(p, layout, rx, &battery, theme::text(), None);
         rx -= 6;
     }
 
@@ -258,12 +277,12 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     if !m.compacto {
         let wifi_on = state.settings.wifi;
         if cabe(rx, p.text_size("Wi-Fi", theme::F_TINY).0 + 34) {
-            rx = badge(p, layout, rx, "Wi-Fi", if wifi_on { theme::OK } else { theme::DIM }, Some("wifi"));
+            rx = badge(p, layout, rx, "Wi-Fi", if wifi_on { theme::ok() } else { theme::dim() }, Some("wifi"));
             rx -= 6;
         }
 
         let pad_label = if state.pad_connected { "ON" } else { "OFF" };
-        let pad_color = if state.pad_connected { theme::OK } else { theme::DIM };
+        let pad_color = if state.pad_connected { theme::ok() } else { theme::dim() };
         if cabe(rx, p.text_size(pad_label, theme::F_TINY).0 + 34) {
             rx = badge(p, layout, rx, pad_label, pad_color, Some("gamepad"));
             rx -= 6;
@@ -273,8 +292,8 @@ pub fn chrome_top(p: &mut Painter, state: &State, layout: &mut Layout) {
     // Ajustes rápidos.
     if cabe(rx, 34) {
         rx -= 34;
-        p.fill_round_rect(rx, y0 + 11, 34, 34, 6, theme::PANEL2);
-        p.icon("settings", rx + 17, y0 + 28, 16, theme::DIM);
+        p.fill_round_rect(rx, y0 + 11, 34, 34, 6, theme::panel2());
+        p.icon("settings", rx + 17, y0 + 28, 16, theme::dim());
         rx -= 8;
     }
 
@@ -295,7 +314,7 @@ fn badge(
     let w = text_w + 20 + if has_icon { 16 } else { 0 };
     let x = right - w;
     p.fill_round_rect(x, 14, w, 28, 14, theme::with_alpha(theme::BLACK, 120));
-    p.stroke_round_rect(x, 14, w, 28, 14, theme::LINE);
+    p.stroke_round_rect(x, 14, w, 28, 14, theme::line());
     let mut tx = x + 9;
     if let Some(name) = icon_name {
         p.icon(name, tx + 5, 28, 12, color);
@@ -357,33 +376,67 @@ fn formatar_relogio(secs: u64) -> String {
 ///
 /// Aqui a lista é dado: o teste pergunta "a Biblioteca anuncia L2/R2?" e
 /// reprova se a resposta mudar sem que a tecla mude junto.
-pub fn dicas(state: &State) -> &'static [(&'static str, &'static str)] {
+pub fn dicas(state: &State) -> Vec<(&'static str, &'static str)> {
+    let i = state.settings.idioma;
+    let t = |c: Chave| idioma::texto(i, c);
     match state.top_overlay() {
-        Some(Overlay::Search) => &[("↑↓←→", "Navegar"), ("A", "Selecionar"), ("B", "Voltar")],
-        Some(Overlay::QuickSettings) => &[("↑↓", "Navegar"), ("←→", "Ajustar"), ("B", "Fechar")],
-        Some(Overlay::GameDetail) => &[("←→", "Ação"), ("A", "Confirmar"), ("B", "Voltar")],
-        Some(Overlay::PowerPopup) => &[("↑↓", "Navegar"), ("A", "Confirmar"), ("B", "Cancelar")],
-        Some(Overlay::WifiList) => &[("A", "Conectar"), ("B", "Voltar"), ("↑↓", "Rede")],
+        Some(Overlay::Search) => vec![
+            ("↑↓←→", t(Chave::HintNavigate)),
+            ("A", t(Chave::HintSelect)),
+            ("B", t(Chave::HintBack)),
+        ],
+        Some(Overlay::QuickSettings) => vec![
+            ("↑↓", t(Chave::HintNavigate)),
+            ("←→", t(Chave::HintAdjust)),
+            ("B", t(Chave::HintClose)),
+        ],
+        Some(Overlay::GameDetail) => vec![
+            ("←→", t(Chave::HintAction)),
+            ("A", t(Chave::HintConfirm)),
+            ("B", t(Chave::HintBack)),
+        ],
+        Some(Overlay::PowerPopup) => vec![
+            ("↑↓", t(Chave::HintNavigate)),
+            ("A", t(Chave::HintConfirm)),
+            ("B", t(Chave::HintCancel)),
+        ],
+        Some(Overlay::WifiList) => vec![
+            ("A", t(Chave::HintConnect)),
+            ("B", t(Chave::HintBack)),
+            ("↑↓", t(Chave::HintNetwork)),
+        ],
+        // Boas-vindas: as duas saídas ficam escritas. `B` **não** é "voltar"
+        // aqui (não há para onde voltar) — é "ficar em inglês", e o rótulo diz
+        // isso em vez de prometer uma volta que não existe.
+        Some(Overlay::BoasVindas) => vec![
+            ("↑↓", t(Chave::HintChoose)),
+            ("A", t(Chave::HintConfirm)),
+            ("B", t(Chave::WelcomeEnglishDefault)),
+        ],
         // `↓ Conectar` entrou em 14/11/2026: a tela não tinha confirmação e a
         // senha digitada nunca entrava em vigor. O rodapé é o único lugar onde
         // o jogador descobre que existe uma saída.
-        Some(Overlay::WifiPassword) => &[
-            ("A", "Digitar"),
-            ("X", "Mostrar"),
-            ("↓", "Conectar"),
-            ("B", "Cancelar"),
+        Some(Overlay::WifiPassword) => vec![
+            ("A", t(Chave::HintType)),
+            ("X", t(Chave::HintShow)),
+            ("↓", t(Chave::HintConnect)),
+            ("B", t(Chave::HintCancel)),
         ],
-        Some(Overlay::BtList) => &[("A", "Parear"), ("B", "Voltar"), ("↑↓", "Aparelho")],
+        Some(Overlay::BtList) => vec![
+            ("A", t(Chave::HintPair)),
+            ("B", t(Chave::HintBack)),
+            ("↑↓", t(Chave::HintDevice)),
+        ],
         // Configurações: as dicas mudam com a coluna em foco.
         //
         // Antes havia uma dica só para a aba inteira, e ela não dizia que ← →
         // atravessa para o painel da direita nem que A abre Wi-Fi. O usuário
         // concluiu — com razão — que a aba não era navegável.
-        None if state.tab == Tab::Settings && state.focus.zone == Zone::SettingsSidebar => &[
-            ("→", "Entrar"),
-            ("L2/R2", "Categoria"),
-            ("LB/RB", "Aba"),
-            ("Select", "Ajustes"),
+        None if state.tab == Tab::Settings && state.focus.zone == Zone::SettingsSidebar => vec![
+            ("→", t(Chave::HintEnter)),
+            ("L2/R2", t(Chave::HintCategory)),
+            ("LB/RB", t(Chave::HintTab)),
+            ("Select", t(Chave::HintQuick)),
         ],
         // Linha com valor ajustável: as setas ajustam, e a saída é o `B`.
         // Sem isto o rodapé prometia "← Categorias" numa linha onde ← ajustava.
@@ -391,47 +444,54 @@ pub fn dicas(state: &State) -> &'static [(&'static str, &'static str)] {
             && state.focus.zone == Zone::SettingsContent
             && settings_ajustavel(state.settings_category, state.focus.index) =>
         {
-            &[("←→", "Ajustar"), ("L2/R2", "Categoria"), ("B", "Categorias")]
+            vec![
+                ("←→", t(Chave::HintAdjust)),
+                ("L2/R2", t(Chave::HintCategory)),
+                ("B", t(Chave::HintCategories)),
+            ]
         }
-        None if state.tab == Tab::Settings => &[
-            ("A", "Abrir"),
-            ("L2/R2", "Categoria"),
-            ("←", "Categorias"),
-            ("B", "Voltar"),
+        None if state.tab == Tab::Settings => vec![
+            ("A", t(Chave::HintOpen)),
+            ("L2/R2", t(Chave::HintCategory)),
+            ("←", t(Chave::HintCategories)),
+            ("B", t(Chave::HintBack)),
         ],
         // O rodapé era um só para Home, Biblioteca e Apps — e as três fazem
         // coisas diferentes com o `A`: na Home ele abre o jogo, na Biblioteca
         // abre a ficha, nos Apps não abre nada. Dizer "Jogar" na Biblioteca era
         // a mesma mentira que o aviso "Iniciando..." sem iniciar: a tela
         // promete um efeito que a tecla não tem.
-        None if state.tab == Tab::Home => &[
-            ("A", "Jogar"),
-            ("X", "Detalhes"),
-            ("Y", "Buscar"),
-            ("LB/RB", "Aba"),
-            ("Select", "Ajustes"),
+        None if state.tab == Tab::Home => vec![
+            ("A", t(Chave::HintPlay)),
+            ("X", t(Chave::HintDetails)),
+            ("Y", t(Chave::HintSearch)),
+            ("LB/RB", t(Chave::HintTab)),
+            ("Select", t(Chave::HintQuick)),
         ],
         // Biblioteca: os gatilhos trocam o filtro. A dica aparece porque o
         // atalho não se descobre sozinho — a faixa de filtros também responde a
         // ← →, então quem não sabe do L2/R2 nunca tenta.
-        None if state.tab == Tab::Library => &[
-            ("A", "Abrir"),
-            ("X", "Detalhes"),
-            ("Y", "Buscar"),
-            ("L2/R2", "Filtro"),
-            ("LB/RB", "Aba"),
+        None if state.tab == Tab::Library => vec![
+            ("A", t(Chave::HintOpen)),
+            ("X", t(Chave::HintDetails)),
+            ("Y", t(Chave::HintSearch)),
+            ("L2/R2", t(Chave::HintFilter)),
+            ("LB/RB", t(Chave::HintTab)),
         ],
         // A grade de apps é de demonstração: os apps não estão no catálogo do
         // sistema, então não há entrypoint para executar. O rodapé diz o que a
         // tecla faz hoje, não o que faria com uma loja instalada.
-        None if state.tab == Tab::Apps => &[("X", "Detalhes"), ("LB/RB", "Aba")],
-        None => &[("LB/RB", "Aba")],
+        None if state.tab == Tab::Apps => vec![
+            ("X", t(Chave::HintDetails)),
+            ("LB/RB", t(Chave::HintTab)),
+        ],
+        None => vec![("LB/RB", t(Chave::HintTab))],
     }
 }
 
 pub fn chrome_foot(p: &mut Painter, state: &State) {
     let m = Moldura::de(p);
-    p.fill_rect(m.safe_x, m.foot_y, m.safe_w, 1, theme::LINE);
+    p.fill_rect(m.safe_x, m.foot_y, m.safe_w, 1, theme::line());
 
     let hints = dicas(state);
 
@@ -445,12 +505,15 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
 
     // A assinatura de versão sai quando não há largura: ela é a informação mais
     // dispensável do rodapé, e sobrepor as dicas seria pior.
-    let build = format!("giochi-launcher 0.1.0 • {}", state.settings.perf.label());
+    let build = format!(
+        "giochi-launcher 0.1.0 • {}",
+        state.settings.perf.label(state.settings.idioma)
+    );
     let build_w = p.text_size(&build, theme::F_TINY).0;
 
     let mut x = m.safe_x + 4;
     let limite = m.safe_x + m.safe_w - 4 - build_w - 16;
-    for (key, label) in hints {
+    for (key, label) in &hints {
         let key_w = p.text_size(key, theme::F_TINY).0 + 10;
         let label_w = p.text_size(label, theme::F_TINY).0;
         if x + key_w + 5 + label_w > limite {
@@ -458,13 +521,13 @@ pub fn chrome_foot(p: &mut Painter, state: &State) {
         }
         p.fill_round_rect(x, chip_y, key_w, chip_h, 3, theme::with_alpha(theme::WHITE, 20));
         let ky = vcenter(chip_y, chip_h, p.text_size(key, theme::F_TINY).1);
-        p.text_left(x + 5, ky, key, theme::F_TINY, theme::ACCENT);
+        p.text_left(x + 5, ky, key, theme::F_TINY, theme::accent());
         x += key_w + 5;
-        p.text_left(x, y, label, theme::F_TINY, theme::DIM);
+        p.text_left(x, y, label, theme::F_TINY, theme::dim());
         x += label_w + 12;
     }
 
-    p.text_right(m.safe_x + m.safe_w - 4, y, &build, theme::F_TINY, theme::FAINT);
+    p.text_right(m.safe_x + m.safe_w - 4, y, &build, theme::F_TINY, theme::faint());
 }
 
 // ════════════════════════════════════════════════════════════
@@ -479,13 +542,19 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
         // numa imagem nova, sem `index.json`, e a tela não dizia o que fazer.
         let cx = m.safe_x + m.safe_w / 2;
         let cy = m.top + m.main_h / 2;
-        p.text_center(cx, cy - m.e(10), "Nenhum jogo instalado.", theme::F_SMALL, theme::TEXT);
+        p.text_center(
+            cx,
+            cy - m.e(10),
+            t(state, Chave::HomeEmptyTitle),
+            theme::F_SMALL,
+            theme::text(),
+        );
         p.text_center(
             cx,
             cy + m.e(10),
-            "o launcher procura em /opt/giochi/games e /user/games",
+            t(state, Chave::HomeEmptyHint),
             theme::F_TINY,
-            theme::FAINT,
+            theme::faint(),
         );
         return;
     }
@@ -581,7 +650,8 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     let gap = (h_meta / 2).max(3);
 
     let btn_h = theme::TOUCH.min((card_h / 5).max(26));
-    let btn_w = (p.text_size("Jogar", f_meta).0 + 46).min(card_w - pad * 2);
+    let jogar = t(state, Chave::HomePlay);
+    let btn_w = (p.text_size(jogar, f_meta).0 + 46).min(card_w - pad * 2);
     let by = y + card_h - pad - btn_h;
 
     let avail = card_w - pad * 2;
@@ -614,7 +684,11 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
         p.text_left(x + pad, tit_y + h_tit, &tit_b, f_tit, theme::WHITE);
     }
 
-    let meta = format!("{} • {}", game.year_label(), game.play_label());
+    let meta = format!(
+        "{} • {}",
+        game.year_label(),
+        game.play_label(state.settings.idioma)
+    );
     let meta = truncate(&meta, avail, &mut |s| p.text_size(s, f_meta).0);
     p.text_left(x + pad, meta_y, &meta, f_meta, theme::with_alpha(theme::WHITE, 170));
 
@@ -624,7 +698,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     let icone = (h_meta as f32 * 1.1).round() as i32;
     p.icon("play", bx + m.e(20).max(10), by + btn_h / 2, icone, theme::WHITE);
     let ty = vcenter(by, btn_h, h_meta);
-    p.text_left(bx + m.e(34).max(22), ty, "Jogar", f_meta, theme::WHITE);
+    p.text_left(bx + m.e(34).max(22), ty, jogar, f_meta, theme::WHITE);
 
     layout
         .hits
@@ -638,7 +712,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     let mut dx = m.safe_x + m.safe_w / 2 - total / 2;
     for i in 0..n {
         if i == state.carousel {
-            p.fill_round_rect(dx, dot_y, ativo, m.e(6).max(3), m.e(3).max(1), theme::ACCENT);
+            p.fill_round_rect(dx, dot_y, ativo, m.e(6).max(3), m.e(3).max(1), theme::accent());
             dx += ativo + dot_gap - ativo;
         } else {
             let r = m.e(3).max(2);
@@ -652,7 +726,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
     if legenda_y + h_meta <= m.foot_y - m.e(4).max(2) {
         let line = format!("{} • {} • {}", game.title, game.category, game.year_label());
         let line = truncate(&line, m.safe_w, &mut |s| p.text_size(s, theme::F_SMALL).0);
-        p.text_center(m.safe_x + m.safe_w / 2, legenda_y, &line, theme::F_SMALL, theme::DIM);
+        p.text_center(m.safe_x + m.safe_w / 2, legenda_y, &line, theme::F_SMALL, theme::dim());
     }
 }
 
@@ -693,11 +767,17 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     };
 
     // Cabeçalho com filtros.
-    p.text_left(m.safe_x + 4, m.top + 12, "BIBLIOTECA", theme::F_TINY, theme::DIM);
+    p.text_left(
+        m.safe_x + 4,
+        m.top + 12,
+        t(state, Chave::LibraryTitle),
+        theme::F_TINY,
+        theme::dim(),
+    );
 
     let mut fx = m.safe_x + m.safe_w - 4;
     for filter in Filter::ALL.iter().rev() {
-        let label = filter.label();
+        let label = filter.label(state.settings.idioma);
         let w = p.text_size(label, theme::F_TINY).0 + 24;
         fx -= w;
         let active = state.library_filter == *filter;
@@ -705,13 +785,13 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
             && Filter::ALL.iter().position(|f| f == filter) == Some(state.focus.index);
 
         if active {
-            p.fill_round_rect(fx, m.top + 6, w, 30, 15, theme::CARD);
-            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::LINE2);
+            p.fill_round_rect(fx, m.top + 6, w, 30, 15, theme::card());
+            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::line2());
         }
         if focused {
-            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::ACCENT);
+            p.stroke_round_rect(fx, m.top + 6, w, 30, 15, theme::accent());
         }
-        let color = if active { theme::TEXT } else { theme::DIM };
+        let color = if active { theme::text() } else { theme::dim() };
         let ty = vcenter(m.top + 6, 30, p.text_size(label, theme::F_TINY).1);
         p.text_center(fx + w / 2, ty, label, theme::F_TINY, color);
         layout
@@ -740,9 +820,9 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
         p.text_center(
             m.safe_x + m.safe_w / 2,
             grid_top + grid_h / 2,
-            "Nenhum jogo nesta categoria",
+            t(state, Chave::LibraryEmpty),
             theme::F_SMALL,
-            theme::FAINT,
+            theme::faint(),
         );
         return;
     }
@@ -775,7 +855,7 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
         }
 
         if game.favorite {
-            p.icon("star", x + cell_w - m.e(16).max(10), y + m.e(16).max(8), m.e(12).max(8), theme::WARN);
+            p.icon("star", x + cell_w - m.e(16).max(10), y + m.e(16).max(8), m.e(12).max(8), theme::warn());
         }
 
         // Etiqueta de categoria.
@@ -813,7 +893,7 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     }
 
     let pager = format!("{} jogo(s) • página {}/{}", games.len(), page + 1, pages);
-    p.text_center(m.safe_x + m.safe_w / 2, m.foot_y - 20, &pager, theme::F_TINY, theme::DIM);
+    p.text_center(m.safe_x + m.safe_w / 2, m.foot_y - 20, &pager, theme::F_TINY, theme::dim());
 }
 
 // ════════════════════════════════════════════════════════════
@@ -830,13 +910,19 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
         layout.grade_apps = None;
         let cx = m.safe_x + m.safe_w / 2;
         let cy = m.top + m.main_h / 2;
-        p.text_center(cx, cy - m.e(10), "Nenhum app instalado.", theme::F_SMALL, theme::TEXT);
+        p.text_center(
+            cx,
+            cy - m.e(10),
+            t(state, Chave::AppsEmptyTitle),
+            theme::F_SMALL,
+            theme::text(),
+        );
         p.text_center(
             cx,
             cy + m.e(10),
-            "o launcher procura em /opt/giochi/apps e /user/apps",
+            t(state, Chave::AppsEmptyHint),
             theme::F_TINY,
-            theme::FAINT,
+            theme::faint(),
         );
         return;
     }
@@ -875,7 +961,7 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
         let x = m.safe_x + m.pad + col * (cell_w + gap);
         let y = m.top + m.pad + row * (cell_h + gap);
 
-        p.fill_round_rect(x, y, cell_w, cell_h, r_tile, theme::PANEL2);
+        p.fill_round_rect(x, y, cell_w, cell_h, r_tile, theme::panel2());
         let focused = state.focus.zone == Zone::AppsGrid && state.focus.index == i;
         p.stroke_round_rect(
             x,
@@ -883,7 +969,7 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
             cell_w,
             cell_h,
             r_tile,
-            if focused { theme::ACCENT } else { theme::LINE },
+            if focused { theme::accent() } else { theme::line() },
         );
 
         // Monograma: primeira letra num quadrado, no mesmo tratamento dos
@@ -896,20 +982,20 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
             mono,
             mono,
             m.e(8).max(3),
-            theme::with_alpha(theme::ACCENT, 40),
+            theme::with_alpha(theme::accent(), 40),
         );
         let f_mono = (mono as f32 * 0.5) as u16;
         let ty_mono = y + interno + (mono - p.text_size("A", f_mono).1) / 2;
-        p.text_center(x + interno + mono / 2, ty_mono, &letter, f_mono, theme::ACCENT);
+        p.text_center(x + interno + mono / 2, ty_mono, &letter, f_mono, theme::accent());
 
         // Texto ancorado no rodapé, como na grade de jogos.
         let cat_y = y + cell_h - interno - h_tiny;
         let title_y = cat_y - m.e(2).max(1) - h_body;
         if title_y > y + interno + mono + 2 {
             let title = truncate(&app.title, cell_w - interno * 2, &mut |s| p.text_size(s, theme::F_BODY).0);
-            p.text_left(x + interno, title_y, &title, theme::F_BODY, theme::TEXT);
+            p.text_left(x + interno, title_y, &title, theme::F_BODY, theme::text());
             let cat = truncate(&app.category, cell_w - interno * 2, &mut |s| p.text_size(s, theme::F_TINY).0);
-            p.text_left(x + interno, cat_y, &cat, theme::F_TINY, theme::DIM);
+            p.text_left(x + interno, cat_y, &cat, theme::F_TINY, theme::dim());
         }
 
         layout
@@ -933,7 +1019,7 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     let r_caixa = m.e(8).max(3);
 
     // Linha divisória.
-    p.fill_rect(side_x + side_w, m.top + 6, 1, m.main_h - 16, theme::LINE);
+    p.fill_rect(side_x + side_w, m.top + 6, 1, m.main_h - 16, theme::line());
 
     let mut y = m.top + 12;
     for (i, name) in SETTINGS_CATEGORIES.iter().enumerate() {
@@ -943,16 +1029,16 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
 
         let chip_w = side_w - m.e(12).max(6);
         if active {
-            p.fill_round_rect(side_x, y, chip_w, row_h, r_chip, theme::CARD);
-            p.stroke_round_rect(side_x, y, chip_w, row_h, r_chip, theme::LINE2);
+            p.fill_round_rect(side_x, y, chip_w, row_h, r_chip, theme::card());
+            p.stroke_round_rect(side_x, y, chip_w, row_h, r_chip, theme::line2());
         }
         if focused {
-            p.stroke_round_rect(side_x, y, chip_w, row_h, r_chip, theme::ACCENT);
+            p.stroke_round_rect(side_x, y, chip_w, row_h, r_chip, theme::accent());
         }
 
-        let color = if active { theme::ACCENT } else { theme::DIM };
+        let color = if active { theme::accent() } else { theme::dim() };
         let ty = vcenter(y, row_h, p.text_size(name, theme::F_SMALL).1);
-        let label = label_for_category(name);
+        let label = label_for_category(name, state.settings.idioma);
         let label = truncate(&label, chip_w - m.e(12).max(6) * 2, &mut |s| p.text_size(s, theme::F_SMALL).0);
         p.text_left(side_x + m.e(12).max(6), ty, &label, theme::F_SMALL, color);
 
@@ -967,20 +1053,22 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
         .get(state.settings_category)
         .copied()
         .unwrap_or("appearance");
-    let heading = label_for_category(category);
-    p.text_left(content_x, m.top + 12, &heading, theme::F_BODY, theme::TEXT);
+    let heading = label_for_category(category, state.settings.idioma);
+    p.text_left(content_x, m.top + 12, &heading, theme::F_BODY, theme::text());
 
     let rows = linhas_da_categoria(category, state);
 
     if category == "about" {
+        // Cada linha vem da tabela de traduções. A linha vazia separa os dois
+        // parágrafos e não é um texto a traduzir, por isso ela fica fora.
         let lines = [
-            "Giochi Launcher — SDL2 com renderer próprio.",
+            t(state, Chave::AboutLine1),
             "",
-            "Interface desenhada para gamepad; toque como adicional.",
-            "Estado único, reducer, foco por zona, overlays separados da aba.",
+            t(state, Chave::AboutLine2),
+            t(state, Chave::AboutLine3),
             "",
-            "Onde não há leitura de sensor, a tela mostra — em vez de",
-            "inventar um número.",
+            t(state, Chave::AboutLine4),
+            t(state, Chave::AboutLine5),
         ];
         let mut ay = m.top + m.e(40).max(26);
         let passo = p.text_size("Ay", theme::F_SMALL).1 + m.e(7).max(3);
@@ -989,7 +1077,7 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
                 break;
             }
             let text = truncate(line, content_w, &mut |s| p.text_size(s, theme::F_SMALL).0);
-            p.text_left(content_x, ay, &text, theme::F_SMALL, theme::DIM);
+            p.text_left(content_x, ay, &text, theme::F_SMALL, theme::dim());
             ay += passo;
         }
     } else {
@@ -1007,7 +1095,7 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
                 content_w,
                 theme::TOUCH,
                 r_caixa,
-                if focado { theme::ACCENT } else { theme::LINE },
+                if focado { theme::accent() } else { theme::line() },
             );
             layout
                 .hits
@@ -1019,9 +1107,9 @@ pub fn settings(p: &mut Painter, state: &State, layout: &mut Layout) {
             let valor_w = p.text_size(&valor, theme::F_SMALL).0;
             let titulo = truncate(title, content_w - valor_w - borda * 3, &mut |s| p.text_size(s, theme::F_SMALL).0);
             let ty = vcenter(ry, theme::TOUCH, p.text_size(title, theme::F_SMALL).1);
-            p.text_left(content_x + borda, ty, &titulo, theme::F_SMALL, theme::TEXT);
+            p.text_left(content_x + borda, ty, &titulo, theme::F_SMALL, theme::text());
             let vy = vcenter(ry, theme::TOUCH, p.text_size(value, theme::F_SMALL).1);
-            p.text_right(content_x + content_w - borda, vy, &valor, theme::F_SMALL, theme::ACCENT);
+            p.text_right(content_x + content_w - borda, vy, &valor, theme::F_SMALL, theme::accent());
             ry += theme::TOUCH + m.e(7).max(3);
         }
     }
@@ -1047,13 +1135,34 @@ fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
         // Substituto de dado ausente precisa ser declarado ausente, não
         // preenchido com o que era verdade antes — a mesma regra do
         // `year_label()`, que formatava o id do cartão.
+        //
+        // O idioma entrou **nesta** lista, e não numa categoria própria, porque
+        // é onde a pessoa procura: a mesma tela que se abre para mudar o visual.
+        // É o pedido do dono — "lá onde troca o tema terá a opção de trocar o
+        // idioma".
         "appearance" => vec![
-            ("Tema".into(), "Giochi Dark (único)".into()),
-            ("Escala".into(), "acompanha o painel".into()),
+            (
+                t(state, Chave::SetTheme).into(),
+                state.settings.tema.rotulo().into(),
+            ),
+            (
+                t(state, Chave::SetLanguage).into(),
+                state.settings.idioma.nome_proprio().into(),
+            ),
+            (
+                t(state, Chave::SetScale).into(),
+                t(state, Chave::SetScaleValue).into(),
+            ),
         ],
         "sound" => vec![
-            ("Volume geral".into(), format!("{}%", state.settings.volume)),
-            ("Saída padrão".into(), "Alto-falante estéreo".into()),
+            (
+                t(state, Chave::SetVolume).into(),
+                format!("{}%", state.settings.volume),
+            ),
+            (
+                t(state, Chave::SetOutput).into(),
+                t(state, Chave::SetOutputValue).into(),
+            ),
         ],
         // O valor vem do que o sistema **respondeu**, não de um booleano da UI.
         //
@@ -1067,20 +1176,20 @@ fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
         // ausente tem de ser declarada ausente.
         "network" => vec![
             (
-                "Wi-Fi".into(),
+                t(state, Chave::Wifi).into(),
                 if state.sem_fio.tem_wifi == Some(false) {
-                    "sem rádio neste aparelho".into()
+                    t(state, Chave::SetNoRadio).into()
                 } else {
                     match &state.sem_fio.conectado {
                         Some(ssid) => ssid.clone(),
-                        None => "não conectado".into(),
+                        None => t(state, Chave::SetNotConnected).into(),
                     }
                 },
             ),
             (
-                "Bluetooth".into(),
+                t(state, Chave::Bluetooth).into(),
                 if state.sem_fio.tem_bt == Some(false) {
-                    "sem rádio neste aparelho".into()
+                    t(state, Chave::SetNoRadio).into()
                 } else {
                     match &state.sem_fio.bt_conectado {
                         Some(mac) => state
@@ -1090,38 +1199,43 @@ fn linhas_da_categoria(category: &str, state: &State) -> Vec<(String, String)> {
                             .find(|d| &d.mac == mac)
                             .map(|d| d.nome.clone())
                             .unwrap_or_else(|| mac.clone()),
-                        None => "não conectado".into(),
+                        None => t(state, Chave::SetNotConnected).into(),
                     }
                 },
             ),
         ],
+        // O nome do botão ("A / Cross") **não** é traduzido: é o que está
+        // gravado no plástico do controle. O que ele faz é.
         "controller" => vec![
-            ("A / Cross".into(), "Confirmar".into()),
-            ("B / Circle".into(), "Voltar".into()),
-            ("X / Square".into(), "Detalhes".into()),
-            ("Y / Triangle".into(), "Buscar".into()),
-            ("LB / RB".into(), "Trocar aba".into()),
-            ("Select".into(), "Ajustes rápidos".into()),
-            ("Start".into(), "Menu de energia".into()),
+            ("A / Cross".into(), t(state, Chave::CtrlConfirm).into()),
+            ("B / Circle".into(), t(state, Chave::CtrlBack).into()),
+            ("X / Square".into(), t(state, Chave::CtrlDetails).into()),
+            ("Y / Triangle".into(), t(state, Chave::CtrlSearch).into()),
+            ("LB / RB".into(), t(state, Chave::CtrlSwitchTab).into()),
+            ("Select".into(), t(state, Chave::CtrlQuick).into()),
+            ("Start".into(), t(state, Chave::CtrlPower).into()),
         ],
         "system" => vec![
-            ("Versão".into(), "launcher 0.1.0".into()),
-            ("Desempenho".into(), state.settings.perf.label().into()),
+            (t(state, Chave::SetVersion).into(), "launcher 0.1.0".into()),
+            (
+                t(state, Chave::SetPerformance).into(),
+                state.settings.perf.label(state.settings.idioma).into(),
+            ),
         ],
         _ => Vec::new(),
     }
 }
 
-fn label_for_category(name: &str) -> String {
-    match name {
-        "appearance" => "Aparência",
-        "sound" => "Som",
-        "network" => "Rede e BT",
-        "controller" => "Controle",
-        "system" => "Sistema",
-        _ => "Sobre",
-    }
-    .to_string()
+fn label_for_category(name: &str, idioma: Idioma) -> String {
+    let chave = match name {
+        "appearance" => Chave::SetAppearance,
+        "sound" => Chave::SetSound,
+        "network" => Chave::SetNetwork,
+        "controller" => Chave::SetController,
+        "system" => Chave::SetSystem,
+        _ => Chave::SetAbout,
+    };
+    idioma::texto(idioma, chave).to_string()
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1134,7 +1248,7 @@ fn label_for_category(name: &str) -> String {
 pub fn mensagem_central(p: &mut Painter, texto: &str) {
     let m = Moldura::de(p);
     p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
-    p.text_center(m.w / 2, m.h / 2, texto, theme::F_BODY, theme::DIM);
+    p.text_center(m.w / 2, m.h / 2, texto, theme::F_BODY, theme::dim());
 }
 
 /// Tela de falha ao desligar/reiniciar.
@@ -1147,7 +1261,7 @@ pub fn mensagem_central(p: &mut Painter, texto: &str) {
 /// **Não** existe porque "o X55 não corta a energia". Isso já foi afirmado aqui
 /// e é falso: medido em 03/11/2026, o `poweroff` do X55 desliga de fato. A tela
 /// continua útil para qualquer falha — só não pressupõe uma causa específica.
-pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
+pub fn aviso_sistema(p: &mut Painter, mensagem: &str, idioma: Idioma) {
     let m = Moldura::de(p);
     // Largura e posição vinham de 1280×720 fixos: num painel de 640 px o aviso
     // nascia fora da tela.
@@ -1155,14 +1269,32 @@ pub fn aviso_sistema(p: &mut Painter, mensagem: &str) {
     let x = m.centro(w);
     let h = m.e(120).max(84);
     let y = m.h - h - m.e(80).max(16);
-    p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::PANEL2);
-    p.stroke_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::DANGER);
+    p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::panel2());
+    p.stroke_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::danger());
     let cx = m.w / 2;
-    p.text_center(cx, y + m.e(22).max(10), "Não foi possível desligar o aparelho", theme::F_BODY, theme::DANGER);
+    p.text_center(
+        cx,
+        y + m.e(22).max(10),
+        idioma::texto(idioma, Chave::PowerFailTitle),
+        theme::F_BODY,
+        theme::danger(),
+    );
     let msg = truncate(mensagem, w - m.e(40).max(16), &mut |s| p.text_size(s, theme::F_TINY).0);
-    p.text_center(cx, y + m.e(56).max(30), &msg, theme::F_TINY, theme::TEXT);
-    p.text_center(cx, y + m.e(84).max(48), "Segure o botão de energia por 8 s para forçar.", theme::F_TINY, theme::DIM);
-    p.text_center(cx, y + m.e(100).max(60), "Quando funciona, o sistema desliga com o brilho apagado.", theme::F_TINY, theme::DIM);
+    p.text_center(cx, y + m.e(56).max(30), &msg, theme::F_TINY, theme::text());
+    p.text_center(
+        cx,
+        y + m.e(84).max(48),
+        idioma::texto(idioma, Chave::PowerFailHold),
+        theme::F_TINY,
+        theme::dim(),
+    );
+    p.text_center(
+        cx,
+        y + m.e(100).max(60),
+        idioma::texto(idioma, Chave::PowerFailOk),
+        theme::F_TINY,
+        theme::dim(),
+    );
 }
 
 pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
@@ -1183,6 +1315,7 @@ pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
             Overlay::WifiList => wifi_list(p, state, layout),
             Overlay::WifiPassword => wifi_password(p, state, layout),
             Overlay::BtList => bt_list(p, state, layout),
+            Overlay::BoasVindas => boas_vindas(p, state, layout),
         }
     }
 
@@ -1191,34 +1324,52 @@ pub fn overlays(p: &mut Painter, state: &State, layout: &mut Layout) {
             p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             let cx = m.w / 2;
             let lua = m.e(72).max(40);
-            p.icon("moon", cx, m.h / 2 - m.e(28).max(12), lua, theme::with_alpha(theme::ACCENT, 130));
-            let aviso = "Toque ou pressione qualquer botão para acordar.";
+            p.icon("moon", cx, m.h / 2 - m.e(28).max(12), lua, theme::with_alpha(theme::accent(), 130));
+            let aviso = t(state, Chave::ScreenSleep);
             let aviso = truncate(aviso, m.safe_w, &mut |s| p.text_size(s, theme::F_SMALL).0);
-            p.text_center(cx, m.h / 2 + m.e(20).max(10), &aviso, theme::F_SMALL, theme::DIM);
+            p.text_center(cx, m.h / 2 + m.e(20).max(10), &aviso, theme::F_SMALL, theme::dim());
         }
         giochi_launcher_core::Screen::Shutdown => {
             p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             let cx = m.w / 2;
-            p.text_center(cx, m.h / 2 - m.e(12).max(6), "Sistema desligado.", theme::F_BODY, theme::FAINT);
-            p.text_center(cx, m.h / 2 + m.e(14).max(8), "Pressione A para reiniciar.", theme::F_SMALL, theme::FAINT);
+            p.text_center(
+                cx,
+                m.h / 2 - m.e(12).max(6),
+                t(state, Chave::ScreenOff),
+                theme::F_BODY,
+                theme::faint(),
+            );
+            p.text_center(
+                cx,
+                m.h / 2 + m.e(14).max(8),
+                t(state, Chave::ScreenOffRestart),
+                theme::F_SMALL,
+                theme::faint(),
+            );
         }
         giochi_launcher_core::Screen::Reboot => {
             p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
-            p.text_center(m.w / 2, m.h / 2, "Reiniciando...", theme::F_BODY, theme::DIM);
+            p.text_center(
+                m.w / 2,
+                m.h / 2,
+                t(state, Chave::ScreenReboot),
+                theme::F_BODY,
+                theme::dim(),
+            );
         }
         giochi_launcher_core::Screen::Boot => {
             p.fill_rect(0, 0, m.w, m.h, theme::BLACK);
             let cx = m.w / 2;
-            p.text_center(cx, m.h / 2 - m.e(42).max(24), "GIOCHI", theme::F_LOGO, theme::ACCENT);
-            p.text_center(cx, m.h / 2 + m.e(2).max(1), "launcher 0.1.0", theme::F_TINY, theme::FAINT);
+            p.text_center(cx, m.h / 2 - m.e(42).max(24), "GIOCHI", theme::F_LOGO, theme::accent());
+            p.text_center(cx, m.h / 2 + m.e(2).max(1), "launcher 0.1.0", theme::F_TINY, theme::faint());
         }
         giochi_launcher_core::Screen::Running => {}
     }
 }
 
 fn panel(p: &mut Painter, x: i32, y: i32, w: i32, h: i32) {
-    p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::LINE2);
+    p.fill_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::panel());
+    p.stroke_round_rect(x, y, w, h, theme::RADIUS_PANEL, theme::line2());
 }
 
 fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
@@ -1238,32 +1389,38 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     let y = ((m.h - h) / 2).max(m.top);
     let r_painel = m.e(theme::RADIUS_PANEL).max(4);
     let r_caixa = m.e(8).max(3);
-    p.fill_round_rect(x, y, w, h, r_painel, theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, r_painel, theme::LINE2);
+    p.fill_round_rect(x, y, w, h, r_painel, theme::panel());
+    p.stroke_round_rect(x, y, w, h, r_painel, theme::line2());
 
-    p.text_left(x + borda, y + borda, "Ajustes rápidos", theme::F_BODY, theme::TEXT);
+    p.text_left(
+        x + borda,
+        y + borda,
+        t(state, Chave::QuickTitle),
+        theme::F_BODY,
+        theme::text(),
+    );
 
     let focused = |index: usize| state.focus.zone == Zone::QuickSettings && state.focus.index == index;
     let mut ry = y + header;
 
     for index in 0..rows {
         if focused(index) {
-            p.stroke_round_rect(x + 8, ry, w - 16, row_h, r_caixa, theme::ACCENT);
+            p.stroke_round_rect(x + 8, ry, w - 16, row_h, r_caixa, theme::accent());
         }
         p.fill_round_rect(x + 8, ry, w - 16, row_h, r_caixa, theme::with_alpha(theme::BLACK, 70));
 
         let (label, icon_name) = match index {
-            0 => ("Volume", "vol"),
-            1 => ("Brilho", "sun"),
-            2 => ("Desempenho", "bolt"),
-            3 => ("Wi-Fi", "wifi"),
-            4 => ("Bluetooth", "bt"),
-            _ => ("HUD de FPS", "chart"),
+            0 => (t(state, Chave::QuickVolume), "vol"),
+            1 => (t(state, Chave::QuickBrightness), "sun"),
+            2 => (t(state, Chave::SetPerformance), "bolt"),
+            3 => (t(state, Chave::Wifi), "wifi"),
+            4 => (t(state, Chave::Bluetooth), "bt"),
+            _ => (t(state, Chave::QuickHud), "chart"),
         };
         let icone = (row_h as f32 * 0.35) as i32;
-        p.icon(icon_name, x + borda + icone / 2, ry + row_h / 2, icone, theme::ACCENT);
+        p.icon(icon_name, x + borda + icone / 2, ry + row_h / 2, icone, theme::accent());
         let ty = vcenter(ry, row_h, p.text_size(label, theme::F_SMALL).1);
-        p.text_left(x + borda + icone + m.e(6).max(3), ty, label, theme::F_SMALL, theme::TEXT);
+        p.text_left(x + borda + icone + m.e(6).max(3), ty, label, theme::F_SMALL, theme::text());
 
         // Barra e valor em fração da largura: em 520 px fixos a barra tinha
         // 220 px; num painel estreito ela passava do painel.
@@ -1274,11 +1431,17 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
                 let value = if index == 0 { state.settings.volume } else { state.settings.brightness };
                 let bar_y = ry + row_h / 2 - 3;
                 p.fill_round_rect(bar_x, bar_y, bar_w, 6, 3, theme::with_alpha(theme::WHITE, 30));
-                p.fill_round_rect(bar_x, bar_y, (bar_w * value as i32 / 100).max(2), 6, 3, theme::ACCENT);
-                p.text_right(x + w - borda, ty, &format!("{value}%"), theme::F_TINY, theme::ACCENT);
+                p.fill_round_rect(bar_x, bar_y, (bar_w * value as i32 / 100).max(2), 6, 3, theme::accent());
+                p.text_right(x + w - borda, ty, &format!("{value}%"), theme::F_TINY, theme::accent());
             }
             2 => {
-                p.text_right(x + w - borda, ty, state.settings.perf.label(), theme::F_TINY, theme::ACCENT);
+                p.text_right(
+                    x + w - borda,
+                    ty,
+                    state.settings.perf.label(state.settings.idioma),
+                    theme::F_TINY,
+                    theme::accent(),
+                );
             }
             _ => {
                 let on = match index {
@@ -1289,10 +1452,10 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
                 let trilho = m.e(34).max(22);
                 let knob_x = x + w - borda - trilho;
                 let trilho_y = ry + row_h / 2 - m.e(8).max(5);
-                p.fill_round_rect(knob_x, trilho_y, trilho, m.e(16).max(10), m.e(8).max(3), if on { theme::with_alpha(theme::ACCENT, 80) } else { theme::with_alpha(theme::WHITE, 30) });
+                p.fill_round_rect(knob_x, trilho_y, trilho, m.e(16).max(10), m.e(8).max(3), if on { theme::with_alpha(theme::accent(), 80) } else { theme::with_alpha(theme::WHITE, 30) });
                 let r = m.e(7).max(4);
                 let dot_x = if on { knob_x + trilho - r * 2 - m.e(2).max(1) } else { knob_x + m.e(2).max(1) };
-                p.fill_circle(dot_x + r, trilho_y + m.e(8).max(5), r, if on { theme::ACCENT } else { theme::DIM });
+                p.fill_circle(dot_x + r, trilho_y + m.e(8).max(5), r, if on { theme::accent() } else { theme::dim() });
             }
         }
 
@@ -1305,7 +1468,8 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
     // Ações.
     let btn_w = (w - borda * 2 - m.e(8).max(4)) / 2;
     let by = y + h - borda - btn_h;
-    for (i, label) in ["Suspender", "Reiniciar"].iter().enumerate() {
+    let acoes = [t(state, Chave::PowerSuspend), t(state, Chave::PowerRestart)];
+    for (i, label) in acoes.iter().enumerate() {
         let bx = x + 8 + i as i32 * (btn_w + 8);
         let danger = i == 1;
         p.fill_round_rect(
@@ -1314,13 +1478,13 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
             btn_w,
             btn_h,
             r_caixa,
-            if danger { theme::with_alpha(theme::DANGER, 40) } else { theme::PANEL2 },
+            if danger { theme::with_alpha(theme::danger(), 40) } else { theme::panel2() },
         );
         if focused(6 + i) {
-            p.stroke_round_rect(bx, by, btn_w, btn_h, r_caixa, theme::ACCENT);
+            p.stroke_round_rect(bx, by, btn_w, btn_h, r_caixa, theme::accent());
         }
         let ty = vcenter(by, btn_h, p.text_size(label, theme::F_SMALL).1);
-        p.text_center(bx + btn_w / 2, ty, label, theme::F_SMALL, if danger { theme::DANGER } else { theme::TEXT });
+        p.text_center(bx + btn_w / 2, ty, label, theme::F_SMALL, if danger { theme::danger() } else { theme::text() });
         layout.hits.push((
             Rect::new(bx, by, btn_w as u32, btn_h as u32),
             Hit::QsButton(6 + i as u8),
@@ -1345,7 +1509,7 @@ fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
     let y = ((m.h - h) / 2).max(m.top);
     let r_painel = m.e(theme::RADIUS_PANEL).max(4);
 
-    p.fill_round_rect(x, y, w, h, r_painel, theme::PANEL);
+    p.fill_round_rect(x, y, w, h, r_painel, theme::panel());
 
     let accent = theme::game_accent(game.id);
     let base = theme::game_base(game.id);
@@ -1361,10 +1525,17 @@ fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
 
     // Estatísticas.
     let stats = [
-        ("ANO", game.year_label()),
-        ("HORAS", game.play_label()),
-        ("ÚLTIMA", game.last_played.clone()),
-        ("FAVORITO", if game.favorite { "Sim".into() } else { "—".into() }),
+        (t(state, Chave::DetailYear), game.year_label()),
+        (t(state, Chave::DetailHours), game.play_label(state.settings.idioma)),
+        (t(state, Chave::DetailLast), game.last_played.clone()),
+        (
+            t(state, Chave::DetailFavorite),
+            if game.favorite {
+                t(state, Chave::DetailYes).into()
+            } else {
+                "—".into()
+            },
+        ),
     ];
     // As estatísticas se distribuem na largura útil em vez de andarem 150 px
     // fixos: em 640×480 a quarta coluna caía fora do painel.
@@ -1379,10 +1550,14 @@ fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
 
     // Ações.
     let labels = [
-        "Jogar".to_string(),
-        if game.favorite { "Favoritado".into() } else { "Favoritar".into() },
-        "Opções".to_string(),
-        "Voltar".to_string(),
+        t(state, Chave::HomePlay).to_string(),
+        if game.favorite {
+            t(state, Chave::DetailFavoriteRemove).to_string()
+        } else {
+            t(state, Chave::DetailFavoriteAdd).to_string()
+        },
+        t(state, Chave::DetailOptions).to_string(),
+        t(state, Chave::HintBack).to_string(),
     ];
     let gap = m.e(8).max(3);
     let btn_w = ((w - borda * 2 - gap * (labels.len() as i32 - 1)) / labels.len() as i32).max(40);
@@ -1393,11 +1568,11 @@ fn game_detail(p: &mut Painter, state: &State, layout: &mut Layout) {
         let focused = state.focus.zone == Zone::GameDetailActions && state.focus.index == i;
         let primary = i == 0;
         let r = m.e(8).max(3);
-        p.fill_round_rect(bx, by, btn_w, btn_h, r, if primary { theme::ACCENT } else { theme::PANEL2 });
+        p.fill_round_rect(bx, by, btn_w, btn_h, r, if primary { theme::accent() } else { theme::panel2() });
         if focused {
             p.stroke_round_rect(bx, by, btn_w, btn_h, r, theme::WHITE);
         }
-        let color = if primary { theme::BG } else { theme::TEXT };
+        let color = if primary { theme::bg() } else { theme::text() };
         let ty = vcenter(by, btn_h, p.text_size(label, theme::F_SMALL).1);
         let rotulo = truncate(label, btn_w - m.e(12).max(6), &mut |s| p.text_size(s, theme::F_SMALL).0);
         p.text_center(bx + btn_w / 2, ty, &rotulo, theme::F_SMALL, color);
@@ -1413,7 +1588,12 @@ fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
     let m = Moldura::de(p);
     // 340×340 em y=190 fixos terminavam em y=530 num painel de 480 de altura:
     // metade do menu ficava fora da tela.
-    let labels = ["Suspender", "Reiniciar", "Desligar", "Cancelar"];
+    let labels = [
+        t(state, Chave::PowerSuspend),
+        t(state, Chave::PowerRestart),
+        t(state, Chave::PowerShutdown),
+        t(state, Chave::PowerCancel),
+    ];
     let borda = m.e(20).max(8);
     let btn_h = m.e(theme::TOUCH).max(30);
     let gap = m.e(5).max(2);
@@ -1425,15 +1605,27 @@ fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
     let y = ((m.h - h) / 2).max(m.top);
     let r_painel = m.e(theme::RADIUS_PANEL).max(4);
     let r_btn = m.e(7).max(3);
-    p.fill_round_rect(x, y, w, h, r_painel, theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, r_painel, theme::LINE2);
+    p.fill_round_rect(x, y, w, h, r_painel, theme::panel());
+    p.stroke_round_rect(x, y, w, h, r_painel, theme::line2());
 
     let cx = x + w / 2;
-    p.fill_round_rect(cx - icone / 2, y + m.e(20).max(8), icone, icone, m.e(12).max(4), theme::with_alpha(theme::DANGER, 40));
-    p.icon("power", cx, y + m.e(20).max(8) + icone / 2, (icone as f32 * 0.46) as i32, theme::DANGER);
+    p.fill_round_rect(cx - icone / 2, y + m.e(20).max(8), icone, icone, m.e(12).max(4), theme::with_alpha(theme::danger(), 40));
+    p.icon("power", cx, y + m.e(20).max(8) + icone / 2, (icone as f32 * 0.46) as i32, theme::danger());
 
-    p.text_center(cx, y + icone + m.e(12).max(4), "Opções de energia", theme::F_BODY, theme::TEXT);
-    p.text_center(cx, y + icone + m.e(34).max(18), "O que deseja fazer?", theme::F_TINY, theme::DIM);
+    p.text_center(
+        cx,
+        y + icone + m.e(12).max(4),
+        t(state, Chave::PowerTitle),
+        theme::F_BODY,
+        theme::text(),
+    );
+    p.text_center(
+        cx,
+        y + icone + m.e(34).max(18),
+        t(state, Chave::PowerSub),
+        theme::F_TINY,
+        theme::dim(),
+    );
 
     let mut by = y + header;
     for (i, label) in labels.iter().enumerate() {
@@ -1445,12 +1637,12 @@ fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
             w - borda * 2,
             btn_h,
             r_btn,
-            if danger { theme::with_alpha(theme::DANGER, 200) } else { theme::PANEL2 },
+            if danger { theme::with_alpha(theme::danger(), 200) } else { theme::panel2() },
         );
         if focused {
-            p.stroke_round_rect(x + borda, by, w - borda * 2, btn_h, r_btn, theme::ACCENT);
+            p.stroke_round_rect(x + borda, by, w - borda * 2, btn_h, r_btn, theme::accent());
         }
-        let color = if danger { theme::WHITE } else if i == 3 { theme::DIM } else { theme::TEXT };
+        let color = if danger { theme::WHITE } else if i == 3 { theme::dim() } else { theme::text() };
         let ty = vcenter(by, btn_h, p.text_size(label, theme::F_SMALL).1);
         p.text_center(cx, ty, label, theme::F_SMALL, color);
         layout.hits.push((
@@ -1459,6 +1651,136 @@ fn power_popup(p: &mut Painter, state: &State, layout: &mut Layout) {
         ));
         by += btn_h + gap;
     }
+}
+
+/// Tela de boas-vindas: a escolha do idioma na primeira abertura.
+///
+/// ## Por que a tela existe
+///
+/// O aparelho sai de fábrica em inglês, que é o padrão comercial. Quem não lê
+/// inglês abriria o produto e encontraria uma interface que não entende, sem
+/// caminho de volta antes de aprender onde ficam os ajustes. Perguntar uma vez,
+/// antes de mostrar o resto, resolve isso com uma tela.
+///
+/// ## Ela aparece uma vez só
+///
+/// Quem decide é `State::idioma_definido`, e quem o liga é a escolha (ou o
+/// arquivo `/user/.config/giochi/language` já existente). Uma tela que
+/// reaparece a cada boot obrigaria quem já escolheu a escolher de novo.
+///
+/// ## O título muda com o foco
+///
+/// Título e instrução são desenhados **no idioma que está sob o cursor**, não
+/// no atual (que ainda é o padrão). É o único jeito de quem chegou aqui sem
+/// entender inglês confirmar que escolheu o idioma certo antes de apertar `A`:
+/// ele vê a frase na própria língua enquanto anda na lista.
+fn boas_vindas(p: &mut Painter, state: &State, layout: &mut Layout) {
+    let m = Moldura::de(p);
+    let idiomas = Idioma::TODOS;
+    let foco = state.focus.index.min(idiomas.len() - 1);
+    let idioma_foco = idiomas[foco];
+
+    let borda = m.e(18).max(8);
+    let w = m.safe_w.min(m.e(560).max(280));
+    let x = m.centro(w);
+
+    let h_titulo = p.text_size("Ay", theme::F_HERO).1;
+    let h_corpo = p.text_size("Ay", theme::F_SMALL).1;
+    let h_tiny = p.text_size("Ay", theme::F_TINY).1;
+    let gap = m.e(8).max(4);
+
+    let cabecalho = borda + h_titulo + gap + h_corpo * 2 + gap;
+    let rodape = borda + h_tiny;
+    // Dez linhas têm de caber na altura que sobra. O piso de 22 px mantém a
+    // linha tocável; se não couber, o painel rola para fora — e aí a escolha
+    // ainda funciona pelo d-pad, que não depende de geometria.
+    let disponivel = (m.main_h - cabecalho - rodape).max(1);
+    let linha_h = (disponivel / idiomas.len() as i32).clamp(22, 38);
+    let h = (cabecalho + linha_h * idiomas.len() as i32 + rodape).min(m.main_h);
+    let y = (m.top + (m.main_h - h) / 2).max(m.top);
+
+    let r_painel = m.e(theme::RADIUS_PANEL).max(4);
+    p.fill_round_rect(x, y, w, h, r_painel, theme::panel());
+    p.stroke_round_rect(x, y, w, h, r_painel, theme::line2());
+
+    let cx = x + w / 2;
+    let ty = y + borda;
+    p.text_center(
+        cx,
+        ty,
+        idioma::texto(idioma_foco, Chave::WelcomeTitle),
+        theme::F_HERO,
+        theme::accent(),
+    );
+
+    // A instrução ocupa até duas linhas: em 640×480 ela não cabe numa só em
+    // nenhum dos dez idiomas.
+    let lede = idioma::texto(idioma_foco, Chave::WelcomeLede);
+    let (l1, l2) = split_title(lede, w - borda * 2, &mut |s| p.text_size(s, theme::F_SMALL).0);
+    let ly = ty + h_titulo + gap;
+    p.text_center(cx, ly, &l1, theme::F_SMALL, theme::dim());
+    if !l2.is_empty() {
+        p.text_center(cx, ly + h_corpo, &l2, theme::F_SMALL, theme::dim());
+    }
+
+    let mut ry = y + cabecalho;
+    let r_linha = m.e(8).max(3);
+    for (i, idioma) in idiomas.iter().enumerate() {
+        let focado = i == foco;
+        let largura = w - borda * 2;
+        p.fill_round_rect(
+            x + borda,
+            ry,
+            largura,
+            linha_h,
+            r_linha,
+            if focado {
+                theme::with_alpha(theme::accent(), 40)
+            } else {
+                theme::with_alpha(theme::BLACK, 70)
+            },
+        );
+        if focado {
+            p.stroke_round_rect(x + borda, ry, largura, linha_h, r_linha, theme::accent());
+        }
+
+        let cor = if focado { theme::text() } else { theme::dim() };
+        let ny = vcenter(ry, linha_h, p.text_size(idioma.nome_proprio(), theme::F_SMALL).1);
+        p.text_left(x + borda + gap, ny, idioma.nome_proprio(), theme::F_SMALL, cor);
+
+        // O nome em inglês fica à direita e em tom apagado. Ele não é enfeite:
+        // se a fonte do aparelho não tiver os glifos daquele idioma (chinês,
+        // devanágari, bengali — ver `docs/idiomas.md`), a linha esquerda sai
+        // vazia, e sem esta segunda coluna a lista teria dez linhas anônimas.
+        let ny_ingles = vcenter(ry, linha_h, p.text_size(idioma.nome(), theme::F_TINY).1);
+        p.text_right(
+            x + w - borda - gap,
+            ny_ingles,
+            idioma.nome(),
+            theme::F_TINY,
+            theme::faint(),
+        );
+
+        layout.hits.push((
+            Rect::new(x + borda, ry, largura as u32, linha_h as u32),
+            Hit::Idioma(i),
+        ));
+        ry += linha_h;
+    }
+
+    // Rodapé: o inglês já está escolhido e `A` confirma o que está em foco.
+    let nota = format!(
+        "{}: {}",
+        idioma::texto(idioma_foco, Chave::WelcomeConfirm),
+        idioma_foco.nome_proprio()
+    );
+    p.text_center(
+        cx,
+        y + h - rodape + m.e(2).max(1),
+        &nota,
+        theme::F_TINY,
+        theme::faint(),
+    );
 }
 
 fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
@@ -1482,18 +1804,18 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
     let x = m.centro(w);
     let y = m.top + (m.main_h - h) / 2;
     let r_painel = m.e(theme::RADIUS_PANEL).max(4);
-    p.fill_round_rect(x, y, w, h, r_painel, theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, r_painel, theme::LINE2);
+    p.fill_round_rect(x, y, w, h, r_painel, theme::panel());
+    p.stroke_round_rect(x, y, w, h, r_painel, theme::line2());
 
-    p.icon("search", x + borda + m.e(10).max(4), y + m.e(30).max(14), m.e(18).max(10), theme::ACCENT);
+    p.icon("search", x + borda + m.e(10).max(4), y + m.e(30).max(14), m.e(18).max(10), theme::accent());
     let query = if state.search_query.is_empty() {
-        "Buscar jogo...".to_string()
+        t(state, Chave::SearchPlaceholder).to_string()
     } else {
         state.search_query.clone()
     };
-    let qcolor = if state.search_query.is_empty() { theme::FAINT } else { theme::TEXT };
+    let qcolor = if state.search_query.is_empty() { theme::faint() } else { theme::text() };
     p.text_left(x + borda + m.e(28).max(12), y + m.e(22).max(10), &query, theme::F_BODY, qcolor);
-    p.fill_rect(x, y + linha_y, w, 1, theme::LINE);
+    p.fill_rect(x, y + linha_y, w, 1, theme::line());
 
     // Teclado.
     let kb_x = x + borda;
@@ -1510,18 +1832,18 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
             let ky = kb_y + row as i32 * (key_h + gap);
             let focused = state.focus.zone == Zone::SearchKeyboard && state.focus.index == index;
 
-            p.fill_round_rect(kx, ky, key_w, key_h, r_tecla, theme::PANEL2);
-            p.stroke_round_rect(kx, ky, key_w, key_h, r_tecla, if focused { theme::ACCENT } else { theme::LINE });
+            p.fill_round_rect(kx, ky, key_w, key_h, r_tecla, theme::panel2());
+            p.stroke_round_rect(kx, ky, key_w, key_h, r_tecla, if focused { theme::accent() } else { theme::line() });
 
 
             let label = if ch == ' ' {
-                "ESP".to_string()
+                t(state, Chave::SearchSpace).to_string()
             } else if ch == '\u{8}' {
                 "<".to_string()
             } else {
                 ch.to_string()
             };
-            let color = if focused { theme::ACCENT } else { theme::TEXT };
+            let color = if focused { theme::accent() } else { theme::text() };
             let ty = vcenter(ky, key_h, p.text_size(&label, theme::F_SMALL).1);
             p.text_center(kx + key_w / 2, ty, &label, theme::F_SMALL, color);
 
@@ -1550,7 +1872,8 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
         let rx = kb_x + KEYBOARD_COLS as i32 * (key_w + gap) + m.e(14).max(6);
         (rx, (x + w - borda - rx).max(60), kb_y)
     };
-    p.text_left(res_x, res_topo, &format!("Resultados ({})", results.len()), theme::F_TINY, theme::DIM);
+    let titulo_res = tv(state, Chave::SearchResults, &results.len().to_string());
+    p.text_left(res_x, res_topo, &titulo_res, theme::F_TINY, theme::dim());
 
     let mut ry = res_topo + m.e(20).max(10);
     let clip_top = ry;
@@ -1558,22 +1881,28 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
     p.push_clip(Clip { x: res_x, y: clip_top, w: res_w, h: clip_h });
 
     if results.is_empty() {
-        p.text_center(res_x + res_w / 2, ry + 30, "Digite para buscar...", theme::F_SMALL, theme::FAINT);
+        p.text_center(
+            res_x + res_w / 2,
+            ry + 30,
+            t(state, Chave::SearchEmpty),
+            theme::F_SMALL,
+            theme::faint(),
+        );
     } else {
         for (i, game_index) in results.iter().enumerate() {
             let game = &state.games[*game_index];
             let row_h = theme::TOUCH;
             let focused = state.focus.zone == Zone::SearchResults && state.focus.index == i;
 
-            p.fill_round_rect(res_x, ry, res_w, row_h - 4, 7, theme::PANEL2);
-            p.stroke_round_rect(res_x, ry, res_w, row_h - 4, 7, if focused { theme::ACCENT } else { theme::LINE });
+            p.fill_round_rect(res_x, ry, res_w, row_h - 4, 7, theme::panel2());
+            p.stroke_round_rect(res_x, ry, res_w, row_h - 4, 7, if focused { theme::accent() } else { theme::line() });
 
             let accent = theme::game_accent(game.id);
             p.fill_round_rect(res_x + 8, ry + 8, 28, 28, 5, accent);
 
             let title = truncate(&game.title, res_w - 60, &mut |s| p.text_size(s, theme::F_SMALL).0);
             let ty = vcenter(ry, row_h - 4, p.text_size(&title, theme::F_SMALL).1);
-            p.text_left(res_x + 44, ty, &title, theme::F_SMALL, theme::TEXT);
+            p.text_left(res_x + 44, ty, &title, theme::F_SMALL, theme::text());
 
             layout.hits.push((
                 Rect::new(res_x, ry, res_w as u32, (row_h - 4) as u32),
@@ -1602,9 +1931,9 @@ pub fn toast(p: &mut Painter, state: &State) {
     let y = m.h - m.e(64) - h;
 
     panel(p, x, y, w, h);
-    p.icon("check", x + 22, y + h / 2, 14, theme::ACCENT);
+    p.icon("check", x + 22, y + h / 2, 14, theme::accent());
     let ty = vcenter(y, h, p.text_size(text, theme::F_SMALL).1);
-    p.text_left(x + 38, ty, text, theme::F_SMALL, theme::TEXT);
+    p.text_left(x + 38, ty, text, theme::F_SMALL, theme::text());
 }
 
 pub fn hud(p: &mut Painter, state: &State) {
@@ -1618,7 +1947,7 @@ pub fn hud(p: &mut Painter, state: &State) {
     let y = 66;
 
     p.fill_round_rect(x, y, w, h, 8, theme::with_alpha(theme::BLACK, 180));
-    p.stroke_round_rect(x, y, w, h, 8, theme::LINE2);
+    p.stroke_round_rect(x, y, w, h, 8, theme::line2());
 
     let items = [
         ("FPS", if state.hud.fps > 0 { state.hud.fps.to_string() } else { "—".into() }),
@@ -1627,8 +1956,8 @@ pub fn hud(p: &mut Painter, state: &State) {
     ];
     let mut ix = x + 14;
     for (label, value) in items {
-        p.text_left(ix, y + 8, label, theme::F_TINY, theme::DIM);
-        p.text_left(ix, y + 20, &value, theme::F_SMALL, theme::ACCENT);
+        p.text_left(ix, y + 8, label, theme::F_TINY, theme::dim());
+        p.text_left(ix, y + 20, &value, theme::F_SMALL, theme::accent());
         ix += 54;
     }
 }
@@ -1652,7 +1981,7 @@ fn truncate(text: &str, max_w: i32, measure: &mut impl FnMut(&str) -> i32) -> St
 /// Extensão local para rótulos que não existem no núcleo.
 trait GameLabel {
     fn year_label(&self) -> String;
-    fn play_label(&self) -> String;
+    fn play_label(&self, idioma: Idioma) -> String;
 }
 
 impl GameLabel for giochi_launcher_core::Game {
@@ -1668,11 +1997,11 @@ impl GameLabel for giochi_launcher_core::Game {
         }
     }
 
-    fn play_label(&self) -> String {
+    fn play_label(&self, idioma: Idioma) -> String {
         if self.hours > 0.0 {
             format!("{:.1}h", self.hours)
         } else {
-            "nunca jogado".to_string()
+            idioma::texto(idioma, Chave::GameNeverPlayed).to_string()
         }
     }
 }
@@ -1711,9 +2040,9 @@ fn painel_lista(p: &mut Painter, state: &State, layout: &mut Layout, lista: List
     let h = (cabecalho + altura_lista + rodape_h + m.e(16).max(8)).min(m.main_h);
     let y = (m.top + (m.main_h - h) / 2).max(m.top);
 
-    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::LINE2);
-    p.text_left(x + m.e(16).max(8), y + m.e(12).max(6), lista.titulo, theme::F_BODY, theme::TEXT);
+    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::panel());
+    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::line2());
+    p.text_left(x + m.e(16).max(8), y + m.e(12).max(6), lista.titulo, theme::F_BODY, theme::text());
 
     let mut ry = y + cabecalho;
     let borda = m.e(10).max(5);
@@ -1721,16 +2050,16 @@ fn painel_lista(p: &mut Painter, state: &State, layout: &mut Layout, lista: List
     for (i, (titulo, detalhe)) in lista.itens.iter().enumerate() {
         let focado = state.focus.zone == zona && state.focus.index == i;
         p.fill_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3),
-            if focado { theme::PANEL2 } else { theme::with_alpha(theme::BLACK, 70) });
+            if focado { theme::panel2() } else { theme::with_alpha(theme::BLACK, 70) });
         if focado {
-            p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::ACCENT);
+            p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::accent());
         }
         let dw = p.text_size(detalhe, theme::F_TINY).0;
         let t = truncate(titulo, w - borda * 3 - dw, &mut |s| p.text_size(s, theme::F_SMALL).0);
         let ty = vcenter(ry, linha_h, p.text_size(&t, theme::F_SMALL).1);
-        p.text_left(x + borda, ty, &t, theme::F_SMALL, theme::TEXT);
+        p.text_left(x + borda, ty, &t, theme::F_SMALL, theme::text());
         let dy = vcenter(ry, linha_h, p.text_size(detalhe, theme::F_TINY).1);
-        p.text_right(x + w - borda, dy, detalhe, theme::F_TINY, theme::ACCENT);
+        p.text_right(x + w - borda, dy, detalhe, theme::F_TINY, theme::accent());
         layout.hits.push((
             Rect::new(x + m.e(6).max(3), ry, (w - m.e(12).max(6)) as u32, linha_h as u32),
             if zona == Zone::BtDevices { Hit::BtDevice(i) } else { Hit::WifiNet(i) },
@@ -1743,12 +2072,12 @@ fn painel_lista(p: &mut Painter, state: &State, layout: &mut Layout, lista: List
     let i = lista.itens.len();
     let focado = state.focus.zone == zona && state.focus.index == i;
     p.fill_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3),
-        if focado { theme::PANEL2 } else { theme::with_alpha(theme::BLACK, 70) });
+        if focado { theme::panel2() } else { theme::with_alpha(theme::BLACK, 70) });
     if focado {
-        p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::ACCENT);
+        p.stroke_round_rect(x + m.e(6).max(3), ry, w - m.e(12).max(6), linha_h, m.e(8).max(3), theme::accent());
     }
     let texto_acao = if lista.vazio.is_empty() { lista.acao.to_string() } else { lista.vazio.to_string() };
-    let cor = if lista.vazio.is_empty() { theme::ACCENT } else { theme::DIM };
+    let cor = if lista.vazio.is_empty() { theme::accent() } else { theme::dim() };
     let ty = vcenter(ry, linha_h, p.text_size(&texto_acao, theme::F_SMALL).1);
     p.text_left(x + borda, ty, &texto_acao, theme::F_SMALL, cor);
     layout.hits.push((
@@ -1758,7 +2087,7 @@ fn painel_lista(p: &mut Painter, state: &State, layout: &mut Layout, lista: List
 
     // Rodapé: o estado real, não uma promessa.
     let rodape = truncate(&lista.rodape, w - borda * 2, &mut |s| p.text_size(s, theme::F_TINY).0);
-    p.text_left(x + borda, y + h - rodape_h + m.e(4).max(2), &rodape, theme::F_TINY, theme::DIM);
+    p.text_left(x + borda, y + h - rodape_h + m.e(4).max(2), &rodape, theme::F_TINY, theme::dim());
 }
 
 fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
@@ -1769,13 +2098,13 @@ fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         .iter()
         .map(|r| {
             let detalhe = if Some(&r.ssid) == sf.conectado.as_ref() {
-                "conectada".to_string()
+                t(state, Chave::WifiConnected).to_string()
             } else if r.salva {
-                "salva".to_string()
+                t(state, Chave::WifiSaved).to_string()
             } else if r.protegida {
                 format!("{}% ▮", r.sinal)
             } else {
-                "aberta".to_string()
+                t(state, Chave::WifiOpen).to_string()
             };
             (r.ssid.clone(), detalhe)
         })
@@ -1783,19 +2112,29 @@ fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
 
     let (rodape, vazio) = if sf.tem_wifi == Some(false) {
         (
-            "este aparelho não tem Wi-Fi".to_string(),
-            "Sem rádio Wi-Fi neste aparelho".to_string(),
+            t(state, Chave::WifiNoRadioFooter).to_string(),
+            t(state, Chave::WifiNoRadioEmpty).to_string(),
         )
     } else if let Some(erro) = &sf.erro {
-        (format!("erro: {erro}"), String::new())
+        // O motivo vem da camada de sistema (wpa_cli/BlueZ) e é diagnóstico:
+        // ele cita `wpa_state` e códigos do BlueZ, que não se traduzem. Ver
+        // `docs/idiomas.md` — é a única parte da tela que não acompanha o
+        // idioma, e o porquê está escrito lá.
+        (tv(state, Chave::ErrorPrefix, erro), String::new())
     } else if sf.escaneando {
-        ("procurando redes…".to_string(), "Procurando…".to_string())
+        (
+            t(state, Chave::WifiScanning).to_string(),
+            t(state, Chave::ScanningShort).to_string(),
+        )
     } else if itens.is_empty() {
-        ("nenhuma rede encontrada".to_string(), "Nenhuma rede — A para procurar".to_string())
+        (
+            t(state, Chave::WifiNone).to_string(),
+            t(state, Chave::WifiNoneEmpty).to_string(),
+        )
     } else {
         (
-            format!("{} rede(s) · A conecta", itens.len()),
-            "Procurar de novo".to_string(),
+            tv(state, Chave::WifiFound, &itens.len().to_string()),
+            t(state, Chave::ScanAgain).to_string(),
         )
     };
 
@@ -1804,10 +2143,10 @@ fn wifi_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         state,
         layout,
         Lista {
-            titulo: "Wi-Fi",
+            titulo: t(state, Chave::Wifi),
             rodape,
             itens,
-            acao: "Procurar redes",
+            acao: t(state, Chave::WifiScanAction),
             vazio: if vazio.is_empty() { String::new() } else { vazio },
         },
         Zone::WifiNetworks,
@@ -1821,9 +2160,9 @@ fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         .iter()
         .map(|d| {
             let detalhe = if Some(&d.mac) == sf.bt_conectado.as_ref() {
-                "conectado".to_string()
+                t(state, Chave::BtConnected).to_string()
             } else if d.pareado {
-                "pareado".to_string()
+                t(state, Chave::BtPaired).to_string()
             } else {
                 d.mac.clone()
             };
@@ -1833,17 +2172,26 @@ fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
 
     let (rodape, vazio) = if sf.tem_bt == Some(false) {
         (
-            "este aparelho não tem Bluetooth".to_string(),
-            "Sem rádio Bluetooth neste aparelho".to_string(),
+            t(state, Chave::BtNoRadioFooter).to_string(),
+            t(state, Chave::BtNoRadioEmpty).to_string(),
         )
     } else if let Some(erro) = &sf.erro {
-        (format!("erro: {erro}"), String::new())
+        (tv(state, Chave::ErrorPrefix, erro), String::new())
     } else if sf.bt_escaneando {
-        ("procurando aparelhos…".to_string(), "Procurando…".to_string())
+        (
+            t(state, Chave::BtScanning).to_string(),
+            t(state, Chave::ScanningShort).to_string(),
+        )
     } else if itens.is_empty() {
-        ("nenhum aparelho".to_string(), "Nenhum — A para procurar".to_string())
+        (
+            t(state, Chave::BtNone).to_string(),
+            t(state, Chave::BtNoneEmpty).to_string(),
+        )
     } else {
-        (format!("{} aparelho(s) · A pareia", itens.len()), "Procurar de novo".to_string())
+        (
+            tv(state, Chave::BtFound, &itens.len().to_string()),
+            t(state, Chave::ScanAgain).to_string(),
+        )
     };
 
     painel_lista(
@@ -1851,10 +2199,10 @@ fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
         state,
         layout,
         Lista {
-            titulo: "Bluetooth",
+            titulo: t(state, Chave::Bluetooth),
             rodape,
             itens,
-            acao: "Procurar aparelhos",
+            acao: t(state, Chave::BtScanAction),
             vazio,
         },
         Zone::BtDevices,
@@ -1873,7 +2221,7 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
     let w = m.safe_w.min(m.e(600).max(300));
     let x = m.w / 2 - w / 2;
 
-    let ssid = state.sem_fio.alvo.clone().unwrap_or_else(|| "rede".into());
+    let ssid = state.sem_fio.alvo.clone().unwrap_or_default();
     let campo_h = m.e(34).max(24);
     let tecla_h = m.e(theme::TOUCH).max(30);
     let gap = m.e(4).max(2);
@@ -1892,11 +2240,12 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
         .min(m.main_h);
     let y = (m.top + (m.main_h - h) / 2).max(m.top);
 
-    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::PANEL);
-    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::LINE2);
+    p.fill_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::panel());
+    p.stroke_round_rect(x, y, w, h, m.e(theme::RADIUS_PANEL).max(4), theme::line2());
 
-    let titulo = truncate(&format!("Senha de {ssid}"), w - m.e(24).max(12), &mut |s| p.text_size(s, theme::F_BODY).0);
-    p.text_left(x + m.e(12).max(6), y + m.e(8).max(4), &titulo, theme::F_BODY, theme::TEXT);
+    let titulo_bruto = tv(state, Chave::PasswordTitle, &ssid);
+    let titulo = truncate(&titulo_bruto, w - m.e(24).max(12), &mut |s| p.text_size(s, theme::F_BODY).0);
+    p.text_left(x + m.e(12).max(6), y + m.e(8).max(4), &titulo, theme::F_BODY, theme::text());
 
     // Campo: bolinhas ou claro, alternado por X. O comprimento aparece sempre —
     // sem isso não se sabe se a tecla pegou.
@@ -1904,7 +2253,7 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
     let borda = m.e(10).max(5);
     p.fill_round_rect(x + m.e(8).max(4), cy, w - m.e(16).max(8), campo_h, m.e(6).max(3),
         theme::with_alpha(theme::BLACK, 120));
-    p.stroke_round_rect(x + m.e(8).max(4), cy, w - m.e(16).max(8), campo_h, m.e(6).max(3), theme::LINE);
+    p.stroke_round_rect(x + m.e(8).max(4), cy, w - m.e(16).max(8), campo_h, m.e(6).max(3), theme::line());
     let visivel = &state.sem_fio.senha;
     let mostrado = if state.sem_fio.senha_visivel {
         visivel.clone()
@@ -1913,7 +2262,7 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
     };
     let mostrado = truncate(&mostrado, w - m.e(28).max(14), &mut |s| p.text_size(s, theme::F_BODY).0);
     let ty = vcenter(cy, campo_h, p.text_size(&mostrado, theme::F_BODY).1);
-    p.text_left(x + borda + m.e(4).max(2), ty, &mostrado, theme::F_BODY, theme::ACCENT);
+    p.text_left(x + borda + m.e(4).max(2), ty, &mostrado, theme::F_BODY, theme::accent());
 
     // Teclado.
     let ky0 = cy + campo_h + gap * 2;
@@ -1925,12 +2274,12 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
             let tx = x + m.e(8).max(4) + c as i32 * (tecla_w + gap);
             let ty2 = ky0 + r as i32 * (tecla_h + gap);
             p.fill_round_rect(tx, ty2, tecla_w, tecla_h, m.e(6).max(3),
-                if focado { theme::ACCENT } else { theme::PANEL2 });
+                if focado { theme::accent() } else { theme::panel2() });
             if focado {
                 p.stroke_round_rect(tx, ty2, tecla_w, tecla_h, m.e(6).max(3), theme::WHITE);
             }
             let rotulo = if *ch == '\u{8}' { "⌫".to_string() } else { ch.to_string() };
-            let cor = if focado { theme::BG } else { theme::TEXT };
+            let cor = if focado { theme::bg() } else { theme::text() };
             let tcy = vcenter(ty2, tecla_h, p.text_size(&rotulo, theme::F_SMALL).1);
             p.text_center(tx + tecla_w / 2, tcy, &rotulo, theme::F_SMALL, cor);
             layout.hits.push((
@@ -1964,23 +2313,27 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
     let focado = state.focus.zone == Zone::PasswordActions;
     let vazio = state.sem_fio.senha.is_empty();
     let fundo = if vazio {
-        theme::PANEL2
+        theme::panel2()
     } else if focado {
-        theme::ACCENT
+        theme::accent()
     } else {
-        theme::with_alpha(theme::ACCENT, 90)
+        theme::with_alpha(theme::accent(), 90)
     };
     p.fill_round_rect(bx, by, bw, bh, m.e(6).max(3), fundo);
     if focado {
         p.stroke_round_rect(bx, by, bw, bh, m.e(6).max(3), theme::WHITE);
     }
-    let rotulo = if vazio { "Conectar (digite a senha)" } else { "Conectar" };
-    let cor = if vazio {
-        theme::DIM
-    } else if focado {
-        theme::BG
+    let rotulo = if vazio {
+        t(state, Chave::PasswordConnectEmpty)
     } else {
-        theme::TEXT
+        t(state, Chave::PasswordConnect)
+    };
+    let cor = if vazio {
+        theme::dim()
+    } else if focado {
+        theme::bg()
+    } else {
+        theme::text()
     };
     let tcy = vcenter(by, bh, p.text_size(rotulo, theme::F_BODY).1);
     p.text_center(bx + bw / 2, tcy, rotulo, theme::F_BODY, cor);
@@ -2046,22 +2399,91 @@ mod tests {
     }
 
     /// `A` só é anunciado como "Jogar" na Home, que é a única aba onde ele inicia.
+    ///
+    /// A comparação é com a **chave traduzida**, não com um texto: o padrão do
+    /// aparelho é inglês e o usuário pode estar em qualquer um dos dez idiomas.
+    /// Amarrar o teste a "Jogar" reprovaria as dez traduções sem que a regra
+    /// tivesse mudado.
     #[test]
     fn rodape_nao_promete_jogar_onde_a_apenas_abre() {
-        use giochi_launcher_core::{State, Tab};
+        use giochi_launcher_core::idioma::{texto, Chave};
+        use giochi_launcher_core::{Idioma, State, Tab};
 
         let base = State::new(Vec::new(), Vec::new());
-        let acao = |tab: Tab| {
-            let s = State { tab, ..base.clone() };
+        let acao = |tab: Tab, idioma: Idioma| {
+            let mut s = State { tab, ..base.clone() };
+            s.settings.idioma = idioma;
             super::dicas(&s)
                 .iter()
                 .find(|(k, _)| *k == "A")
                 .map(|(_, v)| v.to_string())
         };
 
-        assert_eq!(acao(Tab::Home).as_deref(), Some("Jogar"));
-        assert_eq!(acao(Tab::Library).as_deref(), Some("Abrir"));
-        assert_eq!(acao(Tab::Apps), None, "nos Apps o A não faz nada");
+        for idioma in [Idioma::En, Idioma::Pt, Idioma::Zh] {
+            assert_eq!(
+                acao(Tab::Home, idioma).as_deref(),
+                Some(texto(idioma, Chave::HintPlay)),
+                "na Home o A inicia: {}",
+                idioma.nome()
+            );
+            assert_eq!(
+                acao(Tab::Library, idioma).as_deref(),
+                Some(texto(idioma, Chave::HintOpen)),
+                "na Biblioteca o A abre a ficha: {}",
+                idioma.nome()
+            );
+            assert_eq!(
+                acao(Tab::Apps, idioma),
+                None,
+                "nos Apps o A não faz nada ({})",
+                idioma.nome()
+            );
+        }
+    }
+
+    /// A linha do idioma mostra o idioma **escolhido**, no idioma da interface.
+    ///
+    /// É o que o dono pediu: a opção de trocar o idioma mora onde se troca o
+    /// tema. Se a linha mostrasse `Idioma: Idioma` (rótulo traduzido, valor não)
+    /// o usuário que não lê o idioma atual não teria como saber onde está.
+    #[test]
+    fn linha_de_idioma_mostra_o_idioma_escolhido() {
+        use giochi_launcher_core::{Idioma, State};
+
+        let base = State::new(Vec::new(), Vec::new());
+        let linha = |idioma: Idioma| {
+            let mut s = State { ..base.clone() };
+            s.settings.idioma = idioma;
+            super::linhas_da_categoria("appearance", &s)
+        };
+
+        let pt = linha(Idioma::Pt);
+        assert_eq!(pt.len(), 3, "tema, idioma e escala");
+        assert_eq!(pt[0].0, "Tema");
+        assert_eq!(pt[0].1, "Giochi Dark", "nome do tema não se traduz");
+        assert_eq!(pt[1].0, "Idioma");
+        assert_eq!(pt[1].1, "Português", "o valor é o nome no próprio idioma");
+
+        // Em chinês, o rótulo muda e o valor continua sendo o nome nativo.
+        let zh = linha(Idioma::Zh);
+        assert_eq!(zh[1].0, "语言");
+        assert_eq!(zh[1].1, "中文");
+
+        // O inglês é o padrão comercial: quem não escolheu nada cai aqui.
+        let en = linha(Idioma::En);
+        assert_eq!(en[1].0, "Language");
+        assert_eq!(en[1].1, "English");
+    }
+
+    /// A linha da escala continua sendo informativa, e não um ajuste.
+    #[test]
+    fn linha_de_escala_declara_que_acompanha_o_painel() {
+        use giochi_launcher_core::State;
+
+        let s = State::new(Vec::new(), Vec::new());
+        let linhas = super::linhas_da_categoria("appearance", &s);
+        assert_eq!(linhas[2].0, "Scale");
+        assert_eq!(linhas[2].1, "follows the panel");
     }
 
     /// O núcleo e o desenho precisam concordar sobre quantas linhas a categoria

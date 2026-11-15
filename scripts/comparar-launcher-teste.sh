@@ -64,8 +64,13 @@ comparar_um() {
   local nome="real-$tamanho"; [ "$rot" = "270" ] && nome="real-${tamanho}-retrato"
   local nome_t="engine-$tamanho"; [ "$rot" = "270" ] && nome_t="engine-${tamanho}-retrato"
 
+  # `--idioma en` congela o idioma dos dois lados. Sem ele o launcher de
+  # produção abre na tela de boas-vindas num PC sem
+  # `/user/.config/giochi/language` — e o launcher-teste, que não tem essa tela,
+  # desenharia a Home. A comparação reprovaria por assimetria de entrada, que é a
+  # mesma família do relógio, da bateria e da temperatura (AGENTS.md §11).
   env "${extra[@]}" SDL_VIDEODRIVER=dummy LD_LIBRARY_PATH="$LIBS" \
-    "$REAL" --tamanho "$tamanho" --demo ${TECLAS:+--teclas "$TECLAS"} \
+    "$REAL" --tamanho "$tamanho" --demo --idioma en ${TECLAS:+--teclas "$TECLAS"} \
     --dump-frame "$SAIDA/$nome.bmp" >/dev/null 2>&1 \
     || { falha "$tamanho: o launcher de produção não gerou quadro"; return 1; }
 
