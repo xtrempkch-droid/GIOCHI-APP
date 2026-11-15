@@ -1066,6 +1066,12 @@ minuto virando entre as duas capturas).
 host key muda ao regravar (`ssh-keygen -R 10.55.0.2` — a mensagem fala de ataque
 MITM e não é).
 
+**O IP do Wi-Fi é DHCP e muda entre boots.** O mesmo X55 respondeu
+`192.168.1.7` numa sessão e `192.168.1.2` na seguinte, e a host key é outra —
+`sem host key` é endereço reciclado, não aparelho diferente. Hardcodar o IP
+rende `Host key verification failed` que parece defeito de rede. `aparelho.sh
+procurar` varre a `/24` justamente por isso.
+
 O R35S não tem rádio e o `dwc2` nasce como *host*: `aparelho.sh` (feito de
 `ssh`/`scp`) não o alcança sem `usb0`. Quando o USB não sobe, a console serial
 (`ttyS2` @ 1500000) é o único caminho:
@@ -1415,3 +1421,14 @@ Pedidos abertos (15/11/2026), com verificação objetiva para cada um:
 Os três primeiros são a mesma família (transporte HID). O quarto foi medido em
 15/11/2026 e aplicado à mão no X55 desta rodada; sem ele na imagem, o aviso
 "a rede não foi salva" aparece para o usuário em toda sessão.
+
+**Conferido de novo na imagem de 15/11/2026** (`built_at_utc=2026-11-15T00:23:53Z`,
+`commit=d8f544a`): o `update_config=1` **continua ausente**. O pedido não foi
+atendido, e regravar o cartão apaga a correção manual — foi o que aconteceu
+nesta rodada. Sem a linha, `save_config` responde `FAIL`; com ela e o
+supplicant reiniciado, responde **`OK`**. Medido no X55 na mesma sessão.
+
+A imagem também embarca um `network={ key_mgmt=NONE }` vazio: o supplicant
+sobe, entra em `SCANNING` atrás de uma rede aberta sem SSID e a tela fica
+"procurando" sem nunca achar. Não é "sem Wi-Fi" — é um placeholder que parece
+uma rede.
