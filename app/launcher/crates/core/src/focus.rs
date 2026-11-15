@@ -25,6 +25,14 @@ pub enum Zone {
     WifiNetworks,
     /// Teclado da senha. Usa o mesmo `KEYBOARD` da busca, com outro destino.
     PasswordKeys,
+    /// A linha de ações do teclado de senha: o botão **Conectar**.
+    ///
+    /// Existe porque a senha era um caminho sem saída. `Cmd::ConectarSenha`
+    /// estava no enum, o `ui-sdl` sabia executá-lo, e **nada o emitia**: quem
+    /// digitava a senha só podia apagar (`B`) ou errar (`A` digita). O botão é a
+    /// saída, e é declarado como zona — não como um índice mágico na grade do
+    /// teclado, que faria `A` digitar numa tecla que não é uma tecla.
+    PasswordActions,
     /// Lista de dispositivos Bluetooth.
     BtDevices,
     SearchKeyboard,
@@ -46,6 +54,7 @@ impl Zone {
             Zone::SettingsContent => 1,
             Zone::WifiNetworks => 1,
             Zone::PasswordKeys => KEYBOARD_COLS,
+            Zone::PasswordActions => 1,
             Zone::BtDevices => 1,
             Zone::SearchKeyboard => 7,
             Zone::SearchResults => 1,
@@ -151,6 +160,27 @@ pub fn navigate(state: &State, dir: Dir) -> Option<Focus> {
     // E a volta: ← do painel devolve para a coluna, na categoria atual.
     if zone == Zone::SettingsContent && dir == Dir::Left {
         return Some(Focus::at(Zone::SettingsSidebar, state.settings_category));
+    }
+
+    // Senha: descer do teclado chega ao botão Conectar, e subir volta para ele.
+    //
+    // `↓` só sai da **última** linha, senão o direcional não percorreria a
+    // grade — o mesmo erro que a navegação da aba Jogos já teve, quando `↓`
+    // supunha um número de colunas diferente do que a tela desenhava.
+    if zone == Zone::PasswordKeys && dir == Dir::Down {
+        let linha = focus.index / Zone::PasswordKeys.columns();
+        if linha + 1 >= crate::state::KEYBOARD.len() {
+            return Some(Focus::at(Zone::PasswordActions, 0));
+        }
+    }
+    if zone == Zone::PasswordActions {
+        return match dir {
+            Dir::Up => Some(Focus::at(
+                Zone::PasswordKeys,
+                (crate::state::KEYBOARD.len() - 1) * Zone::PasswordKeys.columns(),
+            )),
+            _ => None,
+        };
     }
 
     // Busca: sair da grade de resultados volta para o teclado.

@@ -365,7 +365,10 @@ impl App {
     /// `sync_sem_fio` os detecta por diferença. Um comando com efeito só no
     /// estado seria uma segunda rota para o mesmo fato.
     fn executar_pedido(&mut self, cmd: &Cmd) {
-        if let Cmd::ConectarSenha = cmd {
+        // `pede_conexao` e não `if let Cmd::ConectarSenha`: quem aperta `A` no
+        // botão Conectar envia `Confirm`, e o reducer traduz em `ConectarSenha`
+        // depois que este método já rodou.
+        if cmd.pede_conexao(&self.state) {
             if let Some(ssid) = self.state.sem_fio.alvo.clone() {
                 let senha = self.state.sem_fio.senha.clone();
                 if senha.is_empty() {
@@ -611,6 +614,10 @@ impl App {
             }
             Hit::PasswordKey(index) => {
                 self.dispatch(Cmd::FocusAt(Zone::PasswordKeys, index));
+                self.dispatch(Cmd::Confirm);
+            }
+            Hit::PasswordConfirm => {
+                self.dispatch(Cmd::FocusAt(Zone::PasswordActions, 0));
                 self.dispatch(Cmd::Confirm);
             }
             Hit::BtDevice(index) => {

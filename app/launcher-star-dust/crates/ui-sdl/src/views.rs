@@ -123,6 +123,8 @@ pub enum Hit {
     WifiNet(usize),
     /// Tecla do teclado de senha.
     PasswordKey(usize),
+    /// Botão "Conectar" do teclado de senha.
+    PasswordConfirm,
     /// Dispositivo Bluetooth na lista.
     BtDevice(usize),
     QsRow(usize),
@@ -362,7 +364,14 @@ pub fn dicas(state: &State) -> &'static [(&'static str, &'static str)] {
         Some(Overlay::GameDetail) => &[("←→", "Ação"), ("A", "Confirmar"), ("B", "Voltar")],
         Some(Overlay::PowerPopup) => &[("↑↓", "Navegar"), ("A", "Confirmar"), ("B", "Cancelar")],
         Some(Overlay::WifiList) => &[("A", "Conectar"), ("B", "Voltar"), ("↑↓", "Rede")],
-        Some(Overlay::WifiPassword) => &[("A", "Digitar"), ("X", "Mostrar"), ("B", "Cancelar")],
+        // `↓ Conectar` entrou em 14/11/2026: a tela não tinha confirmação e a
+        // senha digitada nunca entrava em vigor.
+        Some(Overlay::WifiPassword) => &[
+            ("A", "Digitar"),
+            ("X", "Mostrar"),
+            ("↓", "Conectar"),
+            ("B", "Cancelar"),
+        ],
         Some(Overlay::BtList) => &[("A", "Parear"), ("B", "Voltar"), ("↑↓", "Aparelho")],
         // Configurações: as dicas mudam com a coluna em foco.
         //
@@ -2008,7 +2017,16 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
     let gap = m.e(4).max(2);
     let linhas = KEYBOARD.len() as i32;
     let cabecalho = m.e(30).max(20);
-    let h = (cabecalho + campo_h + gap * 2 + tecla_h * linhas + gap * (linhas - 1) + m.e(20).max(10))
+    // Soma o botão Conectar: sem ele o painel terminaria em cima da própria
+    // saída, e o botão desenharia fora da moldura.
+    let h = (cabecalho
+        + campo_h
+        + gap * 2
+        + tecla_h * linhas
+        + gap * (linhas - 1)
+        + gap * 2
+        + tecla_h
+        + m.e(20).max(10))
         .min(m.main_h);
     let y = (m.top + (m.main_h - h) / 2).max(m.top);
 
@@ -2059,4 +2077,42 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
             ));
         }
     }
+
+    // Botão Conectar — a saída do teclado.
+    //
+    // Até 14/11/2026 a tela não tinha como confirmar nada: `A` digitava, `B`
+    // descartava, e a senha nunca entrava em vigor. Fica **abaixo** da grade
+    // porque `A` numa tecla digita, e uma célula que não digitasse quebraria a
+    // regra da fileira de 7 colunas.
+    let by = ky0 + linhas * tecla_h + (linhas - 1) * gap + gap * 2;
+    let bx = x + m.e(8).max(4);
+    let bw = w - m.e(16).max(8);
+    let bh = tecla_h;
+    let focado = state.focus.zone == Zone::PasswordActions;
+    let vazio = state.sem_fio.senha.is_empty();
+    let fundo = if vazio {
+        theme::PANEL2
+    } else if focado {
+        theme::ACCENT
+    } else {
+        theme::with_alpha(theme::ACCENT, 90)
+    };
+    p.fill_round_rect(bx, by, bw, bh, m.e(6).max(3), fundo);
+    if focado {
+        p.stroke_round_rect(bx, by, bw, bh, m.e(6).max(3), theme::WHITE);
+    }
+    let rotulo = if vazio { "Conectar (digite a senha)" } else { "Conectar" };
+    let cor = if vazio {
+        theme::DIM
+    } else if focado {
+        theme::BG
+    } else {
+        theme::TEXT
+    };
+    let tcy = vcenter(by, bh, p.text_size(rotulo, theme::F_BODY).1);
+    p.text_center(bx + bw / 2, tcy, rotulo, theme::F_BODY, cor);
+    layout.hits.push((
+        Rect::new(bx, by, bw as u32, bh as u32),
+        Hit::PasswordConfirm,
+    ));
 }

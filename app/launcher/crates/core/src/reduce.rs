@@ -35,6 +35,19 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
         Cmd::Nav(dir) => nav(state, dir),
         Cmd::Confirm => confirm(state),
         Cmd::Back => go_back(state),
+        // `X` no teclado de senha mostra o que foi digitado.
+        //
+        // O rodapé já anunciava "X Mostrar" e a tecla chamava `open_detail`,
+        // que com o overlay aberto devolve o estado sem mudar nada: promessa
+        // vazia. Sem ver a senha, um erro de digitação em 28 teclas só se
+        // descobre errando de novo.
+        Cmd::Options if state.top_overlay() == Some(Overlay::WifiPassword) => State {
+            sem_fio: crate::state::SemFio {
+                senha_visivel: !state.sem_fio.senha_visivel,
+                ..state.sem_fio
+            },
+            ..state
+        },
         Cmd::Options => open_detail(state),
         Cmd::Search => open_search(state),
         Cmd::TabPrev => tab_step(state, -1),
@@ -148,6 +161,34 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
                 Some(motivo) => toast(s, &motivo),
             }
         }
+        // Conectar com a senha digitada.
+        //
+        // Fecha o teclado e volta para a lista: a conexão leva até 12 s
+        // (associação de verdade, não só `select_network`) e o resultado chega
+        // como toast em `ResultadoWifi`. Deixar a tela aberta enquanto isso
+        // mostraria um campo de senha congelado, sem sinal de que algo acontece.
+        //
+        // Apaga o **texto** e mantém o `alvo`: é o `alvo` que `ResultadoWifi` lê
+        // para dizer qual rede conectou. `go_back` limparia os dois, então esta
+        // saída usa `desempilhar`.
+        Cmd::ConectarSenha => {
+            let s = desempilhar(state);
+            let ssid = s.sem_fio.alvo.clone().unwrap_or_default();
+            let s = State {
+                sem_fio: crate::state::SemFio {
+                    senha: String::new(),
+                    senha_visivel: false,
+                    erro: None,
+                    ..s.sem_fio
+                },
+                ..s
+            };
+            if ssid.is_empty() {
+                s
+            } else {
+                toast(s, &format!("Conectando a {ssid}..."))
+            }
+        }
         Cmd::CancelarSenha => {
             let mut s = go_back(state);
             s.sem_fio.limpar_senha();
@@ -190,9 +231,9 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
             }
             Some(motivo) => toast(state, &motivo),
         },
-        // Estes três não mudam estado por si: a UI lê o campo e executa.
+        // Estes dois não mudam estado por si: a UI lê o campo e executa.
         // Mantidos no `match` para o compilador exigir que alguém pense neles.
-        Cmd::EscolherRede(_) | Cmd::ConectarSenha | Cmd::ParearBt(_) => state,
+        Cmd::EscolherRede(_) | Cmd::ParearBt(_) => state,
         // Abrir já marca "procurando": a UI executa a varredura quando vê este
         // campo passar de falso para verdadeiro. Se a marcação ficasse na UI,
         // haveria duas rotas para o mesmo efeito — e a tela abriria vazia por um
@@ -692,6 +733,13 @@ fn confirm(state: State) -> State {
             }
         }
 
+        // O botão Conectar: a saída do teclado de senha.
+        //
+        // Sem esta zona a tela não tinha como confirmar nada — o comando
+        // `ConectarSenha` existia e ninguém o emitia. `B` descartava o que foi
+        // digitado, `A` digitava, e a senha nunca entrava em vigor.
+        Zone::PasswordActions => reduce(state, Cmd::ConectarSenha),
+
         // Teclado da senha: mesma grade da busca, destino diferente.
         Zone::PasswordKeys => {
             let row = index / crate::state::KEYBOARD_COLS;
@@ -889,6 +937,35 @@ fn go_back(state: State) -> State {
         return state;
     }
 
+    // Sair do teclado de senha apaga o que foi digitado.
+    //
+    // Sem isto a senha continua na memória depois de `B`: o usuário desiste,
+    // volta à lista e ela segue guardada. `CancelarSenha` já fazia isso; `B`
+    // não fazia, e o `B` é justamente o que o rodapé anuncia.
+    let era_teclado_de_senha = state.top_overlay() == Some(Overlay::WifiPassword);
+    let estavam = state.overlays.len();
+    let s = desempilhar(state);
+    if era_teclado_de_senha && s.overlays.len() < estavam {
+        let mut s = s;
+        s.sem_fio.limpar_senha();
+        return s;
+    }
+    s
+}
+
+/// Desempilha o overlay do topo e devolve o foco para onde estava.
+///
+/// Separado de `go_back` porque as duas saídas do teclado de senha limpam
+/// coisas diferentes: `B` (desistir) apaga **tudo**, inclusive o alvo; conectar
+/// apaga só o texto digitado e **mantém** o alvo, que é o que `ResultadoWifi`
+/// usa para dizer qual rede conectou.
+///
+/// A senha nunca sobrevive a nenhuma das duas: ela não persiste em lugar
+/// nenhum do estado depois que a tela fecha.
+fn desempilhar(state: State) -> State {
+    if state.overlays.is_empty() {
+        return state;
+    }
     let mut overlays = state.overlays.clone();
     overlays.pop();
 
@@ -898,17 +975,7 @@ fn go_back(state: State) -> State {
     };
     let index = state.saved_focus.get(&zone).copied().unwrap_or(0);
 
-    // Sair do teclado de senha apaga o que foi digitado.
-    //
-    // Sem isto a senha continua na memória depois de `B`: o usuário desiste,
-    // volta à lista e ela segue guardada. `CancelarSenha` já fazia isso; `B`
-    // não fazia, e o `B` é justamente o que o rodapé anuncia.
-    let saindo_do_teclado = state.top_overlay() == Some(Overlay::WifiPassword);
-    let mut s = State { overlays, ..state };
-    if saindo_do_teclado {
-        s.sem_fio.limpar_senha();
-    }
-
+    let s = State { overlays, ..state };
     focus_on(s, zone, index)
 }
 
@@ -1088,7 +1155,22 @@ fn set_brightness(state: State, value: i16) -> State {
     }
 }
 
+/// Digita um caractere no campo **visível**.
+///
+/// Quando o teclado de senha está aberto, o campo visível é a senha e a busca
+/// não está na tela. Escrever na busca ali seria digitar em algo que ninguém
+/// vê — e o `--teclas` nunca conseguiria exercitar o caminho da senha, que é
+/// justamente onde estava o defeito "não há como confirmar".
 fn push_char(state: State, c: char) -> State {
+    if state.top_overlay() == Some(Overlay::WifiPassword) {
+        return State {
+            sem_fio: crate::state::SemFio {
+                senha: format!("{}{c}", state.sem_fio.senha),
+                ..state.sem_fio
+            },
+            ..state
+        };
+    }
     let mut query = state.search_query.clone();
     query.push(c);
     State {
@@ -1098,6 +1180,17 @@ fn push_char(state: State, c: char) -> State {
 }
 
 fn pop_char(state: State) -> State {
+    if state.top_overlay() == Some(Overlay::WifiPassword) {
+        let mut senha = state.sem_fio.senha.clone();
+        senha.pop();
+        return State {
+            sem_fio: crate::state::SemFio {
+                senha,
+                ..state.sem_fio
+            },
+            ..state
+        };
+    }
     let mut query = state.search_query.clone();
     query.pop();
     State {
@@ -2060,6 +2153,166 @@ mod tests {
         assert_eq!(s.top_overlay(), Some(Overlay::WifiList), "volta para a lista");
         assert!(s.sem_fio.senha.is_empty(), "a senha não pode sobreviver ao B");
         assert!(s.sem_fio.alvo.is_none(), "nem o alvo");
+    }
+
+    /// Estado com o teclado de senha aberto, pronto para digitar.
+    fn no_teclado_de_senha() -> State {
+        use crate::state::{Rede, SemFio};
+
+        let mut s = demo();
+        s.sem_fio = SemFio {
+            redes: vec![Rede {
+                ssid: "Kill.exe".into(),
+                sinal: 80,
+                protegida: true,
+                salva: false,
+            }],
+            ..SemFio::default()
+        };
+        s = reduce(s, Cmd::AbrirWifi);
+        s = reduce(s, Cmd::Confirm);
+        assert_eq!(s.top_overlay(), Some(Overlay::WifiPassword));
+        s
+    }
+
+    #[test]
+    fn a_senha_digitada_pode_ser_confirmada() {
+        // O defeito relatado pelo dono em 14/11/2026: *"quando se digita a
+        // senha não há como confirmar para que a senha entre em vigor"*.
+        //
+        // A causa era literal: `Cmd::ConectarSenha` existia no enum, o
+        // `ui-sdl` sabia executá-lo — e **nada o emitia**. Digitar a senha era
+        // um caminho sem saída: `A` só digitava, `B` descartava, e o rodapé não
+        // anunciava confirmação nenhuma.
+        //
+        // Este teste percorre o caminho do jogador: teclado → botão Conectar →
+        // `ConectarSenha`. Não olha o `footers()` nem o desenho, porque a
+        // pergunta é se o **comando existe**, não se ele é bonito.
+        let mut s = no_teclado_de_senha();
+        s.sem_fio.senha = "segredo".into();
+
+        // Desce até a linha de ações, que existe para isto.
+        let mut s2 = reduce(s.clone(), Cmd::Nav(Dir::Down));
+        let mut passos = 0;
+        while s2.focus.zone == Zone::PasswordKeys && passos < 8 {
+            s2 = reduce(s2, Cmd::Nav(Dir::Down));
+            passos += 1;
+        }
+        assert_eq!(
+            s2.focus.zone,
+            Zone::PasswordActions,
+            "descer do teclado tem de chegar ao botão Conectar"
+        );
+
+        let s3 = reduce(s2, Cmd::Confirm);
+        assert_eq!(
+            s3.top_overlay(),
+            Some(Overlay::WifiList),
+            "confirmar tem de fechar o teclado e voltar para a lista"
+        );
+        assert!(
+            s3.sem_fio.senha.is_empty(),
+            "a senha não pode ficar guardada no estado depois de conectar"
+        );
+        assert_eq!(
+            s3.sem_fio.alvo.as_deref(),
+            Some("Kill.exe"),
+            "o alvo fica: é ele que `ResultadoWifi` usa para dizer qual rede conectou"
+        );
+        assert!(
+            format!("{:?}", s3.toast).contains("Conectando"),
+            "sem um aviso, fechar a tela pareceria desistência: {:?}",
+            s3.toast
+        );
+    }
+
+    #[test]
+    fn a_senha_digitada_chega_ao_pedido_de_conexao() {
+        // A outra metade: o estado tem de carregar a senha **até** o `ui-sdl`
+        // lê-la. `executar_pedido` roda antes do reducer, então o que este
+        // teste afirma é que a senha existe no estado no instante do
+        // `ConectarSenha` — se o reducer a apagasse antes, a conexão sairia
+        // com senha vazia e o `wpa_cli` responderia `FAIL`.
+        let mut s = no_teclado_de_senha();
+        for ch in "abc".chars() {
+            s = reduce(s, Cmd::Confirm); // digita a tecla em foco
+            let _ = ch;
+        }
+        let digitado = s.sem_fio.senha.clone();
+        assert!(!digitado.is_empty(), "digitar tem de acumular no campo");
+
+        let s2 = reduce(s, Cmd::ConectarSenha);
+        assert!(s2.sem_fio.senha.is_empty(), "e confirmar tem de limpar");
+    }
+
+    #[test]
+    fn a_senha_visivel_nao_sobrevive_ao_confirmar() {
+        // `X` mostra a senha; conectar não pode deixá-la legível na tela
+        // seguinte. O campo some junto com o overlay, mas o estado é o contrato.
+        let s = no_teclado_de_senha();
+        let s = reduce(s, Cmd::Options);
+        assert!(s.sem_fio.senha_visivel);
+        let s = reduce(s, Cmd::ConectarSenha);
+        assert!(!s.sem_fio.senha_visivel);
+    }
+
+    #[test]
+    fn x_mostra_a_senha_no_teclado_e_nao_abre_detalhe() {
+        // O rodapé anunciava `X Mostrar` e o `X` chamava `open_detail`, que
+        // com o overlay aberto não faz nada: a tecla era promessa vazia. Sem
+        // mostrar em claro, uma senha digitada errada só se descobre errando de
+        // novo — e no teclado de 28 teclas isso é caro.
+        let s = no_teclado_de_senha();
+        assert!(!s.sem_fio.senha_visivel);
+
+        let s2 = reduce(s.clone(), Cmd::Options);
+        assert_eq!(s2.top_overlay(), Some(Overlay::WifiPassword), "não sai da tela");
+        assert!(s2.sem_fio.senha_visivel, "X tem de mostrar a senha");
+
+        let s3 = reduce(s2, Cmd::Options);
+        assert!(!s3.sem_fio.senha_visivel, "e alternar de volta");
+    }
+
+    #[test]
+    fn letra_digitada_vai_para_o_campo_visivel() {
+        // Com a senha aberta, o campo na tela é a senha. `SearchPush` escrevia
+        // na busca, que ali está invisível — digitar sem ver nada é o mesmo que
+        // não digitar, e era o que impedia exercitar esta tela por ferramenta.
+        let mut s = no_teclado_de_senha();
+        s.search_query = "intacto".into();
+
+        for c in "abc".chars() {
+            s = reduce(s, Cmd::SearchPush(c));
+        }
+        assert_eq!(s.sem_fio.senha, "abc");
+        assert_eq!(s.search_query, "intacto", "a busca não pode mudar às escondidas");
+
+        s = reduce(s, Cmd::SearchBackspace);
+        assert_eq!(s.sem_fio.senha, "ab");
+    }
+
+    #[test]
+    fn o_a_do_botao_conectar_pede_conexao_ao_sistema() {
+        // O `ui-sdl` executa `wpa_cli` em `executar_pedido`, **antes** do
+        // reducer, e o `A` no botão chega como `Cmd::Confirm`. Sem
+        // `Cmd::pede_conexao` a tela fechava, o toast dizia "Conectando…" e
+        // nenhum comando saía para o sistema: um botão que não conecta.
+        //
+        // O teste é da regra, não do `wpa_cli` — mas é a regra que estava
+        // faltando quando a tela inteira não tinha como confirmar.
+        let mut s = no_teclado_de_senha();
+        s.sem_fio.senha = "segredo".into();
+
+        // Ainda no teclado: `A` digita, não conecta.
+        assert!(!Cmd::Confirm.pede_conexao(&s));
+
+        let s = reduce(s, Cmd::FocusAt(Zone::PasswordActions, 0));
+        assert!(Cmd::Confirm.pede_conexao(&s), "no botão, A manda conectar");
+        assert!(Cmd::ConectarSenha.pede_conexao(&s), "e o comando direto também");
+
+        // Fora do overlay, `A` não conecta nada.
+        let fora = reduce(s.clone(), Cmd::CancelarSenha);
+        assert!(!Cmd::Confirm.pede_conexao(&fora));
     }
 
     #[test]

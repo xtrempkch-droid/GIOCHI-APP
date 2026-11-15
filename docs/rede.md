@@ -56,6 +56,25 @@ sabe se a tecla pegou (`X` alterna para texto claro). A senha é limpa ao abrir 
 ao confirmar; não vai para disco nem para o estado depois da conexão
 (`SemFio::limpar_senha`).
 
+### O teclado é QWERTY, e tem como confirmar
+
+Duas correções de 14/11/2026, ambas nascidas de relato do dono:
+
+| Antes | Agora |
+| --- | --- |
+| grade alfabética (`ABCDEFG / HIJKLMN / …`) | QWERTY em leitura: `QWERTYU / IOPASDF / GHJKLZX / CVBNM␣⌫` |
+| nenhuma tecla confirmava a senha | botão **Conectar** abaixo da grade; `↓` da última linha chega nele |
+| `X` não fazia nada, apesar do rodapé prometer "Mostrar" | `X` alterna bolinhas / texto claro |
+
+O QWERTY verdadeiro tem 10 colunas e a grade tem 7 (é o que cabe legível em
+640×480 com fonte de toque), então ele é quebrado em leitura: preserva a ordem e
+a vizinhança horizontal, e perde o deslocamento da segunda linha.
+
+A senha em vigor só sai da tela ao confirmar. `Cmd::pede_conexao` é a regra
+única que decide "este comando manda conectar?" — o `ui-sdl` a consulta **antes**
+do reducer, porque quem aperta `A` no botão envia `Confirm` e o reducer só
+traduz isso em `ConectarSenha` depois.
+
 ---
 
 ## 3. Quem executa
@@ -80,7 +99,9 @@ Três regras de `App`:
    tela fica "procurando…" para sempre.
 3. **Um comando com efeito só no estado seria uma segunda rota.** Só
    `ConectarSenha` é pass-through de verdade (depende da senha digitada); os
-   outros três efeitos são visíveis no estado.
+   outros três efeitos são visíveis no estado. Quem aperta `A` no botão envia
+   `Confirm`, então quem decide é `Cmd::pede_conexao` — uma definição só,
+   consultada pelo reducer e pelo `ui-sdl`.
 
 ---
 

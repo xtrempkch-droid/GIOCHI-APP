@@ -464,6 +464,9 @@ impl State {
             Zone::SearchKeyboard => KEYBOARD_ROWS * KEYBOARD_COLS,
             Zone::WifiNetworks => self.sem_fio.redes.len() + 1, // + "procurar de novo"
             Zone::PasswordKeys => KEYBOARD_ROWS * KEYBOARD_COLS,
+            // Um: o botão "Conectar". É uma linha só de propósito — a tela tem
+            // uma decisão a tomar ("usar esta senha?"), não uma lista.
+            Zone::PasswordActions => 1,
             Zone::BtDevices => self.sem_fio.dispositivos.len() + 1,
             Zone::SearchResults => self.search_results().len(),
             Zone::QuickSettings => QUICK_SETTINGS_ROWS,
@@ -524,15 +527,92 @@ pub const SETTINGS_CATEGORIES: [&str; 6] = [
     "about",
 ];
 
-/// Teclado virtual da busca: 4 linhas de 7.
+/// Teclado virtual: 4 linhas de 7, em ordem **QWERTY**.
+///
+/// ## Por que QWERTY e não alfabético
+///
+/// Até 14/11/2026 a grade era `ABCDEFG / HIJKLMN / OPQRSTU / VWXYZ`, isto é,
+/// **alfabética**. Quem digita no PC não procura a letra pelo alfabeto — a mão
+/// vai direto para onde o QWERTY põe a tecla. Numa grade alfabética essa memória
+/// muscular erra sempre, e digitar uma senha de 12 caracteres vira caça.
+///
+/// A grade é fixa em 7 colunas por causa do painel de 640×480 (7 teclas legíveis
+/// é o máximo que cabe com fonte de toque). O QWERTY verdadeiro tem 10 colunas,
+/// então ele é **quebrado em leitura**: a sequência `Q W E R T Y U I O P A S D F
+/// G H J K L Z X C V B N M` preenche a grade da esquerda para a direita, de
+/// cima para baixo. Isso preserva a ordem e a vizinhança horizontal; o que se
+/// perde é o deslocamento da segunda linha, que exigiria larguras desiguais.
+///
+/// A ordem é verificada por teste — `o_teclado_esta_em_qwerty` reprova se
+/// alguém reverter para alfabético.
 pub const KEYBOARD_ROWS: usize = 4;
 pub const KEYBOARD_COLS: usize = 7;
 pub const KEYBOARD: [[char; KEYBOARD_COLS]; KEYBOARD_ROWS] = [
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
-    ['H', 'I', 'J', 'K', 'L', 'M', 'N'],
-    ['O', 'P', 'Q', 'R', 'S', 'T', 'U'],
-    ['V', 'W', 'X', 'Y', 'Z', ' ', '\u{8}'],
+    ['Q', 'W', 'E', 'R', 'T', 'Y', 'U'],
+    ['I', 'O', 'P', 'A', 'S', 'D', 'F'],
+    ['G', 'H', 'J', 'K', 'L', 'Z', 'X'],
+    ['C', 'V', 'B', 'N', 'M', ' ', '\u{8}'],
 ];
+
+/// As 26 letras na ordem em que o teclado as apresenta.
+///
+/// Existe para o teste poder afirmar a **ordem**, não só o conjunto: um teclado
+/// com as 26 letras em ordem alfabética também teria todas elas.
+pub const QWERTY: [char; 26] = [
+    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', 'A', 'S', 'D', 'F', 'G',
+    'H', 'J', 'K', 'L', 'Z', 'X', 'C', 'V', 'B', 'N', 'M',
+];
+
+#[cfg(test)]
+mod testes_teclado {
+    use super::{KEYBOARD, KEYBOARD_COLS, KEYBOARD_ROWS, QWERTY};
+
+    #[test]
+    fn o_teclado_esta_em_qwerty() {
+        // Reverter a grade para `ABCDEFG…` reprova aqui. É a contraprova do
+        // pedido do dono em 14/11/2026: "teclado modo qwert".
+        let letras: Vec<char> = KEYBOARD
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|c| c.is_ascii_alphabetic())
+            .collect();
+        assert_eq!(
+            letras,
+            QWERTY.to_vec(),
+            "a ordem das letras na grade tem de ser a do QWERTY"
+        );
+    }
+
+    #[test]
+    fn as_26_letras_aparecem_uma_vez_cada() {
+        // Nem falta letra (senha impossível de digitar) nem sobra repetida
+        // (duas teclas para a mesma letra, e o foco passa por duas).
+        let mut letras: Vec<char> = KEYBOARD
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|c| c.is_ascii_alphabetic())
+            .collect();
+        let total = letras.len();
+        let mut unicas = letras.clone();
+        unicas.sort_unstable();
+        unicas.dedup();
+        assert_eq!(total, 26, "faltam letras: {letras:?}");
+        assert_eq!(unicas.len(), 26, "há letra repetida: {letras:?}");
+        letras.clear();
+    }
+
+    #[test]
+    fn o_espaco_e_o_apagar_ficam_no_fim() {
+        // A última posição é a mais fácil de alcançar com o polegar no d-pad
+        // (basta segurar `→`): é onde o apagar precisa estar, porque é a tecla
+        // usada com mais frequência numa senha digitada errado.
+        let ultima = KEYBOARD[KEYBOARD_ROWS - 1];
+        assert_eq!(ultima[KEYBOARD_COLS - 1], '\u{8}', "apagar na última coluna");
+        assert_eq!(ultima[KEYBOARD_COLS - 2], ' ', "espaço ao lado do apagar");
+    }
+}
 
 /// Linhas focáveis do painel rápido: 6 controles + 2 botões.
 pub const QUICK_SETTINGS_ROWS: usize = 8;

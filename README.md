@@ -39,7 +39,7 @@ O que existe hoje, medido em 14/11/2026:
 | `validate-app.mjs --all` | **7 válidos** (1 em `scaffold`) |
 | `tests/run-all.mjs` | **199/199** JS |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| `compilar-launcher.sh --testes` | **241/241** Rust (134 ui-sdl + 107 core) |
+| `compilar-launcher.sh --testes` | **250/250** Rust (134 ui-sdl + 116 core) |
 | `compilar-loja.sh --testes` | **116/116** Rust |
 | aparelhos medidos | X55 (720×1280), X35H e R35S (640×480) |
 

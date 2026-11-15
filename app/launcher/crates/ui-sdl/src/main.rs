@@ -351,6 +351,20 @@ fn main() -> Result<(), String> {
 
     if let Some(tela) = tela_inicial.as_deref() {
         abrir_tela(&mut state, tela)?;
+        // O foco tem de acompanhar a tela.
+        //
+        // Faltava, e o efeito era medível: `--tela senha --teclas down,a`
+        // reportava `foco HomeCarousel 0` porque o overlay era empilhado à mão
+        // (`overlays.push`) sem passar por `focus_on`. O `↓` caía no carrossel e
+        // nada acontecia — uma ferramenta de diagnóstico que não alcança a tela
+        // que diz estar fotografando.
+        //
+        // É a mesma família do `--teclas` que aplicava antes de `Screen::Running`
+        // (§13 do AGENTS.md): ferramenta que mede a intenção em vez do efeito.
+        if let Some(overlay) = state.top_overlay() {
+            let zona = overlay.zone();
+            state.focus = giochi_launcher_core::focus::Focus::at(zona, 0);
+        }
         eprintln!("tela forcada por --tela: {tela}");
     }
 
@@ -478,6 +492,17 @@ fn main() -> Result<(), String> {
                     "l" | "tabprev" => giochi_launcher_core::Cmd::TabPrev,
                     "r" | "tabnext" => giochi_launcher_core::Cmd::TabNext,
                     "b" | "voltar" => giochi_launcher_core::Cmd::Back,
+                    "x" | "opcoes" => giochi_launcher_core::Cmd::Options,
+                    // Letra solta: digita na busca ou na senha.
+                    //
+                    // Sem isto, exercitar o teclado de senha de fora era
+                    // impossivel — e o defeito "nao ha como confirmar a senha"
+                    // so apareceu com um dedo no aparelho porque nenhuma
+                    // ferramenta conseguia digitar.
+                    "apagar" | "backspace" => giochi_launcher_core::Cmd::SearchBackspace,
+                    letra if letra.chars().count() == 1 => {
+                        giochi_launcher_core::Cmd::SearchPush(letra.chars().next().unwrap())
+                    }
                     outra => return Err(format!("--teclas: tecla desconhecida: {outra}")),
                 });
             }

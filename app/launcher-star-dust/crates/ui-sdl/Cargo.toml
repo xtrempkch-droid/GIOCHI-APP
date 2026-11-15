@@ -11,7 +11,18 @@ name = "giochi-launcher-star-dust"
 path = "src/main.rs"
 
 [dependencies]
-giochi-launcher-core = { path = "../core" }
+# O núcleo é o **mesmo** do launcher de produção, apontado por caminho.
+#
+# Era uma cópia em `crates/core/`, e a cópia ficou para trás: 4244 linhas
+# contra 4631 em 15/11/2026, faltando `Cmd::pede_conexao`, a zona
+# `PasswordActions` e a navegação do teclado de senha. O efeito era concreto —
+# o botão "Conectar" existia na tela do Star Dust e não funcionava, porque o
+# núcleo dele não tinha o que o `ui-sdl` chamava.
+#
+# Duas cópias do mesmo crate foi exatamente como o carrossel do foco ficou
+# dessincronizado da tela. Apontar por caminho faz a divergência ser impossível
+# em vez de improvável — e é o que o `launcher-teste` já fazia.
+giochi-launcher-core = { path = "../../../launcher/crates/core" }
 
 # SDL2 sem wrapper extra: o desenho é feito com primitivas do SDL_Renderer.
 # Sem `image`, sem `gfx`: ícones são vetoriais desenhados por nós, não PNG.

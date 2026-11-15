@@ -156,6 +156,30 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    /// Este comando manda **conectar** com a senha que está no campo?
+    ///
+    /// ## Por que isto precisa existir
+    ///
+    /// O `ui-sdl` executa o `wpa_cli` em `executar_pedido`, que roda **antes**
+    /// do reducer. Quem aperta `A` no botão Conectar envia `Cmd::Confirm` — e o
+    /// reducer traduz isso em `Cmd::ConectarSenha`, que o `executar_pedido`
+    /// nunca vê. A consequência, medida em 15/11/2026: a tela fechava, o toast
+    /// dizia "Conectando a X...", e **nenhum comando saía** para o sistema.
+    ///
+    /// A regra fica aqui, em uma definição só, e os dois lados a consultam. Duas
+    /// cópias da condição envelheceriam diferente — é o mesmo motivo pelo qual
+    /// `settings_ajustavel` é consultada pelo reducer e pelo desenho.
+    pub fn pede_conexao(&self, state: &state::State) -> bool {
+        match self {
+            Cmd::ConectarSenha => true,
+            Cmd::Confirm => {
+                state.focus.zone == focus::Zone::PasswordActions
+                    && state.top_overlay() == Some(state::Overlay::WifiPassword)
+            }
+            _ => false,
+        }
+    }
+
     /// Comando que só existe porque uma pessoa mexeu no aparelho.
     ///
     /// É o que separa "o usuário pressionou algo" de "o sistema reportou algo".

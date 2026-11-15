@@ -330,6 +330,18 @@ fn conectar(iface: Option<&str>, ssid: &str, senha: &str) -> Cmd {
     let Some(iface) = iface else {
         return Cmd::ResultadoWifi(Some("nenhuma interface sem fio".into()));
     };
+
+    // Primeira linha, antes de qualquer comando: é ela que responde "o pedido
+    // chegou ao sistema?". Sem registro no início, um pedido que morresse no
+    // caminho (o `executar_pedido` que não via o comando) deixava só silêncio —
+    // e silêncio é indistinguível de "está tentando" para quem lê o log.
+    //
+    // A senha não aparece: o comprimento basta para saber que o campo não veio
+    // vazio, e log de senha é vazamento.
+    eprintln!(
+        "wi-fi: conectando a {ssid} em {iface} (senha: {} caractere(s))",
+        senha.chars().count()
+    );
     ligar_interface(iface);
 
     // Rede já salva: basta selecionar. Reescrever a senha a cada conexão

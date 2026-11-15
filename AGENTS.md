@@ -11,7 +11,7 @@
 | apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **199/199** JS |
-| `compilar-launcher.sh --testes` | **241** Rust (134 ui-sdl + 107 core) |
+| `compilar-launcher.sh --testes` | **250** Rust (134 ui-sdl + 116 core) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
 | apps no catálogo do aparelho | **0** — os sete são host ou shell, e o catálogo exclui os dois (§8) |
@@ -45,7 +45,7 @@ app/
 ├── _template/             # modelo para app novo
 ├── launcher/              # Rust + SDL2 — a interface do aparelho
 │   ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
-│   ├── crates/core/       # 8 módulos, 107 testes, sem SDL
+│   ├── crates/core/       # 8 módulos, 116 testes, sem SDL
 │   └── crates/ui-sdl/     # 15 módulos, 134 testes, KMSDRM + evdev + catálogo
 ├── launcher-teste/        # o mesmo launcher sobre a GIOCHI-ENGINE (scaffold)
 ├── launcher-star-dust/    # o launcher + camada de efeitos (ready)
@@ -175,7 +175,7 @@ node tests/run-all.mjs                      # 199 testes JS (lista vem de readdi
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 241 testes
+bash scripts/compilar-launcher.sh --testes  # 250 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 
 bash scripts/compilar-launcher-arm64.sh                       # cross-compile aarch64
@@ -220,7 +220,7 @@ Buildroot e o KMSDRM dispensa compositor.
 
 | Peça | Onde |
 | --- | --- |
-| estado, foco, reducer, grade | `crates/core` (107 testes, sem SDL) |
+| estado, foco, reducer, grade | `crates/core` (116 testes, sem SDL) |
 | janela, desenho, rotação, evdev, catálogo | `crates/ui-sdl` (134 testes) |
 
 ### 6.1 Rotação — a orientação é fato do sistema
@@ -460,6 +460,44 @@ não do app.**
 bash scripts/aparelho.sh bluetooth      # a pilha inteira, com veredito
 bash scripts/aparelho.sh parear <MAC>   # pareia/conecta com a sequência certa
 ```
+
+#### O teclado de senha, e a tela que não tinha saída
+
+Dois relatos do dono em 14/11/2026, e os dois eram de verdade:
+
+1. *"teclado modo qwert"* — a grade era `ABCDEFG / HIJKLMN / OPQRSTU / VWXYZ`,
+   isto é, **alfabética**. Quem digita no PC não procura a letra pelo alfabeto: a
+   mão vai direto onde o QWERTY põe a tecla. Hoje a ordem é
+   `QWERTYUIOPASDFGHJKLZXCVBNM` em leitura, e `state::QWERTY` é o literal que
+   `o_teclado_esta_em_qwerty` compara — reverter para alfabético reprova.
+2. *"quando se digita a senha não há como confirmar"* — literal. `A` digitava,
+   `B` descartava, `X` não fazia nada, e **nenhuma tecla emitia
+   `Cmd::ConectarSenha`**. O comando existia no enum e o `ui-sdl` sabia
+   executá-lo; faltava quem o emitisse. A senha nunca entrava em vigor.
+
+O que a correção exigiu, e cada peça tem teste:
+
+| Peça | Por quê |
+| --- | --- |
+| zona `PasswordActions` | um botão **Conectar** abaixo da grade; `↓` da última linha chega nele. Célula da grade que não digitasse quebraria a regra das 7 colunas |
+| `Cmd::pede_conexao(&state)` | o `ui-sdl` roda `executar_pedido` **antes** do reducer e só vê `Confirm`; o reducer traduz em `ConectarSenha` depois. Sem esta função a tela fechava, o toast prometia "Conectando…" e **nenhum `wpa_cli` saía** |
+| `X` → `MostrarSenha` | o rodapé já anunciava "X Mostrar" e a tecla chamava `open_detail`, que com overlay devolve o estado. Promessa vazia |
+| `push_char` no campo visível | com a senha aberta, uma letra ia para a busca, que não está na tela |
+
+A regra de `pede_conexao` fica em **uma definição**, consultada pelo reducer e
+pelo `ui-sdl` — duas cópias da condição envelheceriam diferente, que é o mesmo
+motivo pelo qual `settings_ajustavel` é consultada pelo desenho e pelo reducer.
+
+#### O núcleo do Star Dust era uma cópia, e ficou para trás
+
+`app/launcher-star-dust/crates/core/` era uma **cópia** do núcleo do launcher:
+4244 linhas contra 4631, sem `pede_conexao`, sem a zona `PasswordActions` e sem a
+navegação do teclado de senha. O efeito era concreto — o botão "Conectar"
+aparecia na tela do Star Dust e não funcionava.
+
+Hoje o `Cargo.toml` aponta por caminho (`../../../launcher/crates/core`), como o
+`launcher-teste` já fazia, e o compilador passou a apontar sozinho o que faltava
+(`efeitos.rs` não cobria a zona nova). **Divergência impossível, não improvável.**
 
 ### 6.7 Feature `texto`
 
@@ -1056,6 +1094,18 @@ erro**, e a correção certa é converter para o sentinela (`unwrap_or(0)`) em v
 comparar tipos diferentes. O teste que fecha é o do caso silencioso — "sem
 sensor, não registra de novo" — porque o caso barulhento já aparecia na tela.
 
+### Ferramenta de diagnóstico que não alcança a tela que diz fotografar
+
+`--tela senha` empilhava o overlay à mão (`overlays.push`) sem passar por
+`focus_on`, então o foco continuava em `HomeCarousel`: `--teclas down,a`
+reportava "foco HomeCarousel 0" e o `↓` caía no carrossel. Uma ferramenta que
+declara fotografar uma tela e não chega nela. Hoje `abrir_tela` move o foco para
+a zona do overlay, e é isso que permitiu medir o defeito da senha **sem dedo no
+aparelho**.
+
+Junto veio `--teclas` aceitando letra solta e `x`. Sem poder digitar, nenhuma
+ferramenta exercitava o teclado de senha — e o defeito estava exatamente ali.
+
 ### `is_ok()` é "a variável existe", não "está ligada"
 
 `GIOCHI_GLES` era testada por presença, então `GIOCHI_GLES=0` **ligava** o GLES, e
@@ -1092,6 +1142,7 @@ E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtr
 | rotação segue o sistema | **medido** nos três aparelhos, com o `cmdline` desempatando o `0` |
 | botões do controle embutido | **medido**: cobertura completa dos 20 códigos do X55 |
 | brilho, volume, dormir, desligar, reiniciar | **medido** no X55 |
+| senha Wi-Fi: digitar, ver e confirmar | **medido no PC** com `--tela senha --teclas`; no aparelho, sem dedo |
 | boot automático (`::respawn:` → init → launcher) | **medido** no X55: `ppid` do launcher é o init, 29 s depois do boot |
 | Wi-Fi: varredura e lista | **medido** (`wi-fi: 11 rede(s) em wlan0`) |
 | Wi-Fi: conectar com a senha certa | **não testado** — falta a senha |
