@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 14/11/2026 — **os jogos saíram daqui** (foram para um
+> Atualizado em: 15/11/2026 — **os jogos saíram daqui** (foram para um
 > repositório próprio). Este repositório é só de **apps do sistema**.
 
 ## 0. Estado em uma tela
@@ -11,10 +11,10 @@
 | apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **206/206** JS |
-| `compilar-launcher.sh --testes` | **253** Rust (136 ui-sdl + 117 core) |
+| `compilar-launcher.sh --testes` | **257** Rust (140 ui-sdl + 117 core) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| apps no catálogo do aparelho | **0** — os sete são host ou shell, e o catálogo exclui os dois (§8) |
+| apps no catálogo do aparelho | **0** — os sete são host ou tema, e o catálogo exclui os dois (§8) |
 
 O que roda no aparelho hoje é **o launcher**. Com catálogo vazio ele desenha
 "Nenhum jogo instalado." e continua navegável — catalogar ausência como ausência
@@ -212,7 +212,7 @@ node tests/run-all.mjs                      # 206 testes JS (lista vem de readdi
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 253 testes
+bash scripts/compilar-launcher.sh --testes  # 257 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 
 # Clippy faz parte da barra: `-D warnings` (é o que o CI roda)
@@ -746,6 +746,31 @@ isso está explícita em `scripts/lib/catalogo.mjs` e tem teste.
 colheita lê `/opt/giochi/apps/*/metadata.json` **e** `/user/apps/*/metadata.json`
 e o disco vence. E a mesclagem **herda** `license` do `apps.json` — substituir a
 entrada inteira apagava a licença.
+
+### A guarda de tema existe dos dois lados, e precisa
+
+O gerador filtra no PC. Mas ele **não é o único caminho até o índice**:
+
+| Caminho | Quem escreve | Passa pelo gerador? |
+| --- | --- | --- |
+| `aparelho.sh catalogo` | PC, via SSH | sim |
+| `--catalogo-adicionar` (o launcher instala um `.giochi`) | **o próprio aparelho** | **não** |
+| índice de uma imagem antiga, ou escrito à mão no diagnóstico | ninguém sabe | **não** |
+
+`adicionar_ao_indice` é o caminho do aparelho, e ele existe porque amarrar
+instalação a Node+SSH não serve num portátil. Instalar um `launcher-neon.giochi`
+por ali criava o cartão que abre um segundo launcher e perde o DRM — então agora
+ele **recusa com o motivo**, em vez de gravar e deixar o usuário descobrir
+apertando `A`.
+
+E `Catalogo::podar_temas` fecha o que sobra, pela mesma razão que
+`podar_sem_binario` é em tempo de execução: **o PC que gera o índice não sabe o
+que estará no aparelho**. A poda de tema roda **antes** da de binário, senão o
+tema apareceria no log como "cartão removido" e mandaria procurar o problema no
+lugar errado.
+
+As duas podas compartilham um `reter` privado — uma segunda cópia da renumeração
+de `Game.id` envelheceria diferente da primeira.
 
 **Vigiar: foco e desenho descrevem a mesma lista.** `settings_rows()` no núcleo
 decide até onde o foco anda; `views::linhas_da_categoria` monta o que é desenhado.

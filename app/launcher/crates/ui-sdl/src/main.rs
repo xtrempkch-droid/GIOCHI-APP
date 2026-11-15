@@ -304,6 +304,13 @@ fn main() -> Result<(), String> {
                 // Cartão removível pode não estar montado neste boot. Podar em
                 // tempo de execução é o que impede um cartão ausente de virar
                 // cartão que aparece e não abre.
+                // Tema primeiro: um `launcher-*` que porventura esteja no
+                // índice abriria um SEGUNDO launcher e perderia o DRM. Podar
+                // antes do binário evita que ele apareça no log como "cartão
+                // removido", que mandaria procurar o problema no lugar errado.
+                let c = c.podar_temas(|slug, _| {
+                    eprintln!("catálogo: {slug} fora — é tema do launcher, não um app");
+                });
                 let c = c.podar_sem_binario(|slug, caminho| {
                     eprintln!("catálogo: {slug} fora — {caminho} não existe (cartão removido?)");
                 });

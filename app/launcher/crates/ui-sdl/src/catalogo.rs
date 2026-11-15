@@ -23,6 +23,32 @@ use giochi_launcher_core::Game;
 /// Caminho publicado pelo `Giochi System`.
 pub const CAMINHO: &str = "/opt/giochi/apps/index.json";
 
+/// Prefixo dos apps de interface — os **temas** do launcher.
+///
+/// ## Por que o app precisa saber disto
+///
+/// O gerador do PC (`scripts/lib/catalogo.mjs`) já mantém tema fora do índice.
+/// Mas ele não é o único caminho: `adicionar_ao_indice` deixa o **próprio
+/// aparelho** registrar um pacote recém-instalado, sem Node e sem SSH. Instalar
+/// um `launcher-neon.giochi` por ali criava um cartão que, apertado, abria um
+/// SEGUNDO launcher — que perde o DRM (exclusivo) e morre com
+/// `kmsdrm not available`. A tela volta para a Home e nada explica o motivo.
+///
+/// É a mesma razão de `podar_sem_binario`: o PC que gera o índice não sabe o
+/// que estará no aparelho. Quem sabe é o aparelho.
+pub const PREFIXO_TEMA: &str = "launcher";
+
+/// `true` quando o id é de um app de interface (tema do launcher).
+///
+/// O hífen é exigido: sem ele `launchertool` viraria tema e o app sumiria do
+/// catálogo em silêncio. A contraprova está nos testes.
+pub fn eh_tema(id: &str) -> bool {
+    id == PREFIXO_TEMA
+        || id
+            .strip_prefix(PREFIXO_TEMA)
+            .is_some_and(|resto| resto.starts_with('-'))
+}
+
 /// Variável que sobrepõe o caminho.
 ///
 /// Existe pelo mesmo motivo que `GIOCHI_ROTATE`: no PC não há
@@ -182,28 +208,62 @@ impl Catalogo {
     ///
     /// `manter` recebe o motivo para virar uma linha de log — uma poda silenciosa
     /// esconderia um cartão mal montado.
-    pub fn podar_sem_binario(mut self, mut manter: impl FnMut(&str, &str)) -> Self {
-        let antes = self.games.len();
-
-        let mut games = Vec::with_capacity(antes);
-        let mut alvos = Vec::with_capacity(antes);
-        for (game, alvo) in self.games.into_iter().zip(self.alvos) {
+    pub fn podar_sem_binario(self, mut manter: impl FnMut(&str, &str)) -> Self {
+        self.reter(|alvo| {
             let executavel = alvo.executavel();
             if std::path::Path::new(&executavel).is_file() {
-                games.push(game);
-                alvos.push(alvo);
+                true
             } else {
                 manter(&alvo.slug, &executavel);
+                false
+            }
+        })
+    }
+
+    /// Descarta cartões de **tema** (prefixo `launcher`) do catálogo.
+    ///
+    /// ## Por que isto existe
+    ///
+    /// Um cartão de tema não abre um app: abre um segundo launcher, que disputa
+    /// o DRM master com o primeiro (o dispositivo é exclusivo) e falha com
+    /// `kmsdrm not available`. O usuário vê a Home voltar ao ponto de partida,
+    /// sem nenhuma pista — o mesmo "cartão que abre nada" de
+    /// `podar_sem_binario`, só que pior, porque derruba a interface.
+    ///
+    /// O gerador do PC já filtra, mas o índice pode chegar ao aparelho por
+    /// outros caminhos: `adicionar_ao_indice` numa versão anterior, um índice
+    /// escrito à mão no diagnóstico, ou um `index.json` que veio de imagem
+    /// antiga. A poda em tempo de execução fecha os que sobram.
+    pub fn podar_temas(self, mut manter: impl FnMut(&str, &str)) -> Self {
+        self.reter(|alvo| {
+            if eh_tema(&alvo.slug) {
+                manter(&alvo.slug, PREFIXO_TEMA);
+                false
+            } else {
+                true
+            }
+        })
+    }
+
+    /// O único lugar que remove entradas do catálogo.
+    ///
+    /// `Game.id` é a **posição**: renumerar mantém a chave consistente com
+    /// `alvos`, e essa chave nunca aparece na tela (ver "índice interno não é
+    /// dado do jogo"). Uma segunda cópia desta renumeração envelheceria
+    /// diferente da primeira — foi assim que o carrossel do foco ficou
+    /// dessincronizado da tela.
+    fn reter(mut self, mut fica: impl FnMut(&Alvo) -> bool) -> Self {
+        let mut games = Vec::with_capacity(self.games.len());
+        let mut alvos = Vec::with_capacity(self.alvos.len());
+        for (game, alvo) in self.games.into_iter().zip(self.alvos) {
+            if fica(&alvo) {
+                games.push(game);
+                alvos.push(alvo);
             }
         }
-
-        // `Game.id` é a **posição**: renumerar mantém a chave consistente com
-        // `alvos`, e essa chave nunca aparece na tela (ver "índice interno não é
-        // dado do jogo").
         for (i, g) in games.iter_mut().enumerate() {
             g.id = i as u32;
         }
-
         self.games = games;
         self.alvos = alvos;
         self
@@ -255,6 +315,17 @@ pub fn adicionar_ao_indice(texto: &str, dir: &str, metadata: &serde_json::Value)
 
     if !entrypoint.starts_with("bin/") || entrypoint.contains("..") {
         return Err(format!("entrypoint inválido: {entrypoint}"));
+    }
+
+    // Instalar um `launcher-*.giochi` no aparelho e registrá-lo aqui criaria o
+    // cartão que abre um segundo launcher e derruba o DRM. Recusar com o motivo
+    // é melhor que gravar e deixar o usuário descobrir apertando A: o índice
+    // fica sem uma entrada que nunca deveria existir, e o instalador diz por quê.
+    if eh_tema(&id) {
+        return Err(format!(
+            "{id} é tema do launcher (prefixo \"{PREFIXO_TEMA}\"): não vira cartão \
+             — um cartão de tema abriria um segundo launcher e perderia o DRM"
+        ));
     }
 
     let lista = raiz
@@ -339,6 +410,83 @@ mod tests {
             })
             .collect();
         format!(r#"{{"schemaVersion":1,"apps":[{}]}}"#, apps.join(","))
+    }
+
+    /// O prefixo é do **começo** e com hífen.
+    ///
+    /// Sem o hífen, `launchertool` viraria tema e o app sumiria do catálogo em
+    /// silêncio — o erro que a regra existe para evitar, invertido. Sem a âncora
+    /// no começo, `my-launcher-tool` sumiria também.
+    #[test]
+    fn eh_tema_exige_o_prefixo_no_comeco_e_o_hifen() {
+        for id in ["launcher", "launcher-teste", "launcher-star-dust", "launcher-neon"] {
+            assert!(eh_tema(id), "{id} é tema");
+        }
+        for id in ["launchertool", "my-launcher-tool", "relancher", "jogo", ""] {
+            assert!(!eh_tema(id), "{id} NÃO é tema");
+        }
+    }
+
+    fn com_ids(ids: &[&str]) -> String {
+        let apps: Vec<String> = ids
+            .iter()
+            .map(|id| {
+                format!(
+                    r#"{{ "id": "{id}", "version": "1.0.0", "entrypoint": "bin/env",
+                        "dir": "/usr", "title": "T-{id}", "developer": "g" }}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"schemaVersion":1,"apps":[{}]}}"#, apps.join(","))
+    }
+
+    /// Tema no índice não vira cartão.
+    ///
+    /// O cartão de um tema não abre um app: abre um segundo launcher, que perde
+    /// o DRM master (exclusivo) e morre com `kmsdrm not available`. A tela volta
+    /// para a Home e nada explica — pior que o "cartão que abre nada", porque
+    /// derruba a interface junto.
+    ///
+    /// Aqui o binário **existe** de propósito (`bin/env` em `/usr`), para provar
+    /// que é a poda de tema que tirou o cartão e não a de binário.
+    #[test]
+    fn poda_tema_mesmo_com_binario_presente() {
+        let texto = com_ids(&["launcher-neon", "jogo", "launcher"]);
+        let c = Catalogo::do_texto(&texto).unwrap();
+        assert_eq!(c.games.len(), 3, "o catálogo lê os três");
+
+        let mut podados = Vec::new();
+        let c = c.podar_temas(|slug, motivo| podados.push((slug.to_string(), motivo.to_string())));
+
+        assert_eq!(c.games.len(), 1, "só o app comum fica");
+        assert_eq!(c.games[0].title, "T-jogo");
+        assert_eq!(c.games[0].id, 0, "o id é a posição, e renumerar mantém consistente");
+        assert_eq!(c.alvos.len(), 1, "games e alvos têm de ficar alinhados");
+        assert_eq!(podados.len(), 2, "a poda precisa dizer o que tirou");
+        assert_eq!(podados[0].0, "launcher-neon");
+    }
+
+    #[test]
+    fn poda_temas_sem_nada_a_podar_nao_muda_nada() {
+        let c = Catalogo::do_texto(&com_ids(&["jogo", "my-launcher-tool"])).unwrap();
+        let c = c.podar_temas(|slug, _| panic!("não devia podar {slug}"));
+        assert_eq!(c.games.len(), 2);
+    }
+
+    /// Instalar um tema no aparelho é recusado com o motivo, não em silêncio.
+    ///
+    /// `adicionar_ao_indice` é o caminho do **próprio aparelho** para o índice,
+    /// e não passa pelo gerador do PC. Sem esta guarda, instalar um
+    /// `launcher-neon.giochi` criaria o cartão que derruba o DRM.
+    #[test]
+    fn instalar_tema_e_recusado_com_motivo() {
+        let e = adicionar_ao_indice(EXEMPLO, "/user/apps/launcher-neon", &meta("launcher-neon"))
+            .expect_err("tema não deveria entrar no índice");
+        assert!(e.contains("tema"), "o erro tem de dizer o motivo: {e}");
+        assert!(e.contains("DRM"), "o erro tem de dizer a consequência: {e}");
+
+        // A contraprova: um app com "launcher" no meio continua entrando.
+        assert!(adicionar_ao_indice(EXEMPLO, "/user/apps/my-launcher-tool", &meta("my-launcher-tool")).is_ok());
     }
 
     /// Jogo em cartão removível: cartão fora = app fora da Home.
