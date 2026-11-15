@@ -141,6 +141,22 @@ pub enum Cmd {
     MostrarSenha,
     /// Resultado de uma tentativa de conexão. `None` = deu certo.
     ResultadoWifi(Option<String>),
+    /// Conectou, mas a rede **não** foi salva no `wpa_supplicant.conf`.
+    ///
+    /// Carrega o SSID para a mensagem poder nomear a rede.
+    ///
+    /// ## Por que é um comando e não um `eprintln`
+    ///
+    /// Porque até 15/11/2026 o `save_config` falhava e só saía no stderr, que
+    /// ninguém lê no aparelho. O usuário conectava, reiniciava, e o aparelho
+    /// estava desconectado sem uma pista — a senha tinha de ser digitada de
+    /// novo, e nada explicava por quê.
+    ///
+    /// Medido no X55 em 15/11/2026: `/etc/wpa_supplicant.conf` não tem
+    /// `update_config=1`, então `save_config` responde `FAIL`. Até a imagem
+    /// ganhar essa linha (é do **Giochi System**), a conexão vale só até o
+    /// próximo boot — e a tela tem de dizer isso.
+    ConectarSemSalvar(String),
     /// O que este aparelho tem de rádio. Enviado uma vez, na abertura.
     ///
     /// Não é resultado de varredura: é **capacidade**. Um aparelho sem rádio
@@ -230,6 +246,7 @@ impl Cmd {
             | Cmd::RedesWifi(_, _)
             | Cmd::EscaneandoWifi(_)
             | Cmd::ResultadoWifi(_)
+            | Cmd::ConectarSemSalvar(_)
             | Cmd::DispositivosBt(_, _)
             | Cmd::EscaneandoBt(_)
             | Cmd::ResultadoBt(_)

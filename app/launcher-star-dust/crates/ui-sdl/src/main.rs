@@ -38,21 +38,54 @@
 //! resultado. O que a variável consegue de fato é o oposto: **forçar software**
 //! num aparelho onde o acelerado funciona, que é o que permite comparar os dois.
 
-mod app;
+// Os módulos que **não** dependem da camada de efeitos são os arquivos do
+// launcher de produção, apontados por caminho.
+//
+// ## Por que isto deixou de ser cópia
+//
+// Eram cópias, e as cópias ficaram para trás: em 15/11/2026 o `semfio.rs` deste
+// app não tinha a descoberta de 5 s antes do `pair` (o `0x04` de page timeout) e
+// o `input_evdev.rs` não tinha a releitura de `/dev/input` a cada 2 s. O efeito
+// era concreto e do mesmo tipo: **parear funcionava no launcher e não aqui**, e
+// um controle Bluetooth conectado com o app aberto nunca era visto.
+//
+// Duas cópias de um módulo divergem sempre, e o sintoma aparece longe da causa.
+// Com `#[path]` a divergência é impossível — é o que o `launcher-teste` já fazia
+// com as telas.
+#[path = "../../../../launcher/crates/ui-sdl/src/backlight.rs"]
 mod backlight;
-mod efeitos;
+#[path = "../../../../launcher/crates/ui-sdl/src/catalogo.rs"]
 mod catalogo;
+#[path = "../../../../launcher/crates/ui-sdl/src/display.rs"]
 mod display;
-mod draw;
+#[path = "../../../../launcher/crates/ui-sdl/src/energia.rs"]
 mod energia;
+#[path = "../../../../launcher/crates/ui-sdl/src/icons.rs"]
 mod icons;
+#[path = "../../../../launcher/crates/ui-sdl/src/input_evdev.rs"]
 mod input_evdev;
+#[path = "../../../../launcher/crates/ui-sdl/src/power.rs"]
 mod power;
+#[path = "../../../../launcher/crates/ui-sdl/src/semfio.rs"]
 mod semfio;
+#[path = "../../../../launcher/crates/ui-sdl/src/system.rs"]
 mod system;
+#[path = "../../../../launcher/crates/ui-sdl/src/theme.rs"]
 mod theme;
-mod views;
+#[path = "../../../../launcher/crates/ui-sdl/src/volume.rs"]
 mod volume;
+#[path = "../../../../launcher/crates/ui-sdl/src/views.rs"]
+mod views;
+
+// Estes três **são** deste app: são onde a camada de efeitos entra.
+//
+// `views.rs` ficou de fora desta lista de propósito até 15/11/2026 e era a
+// única diferença em relação ao launcher que **não** vinha dos efeitos: as duas
+// cópias divergiam só em comentário, o que é pior que divergir em código —
+// ninguém revisa comentário duplicado.
+mod app;
+mod draw;
+mod efeitos;
 
 use std::time::{Duration, Instant};
 

@@ -423,12 +423,40 @@ fn conectar(iface: Option<&str>, ssid: &str, senha: &str) -> Cmd {
 
     // Só grava depois de dar certo. Salvar uma senha errada faria o aparelho
     // tentar sozinho no próximo boot e falhar sem ninguém entender por quê.
-    match wpa(iface, &["save_config"]) {
-        Ok(t) if t.contains("OK") => eprintln!("wi-fi: configuração salva para {ssid}"),
-        Ok(t) => eprintln!("aviso: save_config respondeu {}", limpar(&t)),
-        Err(e) => eprintln!("aviso: não salvou a rede ({e})"),
+    //
+    // E o resultado da gravação **volta para a tela**, não só para o stderr.
+    // Medido no X55 em 15/11/2026: o `/etc/wpa_supplicant.conf` da imagem não
+    // tem `update_config=1`, então `save_config` responde `FAIL` — a conexão
+    // vale até o próximo boot. Sem o aviso, o usuário reiniciava e encontrava o
+    // aparelho desconectado, com o sintoma "esqueceu a rede" e nenhuma pista da
+    // causa. Silêncio no fracasso é o defeito que este repositório combate.
+    let salvou = match wpa(iface, &["save_config"]) {
+        Ok(t) if t.contains("OK") => {
+            eprintln!("wi-fi: configuração salva para {ssid}");
+            Ok(())
+        }
+        Ok(t) => Err(limpar(&t)),
+        Err(e) => Err(e),
+    };
+    if let Err(motivo) = &salvou {
+        eprintln!("aviso: save_config respondeu {} — a rede vale só até o próximo boot", limpar(motivo));
     }
-    Cmd::ResultadoWifi(None)
+    resultado_da_conexao(salvou.is_ok(), ssid)
+}
+
+/// O que responder depois de conectar de verdade.
+///
+/// Separado do `conectar()` porque a decisão é pura e o resto chama `wpa_cli` —
+/// sem essa separação, "conectou mas não salvou" só se poderia testar com um
+/// aparelho na mão, e foi justamente esse caso que passou despercebido até
+/// 15/11/2026 (o `save_config` do X55 responde `FAIL` porque o
+/// `/etc/wpa_supplicant.conf` não tem `update_config=1`).
+fn resultado_da_conexao(salvou: bool, ssid: &str) -> Cmd {
+    if salvou {
+        Cmd::ResultadoWifi(None)
+    } else {
+        Cmd::ConectarSemSalvar(ssid.to_string())
+    }
 }
 
 /// Espera a associação terminar e devolve o `wpa_state` final.
@@ -688,6 +716,24 @@ impl ComErro for Cmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conexao_salva_com_sucesso_nao_avisa_nada() {
+        // Caminho normal: `ResultadoWifi(None)` faz o reducer fechar a tela e
+        // mostrar "Conectado", sem ressalva.
+        assert_eq!(resultado_da_conexao(true, "Kill.exe"), Cmd::ResultadoWifi(None));
+    }
+
+    #[test]
+    fn conexao_sem_salvar_leva_o_ssid_para_a_tela() {
+        // O caso medido no X55: associação completa, `save_config` responde
+        // `FAIL`. Antes isso ia só para o stderr e o usuário reiniciava sem
+        // entender por que a rede tinha sumido.
+        assert_eq!(
+            resultado_da_conexao(false, "Kill.exe"),
+            Cmd::ConectarSemSalvar("Kill.exe".into())
+        );
+    }
 
     /// A falha de page timeout é a que aconteceu no X55 com um controle
     /// **já descoberto**: `pair` sem descoberta recente.

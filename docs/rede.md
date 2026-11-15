@@ -56,6 +56,34 @@ sabe se a tecla pegou (`X` alterna para texto claro). A senha é limpa ao abrir 
 ao confirmar; não vai para disco nem para o estado depois da conexão
 (`SemFio::limpar_senha`).
 
+### A conexão que funcionava e esquecia
+
+Medido no X55 em 15/11/2026, com a rede real:
+
+```text
+wi-fi: conectando a Kill.exe em wlan0 (senha: 10 caractere(s))
+wpa_state=COMPLETED   inet 192.168.1.7/24   ping gw: 0% perda   DNS ok   HTTP ok
+aviso: save_config respondeu FAIL
+```
+
+Ou seja: **conectava** e **não salvava**. No reboot a rede sumia e a senha tinha
+de ser digitada de novo — com o aviso indo só para o `stderr`, que ninguém lê no
+aparelho.
+
+A causa foi medida: `/etc/wpa_supplicant.conf` não tinha `update_config=1`, e
+essa opção só é lida na **partida** do supplicant. Com a linha, mas sem
+reiniciar o processo, `save_config` continua `FAIL`; reiniciando, responde `OK` e
+o `ssid=` aparece no arquivo. Depois disso, subir o supplicant do zero reconecta
+sozinho.
+
+Hoje a falha **aparece na tela**:
+
+```text
+Conectado a Kill.exe — a rede não foi salva: vai pedir a senha de novo
+```
+
+A linha é da imagem; o pedido está no `AGENTS.md` §17.
+
 ### O teclado é QWERTY, e tem como confirmar
 
 Duas correções de 14/11/2026, ambas nascidas de relato do dono:

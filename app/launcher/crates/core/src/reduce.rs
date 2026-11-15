@@ -189,6 +189,26 @@ pub fn reduce(state: State, cmd: Cmd) -> State {
                 toast(s, &format!("Conectando a {ssid}..."))
             }
         }
+        // Conectou, mas não deu para salvar: o próximo boot pede a senha de
+        // novo. Sem esta linha o usuário só descobre isso reiniciando, e o
+        // sintoma ("o aparelho esqueceu a rede") não aponta para a causa.
+        Cmd::ConectarSemSalvar(ssid) => {
+            let s = desempilhar(state);
+            let s = State {
+                sem_fio: crate::state::SemFio {
+                    conectado: Some(ssid.clone()),
+                    senha: String::new(),
+                    senha_visivel: false,
+                    erro: None,
+                    ..s.sem_fio
+                },
+                ..s
+            };
+            toast(
+                s,
+                &format!("Conectado a {ssid} — a rede não foi salva: vai pedir a senha de novo"),
+            )
+        }
         Cmd::CancelarSenha => {
             let mut s = go_back(state);
             s.sem_fio.limpar_senha();
@@ -2313,6 +2333,25 @@ mod tests {
         // Fora do overlay, `A` não conecta nada.
         let fora = reduce(s.clone(), Cmd::CancelarSenha);
         assert!(!Cmd::Confirm.pede_conexao(&fora));
+    }
+
+    #[test]
+    fn conexao_sem_salvar_avisa_na_tela() {
+        // `save_config` responde `FAIL` no X55 (falta `update_config=1` no
+        // `/etc/wpa_supplicant.conf`). Antes, o aviso ia só para o stderr: o
+        // usuário conectava, reiniciava e o aparelho aparecia desconectado sem
+        // explicação. O toast é o único canal que ele lê.
+        let mut s = no_teclado_de_senha();
+        s.sem_fio.senha = "segredo".into();
+
+        let s = reduce(s, Cmd::ConectarSemSalvar("Kill.exe".into()));
+
+        assert_eq!(s.top_overlay(), Some(Overlay::WifiList), "volta para a lista");
+        assert!(s.sem_fio.senha.is_empty(), "a senha não fica no estado");
+        assert_eq!(s.sem_fio.conectado.as_deref(), Some("Kill.exe"));
+        let msg = format!("{:?}", s.toast);
+        assert!(msg.contains("não foi salva"), "o aviso tem de estar no toast: {msg}");
+        assert!(msg.contains("Kill.exe"), "e nomear a rede: {msg}");
     }
 
     #[test]

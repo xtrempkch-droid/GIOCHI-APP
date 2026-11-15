@@ -617,6 +617,7 @@ fn alvo_em_foco(zone: Zone, indice: usize) -> views::Hit {
         Zone::SettingsContent => views::Hit::SettingsRow(indice),
         Zone::WifiNetworks => views::Hit::WifiNet(indice),
         Zone::PasswordKeys => views::Hit::PasswordKey(indice),
+        Zone::PasswordActions => views::Hit::PasswordConfirm,
         Zone::BtDevices => views::Hit::BtDevice(indice),
         Zone::SearchKeyboard => views::Hit::Key(indice),
         Zone::SearchResults => views::Hit::Result(indice),

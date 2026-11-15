@@ -11,7 +11,7 @@
 | apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **199/199** JS |
-| `compilar-launcher.sh --testes` | **250** Rust (134 ui-sdl + 116 core) |
+| `compilar-launcher.sh --testes` | **253** Rust (136 ui-sdl + 117 core) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
 | apps no catálogo do aparelho | **0** — os sete são host ou shell, e o catálogo exclui os dois (§8) |
@@ -45,8 +45,8 @@ app/
 ├── _template/             # modelo para app novo
 ├── launcher/              # Rust + SDL2 — a interface do aparelho
 │   ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
-│   ├── crates/core/       # 8 módulos, 116 testes, sem SDL
-│   └── crates/ui-sdl/     # 15 módulos, 134 testes, KMSDRM + evdev + catálogo
+│   ├── crates/core/       # 8 módulos, 117 testes, sem SDL
+│   └── crates/ui-sdl/     # 15 módulos, 136 testes, KMSDRM + evdev + catálogo
 ├── launcher-teste/        # o mesmo launcher sobre a GIOCHI-ENGINE (scaffold)
 ├── launcher-star-dust/    # o launcher + camada de efeitos (ready)
 ├── forge/                 # empacotador/classificador (host, Python)
@@ -175,7 +175,7 @@ node tests/run-all.mjs                      # 199 testes JS (lista vem de readdi
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 250 testes
+bash scripts/compilar-launcher.sh --testes  # 253 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 
 bash scripts/compilar-launcher-arm64.sh                       # cross-compile aarch64
@@ -220,8 +220,8 @@ Buildroot e o KMSDRM dispensa compositor.
 
 | Peça | Onde |
 | --- | --- |
-| estado, foco, reducer, grade | `crates/core` (116 testes, sem SDL) |
-| janela, desenho, rotação, evdev, catálogo | `crates/ui-sdl` (134 testes) |
+| estado, foco, reducer, grade | `crates/core` (117 testes, sem SDL) |
+| janela, desenho, rotação, evdev, catálogo | `crates/ui-sdl` (136 testes) |
 
 ### 6.1 Rotação — a orientação é fato do sistema
 
@@ -429,6 +429,42 @@ Três armadilhas de ambiente, todas medidas:
 - **`wpa_cli` está em `/usr/sbin` e `ip` em `/sbin`.** `programa()` procura nos
   diretórios padrão antes de desistir, porque o launcher também é iniciado à mão
   por SSH no diagnóstico.
+
+**`update_config=1` é o que separa "conectou" de "vai lembrar".** Medido no X55
+em 15/11/2026, conexão ponta a ponta com a rede real:
+
+```text
+wi-fi: conectando a Kill.exe em wlan0 (senha: 10 caractere(s))
+wi-fi: interface wlan0 levantada
+wpa_state=COMPLETED   inet 192.168.1.7/24   ping 192.168.1.1: 0% perda
+DNS resolve (github.com)   HTTP ok
+```
+
+Mas o `save_config` respondia **`FAIL`**, em silêncio, e a rede sumia no reboot.
+A causa foi medida, não deduzida: `/etc/wpa_supplicant.conf` **não tinha
+`update_config=1`**, e essa opção só é lida na **partida** do supplicant.
+
+| Passo | Resultado |
+| --- | --- |
+| sem `update_config=1` | `save_config` → `FAIL` |
+| com a linha, sem reiniciar o processo | `save_config` → `FAIL` (a flag é lida no boot dele) |
+| com a linha e supplicant reiniciado | `save_config` → **`OK`**, e o `ssid=` aparece no arquivo |
+| matar e subir o supplicant de novo | reconecta **sozinho** a `Kill.exe` (`wpa_state=COMPLETED`) |
+
+`/` é `ext4 (rw)`, então o arquivo sobrevive a reboot de verdade.
+
+Duas consequências no código:
+
+1. `save_config` deixou de ser silencioso. Quando falha, o `conectar()` devolve
+   `Cmd::ConectarSemSalvar(ssid)` e a tela diz *"Conectado a X — a rede não foi
+   salva: vai pedir a senha de novo"*. Antes ia só para o `stderr`, que ninguém
+   lê no aparelho: o usuário reiniciava e encontrava o console desconectado sem
+   nenhuma pista da causa.
+2. A decisão virou função pura, `resultado_da_conexao(salvou, ssid)`, porque o
+   resto do `conectar()` chama `wpa_cli` e não se testa sem aparelho.
+
+**A linha é da imagem, não do app.** Foi aplicada no X55 desta rodada para o
+recurso funcionar hoje; a próxima imagem precisa trazê-la (§17).
 
 **Esperar a associação é o que separa "aceitou" de "conectou".**
 `select_network` responde OK antes de qualquer associação; sem esperar
@@ -1069,6 +1105,21 @@ Corpo remoto entre **aspas duplas** faz o shell local expandir `$e`/`$n` antes d
 enviar; com `set -u` isso vira `e: variável não associada`. Use **aspas simples**
 com marcador (`__MAC__`) trocado no PC.
 
+### O build `--no-default-features` sobrescreve o binário da comparação
+
+`cargo build --no-default-features` em `app/launcher/crates/ui-sdl` grava em
+`target/debug/giochi-launcher` **o mesmo caminho** do build completo. Quem
+compilou a combinação do CI por último deixa o binário **sem texto** ali, e
+`comparar-launcher-teste.sh` passa a comparar um launcher mudo com um que
+desenha — 95,6 % e "linhas 0,11", com cara de regressão de desenho.
+
+Medido em 15/11/2026: os dois quadros pareciam a Home, um sem nenhum texto. O
+sintoma está no log, não no número: `aviso: compilado sem a feature 'texto'`.
+
+Depois de exercitar a combinação enxuta, rode `bash scripts/compilar-launcher.sh`
+antes de comparar. A mesma família do `--dump-frame` que grava preto (§13): o
+binário é o mesmo caminho, e o que muda é o que ele sabe fazer.
+
 ### Um `cfg` que nunca é compilado é código que não existe
 
 `cargo build --no-default-features` ficou quebrado por semanas (faltava um campo
@@ -1142,10 +1193,11 @@ E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtr
 | rotação segue o sistema | **medido** nos três aparelhos, com o `cmdline` desempatando o `0` |
 | botões do controle embutido | **medido**: cobertura completa dos 20 códigos do X55 |
 | brilho, volume, dormir, desligar, reiniciar | **medido** no X55 |
-| senha Wi-Fi: digitar, ver e confirmar | **medido no PC** com `--tela senha --teclas`; no aparelho, sem dedo |
+| senha Wi-Fi: digitar, ver e confirmar | **medido** — o caminho de produção `--conectar` conectou no X55 com a senha real |
+| Wi-Fi sobrevive ao reboot | **medido** com `update_config=1`: `save_config OK` e reconexão automática |
 | boot automático (`::respawn:` → init → launcher) | **medido** no X55: `ppid` do launcher é o init, 29 s depois do boot |
 | Wi-Fi: varredura e lista | **medido** (`wi-fi: 11 rede(s) em wlan0`) |
-| Wi-Fi: conectar com a senha certa | **não testado** — falta a senha |
+| Wi-Fi: conectar com a senha certa | **medido** no X55 (15/11/2026): `COMPLETED`, IP, gateway, DNS e HTTP |
 | Bluetooth: parear | **medido** (`Bonded: yes`) |
 | Bluetooth: virar entrada | **bloqueado na imagem** (falta transporte HID e `uhid`) |
 | Star Dust desligado = launcher idêntico | **medido**, 4 tamanhos, byte a byte |
@@ -1177,7 +1229,7 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | --- | --- |
 | app `image` que não seja shell | **não existe** — por isso o catálogo sai vazio (§8) |
 | licença consultada antes de lançar | **não feito** — o verificador existe, o launcher ainda não pergunta ao servidor |
-| conexão Wi-Fi real | **não testada** — falta a senha de uma rede |
+| conexão Wi-Fi real | **feita** (15/11/2026) — falta só o `update_config=1` na imagem para persistir |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
 | analógico | **não lido** — normalizar exige `absinfo` por ioctl |
 | tema em tempo de execução | **não existe** — `theme::ACCENT` é `const` em centenas de lugares, e há **um** tema |
@@ -1193,7 +1245,15 @@ Aqui há só um ponteiro: `docs/mensagem-giochi-system.md`.
 inicia rodada. `bash scripts/canal.sh` responde, e `--exigir` sai com 1 para
 encadear em script.
 
-Pedido aberto (14/11/2026): **`CONFIG_HID=y` com o transporte BT-HIDP no
-`hidp.ko`**, **`CONFIG_UHID=y`** e `hidp` carregado no boot. Verificação
-objetiva: `modinfo hidp` lista `hid` em `depends`, e `/sys/bus/hid/drivers/hidp`
-existe.
+Pedidos abertos (15/11/2026), com verificação objetiva para cada um:
+
+| Pedido | Por quê | Como conferir |
+| --- | --- | --- |
+| **`CONFIG_HID=y`** com transporte BT-HIDP no `hidp.ko` | hoje `modinfo hidp` mostra `depends: bluetooth`, sem `hid`: o módulo é só a camada de socket. Controle Bluetooth clássico pareia, conecta e cai (reason 2) | `modinfo hidp` lista `hid` em `depends` e `/sys/bus/hid/drivers/hidp` existe |
+| **`CONFIG_UHID=y`** | controle BLE (HOGP) precisa dele para virar entrada | `/dev/uhid` existe |
+| `hidp` carregado no boot | hoje só por `modprobe` | `lsmod` mostra `hidp` sem intervenção |
+| **`update_config=1` em `/etc/wpa_supplicant.conf`** | sem essa linha o `save_config` responde `FAIL` e a rede conectada **não sobrevive ao reboot** — o usuário digita a senha toda vez | `wpa_cli save_config` responde `OK` e o `ssid=` aparece no arquivo |
+
+Os três primeiros são a mesma família (transporte HID). O quarto foi medido em
+15/11/2026 e aplicado à mão no X55 desta rodada; sem ele na imagem, o aviso
+"a rede não foi salva" aparece para o usuário em toda sessão.
