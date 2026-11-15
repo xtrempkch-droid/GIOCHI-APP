@@ -5,16 +5,34 @@ Este repositório **não escreve** nos repos vizinhos — regra do dono do proje
 conclui que a correção mora em repo alheio, ela vira **issue**, com o medido, o
 arquivo e a linha, a consequência e o que a correção provavelmente é.
 
-**Estado em 15/11/2026:** os cinco corpos abaixo estão prontos e **nenhum dos
-cinco existe no GitHub ainda**. Conferido por `list_issues` no `GIOCHI-SYSTEM`,
-que devolve as mesmas 3 issues de Bluetooth e mais nada.
+**Estado em 15/11/2026, medido por `list_issues`:** **uma** das cinco existe —
+o pedido **5** (fontes), no `GIOCHI-SYSTEM`, como
+[issue #5](https://github.com/xtrempkch-droid/GIOCHI-SYSTEM/issues/5). As outras
+quatro continuam só aqui.
+
+E o repositório vizinho tem **quatro** issues que este documento não numerou:
+
+| Issue | É o pedido | Situação |
+| --- | --- | --- |
+| `GIOCHI-SYSTEM#1`, `#2`, `#3` | **1** (Bluetooth), em três cópias | corpo **antigo e errado**: pede `CONFIG_HID`/`CONFIG_BT_HIDP`, que já estão na imagem (§6.6 do `AGENTS.md`) |
+| `GIOCHI-SYSTEM#4` | **5** (fontes) | **duplicata byte a byte** da #5 |
+| `GIOCHI-SYSTEM#5` | **5** (fontes) | canônica |
+
+**`#N` neste documento é sempre do GitHub; o pedido do arquivo é "pedido N".** A
+numeração dos dois lados colide de propósito nenhum e já produziu confusão: a #4
+do GitHub é a duplicata do pedido 5, e a #4 daqui é o pedido do `GIOCHI-OS`.
+
+A duplicata foi **erro do agente**, e a causa é reutilizável: o `list_issues` de
+conferência rodou antes de o segundo clique chegar (a #4 nasceu `22:48:11`, a #5
+`22:48:33`), então "a issue não existe" foi dito com as duas já criadas. **O
+resultado de um formulário assíncrono não se confere antes do clique** — a leitura
+devolve o passado.
 
 O caminho de escrita pelo MCP autentica (`POST` em issue inexistente responde
 404, não 401) mas **não cria sozinho**: o `issue_write` renderiza um formulário de
-confirmação no VS Code e espera um clique que o agente não dá. Duas tentativas
-pararam ali, e o resultado visível foi o dono do projeto dizendo *"dessa vez não
-apareceu o pedido para eu clicar"* — a ferramenta prometia um clique que nem
-sempre aparece na tela.
+confirmação no VS Code e espera um clique que o agente não dá. Pior: o formulário
+**não é garantia de que aparece** — o dono do projeto relatou *"dessa vez não
+apareceu o pedido para eu clicar"* sobre uma submissão que, afinal, tinha passado.
 
 Por isso o caminho agora é outro, e não depende de extensão nenhuma:
 
@@ -69,6 +87,11 @@ relatado — e a lição está em [AGENTS.md](../AGENTS.md) §13.
 > **as três eram falsas**. As provas e o motivo estão no fim, porque a armadilha
 > vale mais que o pedido: elas foram para o canal e viraam pedido de mudança de
 > imagem para um kernel que já estava certo.
+>
+> **Ela está aberta três vezes, com o corpo velho:** `GIOCHI-SYSTEM#1`, `#2` e
+> `#3`. Este texto é o que deve ser colado **como comentário nas três** — reescrever
+> a issue não é possível por aqui (§1.1), e fechá-las sem a correção deixaria o
+> pedido errado como última palavra do fio.
 
 ### Medido no R35S em 15/11/2026 — `/proc/config.gz`, a fonte que não mente
 
@@ -460,6 +483,15 @@ declarando o `dir` e o `kind` de cada um.
 ---
 
 ## 5. `GIOCHI-SYSTEM` — fontes para chinês, hindi e bengali (o launcher fala 10 idiomas)
+
+> **Criada:** [GIOCHI-SYSTEM#5](https://github.com/xtrempkch-droid/GIOCHI-SYSTEM/issues/5).
+> A `#4` do mesmo repositório é uma **duplicata byte a byte** desta, aberta 22 s
+> antes, e foi fechada como duplicata. Responder na **#5**.
+>
+> Esta nota fica **antes** do título de propósito: o `abrir-issue.mjs` monta o
+> corpo a partir da linha `**Título:**`, então o que está acima dela é
+> procedência — não vai para a issue. Um "Criada: #5" dentro do corpo de uma
+> issue nova seria informação sobre o passado do arquivo, não sobre o pedido.
 
 **Título:** launcher multi-idioma: faltam fontes de CJK, devanágari e bengali — `zh`/`hi`/`bn` saem em quadradinhos
 

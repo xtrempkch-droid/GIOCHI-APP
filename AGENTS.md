@@ -10,7 +10,7 @@
 | --- | --- |
 | apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + **`musica`** (image, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
-| `tests/run-all.mjs` | **231/231** JS |
+| `tests/run-all.mjs` | **233/233** JS |
 | `compilar-launcher.sh --testes` | **321** Rust (162 ui-sdl + 159 core) |
 | Star Dust / launcher-teste | **169** / **95** Rust |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
@@ -148,7 +148,7 @@ schemas/                   # metadata.schema.json + forge.schema.json
 /user/games/<id>           # jogos instalados pela loja / cartão
 /user/apps/<id>            # apps instalados pela loja / cartão
 scripts/                   # validador, empacotadores, ferramentas do aparelho e de issue
-tests/                     # 231 testes JS + suites Python de forge e painel
+tests/                     # 233 testes JS + suites Python de forge e painel
 docs/                      # 29 páginas (inclui idiomas.md e issues-para-outros-repos.md, §1.1)
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
@@ -307,7 +307,7 @@ reprova valor desconhecido (`gles4`, erro de digitação).
 ```bash
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
-node tests/run-all.mjs                      # 231 testes JS (lista vem de readdir)
+node tests/run-all.mjs                      # 233 testes JS (lista vem de readdir)
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
@@ -2049,22 +2049,51 @@ Aqui há só um ponteiro: `docs/mensagem-giochi-system.md`.
 inicia rodada. `bash scripts/canal.sh` responde, e `--exigir` sai com 1 para
 encadear em script.
 
-Pedidos abertos em **`docs/issues-para-outros-repos.md`** — os quatro corpos
-prontos, com medição, arquivo e linha, consequência e como conferir. Resumo:
+Pedidos abertos em **`docs/issues-para-outros-repos.md`** — os cinco corpos
+prontos, com medição, arquivo e linha, consequência e como conferir. Resumo, com
+o estado **medido por `list_issues` em 15/11/2026**:
 
-| # | Repo | Pedido | Gravidade |
-| --- | --- | --- | --- |
-| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel |
-| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** |
-| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso |
-| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente |
-| 5 | System | fontes de CJK/devanágari/bengali — `BR2_PACKAGE_WQY_ZENHEI=y` (já na árvore) + 2 arquivos de 224/200 KB | **o mais visível**: 3 dos 10 idiomas em quadradinhos |
+| # (doc) | Repo | Pedido | Gravidade | Issue no GitHub |
+| --- | --- | --- | --- | --- |
+| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel | **#1, #2, #3** — três cópias, e o **corpo é o antigo** (ver abaixo) |
+| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** | não existe |
+| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso | não existe |
+| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente | não existe |
+| 5 | System | fontes de CJK/devanágari/bengali — `BR2_PACKAGE_WQY_ZENHEI=y` (já na árvore) + 2 arquivos de 224/200 KB | **o mais visível**: 3 dos 10 idiomas em quadradinhos | **#5** (canônica) — a **#4** é duplicata byte a byte |
 
-A #5 é a mais barata das cinco e a única com **verificação ponta a ponta do lado
-de cá**: simulando o que o pacote faria (fonte em `/usr/share/fonts/wqy-zenhei/`),
-o `--fontes` no R35S foi de **5/8 para 8/8** e o quadro mudou 8.557 px, com 4.760
+**O número do documento não é o número da issue, e essa confusão já é o
+primeiro defeito da tabela.** A #4 do GitHub é a duplicata da #5, enquanto a #4
+daqui é o pedido do `GIOCHI-OS`; e as issues #1–#3 do System são todas o pedido
+#1 daqui. Quem apontar "a issue 4" sem dizer de qual lado está falando manda a
+outra pessoa para o repositório errado. Daqui em diante: **`#N` sozinho é do
+GitHub**, e o pedido do documento é sempre "pedido N do documento".
+
+**A #5 está criada e é a única com estado medido do lado de cá.** Ela é a mais
+barata das cinco, e a verificação ponta a ponta foi feita **antes** de abrir:
+simulando o que o pacote faria (fonte em `/usr/share/fonts/wqy-zenhei/`), o
+`--fontes` no R35S foi de **5/8 para 8/8** e o quadro mudou 8.557 px, com 4.760
 no texto chinês — e **0** na linha do hindi, que é o controle negativo. Ligar o
 pacote resolve sem segunda rodada do app.
+
+**A duplicata foi um erro do agente, e o registro vale mais que a limpeza.** Duas
+submissões ao `issue_write` foram dadas como "paradas no clique" porque o
+`list_issues` de conferência rodou **antes** de o segundo clique chegar (22:48:11
+a #4, 22:48:33 a #5). O dono do projeto recebeu "a issue não existe" com as duas
+já criadas. A lição: **o resultado de um formulário assíncrono não se confere
+antes do clique** — a leitura devolve o passado, e chamar isso de verificação é o
+§13 na sua forma mais cara, porque o efeito é uma issue duplicada no repositório
+de outra equipe.
+
+**As três de Bluetooth carregam o pedido antigo, que está errado.** Elas pedem
+`CONFIG_HID` e `CONFIG_BT_HIDP`, que **já estão** na imagem (§6.6, §13); o que
+falta é `CONFIG_UHID` e o `hidp` no autoload. Não foram reescritas porque escrever
+em repo alheio é só por issue (§1.1) e a correção é um comentário que precisa
+deste corpo novo — o texto corrigido está no pedido 1 do documento, pronto para
+ser colado como comentário nas três.
+
+**A #4 foi fechada como duplicata da #5** em 15/11/2026, pelo mesmo caminho de
+formulário; se ela ainda aparecer aberta, o clique não aconteceu — e agora se sabe
+que isso não significa que a operação falhou, significa que **não houve operação**.
 
 **O pedido #2 CORRIGE o anterior, e a correção é do meu lado.** Até 15/11/2026
 esta seção pedia "`update_config=1` em `/etc/wpa_supplicant.conf`" como se o

@@ -41,11 +41,49 @@ function secoesDoDoc() {
 }
 
 const secoes = secoesDoDoc();
+const secoesProcedencia = [];
 
 test("o documento declara os cinco pedidos", () => {
   // Se este número mudar, os testes abaixo continuam verdes — cada um itera
   // sobre `secoes`. Este é o que segura a regressão de "some um pedido".
   assert.ok(secoes.length >= 5, `esperava ao menos 5 pedidos, achei ${secoes.length}`);
+});
+
+test("a numeração dos pedidos é contígua, de 1 a N", () => {
+  // As referências cruzadas deste repositório dizem "pedido 3 do documento", e
+  // não "a terceira seção". Um buraco na numeração (alguém apaga o pedido 2) faz
+  // a frase "pedido 3" passar a apontar para outro assunto — sem erro em lugar
+  // nenhum, porque o texto continua existindo.
+  const numeros = secoes.map((s) => s.numero);
+  assert.deepEqual(numeros, numeros.map((_, i) => i + 1), `numeração com buraco: ${numeros.join(", ")}`);
+});
+
+test("a nota de procedência aponta para issue do repositório da própria seção", () => {
+  // A armadilha que já apareceu: o número do documento não é o número da issue,
+  // e as issues do System são #1..#5 enquanto o documento também vai de 1 a 5.
+  // Um link para `GIOCHI-OS/issues/5` numa seção do `GIOCHI-SYSTEM` manda a
+  // equipe errada ler um pedido que não é dela.
+  const texto = readFileSync(DOC, "utf8").split("\n");
+  let atual = null;
+  for (const linha of texto) {
+    const cabecalho = /^## \d+\. `([^`]+)` — /.exec(linha);
+    if (cabecalho) {
+      atual = { repo: cabecalho[1], notas: [] };
+      secoesProcedencia.push(atual);
+      continue;
+    }
+    // O corpo da issue começa no `**Título:**`; daí para baixo é texto do
+    // pedido, e um link ali é conteúdo, não procedência.
+    if (linha.startsWith("**Título:**")) atual = null;
+    if (!atual) continue;
+    for (const m of linha.matchAll(/github\.com\/([^/]+)\/([^/\s)]+)\/issues\/\d+/g)) {
+      // Comparação pelo **nome** do repo: o link é qualificado com dono
+      // (`xtrempkch-droid/GIOCHI-SYSTEM`) e o cabeçalho não, mas o que precisa
+      // bater é o repositório — é ele que decide qual equipe lê o pedido.
+      assert.equal(m[2], atual.repo, `nota da seção de ${atual.repo} aponta para issue de ${m[1]}/${m[2]}`);
+    }
+  }
+  assert.ok(secoesProcedencia.length >= 5, "não achei as seções pelo cabeçalho");
 });
 
 test("--lista mostra todos os pedidos, com número e repo", () => {
