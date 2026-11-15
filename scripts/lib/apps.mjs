@@ -541,10 +541,18 @@ export function readIndex(appRoot) {
     // silêncio: `role: "tema"` (o nome que o dono usa ao falar) não fazia NADA,
     // e o app virava cartão como se não tivesse papel nenhum.
     if (item.role !== undefined && !ROLE_VALUES.includes(item.role)) {
+      // "tema" é a palavra que o dono usa ao falar, então é a que ele vai
+      // escrever aqui. Recusar está certo — o contrato tem um valor só — mas a
+      // mensagem tem de dizer o que fazer, senão ele conclui que tema não
+      // existe no sistema. E se o app já tem o prefixo, não precisa declarar
+      // nada: a dica é essa.
+      const dica = ehTema(item.id)
+        ? ` "${item.id}" já é tema pelo prefixo "${PREFIXO_TEMA}": apague o campo role`
+        : ` (tema do launcher é ${ROLE_VALUES[0]}; com o prefixo "${PREFIXO_TEMA}" no id nem precisa declarar)`;
       errors.push({
         code: "indice_role_invalido",
         path: `app/apps.json:${item.id}`,
-        message: `role precisa ser ${ROLE_VALUES.join(" ou ")}; recebido "${item.role}"`,
+        message: `role precisa ser ${ROLE_VALUES.join(" ou ")}; recebido "${item.role}"${dica}`,
       });
     }
     entries.set(item.id, item);

@@ -414,7 +414,27 @@ test("readIndex recusa role desconhecido", () => {
       "utf8",
     );
     const { errors } = readIndex(dir);
-    assert.ok(errors.some((item) => item.code === "indice_role_invalido"));
+    const erro = errors.find((item) => item.code === "indice_role_invalido");
+    assert.ok(erro);
+    // A mensagem tem de dizer o que fazer. Recusar `role: "tema"` sem explicar
+    // faz o dono concluir que tema não existe — e "tema" é justamente a palavra
+    // que ele usa. Este app não tem o prefixo, então a dica ensina o atalho.
+    assert.match(erro.message, /shell/);
+    assert.match(erro.message, /prefixo "launcher"/);
+  });
+});
+
+test("role desconhecido num app que já é tema diz para apagar o campo", () => {
+  withTempDir((dir) => {
+    writeFileSync(
+      path.join(dir, "apps.json"),
+      JSON.stringify({ apps: [{ id: "launcher-neon", role: "tema" }] }),
+      "utf8",
+    );
+    const { errors } = readIndex(dir);
+    const erro = errors.find((item) => item.code === "indice_role_invalido");
+    assert.ok(erro);
+    assert.match(erro.message, /apague o campo role/);
   });
 });
 

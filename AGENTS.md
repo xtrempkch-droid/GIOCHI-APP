@@ -10,7 +10,7 @@
 | --- | --- |
 | apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
-| `tests/run-all.mjs` | **206/206** JS |
+| `tests/run-all.mjs` | **207/207** JS |
 | `compilar-launcher.sh --testes` | **257** Rust (140 ui-sdl + 117 core) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
@@ -55,7 +55,7 @@ app/
 └── loja/                  # loja gráfica (host, Rust + SDL2)
 schemas/                   # metadata.schema.json + forge.schema.json
 scripts/                   # validador, empacotadores, ferramentas do aparelho
-tests/                     # 206 testes JS + suites Python de forge e painel
+tests/                     # 207 testes JS + suites Python de forge e painel
 docs/                      # 20 páginas
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
@@ -208,7 +208,7 @@ reprova valor desconhecido (`gles4`, erro de digitação).
 ```bash
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
-node tests/run-all.mjs                      # 206 testes JS (lista vem de readdir)
+node tests/run-all.mjs                      # 207 testes JS (lista vem de readdir)
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
