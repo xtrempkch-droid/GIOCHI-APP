@@ -450,8 +450,11 @@ A causa foi medida, não deduzida: `/etc/wpa_supplicant.conf` **não tinha
 | com a linha, sem reiniciar o processo | `save_config` → `FAIL` (a flag é lida no boot dele) |
 | com a linha e supplicant reiniciado | `save_config` → **`OK`**, e o `ssid=` aparece no arquivo |
 | matar e subir o supplicant de novo | reconecta **sozinho** a `Kill.exe` (`wpa_state=COMPLETED`) |
+| **reboot do aparelho** | subiu, associou a `Kill.exe` e pediu DHCP **sem ninguém tocar em nada** |
 
-`/` é `ext4 (rw)`, então o arquivo sobrevive a reboot de verdade.
+A última linha é a que fecha o caso: `uptime` de 507 s depois de uma queda de
+SSH, com a rede já `COMPLETED` e IP `192.168.1.7`. Ninguém digitou senha. `/` é
+`ext4 (rw)`, então o arquivo sobrevive a reboot de verdade.
 
 Duas consequências no código:
 
@@ -1194,7 +1197,7 @@ E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtr
 | botões do controle embutido | **medido**: cobertura completa dos 20 códigos do X55 |
 | brilho, volume, dormir, desligar, reiniciar | **medido** no X55 |
 | senha Wi-Fi: digitar, ver e confirmar | **medido** — o caminho de produção `--conectar` conectou no X55 com a senha real |
-| Wi-Fi sobrevive ao reboot | **medido** com `update_config=1`: `save_config OK` e reconexão automática |
+| Wi-Fi sobrevive ao reboot | **medido**: aparelho reiniciou e voltou sozinho para `Kill.exe`, com IP, sem digitar senha |
 | boot automático (`::respawn:` → init → launcher) | **medido** no X55: `ppid` do launcher é o init, 29 s depois do boot |
 | Wi-Fi: varredura e lista | **medido** (`wi-fi: 11 rede(s) em wlan0`) |
 | Wi-Fi: conectar com a senha certa | **medido** no X55 (15/11/2026): `COMPLETED`, IP, gateway, DNS e HTTP |
@@ -1229,7 +1232,7 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | --- | --- |
 | app `image` que não seja shell | **não existe** — por isso o catálogo sai vazio (§8) |
 | licença consultada antes de lançar | **não feito** — o verificador existe, o launcher ainda não pergunta ao servidor |
-| conexão Wi-Fi real | **feita** (15/11/2026) — falta só o `update_config=1` na imagem para persistir |
+| conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta só o `update_config=1` na imagem (§17) |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
 | analógico | **não lido** — normalizar exige `absinfo` por ioctl |
 | tema em tempo de execução | **não existe** — `theme::ACCENT` é `const` em centenas de lugares, e há **um** tema |

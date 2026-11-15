@@ -84,6 +84,12 @@ Conectado a Kill.exe — a rede não foi salva: vai pedir a senha de novo
 
 A linha é da imagem; o pedido está no `AGENTS.md` §17.
 
+**E a prova que fecha**: com a linha aplicada, o aparelho reiniciou (queda de SSH
+durante uma pausa de reconexão) e voltou **sozinho** para a `Kill.exe` — rede
+`COMPLETED`, IP `192.168.1.7`, internet respondendo, `uptime` de 507 s e ninguém
+digitou senha nenhuma. Antes disso, o mesmo reboot deixaria o console
+desconectado.
+
 ### O teclado é QWERTY, e tem como confirmar
 
 Duas correções de 14/11/2026, ambas nascidas de relato do dono:
