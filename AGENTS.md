@@ -10,7 +10,7 @@
 | --- | --- |
 | apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + **`musica`** (image, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
-| `tests/run-all.mjs` | **222/222** JS |
+| `tests/run-all.mjs` | **231/231** JS |
 | `compilar-launcher.sh --testes` | **321** Rust (162 ui-sdl + 159 core) |
 | Star Dust / launcher-teste | **169** / **95** Rust |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
@@ -99,6 +99,31 @@ criada" sem ter criado é o §10 aplicado à conversa entre equipes — e uma re
 que promete o que não pode cumprir vira promessa vazia, que é pior que não ter
 regra.
 
+**O clique saiu do caminho em 15/11/2026, e o motivo foi medido na conversa.**
+Depois de duas submissões ao `issue_write`, o retorno do dono do projeto foi
+*"dessa vez não apareceu o pedido para eu clicar"* — o formulário não é uma
+garantia, é uma view que pode não se materializar. Uma regra que depende dele
+produz o mesmo defeito que ela tentava evitar: a issue continua não existindo e
+ninguém sabe por quê.
+
+Hoje o corpo pronto vira **URL do `issues/new`**, com `?title=` e `?body=`:
+
+```bash
+node scripts/abrir-issue.mjs --lista    # os cinco pedidos, com número e repo
+node scripts/abrir-issue.mjs 5 --abrir  # abre a issue já preenchida
+node scripts/abrir-issue.mjs 5 --corpo  # só o texto, para colar
+```
+
+O clique que resta é no **GitHub**, no formulário que a pessoa já usa — não numa
+extensão que pode não aparecer. O corpo sai verbatim do arquivo (reescrevê-lo no
+script criaria uma segunda versão, que é como nascem as cópias atrasadas do
+§7), e o script reescreve link relativo para absoluto, porque um `idiomas.md`
+solto numa issue aponta para 404 — o corpo deixa este diretório.
+
+`--corpo` não é redundância: a URL do pedido de fontes tem **7.354 bytes**. Cabe,
+mas nem todo veículo que cola link gosta, e o texto é o mesmo.
+
+
 ## 2. Estrutura
 
 ```text
@@ -122,8 +147,8 @@ schemas/                   # metadata.schema.json + forge.schema.json
 /opt/giochi/apps/<id>      # apps que vêm na imagem (inclui o launcher e o musica)
 /user/games/<id>           # jogos instalados pela loja / cartão
 /user/apps/<id>            # apps instalados pela loja / cartão
-scripts/                   # validador, empacotadores, ferramentas do aparelho
-tests/                     # 222 testes JS + suites Python de forge e painel
+scripts/                   # validador, empacotadores, ferramentas do aparelho e de issue
+tests/                     # 231 testes JS + suites Python de forge e painel
 docs/                      # 29 páginas (inclui idiomas.md e issues-para-outros-repos.md, §1.1)
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
@@ -282,7 +307,7 @@ reprova valor desconhecido (`gles4`, erro de digitação).
 ```bash
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
-node tests/run-all.mjs                      # 222 testes JS (lista vem de readdir)
+node tests/run-all.mjs                      # 231 testes JS (lista vem de readdir)
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
@@ -303,6 +328,10 @@ bash scripts/compilar-launcher-arm64.sh --app launcher-star-dust --instalar
 bash scripts/compilar-launcher-teste-arm64.sh --instalar
 node scripts/empacotar.mjs app/launcher --saida dist/pacotes  # .giochi assinado
 node scripts/verificar-pacote.mjs dist/pacotes/launcher.giochi
+
+# pedido para outro repo: corpo pronto → URL do `issues/new` (§1.1)
+node scripts/abrir-issue.mjs --lista
+node scripts/abrir-issue.mjs 5 --abrir
 ```
 
 **Não rode `cargo test --workspace` direto em `app/launcher`.** O crate linka com
@@ -2080,6 +2109,12 @@ não cria nada sozinho: o agente não consegue clicar. Consequência prática: o
 entregável é o corpo pronto em `docs/issues-para-outros-repos.md`, e o número da
 issue só entra na tabela acima **depois** que existir de fato. Anunciar "issue
 criada" sem ter criado é o §10 aplicado à conversa entre equipes.
+
+**E o formulário não é garantia de nada:** duas submissões seguidas terminaram com
+o dono do projeto dizendo que *não apareceu* o pedido para clicar. Hoje o caminho
+não passa por ele — `node scripts/abrir-issue.mjs 5 --abrir` monta a URL do
+`issues/new` com título e corpo preenchidos (§1.1), e o clique que resta é no
+GitHub. O mecanismo, o tamanho da URL e o `--corpo` estão descritos no §1.1.
 
 E o item 1 foi **refeito do zero** em 15/11/2026, porque o pedido anterior estava
 errado: `CONFIG_HID=y` e `CONFIG_BT_HIDP=m` **já estão** na imagem, e as três

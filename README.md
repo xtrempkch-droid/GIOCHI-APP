@@ -38,7 +38,7 @@ O que existe hoje, medido em 15/11/2026:
 | --- | --- |
 | apps em `apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + `musica` (image, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em `scaffold`) |
-| `tests/run-all.mjs` | **222/222** JS |
+| `tests/run-all.mjs` | **231/231** JS |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
 | `compilar-launcher.sh --testes` | **289/289** Rust (151 ui-sdl + 138 core) |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |

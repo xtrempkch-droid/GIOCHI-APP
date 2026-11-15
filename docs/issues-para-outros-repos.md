@@ -5,21 +5,34 @@ Este repositório **não escreve** nos repos vizinhos — regra do dono do proje
 conclui que a correção mora em repo alheio, ela vira **issue**, com o medido, o
 arquivo e a linha, a consequência e o que a correção provavelmente é.
 
-**Estado em 15/11/2026:** os cinco corpos abaixo estão prontos e **nenhuma das
-cinco existe no GitHub ainda**. A **nº 5** (fontes) foi submetida ao MCP: o
-`issue_write` renderizou o formulário de confirmação no VS Code e ficou aguardando
-o clique — conferido depois por `list_issues`, que devolve ainda as mesmas 3
-issues de Bluetooth. Ou seja: **a issue não foi criada**, e este arquivo é o
-entregável até o clique acontecer.
+**Estado em 15/11/2026:** os cinco corpos abaixo estão prontos e **nenhum dos
+cinco existe no GitHub ainda**. Conferido por `list_issues` no `GIOCHI-SYSTEM`,
+que devolve as mesmas 3 issues de Bluetooth e mais nada.
 
-Não há atalho neste PC: `gh` não está instalado e não há `GITHUB_TOKEN` no
-ambiente, então o MCP com formulário é o único caminho de escrita. O corpo abaixo
-está no formato que o `issues/new` aceita — cole, ou peça ao agente para
-renderizar o formulário outra vez. A criação pelo MCP do GitHub autentica (`POST` responde 404 para
-issue inexistente, não 401) mas exige **confirmação num formulário do VS Code** —
-o agente não consegue clicar. Enquanto o clique não vier, o artefato é este
-arquivo: cole o bloco no `issues/new` do repo indicado, ou peça ao agente para
-renderizar o formulário de novo.
+O caminho de escrita pelo MCP autentica (`POST` em issue inexistente responde
+404, não 401) mas **não cria sozinho**: o `issue_write` renderiza um formulário de
+confirmação no VS Code e espera um clique que o agente não dá. Duas tentativas
+pararam ali, e o resultado visível foi o dono do projeto dizendo *"dessa vez não
+apareceu o pedido para eu clicar"* — a ferramenta prometia um clique que nem
+sempre aparece na tela.
+
+Por isso o caminho agora é outro, e não depende de extensão nenhuma:
+
+```bash
+node scripts/abrir-issue.mjs --lista        # os cinco pedidos
+node scripts/abrir-issue.mjs 5 --abrir      # URL do issues/new, já preenchida
+node scripts/abrir-issue.mjs 5 --corpo      # só o corpo, para colar à mão
+```
+
+O GitHub aceita `?title=` e `?body=` no `issues/new`, então o texto que está
+abaixo vira um link: quem clica é a pessoa, mas clica no formulário **do GitHub**,
+que ela já conhece. O corpo sai verbatim daqui (uma segunda cópia envelheceria
+diferente da primeira) e os links relativos são reescritos para absolutos — um
+`idiomas.md` solto numa issue aponta para 404, porque o corpo deixa este
+diretório.
+
+Sem atalho por linha de comando: `gh` não está instalado e não há `GITHUB_TOKEN`
+no ambiente.
 
 | # | Repositório | Assunto | Gravidade |
 | --- | --- | --- | --- |
