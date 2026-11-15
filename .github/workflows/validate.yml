@@ -141,7 +141,12 @@ jobs:
           ./target/debug/giochi-launcher --dump-frame /tmp/sem.bmp \
             --tamanho 640x480 > /tmp/sem.log 2>&1
           test -s /tmp/sem.bmp
-          grep -q "nenhum app com binário presente" /tmp/sem.log
+          # A mensagem é a que o código emite: quando a detecção não acha nada
+          # ela diz as quatro raízes que varreu. Antes o check procurava
+          # "nenhum app com binário presente", texto que deixou de existir
+          # quando o catálogo passou a ser detectado do disco — e um grep preso
+          # a uma frase antiga reprova o CI sem nada de errado no app.
+          grep -q "nenhum app encontrado em /opt/giochi/games, /user/games, /opt/giochi/apps, /user/apps" /tmp/sem.log
           if grep -q "demonstração" /tmp/sem.log; then
             echo "sem --demo o launcher nao pode usar o catalogo de demonstracao"
             exit 1
