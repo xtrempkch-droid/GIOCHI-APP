@@ -1244,6 +1244,46 @@ que manda procurar chave SSH — e o errado era o nome do usuário. O
 `compilar-launcher-arm64.sh` não fazia, e os dois divergiram. Hoje ambos usam
 `INSTALAR="${2#root@}"` no parse e `root@$INSTALAR` nos comandos.
 
+### Dois significados para a mesma variável produzem `root@root@`
+
+`compilar-launcher-arm64.sh` guardava o destino do `--instalar` de duas formas:
+`INSTALAR` era **bare** (`${2#root@}`) mas `HOST_SSH` já vinha com `root@`. Quando
+`--instalar` não trazia argumento, `INSTALAR="$HOST_SSH"` gravava `root@10.55.0.2`
+e os quatro `ssh`/`scp` prefixavam `root@` de novo. Medido em 15/11/2026:
+
+```text
+instalando em root@root@10.55.0.2:/opt/giochi/apps/launcher/bin
+root@root@10.55.0.2: Permission denied (publickey,password,keyboard-interactive).
+```
+
+A mensagem manda procurar chave quando o errado era o alvo — a **mesma** família
+do `--instalar ip` que virava `charles@ip`. Corrigir o prefixo num ponto não
+adianta: sobra outro lugar que prefixa. Hoje **uma função** decide, e todo
+`ssh`/`scp` a consulta:
+
+```bash
+alvo_ssh() { case "$INSTALAR" in *@*) printf '%s' "$INSTALAR" ;; *) printf 'root@%s' "$INSTALAR" ;; esac; }
+```
+
+`foo@host` passa intacto (usuário explícito é respeitado), `host` ganha `root@`,
+e `root@host` não ganha nada. Medido nas três formas mais `--instalar` sozinho.
+
+### A referência do `verificar` vinha de um binário velho
+
+`gerar_referencia` usa `app/launcher/target/debug/giochi-launcher` para desenhar a
+Home no PC. Nada garantia que ele fosse atual — e `--testes` compila *harnesses*,
+não o binário, enquanto o clippy só faz type-check. Medido em 15/11/2026: o
+binário era de 08:19, a poda de tema entrou depois, a referência desenhou 6
+cartões e o aparelho 4. **92,4%**, com cara de regressão de desenho e nenhuma
+regressão nenhuma. Com o binário atualizado: **99,6%**.
+
+É a terceira vez que a comparação acusa o desenho por uma assimetria de entrada
+(as outras: catálogo divergente no X35H, 99,4% → 97,8%; e `dir` do aparelho
+inexistente no PC, 36,5%). A diferença é que esta o próprio script podia evitar:
+hoje ele procura `*.rs` mais novo que o binário e **reconstrói** — o build é
+incremental e custa 0,02 s quando nada mudou. Aviso aqui seria lido por ninguém
+e a rodada inteira sairia com o número errado.
+
 ### Ferramenta de build que sai calada
 
 `INSTALAR="${2:-}"; shift 2` com um argumento só: o `shift 2` falha e `set -e`

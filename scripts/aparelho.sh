@@ -402,6 +402,27 @@ gerar_referencia() {
   [ -x "$bin" ] || return 1
   [ -d "$libs" ] || return 1
 
+  # O binário de referência pode estar **velho**, e um referência velha produz um
+  # número que parece regressão de desenho e não é.
+  #
+  # Medido em 15/11/2026: o `target/debug/giochi-launcher` era de 08:19 e o
+  # código de poda de tema entrou depois. A referência desenhava 6 cartões
+  # (contando `launcher` e `launcher-star-dust`) enquanto o aparelho desenhava
+  # 4, e a comparação deu **92,4%** sem uma linha de desenho ter mudado. É a
+  # mesma família do catálogo divergente que já custou 99,4% → 97,8% no X35H.
+  #
+  # A correção é reconstruir em vez de confiar: o build é incremental e custa
+  # ~0,02 s quando nada mudou. Um aviso aqui seria lido por ninguém e a rodada
+  # inteira sairia com o número errado.
+  local fonte_nova
+  fonte_nova=$(find "$RAIZ/app/launcher/crates" -name '*.rs' -newer "$bin" -print -quit 2>/dev/null)
+  if [ -n "$fonte_nova" ]; then
+    printf '  referência: %s é mais novo que o binário — reconstruindo\n' "${fonte_nova#$RAIZ/}"
+    ( cd "$RAIZ/app/launcher" \
+      && RUSTFLAGS="-L $libs${RUSTFLAGS:+ $RUSTFLAGS}" cargo build --workspace >/dev/null 2>&1 ) \
+      || { printf '  ERRO: não consegui reconstruir %s\n' "$bin"; return 1; }
+  fi
+
   # A referência tem de estar no espaço de PROJETO, que é paisagem.
   #
   # `verificar-frame.mjs` des-rotaciona a captura e compara no espaço de projeto

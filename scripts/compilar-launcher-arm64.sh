@@ -85,6 +85,22 @@ resolver_aparelho() {
   log "aparelho em $HOST_SSH"
 }
 
+# O destino do `--instalar` tinha **dois significados** no mesmo arquivo, e isso
+# rendeu `root@root@10.55.0.2: Permission denied`. `INSTALAR` é bare em
+# `--instalar <ip>` (`${2#root@}`) e `HOST_SSH` já vem com `root@` — então
+# `INSTALAR="$HOST_SSH"` gravava `root@ip`, e os `ssh` prefixavam `root@` de novo.
+#
+# Mensagem de erro que manda procurar chave quando o errado era o usuário é a
+# mesma armadilha de `--instalar ip` virando `charles@ip`. A correção não é
+# acertar o prefixo neste ponto: é **uma função** decidir o alvo, consultada por
+# todo `ssh`/`scp`, para não sobrar um lugar onde alguém prefixe de novo.
+alvo_ssh() {
+  case "$INSTALAR" in
+    *@*) printf '%s' "$INSTALAR" ;;
+    *)   printf 'root@%s' "$INSTALAR" ;;
+  esac
+}
+
 INSTALAR=""
 PEDIU_INSTALAR=""
 FORCAR_TEXTO=""
@@ -359,11 +375,12 @@ if [ -n "$INSTALAR" ]; then
   # conexão. O aviso vai para stderr e polui a saída do script inteiro.
   filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
 
-  log "instalando em root@$INSTALAR:$DESTINO"
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
+  ALVO="$(alvo_ssh)"
+  log "instalando em $ALVO:$DESTINO"
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$ALVO" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "$BIN" "root@$INSTALAR:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" \
+    "$BIN" "$ALVO:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$ALVO" \
     "chmod +x $DESTINO/$BIN_NAME && ls -la $DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
   # **Perguntar ao aparelho**, não afirmar. A mensagem dizia sempre "o inittab
   # não inicia o giochi-init", verdade na imagem do X55 de 03/11 e **falsa** nas
@@ -371,7 +388,7 @@ if [ -n "$INSTALAR" ]; then
   #
   # Uma mensagem fixa sobre o estado de outra pessoa envelhece calada, e o custo
   # é diagnosticar "não sobe" quando sobe.
-  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 "root@$INSTALAR" \
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$ALVO" \
       'grep -qE "^[^#]*respawn:.*giochi-init" /etc/inittab' 2>/dev/null; then
     log "instalado. O inittab TEM respawn do giochi-init: a interface sobe no boot."
     log "  para ver agora sem reiniciar: bash scripts/aparelho.sh subir"
