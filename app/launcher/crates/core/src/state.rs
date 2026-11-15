@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::deteccao::Tipo;
 use crate::focus::{Focus, Zone};
 
 /// Abas do topo.
@@ -208,6 +209,32 @@ impl App {
     }
 }
 
+/// Pedido de lançamento: o tipo do item e a posição na lista daquele tipo.
+///
+/// `Tipo` é o que separa "abrir o jogo 0" de "abrir o app 0". Os dois números
+/// existem ao mesmo tempo e significam coisas diferentes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pedido {
+    pub tipo: Tipo,
+    pub indice: u32,
+}
+
+impl Pedido {
+    pub fn jogo(indice: u32) -> Pedido {
+        Pedido {
+            tipo: Tipo::Jogo,
+            indice,
+        }
+    }
+
+    pub fn app(indice: u32) -> Pedido {
+        Pedido {
+            tipo: Tipo::App,
+            indice,
+        }
+    }
+}
+
 /// Uma rede Wi-Fi vista pelo `wpa_supplicant`.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Rede {
@@ -355,15 +382,25 @@ pub struct State {
     pub pad_connected: bool,
     /// Wi-Fi e Bluetooth: redes, dispositivos, senha em digitação.
     pub sem_fio: SemFio,
-    /// Id do app que a UI pediu para iniciar.
+    /// Pedido de lançamento: **que** item abrir e de que tipo.
     ///
     /// O núcleo decide **que** iniciar; quem sabe abrir processo e liberar o
     /// display é o `ui-sdl`. Por isso o pedido viaja como dado no estado, e não
     /// como ação lateral do reducer — o reducer continua puro e testável.
     ///
+    /// ## Por que carrega o tipo, e não só o id
+    ///
+    /// Com a aba Apps passando a detectar apps de verdade, os dois índices
+    /// (`games` e `apps`) são independentes e **dois deles valem 0** ao mesmo
+    /// tempo em qualquer aparelho que tenha um jogo e um app. Um pedido que
+    /// levasse só o número abriria o jogo errado — e o defeito apareceria como
+    /// "abriu outra coisa", longe da causa. O tipo é o que torna o pedido
+    /// inequívoco; é a mesma lição da loja, onde `PacoteVerificado` e
+    /// `LicencaAssinada` são tipos diferentes por uma razão prática.
+    ///
     /// Quem consome é `App::tomar_pedido_de_lancamento`, com `take()`: o pedido
-    /// vale uma vez. Sem isso o launcher tentaria iniciar o jogo em todo quadro.
-    pub lancar: Option<u32>,
+    /// vale uma vez. Sem isso o launcher tentaria iniciar o app em todo quadro.
+    pub lancar: Option<Pedido>,
     /// Arranjo da grade de jogos, **publicado pelo desenho**.
     ///
     /// A view escolhe as colunas por geometria (`grade_para`) e pagina; a

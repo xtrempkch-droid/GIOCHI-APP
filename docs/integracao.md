@@ -30,9 +30,37 @@ do caminho crítico do desenho (§4).
 
 ### 2.1 Catálogo de apps
 
-**De onde:** `/opt/giochi/apps/index.json`
+**De onde, em ordem:** o **disco**, e o índice como complemento.
 
-Formato, gerado pela fase `apps` do `Giochi os`:
+Desde 15/11/2026 o launcher **detecta**: ele varre as quatro raízes e monta o
+catálogo do que existe. `index.json` continua sendo lido — é o que lista
+conteúdo fora das raízes e o que uma imagem antiga publica — mas **o disco
+vence** na junção: para o mesmo `slug`, a entrada varrida substitui a do índice,
+com o `dir` onde o pacote está de fato.
+
+| Raiz | O que mora | Quem instala |
+| --- | --- | --- |
+| `/opt/giochi/games/<id>` | jogos que vêm na imagem | `Giochi os` |
+| `/opt/giochi/apps/<id>` | apps que vêm na imagem | `Giochi os` |
+| `/user/games/<id>` | jogos da loja / cartão | `instalar-do-cartao.sh` |
+| `/user/apps/<id>` | apps da loja / cartão | `instalar-do-cartao.sh` |
+
+Um pacote é uma pasta com `metadata.json`. O campo **`kind`** (`"game"` ou
+`"app"`) decide a aba: a **declaração vence o lugar**, e um pacote no lugar
+trocado aparece na aba certa com uma linha de aviso no log. `kind` ausente vale
+`"game"` — compatibilidade com todo pacote anterior a 15/11/2026.
+
+```text
+catálogo: 3 jogo(s) e 1 app(s) detectado(s) em /opt/giochi/games, /user/games, /opt/giochi/apps, /user/apps
+```
+
+Detectar em vez de só ler o índice foi decisão do dono em 15/11/2026
+(*"a aba apps precisa ser do tipo detectar, assim como a aba jogos"*): copiar a
+pasta para o aparelho passou a bastar, e o índice deixou de ser o único caminho
+para um cartão existir.
+
+**Formato do índice**, gerado pela fase `apps` do `Giochi os` e por
+`scripts/gerar-catalogo.mjs`:
 
 ```json
 {
@@ -43,9 +71,10 @@ Formato, gerado pela fase `apps` do `Giochi os`:
       "version": "0.1.0",
       "entrypoint": "bin/giochi-launcher",
       "dir": "/opt/giochi/apps/launcher",
-      "title": "Launcher",
+      "title": "Giochi Launcher",
       "developer": "Giochi",
-      "year": 2026
+      "year": 2026,
+      "kind": "app"
     }
   ]
 }
@@ -61,6 +90,7 @@ Formato, gerado pela fase `apps` do `Giochi os`:
 | `category` | não | categoria do cartão | `Aplicativo` |
 | `developer` | não | ficha do jogo | `—` |
 | `year` | não | cartão e ficha | `—` |
+| `kind` | não | **aba** (jogos × apps) | `game` |
 
 `developer` e `year` vêm do `metadata.json` do pacote (`developer` é obrigatório
 lá; `releaseYear` é opcional). **A loja apenas repassa** — ela não deve inventar
@@ -71,23 +101,29 @@ porque não havia campo de ano e o port usou o id do jogo no lugar. Um número
 interno desenhado com a mesma tipografia de um dado real engana quem lê a tela.
 Se a loja não tiver o ano, o certo é omitir o campo — a UI mostra `—`.
 
-**Fallback:** arquivo ausente → catálogo de demonstração embutido (quatro
-títulos), e o botão "Jogar" avisa que o app não está no catálogo. Nunca quebra.
+**Fallback:** arquivo ausente e disco vazio → catálogo vazio, e a tela diz
+"Nenhum jogo instalado." / "Nenhum app instalado." com as raízes procuradas.
+Nunca quebra, e nunca inventa conteúdo: os quatro títulos de demonstração que
+existiam aqui apareciam na tela e davam erro ao apertar `A`. Hoje eles só
+existem com `--demo`, para comparação de desenho.
 
 **Validação do caminho.** `dir` precisa ser absoluto e sem `..`; `entrypoint`
 precisa começar em `bin/`, ser relativo e sem `..`. Entrada que não passa é
 **descartada com aviso**, não saneada: um manifesto corrompido não pode virar
 execução de binário arbitrário, e sanear esconderia que o arquivo está errado.
 
-**Estado em 04/11/2026 — implementado e verificado no X35H.** O launcher lê este
-arquivo (`crates/ui-sdl/src/catalogo.rs`), desenha o catálogo real e executa o
-`entrypoint`. Medido no aparelho: `catálogo: 1 app(s) de
-/opt/giochi/apps/index.json`, e o ciclo abrir jogo → sair → voltar funcionou com
-o app instalado.
+**Estado em 15/11/2026 — implementado e medido no R35S.** O launcher detecta nas
+quatro raízes (`crates/ui-sdl/src/catalogo.rs`, modelo puro em
+`crates/core/src/deteccao.rs`), desenha as duas abas e executa o `entrypoint` do
+item escolhido. Medido no aparelho: `3 jogo(s) e 1 app(s) detectado(s)`, e o
+ciclo abrir app → sair → voltar funcionou.
 
-Duas variáveis de ambiente existem para diagnóstico: `GIOCHI_CATALOGO` aponta
-outro arquivo (é como se testa no PC, onde `/opt` não existe) e
-`--lancar <id|slug>` pede o lançamento já na abertura.
+Três variáveis de ambiente existem para diagnóstico: `GIOCHI_CATALOGO` aponta
+outro índice, `GIOCHI_RAIZES` sobrepõe as quatro raízes separadas por `:` (é como
+se testa no PC, onde `/opt` não existe) e `--lancar <app:N|jogo:N|slug>` pede o
+lançamento já na abertura. **`--lancar N` sozinho continua sendo jogo** — os dois
+índices valem 0 num aparelho com um jogo e um app, e um número solto abriria o
+item errado.
 
 **Cuidado:** `dir` vem do manifesto. O launcher deve resolver `entrypoint` **relativo
 a `dir`** e recusar caminho que escape (`..`, absoluto). Um manifesto corrompido não

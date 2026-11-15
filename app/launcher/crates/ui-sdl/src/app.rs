@@ -246,7 +246,7 @@ impl App {
             .then_some(self.state.toast.message.as_str())
     }
 
-    pub fn tomar_pedido_de_lancamento(&mut self) -> Option<u32> {
+    pub fn tomar_pedido_de_lancamento(&mut self) -> Option<giochi_launcher_core::Pedido> {
         self.state.lancar.take()
     }
 

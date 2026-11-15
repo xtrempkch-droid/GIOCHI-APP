@@ -271,7 +271,7 @@ fn principal() -> Result<(), String> {
                     .map(|p| p as u32)
             })
             .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))?;
-        state.lancar = Some(id);
+        state.lancar = Some(giochi_launcher_core::Pedido::jogo(id));
         eprintln!("--lancar: pedido de lançamento para o app {id} ({pedido})");
     }
 
@@ -423,8 +423,12 @@ fn principal() -> Result<(), String> {
 
         // Pedido de lançamento: o núcleo decidiu *o que* abrir, e aqui é o
         // único lugar que sabe *como*.
-        if let Some(id) = state.lancar.take() {
-            let alvo = catalogo.alvo(id).cloned();
+        if let Some(pedido) = state.lancar.take() {
+            let alvo = match pedido.tipo {
+                giochi_launcher_core::deteccao::Tipo::Jogo => catalogo.alvo(pedido.indice),
+                giochi_launcher_core::deteccao::Tipo::App => catalogo.alvo_app(pedido.indice),
+            }
+            .cloned();
             let mut recado: Option<String> = None;
 
             // Destruir o pintor **antes** do filho é o que libera o DRM master.
@@ -541,19 +545,18 @@ fn desenhar_com(painter: &mut Painter, state: &mut State, mut efeitos: Option<&m
     painter.present();
 }
 
-/// Catálogo lido do aparelho, ou vazio quando não há.
+/// Catálogo **detectado** no aparelho, ou vazio quando não há.
 ///
-/// `GIOCHI_CATALOGO` aponta outro arquivo, como no launcher de produção — no PC
-/// não existe `/opt/giochi/apps/` e testar exigiria root.
+/// Usa a mesma detecção do launcher de produção (`Catalogo::detectar`): varre as
+/// raízes de jogos e de apps e lê o índice como complemento. `GIOCHI_CATALOGO`
+/// aponta outro índice e `GIOCHI_RAIZES` outras raízes — no PC não existe
+/// `/opt/giochi/`, e testar exigiria root.
 ///
 /// Devolve o catálogo **e** o aviso da falha, para o chamador poder dizer na
 /// tela: um catálogo vazio por arquivo ausente é indistinguível de "nenhum jogo
 /// instalado", e foram dois diagnósticos errados seguidos nesse mesmo caminho.
 fn catalogo_do_aparelho() -> (catalogo::Catalogo, Option<String>) {
-    let caminho = std::env::var_os("GIOCHI_CATALOGO")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(catalogo::caminho);
-    match catalogo::Catalogo::carregar(&caminho) {
+    match catalogo::Catalogo::detectar() {
         Ok(c) => (c, None),
         Err(e) => (
             catalogo::Catalogo::default(),
@@ -575,19 +578,31 @@ fn estado_inicial(demo: bool, catalogo: &catalogo::Catalogo) -> State {
         // `alvo` no lançamento. Ler de novo no laço criaria duas listas que
         // podem discordar — o cartão na tela e o executável aberto sairiam de
         // fontes diferentes.
-        eprintln!("launcher-teste: catálogo com {} jogo(s)", catalogo.games.len());
+        eprintln!(
+            "launcher-teste: catálogo com {} jogo(s) e {} app(s)",
+            catalogo.games.len(),
+            catalogo.apps.len()
+        );
         catalogo.games.clone()
     };
-    let apps = vec![
-        AppEntry::new("music", "Música", "music", "Mídia"),
-        AppEntry::new("retro", "RetroArch", "retro", "Emulador"),
-        AppEntry::new("files", "Arquivos", "files", "Sistema"),
-        AppEntry::new("term", "Terminal", "term", "Avançado"),
-        AppEntry::new("browse", "Navegador", "browse", "Internet"),
-        AppEntry::new("shots", "Capturas", "camera", "Mídia"),
-        AppEntry::new("store", "Loja", "cart", "Sistema"),
-        AppEntry::new("sync", "Sincronizar", "sync", "Nuvem"),
-    ];
+    // Com `--demo` a lista é a mesma do launcher de produção, byte a byte, para
+    // a comparação de pixels valer também nesta aba. Sem `--demo`, é o que a
+    // detecção achou — inventar apps aqui faria o banco de prova mentir sobre o
+    // aparelho, que é justamente o que ele existe para medir.
+    let apps = if demo {
+        vec![
+            AppEntry::new("music", "Música", "music", "Mídia"),
+            AppEntry::new("retro", "RetroArch", "retro", "Emulador"),
+            AppEntry::new("files", "Arquivos", "files", "Sistema"),
+            AppEntry::new("term", "Terminal", "term", "Avançado"),
+            AppEntry::new("browse", "Navegador", "browse", "Internet"),
+            AppEntry::new("shots", "Capturas", "camera", "Mídia"),
+            AppEntry::new("store", "Loja", "cart", "Sistema"),
+            AppEntry::new("sync", "Sincronizar", "sync", "Nuvem"),
+        ]
+    } else {
+        catalogo.apps.clone()
+    };
     let mut state = State::new(games, apps);
     state.screen = Screen::Running;
 
@@ -687,6 +702,7 @@ mod testes {
             c.games
                 .push(Game::new(i as u32, slug, "Teste", 0.0, "nunca", false));
             c.alvos.push(catalogo::Alvo {
+                tipo: giochi_launcher_core::deteccao::Tipo::Jogo,
                 slug: (*slug).to_string(),
                 dir: format!("/tmp/{slug}"),
                 entrypoint: "bin/x".to_string(),

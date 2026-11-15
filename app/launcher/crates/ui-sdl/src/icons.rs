@@ -222,6 +222,44 @@ static SEARCH: [Prim; 2] = [
     Prim::Line(21.0, 21.0, 16.65, 16.65),
 ];
 
+// ── transporte de mídia ─────────────────────────────────────
+//
+// Usados pelo app de música (`app/musica`). Ficam aqui, e não no app, porque o
+// desenho de ícone é um só: uma segunda tabela de polígonos envelheceria
+// diferente desta, e o traço de 2 px que o `Painter` aplica é o que dá a
+// espessura — copiar as coordenadas sem copiar o traço produziria dois pesos
+// de linha na mesma tela.
+//
+// O traço é o mesmo dos outros ícones (contorno), exceto onde o preenchimento
+// é o próprio significado: o triângulo de play/pular e as barras de pausa são
+// sólidos porque um triângulo vazado lê como "play" só de perto.
+
+/// Nota musical: haste, bandeirola e cabeça.
+static NOTA: [Prim; 4] = [
+    Prim::Circle(9.5, 17.5, 3.5),
+    Prim::Line(13.0, 17.5, 13.0, 4.5),
+    Prim::Line(13.0, 4.5, 19.5, 7.0),
+    Prim::Line(19.5, 7.0, 19.5, 11.0),
+];
+
+/// Pausa: duas barras sólidas.
+static PAUSA: [Prim; 2] = [
+    Prim::Poly(&[(7.0, 5.0), (10.6, 5.0), (10.6, 19.0), (7.0, 19.0)], true),
+    Prim::Poly(&[(13.4, 5.0), (17.0, 5.0), (17.0, 19.0), (13.4, 19.0)], true),
+];
+
+/// Faixa anterior: triângulo para a esquerda e barra.
+static ANTERIOR: [Prim; 2] = [
+    Prim::Poly(&[(18.0, 5.0), (8.0, 12.0), (18.0, 19.0)], true),
+    Prim::Poly(&[(5.4, 5.0), (7.6, 5.0), (7.6, 19.0), (5.4, 19.0)], true),
+];
+
+/// Próxima faixa: o mesmo, espelhado.
+static PROXIMO: [Prim; 2] = [
+    Prim::Poly(&[(6.0, 5.0), (16.0, 12.0), (6.0, 19.0)], true),
+    Prim::Poly(&[(16.4, 5.0), (18.6, 5.0), (18.6, 19.0), (16.4, 19.0)], true),
+];
+
 /// Devolve o ícone pelo nome usado nos dados do catálogo.
 pub fn get(name: &str) -> Option<&'static Icon> {
     // `Icon` é só um fat pointer para dados estáticos: promovê-lo a `static`
@@ -249,6 +287,10 @@ pub fn get(name: &str) -> Option<&'static Icon> {
         "chart" => icon!(CHART),
         "moon" => icon!(MOON),
         "search" => icon!(SEARCH),
+        "nota" => icon!(NOTA),
+        "pause" => icon!(PAUSA),
+        "anterior" => icon!(ANTERIOR),
+        "proximo" => icon!(PROXIMO),
         _ => None,
     }
 }

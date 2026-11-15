@@ -21,6 +21,7 @@ Giochi app/
 │   ├── launcher/             # interface do aparelho (Rust + SDL2)
 │   ├── launcher-teste/       # o mesmo launcher desenhado sobre a GIOCHI-ENGINE
 │   ├── launcher-star-dust/   # o launcher + camada de efeitos
+│   ├── musica/               # tocador de música: o primeiro app de imagem que não é tema
 │   ├── loja/                 # loja do PC (Rust + SDL2)
 │   ├── painel/               # interface web local do PC
 │   ├── forge/                # empacotador/classificador (native, Python)
@@ -31,16 +32,18 @@ Giochi app/
 └── docs/
 ```
 
-O que existe hoje, medido em 14/11/2026:
+O que existe hoje, medido em 15/11/2026:
 
 | Item | Estado |
 | --- | --- |
-| apps em `apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, shell) + `forge`, `store`, `painel`, `loja` (host) |
-| `validate-app.mjs --all` | **7 válidos** (1 em `scaffold`) |
-| `tests/run-all.mjs` | **199/199** JS |
+| apps em `apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + `musica` (image, app) + `forge`, `store`, `painel`, `loja` (host) |
+| `validate-app.mjs --all` | **8 válidos** (1 em `scaffold`) |
+| `tests/run-all.mjs` | **222/222** JS |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| `compilar-launcher.sh --testes` | **253/253** Rust (136 ui-sdl + 117 core) |
+| `compilar-launcher.sh --testes` | **289/289** Rust (151 ui-sdl + 138 core) |
+| `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
 | `compilar-loja.sh --testes` | **116/116** Rust |
+| apps no catálogo do aparelho | **4**: 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco |
 | aparelhos medidos | X55 (720×1280), X35H e R35S (640×480) |
 
 Cada app tem a mesma anatomia:

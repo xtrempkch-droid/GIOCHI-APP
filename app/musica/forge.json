@@ -1,0 +1,10 @@
+{
+  "arch": "aarch64",
+  "runtime": "native",
+  "graphics_api_min": "none",
+  "ram_min_mb": 128,
+  "vram_min_mb": 16,
+  "display_min_width": 320,
+  "display_min_height": 240,
+  "touchscreen_required": false
+}

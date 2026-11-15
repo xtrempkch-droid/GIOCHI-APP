@@ -13,6 +13,8 @@ import { test } from "node:test";
 import {
   DIR_BASE_PADRAO,
   gerarCatalogo,
+  RAIZES,
+  RAIZES_IMAGEM,
   lerMetadata,
   mesclarInstalados,
   MOTIVOS,
@@ -93,14 +95,73 @@ test("deriva título, ano e categoria do metadata.json", () => {
 });
 
 // O `dir` do aparelho é convenção do Giochi System e NÃO se deriva do caminho
-// no repositório. `<grupo>/<slug>` vira `/opt/giochi/apps/<id>` — o `id` manda.
+// no repositório. `<grupo>/<slug>` vira `/opt/giochi/games/<id>` (ou `apps`,
+// conforme o `kind`) — o `id` manda no nome da pasta.
 test("dir do aparelho usa o id, não o caminho do repositório", () => {
   withTempDir((dir) => {
     escreverIndice(dir, [criarApp(dir, "editor", { folder: "ferramentas/editor" })]);
     const { catalogo } = gerarCatalogo(dir);
-    assert.equal(catalogo.apps[0].dir, `${DIR_BASE_PADRAO}/editor`);
+    assert.equal(catalogo.apps[0].dir, `/opt/giochi/games/editor`);
     assert.ok(!catalogo.apps[0].dir.includes("ferramentas"));
   });
+});
+
+// Jogo e app moram em raízes diferentes.
+//
+// Decisão do dono, 15/11/2026: "apps deverão ficar em locais diferentes dos
+// jogos para que a detecção não se confunda". O `dir` publicado é o que o
+// launcher usa para executar, então uma raiz errada aqui é um cartão que não
+// abre — ou, pior, um app na aba de jogos.
+test("kind decide a raiz: app em /opt/giochi/apps, jogo em /opt/giochi/games", () => {
+  withTempDir((dir) => {
+    const jogos = criarApp(dir, "volley", { metadata: { kind: "game" } });
+    const apps = criarApp(dir, "musica", { metadata: { kind: "app" } });
+    escreverIndice(dir, [jogos, apps]);
+
+    const { catalogo } = gerarCatalogo(dir);
+    const porId = new Map(catalogo.apps.map((a) => [a.id, a]));
+
+    assert.equal(porId.get("volley").dir, "/opt/giochi/games/volley");
+    assert.equal(porId.get("musica").dir, "/opt/giochi/apps/musica");
+    assert.equal(porId.get("volley").kind, "game");
+    assert.equal(porId.get("musica").kind, "app");
+    // E as duas raízes não se sobrepõem: `startsWith` de uma não pega a outra.
+    assert.ok(!porId.get("musica").dir.startsWith("/opt/giochi/games"));
+  });
+});
+
+// Pacote que declara um tipo e está na raiz do outro: entra (a declaração manda)
+// e o aviso diz que o lugar está errado. Sumir com ele seria o "app que existe e
+// não aparece" que o catálogo projetado veio corrigir.
+test("instalado na raiz errada entra, com aviso de lugar", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { catalogo, avisos } = mesclarInstalados(base, [
+    {
+      id: "musica",
+      dir: "/user/games/musica",
+      metadata: { ...META_INSTALADO, slug: "musica", kind: "app", entrypoint: "bin/giochi-musica" },
+    },
+  ]);
+
+  assert.equal(catalogo.apps.length, 1, "o pacote existe: tem de aparecer");
+  assert.equal(catalogo.apps[0].kind, "app");
+  assert.equal(catalogo.apps[0].dir, "/user/games/musica", "o dir é onde ele está");
+  assert.ok(
+    avisos.some((a) => a.id === "musica" && /raiz do outro tipo/.test(a.motivo)),
+    `sem aviso de lugar: ${JSON.stringify(avisos)}`,
+  );
+});
+
+test("instalado no lugar certo não gera aviso de lugar", () => {
+  const base = { schemaVersion: 1, apps: [] };
+  const { avisos } = mesclarInstalados(base, [
+    {
+      id: "cobrinha",
+      dir: "/user/games/cobrinha",
+      metadata: { ...META_INSTALADO, slug: "cobrinha", kind: "game" },
+    },
+  ]);
+  assert.ok(!avisos.some((a) => /raiz do outro tipo/.test(a.motivo)));
 });
 
 // O launcher tem status ready, distribution image e binário no lugar — entrava
@@ -294,7 +355,7 @@ test("serialização termina com newline e é JSON válido", () => {
 // O que o teste realmente garante continua valendo e não depende de quais apps
 // existem: `distribution: image` + `bin/` entram, `distribution: host` e
 // `role: shell` ficam fora, e todo `dir` sai da base padrão.
-test("na árvore real: o launcher não entra e todo dir sai da base", () => {
+test("na árvore real: o launcher não entra e todo dir sai de uma raiz conhecida", () => {
   const appRoot = path.resolve(import.meta.dirname, "..", "app");
   const { catalogo } = gerarCatalogo(appRoot);
   const ids = catalogo.apps.map((a) => a.id);
@@ -305,7 +366,16 @@ test("na árvore real: o launcher não entra e todo dir sai da base", () => {
   }
 
   for (const app of catalogo.apps) {
-    assert.ok(app.dir.startsWith(DIR_BASE_PADRAO), `${app.id}: dir fora da base`);
+    // Duas raízes desde 15/11/2026: jogos e apps não compartilham pasta.
+    assert.ok(
+      RAIZES_IMAGEM.some((raiz) => app.dir.startsWith(raiz)),
+      `${app.id}: dir fora das raízes de imagem (${app.dir})`,
+    );
+    assert.equal(
+      app.dir.split("/")[3],
+      app.kind === "app" ? RAIZES.app.imagem.split("/")[3] : RAIZES.game.imagem.split("/")[3],
+      `${app.id}: kind ${app.kind} com dir de outra raiz`,
+    );
     assert.ok(app.title, `${app.id}: sem título`);
   }
 });

@@ -1,0 +1,13 @@
+{
+  "title": "Música",
+  "slug": "musica",
+  "developer": "Giochi",
+  "version": "0.1.0",
+  "arch": "aarch64",
+  "runtime": "native",
+  "kind": "app",
+  "entrypoint": "bin/giochi-musica",
+  "category": "Música",
+  "releaseYear": 2026,
+  "license": "Proprietary"
+}

@@ -289,45 +289,56 @@ fn main() -> Result<(), String> {
     let painter = draw::Painter::new(window, &font_path)?;
     informar_projecao(&painter);
 
-    // O catálogo vem do sistema. Sem ele, o launcher mostra o catálogo de
-    // demonstração — o aparelho continua utilizável, mas nenhum app é
-    // iniciável, porque não há caminho para executar.
-    // Catálogo de demonstração só por pedido explícito: ver o bloco do `Err`
-    // abaixo. Uma imagem recém-gravada não tem `index.json`, e mostrar jogos
-    // que não existem é pior que mostrar uma tela vazia e honesta.
+    // ── detecção ────────────────────────────────────────────
+    //
+    // O que abre vem do **disco**: jogos de `/opt/giochi/games` e
+    // `/user/games`, apps de `/opt/giochi/apps` e `/user/apps`. O índice
+    // publicado continua sendo lido, mas como complemento, para o que estiver
+    // fora dessas raízes (cartão montado noutro caminho).
+    //
+    // ## O que isto substitui
+    //
+    // A aba Apps desenhava oito apps escritos no código (`demo_apps()`) —
+    // Música, RetroArch, Arquivos, Terminal… — e nenhum deles existia no
+    // aparelho. Apertar `A` mostrava "Abrindo X..." e nada abria. É o mesmo
+    // "cartão que abre nada" que a Home já teve com quatro jogo de demonstração.
+    //
+    // Detectar em vez de listar resolve os dois lados: o que aparece é o que
+    // existe, e um app copiado para a pasta aparece **sem** alguém rodar um
+    // script no PC.
     let demo_explicito = args.iter().any(|a| a == "--demo");
 
     let (mut state, catalogo) = {
-        let caminho = catalogo::caminho();
-        match catalogo::Catalogo::carregar(&caminho) {
+        match catalogo::Catalogo::detectar() {
             Ok(c) => {
                 // Cartão removível pode não estar montado neste boot. Podar em
                 // tempo de execução é o que impede um cartão ausente de virar
                 // cartão que aparece e não abre.
-                // Tema primeiro: um `launcher-*` que porventura esteja no
-                // índice abriria um SEGUNDO launcher e perderia o DRM. Podar
-                // antes do binário evita que ele apareça no log como "cartão
-                // removido", que mandaria procurar o problema no lugar errado.
+                //
+                // Tema primeiro: um `launcher-*` que porventura esteja na árvore
+                // abriria um SEGUNDO launcher e perderia o DRM. Podar antes do
+                // binário evita que ele apareça no log como "cartão removido",
+                // que mandaria procurar o problema no lugar errado.
                 let c = c.podar_temas(|slug, _| {
                     eprintln!("catálogo: {slug} fora — é tema do launcher, não um app");
                 });
                 let c = c.podar_sem_binario(|slug, caminho| {
                     eprintln!("catálogo: {slug} fora — {caminho} não existe (cartão removido?)");
                 });
-                if c.vazio() {
-                    // Mesma regra do catálogo ausente: um app que está no
-                    // índice mas não tem binário não vira cartão. Se sobrar
-                    // zero, a tela diz isso — não finge que há jogos.
-                    eprintln!("catálogo: nenhum app com binário presente em {}", caminho.display());
-                    if demo_explicito {
-                        eprintln!("--demo: usando catálogo de demonstração");
-                        (State::new(demo_games(), demo_apps()), None)
-                    } else {
-                        (State::new(Vec::new(), demo_apps()), None)
-                    }
+                eprintln!(
+                    "catálogo: {} jogo(s) e {} app(s) detectado(s) em {}",
+                    c.games.len(),
+                    c.apps.len(),
+                    catalogo::raizes().join(", ")
+                );
+                if c.sem_nada() && demo_explicito {
+                    eprintln!("--demo: usando catálogo de demonstração");
+                    (State::new(demo_games(), demo_apps()), None)
                 } else {
-                    eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
-                    (State::new(c.games.clone(), demo_apps()), Some(c))
+                    // Apps vazio é um resultado legítimo: a aba diz "nenhum app
+                    // instalado" em vez de inventar oito.
+                    let (games, apps) = (c.games.clone(), c.apps.clone());
+                    (State::new(games, apps), Some(c))
                 }
             }
             Err(e) => {
@@ -350,7 +361,7 @@ fn main() -> Result<(), String> {
                     eprintln!("--demo: usando catálogo de demonstração");
                     (State::new(demo_games(), demo_apps()), None)
                 } else {
-                    (State::new(Vec::new(), demo_apps()), None)
+                    (State::new(Vec::new(), Vec::new()), None)
                 }
             }
         }
@@ -529,20 +540,14 @@ fn main() -> Result<(), String> {
     // Escreve em `state.lancar`, que é exatamente o campo que o reducer do
     // botão "Jogar" preenche — então o teste percorre o mesmo código, não uma
     // cópia dele.
+    //
+    // Aceita jogo **e** app, e o pedido leva o tipo: os dois índices valem 0 ao
+    // mesmo tempo, então "abrir o 0" seria ambíguo. `--lancar app:0` e
+    // `--lancar jogo:0` desfazem a ambiguidade; um slug também serve.
     if let Some(i) = args.iter().position(|a| a == "--lancar") {
         let pedido = args.get(i + 1).ok_or("--lancar precisa de id ou slug")?;
-        let id = pedido
-            .parse::<u32>()
-            .ok()
-            .filter(|id| (*id as usize) < state.games.len())
-            .or_else(|| {
-                catalogo.as_ref().and_then(|c| {
-                    c.alvos.iter().position(|a| &a.slug == pedido).map(|p| p as u32)
-                })
-            })
-            .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))?;
-        state.lancar = Some(id);
-        eprintln!("--lancar: pedido de lançamento para o app {id} ({pedido})");
+        state.lancar = Some(interpretar_pedido(pedido, &state, catalogo.as_ref())?);
+        eprintln!("--lancar: pedido de lançamento para {pedido}");
     }
 
     // Entrada por evdev: o SDL fica só com a janela e o desenho.
@@ -650,8 +655,17 @@ fn main() -> Result<(), String> {
         // Antes desta checagem o botão "Jogar" só mostrava um aviso: o estado
         // mudava e nada abria. Sem este trecho o app escolhido no cartão
         // continuaria inalcançável.
-        if let Some(id) = app.tomar_pedido_de_lancamento() {
-            let alvo = catalogo.as_ref().and_then(|c| c.alvo(id)).cloned();
+        if let Some(pedido) = app.tomar_pedido_de_lancamento() {
+            // `alvo` e `alvo_app` são listas diferentes: usar o índice do app na
+            // lista de jogos abriria o jogo errado — e o sintoma ("abriu outra
+            // coisa") não aponta para cá.
+            let alvo = catalogo
+                .as_ref()
+                .and_then(|c| match pedido.tipo {
+                    giochi_launcher_core::deteccao::Tipo::Jogo => c.alvo(pedido.indice),
+                    giochi_launcher_core::deteccao::Tipo::App => c.alvo_app(pedido.indice),
+                })
+                .cloned();
 
             // Consome o `App`: o `Painter` morre aqui e o DRM master é liberado.
             // Sem isso o filho recebe `kmsdrm not available` — medido no X35H.
@@ -1057,6 +1071,77 @@ fn exemplo_redes() -> giochi_launcher_core::SemFio {
 /// São os quatro jogos que existem no projeto — o protótipo listava títulos
 /// comerciais que não estão no catálogo. A leitura real virá de
 /// `apps.json` + `/apps` no aparelho.
+/// Traduz `--lancar <pedido>` num [`giochi_launcher_core::Pedido`] tipado.
+///
+/// Formatos aceitos:
+///
+/// | forma | significado |
+/// | --- | --- |
+/// | `jogo:3` / `app:0` | índice na lista daquele tipo |
+/// | `3` | índice — **de jogo**, que é o uso que já existia |
+/// | `volley` | slug, procurado nos dois tipos |
+///
+/// Separado de `principal` porque é a única parte do `--lancar` que decide, e
+/// decidir em função de duas listas é o que erra quando os índices coincidem.
+fn interpretar_pedido(
+    pedido: &str,
+    state: &State,
+    catalogo: Option<&catalogo::Catalogo>,
+) -> Result<giochi_launcher_core::Pedido, String> {
+    use giochi_launcher_core::deteccao::Tipo;
+    use giochi_launcher_core::Pedido;
+
+    let (tipo, resto) = match pedido.split_once(':') {
+        Some(("app", resto)) | Some(("apps", resto)) => (Some(Tipo::App), resto),
+        Some(("jogo", resto)) | Some(("jogos", resto)) | Some(("game", resto)) => {
+            (Some(Tipo::Jogo), resto)
+        }
+        Some((outro, _)) => {
+            return Err(format!(
+                "--lancar: tipo desconhecido `{outro}` (use jogo: ou app:)"
+            ))
+        }
+        None => (None, pedido),
+    };
+
+    if let Ok(indice) = resto.parse::<u32>() {
+        // Sem tipo explícito o índice é de jogo: era o único que existia quando
+        // esta flag nasceu, e mudar o significado quebraria os scripts que já a
+        // usam para testar o ciclo launcher → jogo → launcher.
+        let tipo = tipo.unwrap_or(Tipo::Jogo);
+        let total = match tipo {
+            Tipo::Jogo => state.games.len(),
+            Tipo::App => state.apps.len(),
+        };
+        if (indice as usize) < total {
+            return Ok(Pedido { tipo, indice });
+        }
+        return Err(format!(
+            "--lancar {pedido}: {} tem {total} item(ns)",
+            tipo.nome()
+        ));
+    }
+
+    let Some(c) = catalogo else {
+        return Err(format!("--lancar {pedido}: sem catálogo para procurar o slug"));
+    };
+    let procura = |lista: &[catalogo::Alvo], tipo: Tipo| {
+        lista
+            .iter()
+            .position(|a| a.slug == resto)
+            .map(|p| Pedido {
+                tipo,
+                indice: p as u32,
+            })
+    };
+    match tipo {
+        Some(Tipo::App) => procura(&c.alvos_apps, Tipo::App),
+        Some(Tipo::Jogo) => procura(&c.alvos, Tipo::Jogo),
+        None => procura(&c.alvos, Tipo::Jogo).or_else(|| procura(&c.alvos_apps, Tipo::App)),
+    }
+    .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))
+}
+
 fn demo_games() -> Vec<Game> {
     // Os anos são os do protótipo (`launcher.html`): eles existem como dado do
     // jogo, não como decoração — é o que aparece no cartão e na ficha.

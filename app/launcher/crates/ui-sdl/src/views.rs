@@ -483,7 +483,7 @@ pub fn home(p: &mut Painter, state: &State, layout: &mut Layout) {
         p.text_center(
             cx,
             cy + m.e(10),
-            "o launcher lê /opt/giochi/apps/index.json",
+            "o launcher procura em /opt/giochi/games e /user/games",
             theme::F_TINY,
             theme::FAINT,
         );
@@ -821,6 +821,26 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
 // ════════════════════════════════════════════════════════════
 pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
     let m = Moldura::de(p);
+
+    if state.apps.is_empty() {
+        // Antes a lista de apps era escrita no código (`demo_apps()`), então
+        // esta tela era inalcançável. Com a detecção ela é o caso normal de um
+        // aparelho recém-gravado — e dizer *onde* o launcher procurou é o que
+        // transforma "não tem nada" em diagnóstico.
+        layout.grade_apps = None;
+        let cx = m.safe_x + m.safe_w / 2;
+        let cy = m.top + m.main_h / 2;
+        p.text_center(cx, cy - m.e(10), "Nenhum app instalado.", theme::F_SMALL, theme::TEXT);
+        p.text_center(
+            cx,
+            cy + m.e(10),
+            "o launcher procura em /opt/giochi/apps e /user/apps",
+            theme::F_TINY,
+            theme::FAINT,
+        );
+        return;
+    }
+
     let gap = m.e(9).max(4);
     // Mesma conta do desenho, publicada para a navegação — ver `Layout`.
     let itens_apps = state.apps.len().max(1);
@@ -831,8 +851,16 @@ pub fn apps(p: &mut Painter, state: &State, layout: &mut Layout) {
         gap,
     ));
     let (cols, rows) = grade_para(itens_apps, m.safe_w - m.pad * 2, m.main_h - m.pad * 2, gap);
-    let cell_w = (m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols;
-    let cell_h = (m.main_h - m.pad * 2 - gap * (rows - 1)) / rows;
+    // Teto do ladrilho.
+    //
+    // A lista era fixa em oito (`demo_apps()`), então a grade nunca tinha menos
+    // de oito itens e o ladrilho nunca foi esticado. Com a detecção, um aparelho
+    // com **um** app produziria um único quadrado do tamanho da tela — que lê
+    // como interface quebrada, não como grade. O teto não muda `cols`/`rows`
+    // publicados, então a navegação continua seguindo a grade desenhada.
+    let lado_max = m.e(150).clamp(56, 220);
+    let cell_w = ((m.safe_w - m.pad * 2 - gap * (cols - 1)) / cols).min(lado_max);
+    let cell_h = ((m.main_h - m.pad * 2 - gap * (rows - 1)) / rows).min(lado_max);
     let r_tile = m.e(theme::RADIUS_TILE).max(3);
     let h_body = p.text_size("Ay", theme::F_BODY).1;
     let h_tiny = p.text_size("Ay", theme::F_TINY).1;

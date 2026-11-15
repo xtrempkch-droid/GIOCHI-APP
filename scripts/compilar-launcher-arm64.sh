@@ -386,11 +386,23 @@ if [ -n "$INSTALAR" ]; then
   #
   # Mesma família do `tar --mode` que mascara permissão: o erro não é o modo
   # errado, é o modo depender de um estado ambiente que ninguém declarou.
+  # O `metadata.json` **vai junto**, e desde 15/11/2026 isso é funcional: a
+  # detecção do launcher classifica o que acha no disco pelo `kind` (e descarta
+  # tema pelo prefixo `launcher`). Sem identidade na pasta, o launcher não é
+  # detectado **nem** descartado — ele some da lista por ausência de arquivo, e
+  # a guarda de tema (§8) fica sem exercício justamente no aparelho.
+  RAIZ_APP="$(dirname "$DESTINO")"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$ALVO" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
     "$BIN" "$ALVO:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
+  for arquivo in metadata.json capa.png; do
+    [ -f "$LAUNCHER/$arquivo" ] || continue
+    scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
+      "$LAUNCHER/$arquivo" "$ALVO:$RAIZ_APP/$arquivo" 2>&1 | filtrar_ruido
+  done
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$ALVO" \
-    "chmod 755 $DESTINO/$BIN_NAME && ls -la $DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
+    "chmod 755 $DESTINO/$BIN_NAME && chmod 644 $RAIZ_APP/metadata.json 2>/dev/null; \
+     ls -la $DESTINO/$BIN_NAME $RAIZ_APP/metadata.json" 2>&1 | filtrar_ruido
   # **Perguntar ao aparelho**, não afirmar. A mensagem dizia sempre "o inittab
   # não inicia o giochi-init", verdade na imagem do X55 de 03/11 e **falsa** nas
   # de 04/11 e na do R35S — onde o `::respawn:` existe e a interface sobe sozinha.

@@ -59,6 +59,13 @@
       ],
       "description": "Arquitetura do binário. aarch64 = console; x86_64/arm64/any = app de PC (distribution: host). O validador exige o pareamento."
     },
+    "kind": {
+      "enum": [
+        "game",
+        "app"
+      ],
+      "description": "Opcional no schema, obrigatorio para app de imagem que nao e tema. Decide a aba do launcher (Home ou Apps) e a raiz de instalacao: game vai para /opt|/user/games, app para /opt|/user/apps. Ausente vale game, pelo mesmo motivo que o campo existe: todo pacote anterior a separacao era jogo."
+    },
     "runtime": {
       "enum": [
         "godot",

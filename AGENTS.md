@@ -8,18 +8,21 @@
 
 | | |
 | --- | --- |
-| apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
-| `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
-| `tests/run-all.mjs` | **207/207** JS |
-| `compilar-launcher.sh --testes` | **257** Rust (140 ui-sdl + 117 core) |
+| apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + **`musica`** (image, app) + `forge`, `store`, `painel`, `loja` (host) |
+| `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
+| `tests/run-all.mjs` | **222/222** JS |
+| `compilar-launcher.sh --testes` | **289** Rust (151 ui-sdl + 138 core) |
+| Star Dust / launcher-teste | **159** / **91** Rust |
+| `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| apps no catálogo do aparelho | **0** — os sete são host ou tema, e o catálogo exclui os dois (§8) |
+| apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§6.9) |
 
-O que roda no aparelho hoje é **o launcher**. Com catálogo vazio ele desenha
-"Nenhum jogo instalado." e continua navegável — catalogar ausência como ausência
-é o comportamento certo, e já houve o oposto aqui (quatro jogos de demonstração
-que não existiam no aparelho e davam erro ao apertar `A`).
+O que roda no aparelho hoje é **o launcher** e o **app de música**, que ele
+detecta. Até 15/11/2026 o catálogo saía vazio por construção (os sete apps eram
+host ou tema) e a aba Apps desenhava **oito apps escritos no código**, nenhum
+deles instalado: apertar `A` mostrava "Abrindo X..." e nada abria. Hoje as duas
+abas **detectam** — jogos em `/opt|/user/games`, apps em `/opt|/user/apps`.
 
 ## 1. Objetivo e fronteira
 
@@ -36,6 +39,64 @@ Cada pasta é **repositório Git individual**. A comunicação é sempre por
 Localização: `C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi app`
 (Windows) e `/home/charles/Giochi/GIOCHI-APP` (Linux). GitHub:
 `https://github.com/xtrempkch-droid/GIOCHI-APP`.
+
+### 1.1 Repositório alheio é **SOMENTE LEITURA** — decisão do dono, 15/11/2026
+
+*"de agora em diante trate o repositório alheio como apenas leitura, caso tenha
+alguma alteração crie issues para que a equipe responsável possa tratar."*
+
+O layout da máquina é maior que a tabela acima:
+
+```text
+/home/charles/Giochi/
+├── GIOCHI-APP/          ← este repo. Alterar é o trabalho.
+├── GIOCHI-SYSTEM/       ┐
+├── GIOCHI-OS/           │
+├── GIOCHI-ENGINE/       ├─ de outra equipe. LER, nunca escrever.
+├── GIOCHI-ENGINE-3D/    │
+├── GIOCHI-GAMES/        │
+└── giochi-engine/       ┘
+```
+
+**Regra:** só o `GIOCHI-APP` é escrito aqui. Em qualquer outro, a única operação
+permitida é **leitura** — inclusive `git log`/`git diff`, que é como se entende o
+que a outra equipe fez. Quando o diagnóstico concluir que a correção mora em repo
+alheio:
+
+1. **não edite** — nem uma linha, nem um comentário, nem um doc;
+2. abra uma **issue** no repositório responsável, com o que foi medido, arquivo e
+   linha, a consequência e o que a correção provavelmente é;
+3. registre o número da issue em §17, para a conversa apontar para ela em vez de
+   repetir a análise.
+
+**O primeiro motivo é medido, e é o mais forte:** os repos vizinhos já têm
+trabalho não commitado de outra pessoa. `git status` de 15/11/2026 mostrou
+`GIOCHI-ENGINE` (6 arquivos + um `examples/captura.rs` novo) e `GIOCHI-GAMES`
+(8 arquivos) com alterações pendentes que **não são deste agente**. Escrever ali
+mistura o meu diff com o de alguém, e depois nem `git diff` separa. O segundo é
+que a fronteira do topo desta seção só vale se o código não atravessá-la.
+
+**O mecanismo foi medido antes da regra ser escrita**, porque prometer issue e
+não conseguir abrir uma é o mesmo defeito do §10 ("silêncio no sucesso é o
+defeito espelhado do silêncio no fracasso"). Resultado medido em 15/11/2026:
+
+| Passo | Resultado |
+| --- | --- |
+| `GET /repos/.../issues` | **200** — ler funciona |
+| `POST` num issue inexistente (`add_issue_comment`) | **404** — autentica; 401 seria falta de token |
+| `POST` de issue (`issue_write`) | **formulário de confirmação no VS Code** — nada é criado sem clique |
+
+O `GIOCHI-SYSTEM` registrou a mesma regra na direção dele (§2-A do `AGENTS.md`
+de lá) supondo que a máquina não tinha credencial nenhuma. A premissa estava
+errada: há **MCP do GitHub autenticado como `xtrempkch-droid`**. O que falta não é
+token, é **um clique** — o agente não clica em formulário de extensão.
+
+Consequência prática, e é o que vale: o entregável é o **corpo pronto** em
+[`docs/issues-para-outros-repos.md`](docs/issues-para-outros-repos.md), e o
+número da issue só entra em §17 **depois** que existir de fato. Anunciar "issue
+criada" sem ter criado é o §10 aplicado à conversa entre equipes — e uma regra
+que promete o que não pode cumprir vira promessa vazia, que é pior que não ter
+regra.
 
 ## 2. Estrutura
 
@@ -54,9 +115,15 @@ app/
 ├── painel/                # interface web local (host, Python)
 └── loja/                  # loja gráfica (host, Rust + SDL2)
 schemas/                   # metadata.schema.json + forge.schema.json
+
+# no aparelho (convenção do Giochi System, não deste repo)
+/opt/giochi/games/<id>     # jogos que vêm na imagem
+/opt/giochi/apps/<id>      # apps que vêm na imagem (inclui o launcher e o musica)
+/user/games/<id>           # jogos instalados pela loja / cartão
+/user/apps/<id>            # apps instalados pela loja / cartão
 scripts/                   # validador, empacotadores, ferramentas do aparelho
-tests/                     # 207 testes JS + suites Python de forge e painel
-docs/                      # 20 páginas
+tests/                     # 222 testes JS + suites Python de forge e painel
+docs/                      # 28 páginas (inclui issues-para-outros-repos.md, §1.1)
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
 
@@ -172,7 +239,13 @@ Só ampliar o enum teria deixado o campo voltar a não significar nada.
 
 Obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`, `entrypoint`.
 Opcionais: `graphics_api`, `buttons_map`, `license`, `licenseUrl`, `releaseYear`,
-`category`, `slug`. `additionalProperties: false` — campo desconhecido reprova.
+`category`, `slug`, **`kind`**.
+
+**`kind` decide a aba e a raiz** (`game` ou `app`; ausente = `game`). É
+obrigatório no validador para app de **imagem** que não é tema: é ele que escolhe
+entre `/opt/giochi/games/<id>` e `/opt/giochi/apps/<id>` e, portanto, entre a
+Home e a aba Apps. Sem o campo, o padrão é `game` — e um app novo apareceria no
+carrossel de jogos sem um único aviso. `additionalProperties: false` — campo desconhecido reprova.
 Semver obrigatório (`1.0.0`, não `1.0`).
 
 - **`slug`** — identidade do pacote. Derivar do **título** faria "Editor" →
@@ -208,12 +281,16 @@ reprova valor desconhecido (`gles4`, erro de digitação).
 ```bash
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
-node tests/run-all.mjs                      # 207 testes JS (lista vem de readdir)
+node tests/run-all.mjs                      # 222 testes JS (lista vem de readdir)
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
 bash scripts/compilar-launcher.sh --testes  # 257 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
+bash scripts/compilar-musica.sh --testes    # 158 testes (120 núcleo + 38 binário)
+bash scripts/compilar-musica.sh --clippy    # -D warnings nos dois crates
+bash scripts/compilar-musica.sh --verificar # determinismo, rotação e orçamento
+bash scripts/compilar-musica-arm64.sh --instalar   # aarch64 + instala no aparelho
 
 # Clippy faz parte da barra: `-D warnings` (é o que o CI roda)
 ( cd app/launcher && cargo clippy --all-targets -- -D warnings )
@@ -528,14 +605,45 @@ de `info` (`Paired: yes`), não do texto. `motivo_do_pareamento` traduz
 em instruções — e há teste exigindo que o código bruto do BlueZ nunca chegue ao
 usuário.
 
-**O sistema tem HCI; o que falta é o transporte HID do kernel.** Medido no X55:
-`hci0`, rfkill liberado, firmware `rtl8821cs` carregado, `bluetoothd` no ar,
-BlueZ 5.72. Mas `modinfo hidp` mostra `depends: bluetooth` (sem `hid`),
-`strings hidp.ko | grep hid_register_driver` não devolve nada e
-`/sys/bus/hid/drivers/hidp` não existe: o módulo é **só a camada de socket**. Com
-o controle ao lado ele conecta e cai — `disconnected with reason 2` — sem criar
-`/dev/input/event*`. Falta também `/dev/uhid` para controle BLE. **É da imagem,
-não do app.**
+**Bluetooth como entrada: o kernel está completo para clássico, falta `UHID`, e
+o ponta a ponta nunca foi medido.** Esta seção já afirmou o contrário — que
+faltava "o transporte HID do kernel" — com três provas que **eram falsas**. Ficam
+registradas porque cada uma é uma armadilha reutilizável (§13).
+
+Medido no R35S em 15/11/2026 (`/proc/config.gz`, que é a fonte real):
+
+```text
+CONFIG_HID=y            # já existe
+CONFIG_HID_GENERIC=y    # já existe — é ele que trata o relatório
+CONFIG_BT=m
+CONFIG_BT_HIDP=m        # já existe
+# CONFIG_UHID is not set ← o único que falta
+```
+
+| Prova antiga | Por que era falsa |
+| --- | --- |
+| `modinfo hidp` mostra `depends: bluetooth` sem `hid` | **`modinfo` não existe nesta imagem** (`sh: modinfo: not found`). A "medição" era memória, não comando. O equivalente real é `grep hidp modules.dep`, e ele não lista `hid.ko` porque `CONFIG_HID=y` está **embutido no vmlinux** — não há `.ko` para depender |
+| `strings hidp.ko \| grep hid_register_driver` devolve vazio | o símbolo no 6.12 é `__hid_register_driver` (macro `hid_register_driver`). E **não há driver a registrar**: `hidp` no 6.12 é **transport driver**, e o `.ko` referencia `hid_allocate_device`/`hid_parse_report`/`hid_add_device`/`hid_input_report` — o conjunto exato de quem cria `hid_device` e entrega ao `hid-generic` |
+| `/sys/bus/hid/drivers/hidp` não existe | **é o esperado.** Só um `hid_driver` aparece ali. Um transport não cria diretório de driver. Medido: `modprobe hidp` → `rc=0`, e o log diz `HIDP socket layer initialized`, que só é impresso **depois** da inicialização bem-sucedida |
+
+A lição vale mais que o achado: **duas das três provas mediam a intenção**
+("o módulo parece incompleto") em vez do efeito (o módulo carrega e inicializa?),
+e a terceira usou uma ferramenta que não está instalada. Foi assim que um pedido
+foi para o canal pedindo `CONFIG_HID=y` para uma imagem que **já tinha**
+`CONFIG_HID=y`.
+
+**O que falta de verdade:** `CONFIG_UHID` (`# CONFIG_UHID is not set`), que é o
+que permite o BlueZ criar o dispositivo HID de um controle **BLE/HOGP**
+(`/dev/uhid` não existe). E `hidp` **não está no autoload**: nem `/etc/modules`
+nem `/etc/modules-load.d/` o citam (medido), então o módulo `=m` só carrega por
+`modprobe` manual. Para HID clássico o kernel está completo — o próximo passo é
+**medir**, não configurar.
+
+**O que segue não medido:** o `disconnected with reason 2` observado no X55 em
+sessão anterior nunca foi reproduzido com o kernel analisado aqui. Medir exige um
+aparelho com rádio — o R35S não tem, e o X55 não estava na rede em 15/11/2026
+(`aparelho.sh procurar` achou só o R35S). **Não repita "o transporte HID falta"
+como fato**: hoje é hipótese sem prova, e a prova anterior foi retirada.
 
 ```bash
 bash scripts/aparelho.sh bluetooth      # a pilha inteira, com veredito
@@ -601,11 +709,16 @@ não exigir `Send`/`Sync` de um tipo que guarda ponteiro cru do SDL.
 
 ### 6.8 Catálogo e lançamento
 
-`catalogo.rs` lê `/opt/giochi/apps/index.json` e resolve `id → dir + entrypoint`.
-`GIOCHI_CATALOGO=<arquivo>` aponta outro catálogo (existe porque no PC não há
-`/opt/giochi/apps/`). `--catalogo-adicionar` é como o app registra um pacote
-recém-instalado — não por `sed`, que produziria JSON inválido no primeiro campo
-com vírgula.
+`catalogo.rs` monta as duas listas e resolve `id → dir + entrypoint`: varre as
+quatro raízes e junta com `/opt/giochi/apps/index.json`, com o disco vencendo
+(§6.9). `GIOCHI_RAIZES` sobrepõe as raízes varridas e `GIOCHI_CATALOGO=<arquivo>`
+aponta outro índice — os dois existem porque no PC não há `/opt/giochi`. Nem
+`raízes` nem índice desligam o outro: testar com `GIOCHI_RAIZES` num `/tmp` ainda
+soma o índice real do aparelho, então isolar exige apontar `GIOCHI_CATALOGO` para
+um índice vazio.
+
+`--catalogo-adicionar` é como o app registra um pacote recém-instalado — não por
+`sed`, que produziria JSON inválido no primeiro campo com vírgula.
 
 **O display precisa ser solto, e isso é medido.** Com o launcher vivo segurando o
 DRM master, um segundo processo recebe `kmsdrm not available`. Por isso
@@ -631,7 +744,98 @@ oferecer a saída.
 **O catálogo é podado em tempo de execução** (`poda_sem_binario`), não na
 geração: o PC que gera o índice não sabe se um cartão removível estará lá.
 
-## 7. Launcher-teste e Star Dust
+### 6.9 As duas abas **detectam** — decisão do dono, 15/11/2026
+
+*"a aba apps do launcher precisa ser do tipo detectar, assim como a aba jogos.
+os apps deverão ficar em locais diferentes dos jogos para que a detecção não se
+confunda."*
+
+| | antes | agora |
+| --- | --- | --- |
+| aba Jogos | `index.json` + poda em execução | **varredura do disco** + `index.json` de complemento + poda |
+| aba Apps | **oito apps escritos no código** (`demo_apps()`) | varredura de `/opt|/user/apps`, com `kind` |
+| `A` num app | `toast("Abrindo X...")` e nada abria | `state.lancar = Some(Pedido::app(i))` — abre de verdade |
+
+**As raízes são quatro, e nenhuma é compartilhada** (`deteccao::Tipo`):
+
+```
+jogos:  /opt/giochi/games   /user/games
+apps:   /opt/giochi/apps    /user/apps
+```
+
+`GIOCHI_RAIZES` (separado por `:`) sobrepõe as raízes **varridas** — é o que
+permite testar a detecção no PC, onde `/opt/giochi` não existe. Ela não desliga o
+índice: no aparelho, `index.json` continua entrando. Medido no R35S em
+15/11/2026, com duas raízes de teste num `/tmp` e uma de cada tipo:
+`catálogo: 4 jogo(s) e 2 app(s)` — os 3 jogos e o `musica` vinham do índice real.
+Para isolar de verdade, aponte **`GIOCHI_CATALOGO`** para um índice vazio; com os
+dois, a conta fecha em `1 jogo(s) e 1 app(s)`.
+
+**A varredura é conjunta e a classificação é pelo `kind` do pacote**, não pela
+pasta. Isso é deliberado e tem uma medição atrás: os três jogos do R35S estavam
+em `/user/apps` (instalados antes da separação) e **não declaram `kind`**. Varrer
+só a raiz do próprio tipo os faria **sumir** da Home; classificar por pasta os
+faria aparecer na aba de apps. Com `kind` (ausente = jogo) eles continuam jogos,
+e o log diz que o lugar está errado:
+
+```text
+catálogo: teste-jogo (/user/apps/teste-jogo) está em /user/apps, que é raiz de outro
+  tipo; o lugar de um jogo é /user/games (ou declare "kind": "app" no metadata.json,
+  se for um app)
+```
+
+Medido no R35S em 15/11/2026 com um pacote sem `kind` plantado em `/user/apps`. A
+segunda metade da frase existe porque **o campo ausente é metade da causa**: o
+padrão é jogo (§3), então um app sem `kind` "está no lugar errado" por omissão de
+um campo. Antes dela o aviso só mandava mover, e mover era a ação errada.
+
+Depois da migração, medido no R35S em 15/11/2026:
+
+```text
+catálogo: 3 jogo(s) e 1 app(s) detectado(s) em /opt/giochi/games, /user/games, /opt/giochi/apps, /user/apps
+```
+
+**O índice não sumiu do caminho.** Ele continua sendo lido porque é o que lista
+conteúdo **fora** das raízes (cartão montado noutro caminho) e porque é o
+contrato de `docs/integracao.md` §2.1. Mas o **disco vence** na junção: um
+pacote varrido substitui a entrada do índice para o mesmo slug, com o `dir` onde
+ele está de fato. Foi a lição da loja, que apontava para `/opt/giochi/apps/x` com
+o pacote em `/user/apps/x`.
+
+**O pedido de lançamento carrega o tipo** (`state::Pedido { tipo, indice }`). Os
+dois índices valem 0 ao mesmo tempo em qualquer aparelho com um jogo e um app;
+um pedido que levasse só o número abriria o item errado, e o sintoma ("abriu
+outra coisa") aponta para longe da causa. É a mesma razão pela qual a loja
+separa `PacoteVerificado` de `LicencaAssinada` por tipo.
+
+**Detectar exige pacote com identidade no disco.** Medido: a primeira instalação
+do `musica` no R35S copiou **só o binário**, sem `metadata.json`. A pasta existia,
+tinha executável, e não havia como saber que ali havia um *app* — ele apareceu
+como **jogo**, no carrossel da Home. Hoje `compilar-musica-arm64.sh --instalar`
+copia `metadata.json` (e `capa.png`) junto com o binário.
+
+**O aviso de lugar existe em duas linguagens e diz a mesma frase.** O gerador do
+PC (`scripts/lib/catalogo.mjs`, `LUGAR_ERRADO`) e o detector do aparelho
+(`deteccao::aviso_de_lugar`) não compartilham código — um roda em Node, o outro
+no binário. O que compartilham é o **texto**: `lugar de um <tipo> é <raiz>`. É
+de propósito: `grep "lugar de um"` acha os dois lados, e a mensagem não muda de
+significado conforme quem reclamou.
+
+**Tema não recebe esse aviso**, e a guarda existe por medição: o launcher mora em
+`/opt/giochi/apps`, não declara `kind` (é tema) e caía no padrão jogo — o log
+dizia *"o lugar de um jogo é `/user/games`"*, que é onde o executável de
+inicialização **não** pode ficar. Seguir o aviso quebraria o boot.
+
+**Consequências para quem instala:**
+
+| caminho | quem escolhe a raiz |
+| --- | --- |
+| `instalar-do-cartao.sh` (no aparelho) | `kind` do `metadata.json` dentro do `.giochi` (ausente = `/user/games`) |
+| `aparelho.sh catalogo` | colhe as quatro raízes e o `mesclarInstalados` avisa quando o `kind` não bate com a pasta |
+| `empacotar.mjs` | não muda: o `kind` viaja dentro do pacote |
+| `--catalogo-adicionar` (o próprio aparelho) | recebe o `dir` de quem chama e grava o `kind` junto |
+
+## 7. Apps sobre a engine: launcher-teste, Star Dust e Música
 
 ### `launcher-teste` (scaffold)
 
@@ -698,10 +902,60 @@ tem contador e `exit 1`: a primeira versão imprimiu "ok camada verificada" depo
 de um FALHA, porque o resumo não olhava o que tinha acontecido. **Um resumo que
 ignora falha é pior que nenhum.**
 
+### `musica` (ready) — o primeiro app de imagem que não é tema
+
+O app que faz a aba de apps ter o que mostrar. Tocador sobre a mesma engine do
+`launcher-teste`, em `app/musica/`:
+
+| Peça | Onde | O que decide |
+| --- | --- | --- |
+| núcleo | `crates/core` | ordem natural, foco com volta, transporte, layout, rotação, capa, título — **120 testes, sem SDL** |
+| desenho | `src/pintor.rs`, `src/tela.rs` | pixels, texto, texturas |
+| mundo | `src/audio.rs`, `src/entrada.rs` | mixer e `/dev/input` |
+
+`crates/core` não tem **nenhuma** dependência de propósito: o binário depende da
+engine, que depende de SDL2 e do repositório irmão — e é por isso que só o núcleo
+roda no CI, como o `giochi-launcher-core`.
+
+O que o app de exemplo que originou o pedido fazia de errado, e onde cada coisa
+foi resolvida:
+
+| Defeito do exemplo | Correção |
+| --- | --- |
+| lia o botão por **nível** dentro do passo fixo (segurar o direcional corria a lista) | borda vem do `Mapper` do launcher, com a curva medida |
+| só havia `play`: sem pausa, sem parar, sem volume | `Efeito::{Pausar, Retomar, Parar, Volume}` no reducer |
+| o carrossel parava nas pontas | `Carrossel::mover` dá a volta |
+| pasta vazia derrubava o app no primeiro asset ausente | `Biblioteca::Vazia { motivo }`, que vira frase na tela |
+| ordem vinha do `readdir` | `faixa::ordem_natural` (`Faixa 2` antes de `Faixa 10`) |
+| `aspect` fixo 16:9, sem painel nem rotação | `Layout::de(largura, altura)` + `rotacao::decidir` |
+| `play_sound` (efeito, decodifica na RAM) | API de **música** do mixer, que faz *streaming* |
+| nenhum teste | 158, e 120 deles sem SDL |
+
+**Medido em 15/11/2026:** quadro de 640×480 do R35S **100,00% idêntico** ao do
+PC (mesma pasta, comparação pixel a pixel); 720×1280 des-rotacionado bate
+**99,96%** com 1280×720; 96 a 112 desenhos por quadro; áudio no R35S com mixer
+**2.6.3**, `Playing → Stopped` em **2,5 s** num WAV de 2,5 s (`--testar-som`).
+
+**A imagem passou a trazer o que o app precisa.** O binário pede
+`libSDL2_mixer-2.0.so.0` (e `SDL2_image`), que o launcher nunca pediu — o
+`docs/dependencias-aparelho.md` chamava isso de ausente, e para esta imagem é
+falso. `compilar-musica-arm64.sh --instalar` **pergunta ao aparelho** antes de
+copiar, porque biblioteca ausente aqui é falha de carga, não degradação.
+
 ## 8. O catálogo do aparelho
 
-**Catálogo é projeção, não segunda fonte da verdade.** Sai de `app/apps.json` +
-os `metadata.json`:
+**O catálogo não é escrito à mão nem lido cegamente: ele é projetado do que
+existe no disco, e `index.json` é o complemento.** Duas camadas:
+
+| Camada | Quem usa | Alcance |
+| --- | --- | --- |
+| **varredura** de `/opt|/user/{games,apps}` | o aparelho, sempre | tudo que está numa raiz, com `kind` lido do pacote |
+| **`index.json`** | complementar | conteúdo fora das raízes e o contrato de `docs/integracao.md` |
+
+O disco **vence** na junção (§6.9): o que foi varrido substitui a entrada do
+índice para o mesmo slug, com o `dir` real.
+
+No PC, é o gerador que projeta `app/apps.json` + `metadata.json`:
 
 ```bash
 bash scripts/aparelho.sh catalogo        # gera, confere no aparelho e publica
@@ -716,7 +970,7 @@ no app, nem no log, nem na tela.
 | --- | --- |
 | `status: scaffold` fica fora | `bin/` vazio; cartão que não abre é pior que cartão ausente |
 | `distribution: host` fica fora | roda no PC |
-| `distribution: store` fica fora | é instalado em `/user/apps` pela loja |
+| `distribution: store` fica fora | é instalado em `/user/apps` ou `/user/games` pela loja |
 | **tema** (`role: shell` **ou** prefixo `launcher`) fica fora | senão o launcher **lista a si mesmo** |
 | `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
 
@@ -726,9 +980,16 @@ contra `role shell: é a própria interface`. Dizer "role shell" para um app que
 nunca declarou `role` manda quem lê procurar no `apps.json` um campo que não
 existe; é a ferramenta medindo a intenção em vez do efeito (§13).
 
-**Hoje o catálogo sai vazio (0 apps)** — os sete apps são host ou tema. Não é
-defeito: é o resultado correto das regras de projeção. Assim que um app `image`
-sem `role: shell` existir, ou um pacote da loja for instalado, ele aparece.
+**Hoje o catálogo do R35S tem 4 entradas: 3 jogos e `musica`.** O app de música
+é o primeiro `image` sem `role: shell` — o que fez a aba Apps deixar de mostrar
+"Nenhum jogo instalado." (e de mostrar oito apps que não existiam, §6.9). Um
+teste (`tests/musica-app.test.mjs`) reprova se ele sair do catálogo: `status`
+`scaffold`, `bin/` apagado, `kind` perdido ou `role` declarado por engano não
+apareceriam em nenhum outro lugar.
+
+**O `kind` vai em cada entrada do índice**, e não é decoração: é a única coisa
+que diz ao launcher qual aba desenha o cartão. Sem ele o default é `game` (§3),
+e um app cairia na Home.
 
 **A conferência que faltava é no aparelho, não no repo.** O gerador checa o
 binário na árvore; quem importa é o aparelho. `aparelho.sh catalogo` percorre cada
@@ -737,15 +998,18 @@ tirou e como instalar. Medido: remover o binário do aparelho fez `gerado: 3`
 virar `catálogo reduzido para 2`. **Projeção de verdade reflete remoção, não só
 adição.**
 
-**O `dir` do aparelho não é derivável do repo.** `<grupo>/<slug>` no repositório é
-`/opt/giochi/apps/<id>` no aparelho. É convenção do `Giochi System` e a única
+**O `dir` do aparelho não é derivável do repo — e desde 15/11/2026 depende do
+`kind`.** `<grupo>/<slug>` no repositório é `/opt/giochi/games/<id>` para um jogo
+e `/opt/giochi/apps/<id>` para um app. É convenção do `Giochi System`, e a única
 informação do catálogo que não vem do `apps.json` nem do `metadata.json` — por
-isso está explícita em `scripts/lib/catalogo.mjs` e tem teste.
+isso está explícita em `scripts/lib/catalogo.mjs` (`dirDoApp`) e tem teste. Um
+app `image` com `kind: "app"` publicado em `/opt/giochi/games` apareceria na
+Home; o gerador avisa com `LUGAR_ERRADO`.
 
 **O catálogo inclui o que veio da loja.** Um `.giochi` não está no `apps.json`; a
-colheita lê `/opt/giochi/apps/*/metadata.json` **e** `/user/apps/*/metadata.json`
-e o disco vence. E a mesclagem **herda** `license` do `apps.json` — substituir a
-entrada inteira apagava a licença.
+colheita lê as **quatro** raízes (`RAIZES`) e o disco vence. E a mesclagem
+**herda** `license` do `apps.json` — substituir a entrada inteira apagava a
+licença.
 
 ### A guarda de tema existe dos dois lados, e precisa
 
@@ -770,7 +1034,9 @@ tema apareceria no log como "cartão removido" e mandaria procurar o problema no
 lugar errado.
 
 As duas podas compartilham um `reter` privado — uma segunda cópia da renumeração
-de `Game.id` envelheceria diferente da primeira.
+de `Game.id` envelheceria diferente da primeira — e as duas cobrem **as duas
+listas**: `podar_sem_binario` e `podar_temas` percorrem `jogos` **e** `apps`. Um
+tema só na lista de apps passaria pela poda e abriria um segundo launcher.
 
 **Vigiar: foco e desenho descrevem a mesma lista.** `settings_rows()` no núcleo
 decide até onde o foco anda; `views::linhas_da_categoria` monta o que é desenhado.
@@ -1069,6 +1335,7 @@ A tabela acima é de 06/11 e **não vale mais para o R35S**. Medido na imagem
 | | 06/11/2026 | 15/11/2026 |
 | --- | --- | --- |
 | `libasound` | ausente → volume `—` | **presente**, mixer `rk817_int`, Master 255 |
+| `SDL2` / `SDL2_mixer` / `SDL2_image` | — | **2.28.5 / 2.6.3 / 2.0.8** — é o que faz o app de música abrir (§7) |
 | `/dev/input` | — | `rk817_int`, `gpio-keys-vol`, `r36s_Gamepad` (**17** códigos) |
 | `KEY_POWER` | não declarado | **continua não declarado** — o launcher avisa e o menu fica no START |
 | rotação | `fbcon/rotate=0` → None | igual, e a referência bate **100,0%** |
@@ -1226,6 +1493,80 @@ sintoma está no log, não no número: `aviso: compilado sem a feature 'texto'`.
 Depois de exercitar a combinação enxuta, rode `bash scripts/compilar-launcher.sh`
 antes de comparar. A mesma família do `--dump-frame` que grava preto (§13): o
 binário é o mesmo caminho, e o que muda é o que ele sabe fazer.
+
+### Três provas falsas viraram um pedido errado para outra equipe
+
+Em 15/11/2026 um pedido foi para o canal do Giochi System: *"falta o transporte
+HID do kernel (`CONFIG_HID`/`BT_HIDP`), o `hidp.ko` é só a camada de socket"*.
+Medido no R35S na mesma data, contra `/proc/config.gz`:
+
+```text
+CONFIG_HID=y          # sempre esteve lá
+CONFIG_HID_GENERIC=y
+CONFIG_BT_HIDP=m
+# CONFIG_UHID is not set    ← o único que faltava
+```
+
+O módulo **carrega e inicializa** (`modprobe hidp` → `rc=0`,
+`HIDP socket layer initialized` no `dmesg`, que só aparece depois do sucesso).
+As três provas do pedido eram falsas, cada uma de um jeito diferente:
+
+| Prova | Defeito |
+| --- | --- |
+| `modinfo hidp` mostra `depends: bluetooth` sem `hid` | **`modinfo` não existe na imagem** (`sh: modinfo: not found`). A linha veio de memória e nunca foi executada |
+| `strings hidp.ko \| grep hid_register_driver` vazio | o símbolo no 6.12 é `__hid_register_driver`, gerado por macro. O `grep` procurava o nome errado e o "sinal" era a ausência do que não existe |
+| `/sys/bus/hid/drivers/hidp` não existe | **é o correto**: no 6.12 o `hidp` é transport driver, cria `hid_device` e quem fica no barramento é o `hid-generic`. Esse diretório nunca existiria |
+
+Três lições, todas reutilizáveis:
+
+1. **Ferramenta que não está instalada não é ferramenta.** `modinfo`,
+   `timeout`, `evtest --query` (§6.6) — o comando ausente devolve vazio, e vazio
+   lido como "não tem" é a mesma família de `is_ok()` medindo presença de
+   variável em vez de estado.
+2. **Nome de símbolo é detalhe de versão do kernel.** `hid_register_driver` é
+   macro; o símbolo exportado é `__hid_register_driver`. Procurar o nome
+   plausível devolve vazio, e vazio virou diagnóstico.
+3. **Pergunte se o estado observado é o esperado antes de chamá-lo de defeito.**
+   O jeito de responder isso é o log do próprio módulo (ele diz que inicializou)
+   e a config do kernel (ela diz o que foi embutido), não a estrutura de sysfs
+   que se *esperava*.
+
+A ferramenta do repo (`scripts/aparelho.sh bluetooth`) repetia o mesmo erro e
+ganhou a correção junto: hoje ela prova o núcleo HID por
+`/sys/bus/hid/drivers/hid-generic`, lê a config por `zcat /proc/config.gz` e
+declara **"entrega ao controle NÃO MEDIDA"** em vez de inventar veredito.
+
+### Comparação exata de quadro acusa glifo que a régua do projeto aprova
+
+`verificar-frame.mjs` compara com **tolerância 12** (soma da diferença RGB por
+pixel) e amostra 1 pixel a cada 3×3. Comparar os mesmos dois BMPs com igualdade
+**exata** dá outro número, e o outro número parece regressão:
+
+| Quadro (R35S × PC, 640×480) | exato | régua do projeto (tol. 12) |
+| --- | --- | --- |
+| Home | 98,30 % (5.228 px) | **100,0 %** |
+| Apps | 99,39 % (1.887 px) | **100,0 %** |
+
+Medido em 15/11/2026. Os pixels diferentes são **antialiasing de glifo**: mesmo
+texto, mesma posição, um pixel de borda com 1–3 níveis de diferença. A causa é o
+`FreeType` do Buildroot contra o do PC (o `libSDL2_ttf` é 2.24.0 dos dois lados e
+trocar o arquivo `DejaVuSans.ttf` pelo do aparelho **não mudou um pixel** — os
+arquivos têm MD5 diferentes e rasterizam igual).
+
+Três consequências:
+
+1. **Não use igualdade exata para julgar desenho.** É régua mais dura que a
+   aprovada, e o resultado dela já custou uma rodada de investigação.
+2. **A tolerância 12 existe para isso**, não para perdoar layout errado: um
+   deslocamento de 1 px, uma cor de tema trocada ou um texto faltando estouram
+   muito antes disso (rotação oposta dá 10,9 %, catálogo divergente 92–97 %).
+3. **A fonte é ambiente, não dado.** Como relógio, bateria e temperatura (§11),
+   ela não se congela por variável de ambiente — está na biblioteca.
+
+Sanidade do comparador, e ela é do mesmo tipo da que já existe para o rotador
+(§13, "girar 90° e voltar tem de dar 100,00 %"): **o mesmo BMP contra ele mesmo
+tem de dar 100,0 %**, e um BMP contra a própria imagem deslocada 1 px tem de
+cair. Se as duas coisas não acontecerem, o número está medindo outra coisa.
 
 ### Aviso de compilador que ninguém lê é aviso que não existe
 
@@ -1416,7 +1757,10 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 
 | Item | Estado |
 | --- | --- |
-| app `image` que não seja shell | **não existe** — por isso o catálogo sai vazio (§8) |
+| app `image` que não seja shell | **existe**: `musica` (§7) — o catálogo deixou de sair vazio (§8) |
+| migrar jogos de `/user/apps` para `/user/games` | **manual** — feito à mão no R35S em 15/11/2026; a detecção os mantém corretos e só avisa, mas um `scripts/migrar-raizes.sh` evitaria repetir |
+| barra de progresso no app de música | **não existe** — o `SDL_mixer` não informa a posição; a barra mostraria número inventado |
+| duração de MP3/OGG/FLAC no app de música | **`—`** — só o WAV declara o tamanho no cabeçalho |
 | licença consultada antes de lançar | **não feito** — o verificador existe, o launcher ainda não pergunta ao servidor |
 | conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta só o `update_config=1` na imagem (§17) |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
@@ -1434,26 +1778,61 @@ Aqui há só um ponteiro: `docs/mensagem-giochi-system.md`.
 inicia rodada. `bash scripts/canal.sh` responde, e `--exigir` sai com 1 para
 encadear em script.
 
-Pedidos abertos (15/11/2026), com verificação objetiva para cada um:
+Pedidos abertos em **`docs/issues-para-outros-repos.md`** — os quatro corpos
+prontos, com medição, arquivo e linha, consequência e como conferir. Resumo:
 
-| Pedido | Por quê | Como conferir |
-| --- | --- | --- |
-| **`CONFIG_HID=y`** com transporte BT-HIDP no `hidp.ko` | hoje `modinfo hidp` mostra `depends: bluetooth`, sem `hid`: o módulo é só a camada de socket. Controle Bluetooth clássico pareia, conecta e cai (reason 2) | `modinfo hidp` lista `hid` em `depends` e `/sys/bus/hid/drivers/hidp` existe |
-| **`CONFIG_UHID=y`** | controle BLE (HOGP) precisa dele para virar entrada | `/dev/uhid` existe |
-| `hidp` carregado no boot | hoje só por `modprobe` | `lsmod` mostra `hidp` sem intervenção |
-| **`update_config=1` em `/etc/wpa_supplicant.conf`** | sem essa linha o `save_config` responde `FAIL` e a rede conectada **não sobrevive ao reboot** — o usuário digita a senha toda vez | `wpa_cli save_config` responde `OK` e o `ssid=` aparece no arquivo |
+| # | Repo | Pedido | Gravidade |
+| --- | --- | --- | --- |
+| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel |
+| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** |
+| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso |
+| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente |
 
-Os três primeiros são a mesma família (transporte HID). O quarto foi medido em
-15/11/2026 e aplicado à mão no X55 desta rodada; sem ele na imagem, o aviso
-"a rede não foi salva" aparece para o usuário em toda sessão.
+**O pedido #2 CORRIGE o anterior, e a correção é do meu lado.** Até 15/11/2026
+esta seção pedia "`update_config=1` em `/etc/wpa_supplicant.conf`" como se o
+arquivo fosse criado pela imagem. Medido no R35S em 15/11/2026, ele **existe** —
+é o template que o Buildroot instala:
 
-**Conferido de novo na imagem de 15/11/2026** (`built_at_utc=2026-11-15T00:23:53Z`,
-`commit=d8f544a`): o `update_config=1` **continua ausente**. O pedido não foi
-atendido, e regravar o cartão apaga a correção manual — foi o que aconteceu
-nesta rodada. Sem a linha, `save_config` responde `FAIL`; com ela e o
-supplicant reiniciado, responde **`OK`**. Medido no X55 na mesma sessão.
+```console
+$ ls -l /etc/wpa_supplicant.conf
+-rw-r--r-- 1 root root 78 /etc/wpa_supplicant.conf
+$ cat /etc/wpa_supplicant.conf
+ctrl_interface=/var/run/wpa_supplicant
+ap_scan=1
 
-A imagem também embarca um `network={ key_mgmt=NONE }` vazio: o supplicant
-sobe, entra em `SCANNING` atrás de uma rede aberta sem SSID e a tela fica
-"procurando" sem nunca achar. Não é "sem Wi-Fi" — é um placeholder que parece
-uma rede.
+network={
+  key_mgmt=NONE
+}
+```
+
+Três consequências, e as duas primeiras ninguém tinha visto:
+
+1. **O comentário do `S40wifi:5-7` está errado** — ele afirma "o arquivo NAO vem
+   na imagem", e vem. Quem o lesse concluiria que não há `ctrl_interface`, que é
+   justamente o que faz `wpa_cli` funcionar.
+2. **A receita de provisionamento destrói esse arquivo.** `docs/x55-bringup.md:618`
+   manda `wpa_passphrase 'REDE' 'SENHA' > /etc/wpa_supplicant.conf`, e o `>` trunca:
+   some `ctrl_interface` e some `ap_scan`, então **`wpa_cli` para de responder** e a
+   tela de Wi-Fi do launcher morre inteira — um defeito pior que o original.
+3. **O placeholder vazio é uma armadilha própria.** `network={ key_mgmt=NONE }`
+   sem `ssid` faz o supplicant entrar em `SCANNING` atrás de uma rede aberta que
+   não existe: a tela fica "procurando" e nunca acha. Não é "sem Wi-Fi" — é um
+   bloco que parece uma rede.
+
+A correção certa é no **caminho de provisionamento**, preservando o template e
+acrescentando a linha — não "pôr a linha na imagem", que já foi tentado e é
+apagado por regravar o cartão. É a mesma família do §13: pedir de novo o que já
+era impossível é a ferramenta medindo a intenção em vez do efeito.
+
+**Estado do mecanismo de issue, medido em 15/11/2026:** o MCP do GitHub
+autentica (`POST` em issue inexistente devolve 404, não 401 — o `add_issue_comment`
+provou), mas `issue_write` **renderiza um formulário de confirmação no VS Code** e
+não cria nada sozinho: o agente não consegue clicar. Consequência prática: o
+entregável é o corpo pronto em `docs/issues-para-outros-repos.md`, e o número da
+issue só entra na tabela acima **depois** que existir de fato. Anunciar "issue
+criada" sem ter criado é o §10 aplicado à conversa entre equipes.
+
+E o item 1 foi **refeito do zero** em 15/11/2026, porque o pedido anterior estava
+errado: `CONFIG_HID=y` e `CONFIG_BT_HIDP=m` **já estão** na imagem, e as três
+provas que sustentavam o pedido eram falsas (§6.6). O que resta de verdade é
+`# CONFIG_UHID is not set` e `hidp` fora do autoload.

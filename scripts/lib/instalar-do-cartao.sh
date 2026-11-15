@@ -47,7 +47,17 @@ PASTA="${1:-/mnt/cartao}"
 APPS_BASE="${GIOCHI_APPS_BASE:-/opt/giochi/apps}"
 INDICE="$APPS_BASE/index.json"
 LAUNCHER="${GIOCHI_LAUNCHER:-$APPS_BASE/launcher/bin/giochi-launcher}"
-DESTINO_BASE="${GIOCHI_DESTINO_BASE:-/user/apps}"
+# Destino por tipo: jogos em `/user/games`, apps em `/user/apps`.
+#
+# Decisão do dono, 15/11/2026: "apps deverão ficar em locais diferentes dos jogos
+# para que a detecção não se confunda". Quem escolhe é o `kind` do **pacote**
+# (ausente = jogo, pelo mesmo motivo do lado do launcher): um `.giochi` copiado
+# para o cartão tem de chegar ao lugar certo sem um PC decidindo por ele.
+#
+# `GIOCHI_DESTINO_BASE` sobrepõe **os dois** — é o que permite testar a extração
+# no PC sem escrever em `/user`.
+DESTINO_JOGOS="${GIOCHI_DESTINO_BASE:-${GIOCHI_DESTINO_JOGOS:-/user/games}}"
+DESTINO_APPS="${GIOCHI_DESTINO_BASE:-${GIOCHI_DESTINO_APPS:-/user/apps}}"
 
 # O verificador e a chave pública. Ausentes = aviso explícito, não passe livre.
 VERIFICADOR="${GIOCHI_VERIFICADOR:-$APPS_BASE/bin/verificador-ed25519}"
@@ -56,7 +66,7 @@ CHAVE_PUBLICA="${GIOCHI_CHAVE_PUBLICA:-/etc/giochi/loja-publica.pem}"
 [ -d "$PASTA" ] || { echo "ERRO pasta não existe: $PASTA"; exit 1; }
 [ -x "$LAUNCHER" ] || { echo "ERRO launcher não está em $LAUNCHER"; exit 1; }
 
-mkdir -p "$DESTINO_BASE" "$APPS_BASE" || { echo "ERRO não consegui criar destino"; exit 1; }
+mkdir -p "$DESTINO_JOGOS" "$DESTINO_APPS" "$APPS_BASE" || { echo "ERRO não consegui criar destino"; exit 1; }
 
 TOTAL=0
 OK=0
@@ -141,6 +151,22 @@ for PACOTE in "$PASTA"/*.giochi; do
   SLUG=$(sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/metadata.json" | head -1)
   [ -n "$SLUG" ] || SLUG=$(basename "$NOME" .giochi)
 
+  # Tipo do pacote: `kind` do metadata, ausente = jogo. A leitura é por `sed`
+  # porque este script roda no aparelho, onde não há Node nem `jq`.
+  KIND=$(sed -n 's/.*"kind"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/metadata.json" | head -1)
+  case "$KIND" in
+    app|apps) DESTINO_BASE="$DESTINO_APPS"; TIPO="app" ;;
+    ""|game)  DESTINO_BASE="$DESTINO_JOGOS"; TIPO="jogo" ;;
+    *)
+      # Grafia desconhecida não escolhe pasta por adivinhação: o pacote é
+      # recusado com o motivo, e o motivo diz o que escrever.
+      rm -rf "$TMP"
+      echo "  $NOME: RECUSADO — kind \"$KIND\" desconhecido (use \"game\" ou \"app\")"
+      FALHOU=$((FALHOU + 1))
+      continue
+      ;;
+  esac
+
   ENTRY=$(sed -n 's/.*"entrypoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/metadata.json" | head -1)
   if [ -z "$ENTRY" ] || [ ! -f "$TMP/$ENTRY" ]; then
     rm -rf "$TMP"
@@ -169,7 +195,7 @@ for PACOTE in "$PASTA"/*.giochi; do
     continue
   fi
 
-  echo "  $NOME: instalado em $DESTINO"
+  echo "  $NOME: instalado em $DESTINO ($TIPO)"
   OK=$((OK + 1))
 done
 

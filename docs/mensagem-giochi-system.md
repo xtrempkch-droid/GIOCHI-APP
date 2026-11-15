@@ -53,6 +53,7 @@ A conversa saiu; o que ela produziu ficou:
 | Fatos medidos no X55 | [AGENTS.md](../AGENTS.md) §3 e §12 |
 | Por que copyleft não entra na imagem assinada | [licenciamento.md](licenciamento.md) |
 | Por que `adc-joystick`, e o Y já vem invertido | [controles.md](controles.md) |
+| Pedidos de correção que moram no repo de vocês | [issues-para-outros-repos.md](issues-para-outros-repos.md) |
 
 ## Regras do canal
 

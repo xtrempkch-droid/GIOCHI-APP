@@ -304,8 +304,20 @@ mesma família de erro que "não declarou, não entrega".
 
 - **`libSDL2` com backend KMSDRM**: já está lá e funciona.
 - **Compositor / X11 / Wayland**: não é necessário; `kmsdrm` entrega a tela direto.
-- **`libSDL2_image`, `libSDL2_mixer`, `libSDL2_gfx`**: o launcher desenha com
-  primitivas e ícones vetoriais. `image` não é usada; `mixer` e `gfx` idem.
+- **`libSDL2_image`, `libSDL2_mixer`, `libSDL2_gfx`** para o **launcher**: ele
+  desenha com primitivas e ícones vetoriais. `image` não é usada; `mixer` e `gfx`
+  idem.
+
+  **Correção de 15/11/2026, para o app de música.** O `app/musica` toca pelo
+  mixer da engine e **pede `libSDL2_mixer` no carregamento** — biblioteca
+  ausente ali é falha de carga, não degradação. Medido na imagem do R35S de
+  15/11/2026 (`built_at_utc=2026-11-15T12:58:43Z`): `SDL2` 2.28.5,
+  `SDL2_mixer` **2.6.3**, `SDL2_image` 2.0.8 e `SDL2_ttf` 2.24.0, com
+  `/dev/snd` e `libasound`. Ou seja: **já está atendido** nesta imagem, e o app
+  de música não gerou pedido nenhum ao Giochi System por causa disso. Pelo mesmo
+  motivo, `SDL2_image` também passou a ser dependência de **link** do app (a
+  engine liga a feature), e não só um "não precisa": quem montar uma imagem
+  mínima sem ela terá o app morrendo no carregador.
 
 ## Enquanto isso: texto é feature, som não precisa ser
 

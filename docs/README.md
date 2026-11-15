@@ -15,11 +15,13 @@
 - [Licenciamento](licenciamento.md) — o que pode ir na imagem, o que vai pela loja e o que pode ser vendido.
 - [Compilar o launcher](compilar-launcher.md) — cargo + SDL2, o prefixo local sem root e como conferir o desenho sem tela.
 - [Launcher sobre a GIOCHI-ENGINE](launcher-teste.md) — o mesmo launcher desenhado na engine própria: 100% idêntico pixel a pixel em 4 painéis, 4 abas e 4 overlays, e as cinco primitivas que a engine ganhou por causa do porte.
+- [Música](musica.md) — o primeiro app de imagem que não é tema: carrossel de capas geradas do nome, transporte completo pelo mixer da engine, 120 testes sem SDL e **100,00%** de identidade de quadro entre PC e R35S.
 - [Star Dust](star-dust.md) — o launcher com a camada de efeitos: oito efeitos, 29 chamadas de desenho para a camada inteira, e desligado ele é **idêntico byte a byte** ao launcher de produção.
 - [Dependências que faltam no aparelho](dependencias-aparelho.md) — o que pedir ao Giochi System: SDL2_ttf, freetype e uma fonte.
 - [Contrato app × sistema](contrato-app-sistema.md) — quem corrige o quê: características de aparelho no sistema, comportamento no app.
 - [Ferramentas](ferramentas.md) — `aparelho.sh`, `verificar-frame.mjs` e os scripts de compilação: o que cada um resolve e por que existe.
 - [Canal com o Giochi System](mensagem-giochi-system.md) — ponteiro para o arquivo de conversa (fora dos repos), a janela de contato (08:00–18:50) e os pontos abertos.
+- [Issues para os outros repositórios](issues-para-outros-repos.md) — os quatro corpos prontos (3 para o System, 1 para o OS). Repo alheio é somente leitura: aqui só se lê, o pedido de correção viaja como issue.
 - [Checklist de imagem nova](checklist-imagem.md) — o que validar quando o Giochi System entrega uma imagem: em que ordem, e de quem é o problema quando falha.
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.

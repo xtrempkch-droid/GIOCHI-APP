@@ -54,6 +54,16 @@
       "role": "shell"
     },
     {
+      "id": "musica",
+      "folder": "musica",
+      "slug": "musica",
+      "runtime": "native",
+      "status": "ready",
+      "distribution": "image",
+      "license": "Proprietary",
+      "note": "Tocador de musica sobre a GIOCHI-ENGINE: carrossel de capas geradas do nome do arquivo, transporte completo (tocar/pausar/parar/volume) e leitura de /user/musica. E o primeiro app de IMAGEM que nao e interface, entao o catalogo do aparelho deixa de sair vazio. Ver app/musica/README.md."
+    },
+    {
       "id": "painel",
       "folder": "painel",
       "slug": "painel",

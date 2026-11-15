@@ -16,9 +16,8 @@
 //! `bin/` e nenhum dos dois pode conter `..` nem ser relativo. Recusar é melhor
 //! que sanear — sanear esconde que o arquivo está errado.
 
-use std::path::Path;
-
-use giochi_launcher_core::Game;
+use giochi_launcher_core::deteccao::{juntar, Tipo};
+use giochi_launcher_core::{App, Detectado, Game};
 
 /// Caminho publicado pelo `Giochi System`.
 pub const CAMINHO: &str = "/opt/giochi/apps/index.json";
@@ -72,6 +71,8 @@ pub struct Alvo {
     pub slug: String,
     pub dir: String,
     pub entrypoint: String,
+    /// Jogo ou app. Decide a aba e **qual lista** o índice do pedido percorre.
+    pub tipo: Tipo,
 }
 
 impl Alvo {
@@ -85,109 +86,155 @@ impl Alvo {
 #[derive(Clone, Debug, Default)]
 pub struct Catalogo {
     pub games: Vec<Game>,
+    /// Apps da aba Apps, detectados do disco (e do índice, para o que estiver
+    /// fora das raízes).
+    ///
+    /// Lista separada de `games` porque a aba é outra: antes ela desenhava oito
+    /// apps escritos no código e nenhum existia no aparelho.
+    pub apps: Vec<App>,
     /// Alinhado por posição com `games`: `alvos[i]` descreve `games[i]`.
     ///
     /// `Game.id` é essa posição. O id do domínio é o *slug*, que não cabe em
     /// `u32`; a posição é só a chave interna de cor e favorito — nunca aparece
     /// na tela (ver "índice interno não é dado do jogo" no `AGENTS.md`).
     pub alvos: Vec<Alvo>,
+    /// Alinhado por posição com `apps`, como `alvos` é com `games`.
+    pub alvos_apps: Vec<Alvo>,
 }
 
 impl Catalogo {
-    /// Lê o catálogo. Ausente ou inválido devolve `Err` — quem chama decide o
-    /// fallback, e o padrão é o catálogo de demonstração.
-    pub fn carregar(caminho: &Path) -> Result<Self, String> {
-        let texto = std::fs::read_to_string(caminho)
-            .map_err(|e| format!("{}: {e}", caminho.display()))?;
-        Self::do_texto(&texto)
-    }
-
-    /// Mesma leitura, a partir do texto. Separado para poder testar sem disco.
+    /// Lê **só o índice**, a partir do texto.
+    ///
+    /// `#[cfg(test)]` e não `pub`: quem abre o aparelho usa
+    /// [`Catalogo::detectar`], que junta índice e disco. Este atalho sobra para
+    /// os testes da leitura do `index.json` — precisar de um `Path` e de um
+    /// sistema de arquivos para testar o parser seria pedir mais do ambiente do
+    /// que o teste precisa.
+    ///
+    /// Deletá-lo junto com o `carregar` que existia aqui foi a escolha certa:
+    /// uma função pública documentada e sem chamador é a segunda porta de
+    /// entrada que envelhece sem ninguém notar.
+    #[cfg(test)]
     pub fn do_texto(texto: &str) -> Result<Self, String> {
-        let raiz: serde_json::Value =
-            serde_json::from_str(texto).map_err(|e| format!("JSON inválido: {e}"))?;
+        let detectados = ler_indice(texto)?;
+        Ok(Self::dos_detectados(detectados))
+    }
 
-        let lista = raiz
-            .get("apps")
-            .and_then(|v| v.as_array())
-            .ok_or("catálogo sem a lista \"apps\"")?;
+    /// **A detecção**: o que está instalado, agora.
+    ///
+    /// ## O que mudou, e por quê
+    ///
+    /// Antes o launcher só sabia o que o `index.json` dizia, e a aba Apps nem
+    /// isso — desenhava oito apps escritos no código. Consequência medida: um
+    /// app copiado para `/user/apps` **não aparecia** até alguém rodar um script
+    /// de Node no PC e publicar o índice de novo. "Não aparece" e "não existe"
+    /// ficavam indistinguíveis.
+    ///
+    /// Agora a varredura do disco é a fonte principal e o índice é complemento:
+    ///
+    /// 1. varre as quatro raízes (`/opt/giochi/{games,apps}`, `/user/{games,apps}`)
+    ///    procurando `<pasta>/metadata.json`;
+    /// 2. lê `kind` do pacote para decidir a aba (ausente = jogo);
+    /// 3. junta com o índice, **disco vencendo** ([`juntar`]);
+    /// 4. poda tema e binário ausente, como antes.
+    ///
+    /// O índice não sumiu do caminho por dois motivos: ele é o que lista conteúdo
+    /// fora das raízes, e é o que a imagem publica — apagar a leitura deixaria um
+    /// arquivo documentado sem leitor.
+    pub fn detectar() -> Result<Self, String> {
+        let do_indice = match std::fs::read_to_string(caminho()) {
+            Ok(texto) => match ler_indice(&texto) {
+                Ok(lista) => lista,
+                Err(e) => {
+                    eprintln!("catálogo: índice inválido ({e}); usando só a varredura do disco");
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        };
 
+        let varridas = varrer(&raizes());
+        if do_indice.is_empty() && varridas.is_empty() {
+            // `Err` aqui mantém o contrato antigo de "não há catálogo": quem chama
+            // decide o que dizer na tela. O motivo tem de citar as raízes, senão
+            // o usuário procura no lugar errado.
+            return Err(format!(
+                "nenhum app encontrado em {} (nem catálogo em {})",
+                Tipo::todas_as_raizes().join(", "),
+                caminho().display()
+            ));
+        }
+
+        let juntos = juntar(do_indice, varridas);
+        Ok(Self::dos_detectados(juntos))
+    }
+
+    /// Um item varrido vira `Game` ou `App`, nunca os dois.
+    ///
+    /// A partição acontece **aqui e uma vez só**: duas listas construídas em
+    /// lugares diferentes envelheceriam diferente — é como o carrossel do foco
+    /// ficou dessincronizado da tela neste projeto.
+    fn dos_detectados(detectados: Vec<Detectado>) -> Self {
         let mut catalogo = Self::default();
-        for entrada in lista {
-            // Uma entrada ruim não derruba o catálogo inteiro: o aparelho
-            // continua utilizável com os apps que estão certos. O aviso fica no
-            // log, que é onde se procura quando um app "não aparece".
-            let Some(alvo) = Self::ler_alvo(entrada) else {
-                let slug = entrada
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("<sem id>");
-                eprintln!("catálogo: entrada ignorada ({slug})");
-                continue;
+        // Todo caminho passa por `juntar`, inclusive o que não tem índice: a
+        // deduplicação por slug é **uma** regra, e uma cópia aqui envelheceria
+        // diferente dela. Sem isto, duas cópias em raízes diferentes virariam
+        // dois cartões que abrem o mesmo app.
+        for item in juntar(Vec::new(), detectados) {
+            let alvo = Alvo {
+                slug: item.slug,
+                dir: item.dir,
+                entrypoint: item.entrypoint,
+                tipo: item.tipo,
             };
-
-            let id = catalogo.games.len() as u32;
-            let titulo = entrada
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&alvo.slug)
-                .to_string();
-            let categoria = entrada
-                .get("category")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Aplicativo")
-                .to_string();
-            let ano = entrada
-                .get("year")
-                .and_then(|v| v.as_u64())
-                .filter(|a| (1900..=2199).contains(a))
-                .unwrap_or(0) as u16;
-
-            catalogo.games.push(Game {
-                id,
-                title: titulo,
-                category: categoria,
-                year: ano,
-                hours: 0.0,
-                last_played: "nunca".to_string(),
-                favorite: false,
-            });
-            catalogo.alvos.push(alvo);
+            match item.tipo {
+                Tipo::Jogo => {
+                    let id = catalogo.games.len() as u32;
+                    catalogo.games.push(Game {
+                        id,
+                        title: item.titulo,
+                        category: item.categoria,
+                        year: item.ano,
+                        hours: 0.0,
+                        last_played: "nunca".to_string(),
+                        favorite: false,
+                    });
+                    catalogo.alvos.push(alvo);
+                }
+                Tipo::App => {
+                    catalogo.apps.push(App::new(
+                        &alvo.slug,
+                        &item.titulo,
+                        // O ícone é do tema e a detecção não tem como adivinhar
+                        // um glifo por app; a aba desenha monograma quando o
+                        // nome não está na tabela (ver `views::apps`).
+                        "apps",
+                        &item.categoria,
+                    ));
+                    catalogo.alvos_apps.push(alvo);
+                }
+            }
         }
-
-        Ok(catalogo)
+        catalogo
     }
 
-    fn ler_alvo(entrada: &serde_json::Value) -> Option<Alvo> {
-        let slug = entrada.get("id")?.as_str()?.to_string();
-        let dir = entrada.get("dir")?.as_str()?.to_string();
-        let entrypoint = entrada.get("entrypoint")?.as_str()?.to_string();
 
-        // `..` em qualquer posição e caminho não-absoluto são recusados. O
-        // `entrypoint` ainda precisa ficar dentro de `bin/`, como no
-        // `metadata.json`.
-        if dir.contains("..") || !dir.starts_with('/') {
-            return None;
-        }
-        if entrypoint.contains("..") || entrypoint.starts_with('/') {
-            return None;
-        }
-        if !entrypoint.starts_with("bin/") || entrypoint.len() <= 4 {
-            return None;
-        }
-
-        Some(Alvo {
-            slug,
-            dir,
-            entrypoint,
-        })
-    }
-
-    /// Alvo para executar, a partir do `Game.id`.
+    /// Alvo de jogo, a partir do `Game.id`.
     pub fn alvo(&self, id: u32) -> Option<&Alvo> {
         self.alvos.get(id as usize)
     }
 
+    /// Alvo de app, a partir da posição na aba Apps.
+    pub fn alvo_app(&self, indice: u32) -> Option<&Alvo> {
+        self.alvos_apps.get(indice as usize)
+    }
+
+    /// `true` quando não há nem jogo nem app — a tela diz isso.
+    pub fn sem_nada(&self) -> bool {
+        self.games.is_empty() && self.apps.is_empty()
+    }
+
+    #[cfg(test)]
     pub fn vazio(&self) -> bool {
         self.games.is_empty()
     }
@@ -266,7 +313,281 @@ impl Catalogo {
         }
         self.games = games;
         self.alvos = alvos;
+
+        // As duas listas passam pela **mesma** poda: uma segunda cópia disto
+        // deixaria a aba Apps mostrando cartão sem binário, que é exatamente o
+        // defeito que a poda existe para impedir.
+        let apps = std::mem::take(&mut self.apps);
+        let alvos_apps = std::mem::take(&mut self.alvos_apps);
+        let mut mantidos = Vec::with_capacity(alvos_apps.len());
+        for (app, alvo) in apps.into_iter().zip(alvos_apps) {
+            if fica(&alvo) {
+                mantidos.push((app, alvo));
+            }
+        }
+        for (app, alvo) in mantidos {
+            self.apps.push(app);
+            self.alvos_apps.push(alvo);
+        }
         self
+    }
+}
+
+/// Lê o índice publicado e devolve o que ele declara, **sem** conferir disco.
+///
+/// Devolve `Detectado` — e não `Alvo` — porque a junção com a varredura
+/// ([`juntar`]) precisa do tipo e do título dos dois lados.
+fn ler_indice(texto: &str) -> Result<Vec<Detectado>, String> {
+    let raiz: serde_json::Value =
+        serde_json::from_str(texto).map_err(|e| format!("JSON inválido: {e}"))?;
+
+    let lista = raiz
+        .get("apps")
+        .and_then(|v| v.as_array())
+        .ok_or("catálogo sem a lista \"apps\"")?;
+
+    let mut detectados = Vec::with_capacity(lista.len());
+    for entrada in lista {
+        // Uma entrada ruim não derruba o catálogo inteiro: o aparelho continua
+        // utilizável com os apps que estão certos. O aviso fica no log, que é
+        // onde se procura quando um app "não aparece".
+        let Some(mut item) = entrada_do_indice(entrada) else {
+            let slug = entrada
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<sem id>");
+            eprintln!("catálogo: entrada ignorada ({slug})");
+            continue;
+        };
+        // O índice é fato do sistema instalado, não um pacote em disco: quem
+        // vence na junção é a entrada varrida.
+        item.do_disco = false;
+        detectados.push(item);
+    }
+    Ok(detectados)
+}
+
+/// Uma entrada do `index.json` vira `Detectado`, com as mesmas recusas de antes.
+fn entrada_do_indice(entrada: &serde_json::Value) -> Option<Detectado> {
+    let slug = entrada.get("id")?.as_str()?.to_string();
+    let dir = entrada.get("dir")?.as_str()?.to_string();
+    let entrypoint = entrada.get("entrypoint")?.as_str()?.to_string();
+
+    // `..` em qualquer posição e caminho não-absoluto são recusados. O
+    // `entrypoint` ainda precisa ficar dentro de `bin/`, como no
+    // `metadata.json`.
+    if dir.contains("..") || !dir.starts_with('/') {
+        return None;
+    }
+    if entrypoint.contains("..") || entrypoint.starts_with('/') {
+        return None;
+    }
+    if !entrypoint.starts_with("bin/") || entrypoint.len() <= 4 {
+        return None;
+    }
+
+    Some(Detectado {
+        slug,
+        titulo: entrada
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        dir,
+        entrypoint,
+        categoria: entrada
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Aplicativo")
+            .to_string(),
+        ano: entrada
+            .get("year")
+            .and_then(|v| v.as_u64())
+            .filter(|a| (1900..=2199).contains(a))
+            .unwrap_or(0) as u16,
+        tipo: Tipo::de_kind(entrada.get("kind").and_then(|v| v.as_str())),
+        do_disco: false,
+    })
+}
+
+/// Raízes a varrer, na ordem de precedência.
+///
+/// `GIOCHI_RAIZES` (separado por `:`) sobrepõe as quatro de uma vez. Existe pelo
+/// mesmo motivo de `GIOCHI_CATALOGO`: no PC não há `/opt/giochi`, e sem a
+/// sobreposição não haveria como testar a detecção sem root nem como apontar o
+/// launcher para uma pasta qualquer.
+pub fn raizes() -> Vec<String> {
+    match std::env::var("GIOCHI_RAIZES") {
+        Ok(v) if !v.trim().is_empty() => v
+            .split(':')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Tipo::todas_as_raizes().iter().map(|p| (*p).to_string()).collect(),
+    }
+}
+
+/// Varre as raízes e devolve o que encontrou de fato no disco.
+///
+/// Cada raiz é lida **um nível**: `<raiz>/<slug>/metadata.json`. É a mesma
+/// profundidade do validador de apps, e a razão é a mesma — grupo dentro de
+/// raiz de instalação não existe, e aceitar profundidades variáveis faria um
+/// `assets/` com `metadata.json` virar app.
+fn varrer(raizes: &[String]) -> Vec<Detectado> {
+    let mut achados = Vec::new();
+    for raiz in raizes {
+        let dir = std::path::Path::new(raiz);
+        let Ok(entradas) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        // Ordem estável: `read_dir` não promete nenhuma, e a precedência entre
+        // duas cópias do mesmo slug é "a primeira raiz que o tem".
+        let mut pastas: Vec<String> = entradas
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        pastas.sort();
+
+        for pasta in pastas {
+            let caminho_pasta = format!("{}/{}", raiz.trim_end_matches('/'), pasta);
+            match ler_pacote(&caminho_pasta) {
+                Ok(Some(item)) => achados.push(item),
+                // `Ok(None)`: pasta sem `metadata.json` (ex.: `bin/`) ou com
+                // JSON ilegível que já foi avisado. Não é erro do catálogo.
+                Ok(None) => {}
+                Err(aviso) => eprintln!("catálogo: {aviso}"),
+            }
+        }
+    }
+    achados
+}
+
+/// Decide se o pacote merece o aviso de lugar errado.
+///
+/// Separado do `eprintln!` para ser testável: um aviso que só existe no `stderr`
+/// não tem como reprovar em teste, e foi justamente um aviso errado que mandou
+/// mover o launcher para `/user/games` no R35S.
+fn avisar_lugar(slug: &str, tipo: Tipo, dir: &str, kind: Option<&str>) -> Option<String> {
+    if eh_tema(slug) {
+        return None;
+    }
+    giochi_launcher_core::deteccao::aviso_de_lugar(tipo, dir, kind)
+}
+
+/// Lê `<dir>/metadata.json` e monta o item, com as conferências que importam.
+///
+/// `Ok(None)` = não é pacote (sem metadata). `Err` = é pacote e está errado — o
+/// texto vai para o log, porque um pacote que existe e não aparece é
+/// indistinguível de um pacote que não existe.
+fn ler_pacote(dir: &str) -> Result<Option<Detectado>, String> {
+    let caminho = format!("{dir}/metadata.json");
+    let texto = match std::fs::read_to_string(&caminho) {
+        Ok(t) => t,
+        // `NotFound` é o caso normal de uma pasta que não é pacote.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Ok(Some(erro_de_pacote(dir, "não consegui ler o metadata.json", &e.to_string()))),
+    };
+
+    let meta: serde_json::Value = match serde_json::from_str(&texto) {
+        Ok(v) => v,
+        Err(e) => return Ok(Some(erro_de_pacote(dir, "metadata.json não é JSON válido", &e.to_string()))),
+    };
+
+    let entrypoint = meta
+        .get("entrypoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if !entrypoint.starts_with("bin/") || entrypoint.contains("..") || entrypoint.len() <= 4 {
+        return Ok(Some(erro_de_pacote(
+            dir,
+            "entrypoint inválido no metadata.json",
+            &format!("`{entrypoint}` (precisa começar em bin/)"),
+        )));
+    }
+
+    let kind = meta.get("kind").and_then(|v| v.as_str());
+    if !Tipo::kind_reconhecido(kind) {
+        // Grafia desconhecida cai no padrão (jogo), e isso é o comportamento
+        // certo — mas dizer é o que impede `"kind": "jogo"` de virar campo
+        // decorativo.
+        eprintln!(
+            "catálogo: {dir}: kind `{}` não é conhecido (use \"game\" ou \"app\"); tratando como jogo",
+            kind.unwrap_or_default()
+        );
+    }
+    let tipo = Tipo::de_kind(kind);
+
+    let slug = slug_de(dir, &meta);
+    // **Tema não recebe aviso de lugar.** Ele não entra em catálogo nenhum, então
+    // o lugar onde está não muda cartão nenhum — e o aviso mandaria mover o
+    // próprio executável de inicialização para a pasta de jogos. Medido no R35S
+    // em 15/11/2026, antes desta guarda:
+    //   `catálogo: launcher (/opt/giochi/apps/launcher) está em /opt/giochi/apps,
+    //    que é raiz de outro tipo; o lugar de um jogo é /user/games`
+    // A pasta estava certa; o campo `kind` é que não existe, e não precisa.
+    if let Some(aviso) = avisar_lugar(&slug, tipo, dir, kind) {
+        // O pacote diz o que é; o lugar está errado para ele. Aparecer na aba
+        // certa com uma linha de log é melhor que sumir em silêncio.
+        eprintln!("catálogo: {slug} ({dir}) {aviso}");
+    }
+    Ok(Some(Detectado {
+        titulo: meta
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&slug)
+            .to_string(),
+        slug,
+        dir: dir.to_string(),
+        entrypoint,
+        categoria: meta
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Aplicativo")
+            .to_string(),
+        ano: meta
+            .get("releaseYear")
+            .and_then(|v| v.as_u64())
+            .filter(|a| (1900..=2199).contains(a))
+            .unwrap_or(0) as u16,
+        tipo,
+        do_disco: true,
+    }))
+}
+
+/// Slug do pacote: `metadata.slug`, senão o nome da pasta.
+///
+/// A mesma ordem do validador e do `adicionar_ao_indice`. Derivar do título
+/// moveria o app de lugar ao renomear — o defeito que já instalou em
+/// `/opt/giochi/apps/pac-man` enquanto o catálogo apontava para `pacman`.
+fn slug_de(dir: &str, meta: &serde_json::Value) -> String {
+    meta.get("slug")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            std::path::Path::new(dir)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "desconhecido".to_string())
+}
+
+/// Pacote que existe e está errado: aparece no log e **não** vira cartão.
+fn erro_de_pacote(dir: &str, motivo: &str, detalhe: &str) -> Detectado {
+    eprintln!("catálogo: {dir}: {motivo} ({detalhe}) — fora do catálogo");
+    Detectado {
+        slug: dir.to_string(),
+        titulo: String::new(),
+        dir: dir.to_string(),
+        // `entrypoint` vazio nunca é `bin/…`, então `podar_sem_binario` o
+        // descarta — a mesma peneira de todo pacote.
+        entrypoint: String::new(),
+        categoria: "Aplicativo".to_string(),
+        ano: 0,
+        tipo: Tipo::Jogo,
+        do_disco: true,
     }
 }
 
@@ -463,7 +784,12 @@ mod tests {
         assert_eq!(c.games[0].id, 0, "o id é a posição, e renumerar mantém consistente");
         assert_eq!(c.alvos.len(), 1, "games e alvos têm de ficar alinhados");
         assert_eq!(podados.len(), 2, "a poda precisa dizer o que tirou");
-        assert_eq!(podados[0].0, "launcher-neon");
+        // A ordem do relatório segue a **ordem da lista**, que é por título —
+        // não a ordem do `index.json`. Afirmar a posição aqui já custou um teste
+        // vermelho quando a ordenação passou a valer também para o índice.
+        let mut nomes: Vec<&str> = podados.iter().map(|(s, _)| s.as_str()).collect();
+        nomes.sort_unstable();
+        assert_eq!(nomes, vec!["launcher", "launcher-neon"]);
     }
 
     #[test]
@@ -673,5 +999,214 @@ mod tests {
     fn json_invalido_e_erro() {
         assert!(Catalogo::do_texto("não é json").is_err());
         assert!(Catalogo::do_texto("{}").is_err(), "sem a lista apps");
+    }
+
+    // ── detecção do disco ───────────────────────────────────
+    //
+    // Estes testes montam uma árvore de verdade num diretório temporário e
+    // chamam `varrer`, que recebe as raízes por parâmetro. A variável
+    // `GIOCHI_RAIZES` fica de fora de propósito: variável de ambiente é global
+    // ao processo, e dois testes em paralelo se atropelariam — o teste passaria
+    // ou falharia conforme a ordem de execução, que é o pior tipo de teste.
+
+    use std::fs;
+
+    /// Cria `<raiz>/<slug>/metadata.json` e o binário do entrypoint.
+    fn plantar(raiz: &std::path::Path, slug: &str, kind: Option<&str>, com_binario: bool) -> String {
+        let dir = raiz.join(slug);
+        fs::create_dir_all(dir.join("bin")).expect("mkdir");
+        let kind = kind.map(|k| format!(r#", "kind": "{k}""#)).unwrap_or_default();
+        fs::write(
+            dir.join("metadata.json"),
+            format!(
+                r#"{{"title": "Título {slug}", "slug": "{slug}", "developer": "g",
+                    "version": "1.0.0", "arch": "aarch64", "runtime": "native",
+                    "entrypoint": "bin/{slug}"{kind}}}"#
+            ),
+        )
+        .expect("metadata");
+        if com_binario {
+            fs::write(dir.join("bin").join(slug), b"#!/bin/sh\n").expect("bin");
+        }
+        dir.to_string_lossy().into_owned()
+    }
+
+    fn temp(nome: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "giochi-cat-{nome}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp");
+        dir
+    }
+
+    #[test]
+    fn deteccao_encontra_pacote_sem_indice_nenhum() {
+        // O caso que motivou o pedido: copiar a pasta para o aparelho tem de
+        // bastar. Antes, sem `index.json` atualizado no PC, o app não aparecia.
+        let raiz = temp("sem-indice");
+        plantar(&raiz, "musica", Some("app"), true);
+
+        let achados = varrer(&[raiz.to_string_lossy().into_owned()]);
+
+        assert_eq!(achados.len(), 1);
+        assert_eq!(achados[0].slug, "musica");
+        assert_eq!(achados[0].tipo, Tipo::App);
+        assert!(achados[0].do_disco);
+        assert_eq!(achados[0].titulo, "Título musica");
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn tema_nao_recebe_aviso_de_lugar() {
+        // Medido no R35S em 15/11/2026: o launcher mora em `/opt/giochi/apps`,
+        // não declara `kind` (é tema) e por isso caía no padrão jogo — o log
+        // dizia "o lugar de um jogo é /user/games", que é onde o executável de
+        // inicialização **não** pode ficar. Um tema não entra em catálogo, então
+        // o lugar dele não muda cartão nenhum: silêncio é a resposta certa.
+        assert_eq!(avisar_lugar("launcher", Tipo::Jogo, "/opt/giochi/apps/launcher", None), None);
+        assert_eq!(
+            avisar_lugar("launcher-star-dust", Tipo::Jogo, "/opt/giochi/apps/launcher-star-dust", None),
+            None
+        );
+    }
+
+    #[test]
+    fn app_em_raiz_de_jogo_continua_avisando() {
+        // A guarda de tema não pode engolir o aviso que existe por um motivo:
+        // um pacote classificado como app dentro de `/user/games` apareceria na
+        // aba errada sem uma linha de explicação.
+        let aviso = avisar_lugar("musica", Tipo::App, "/user/games/musica", Some("app"))
+            .expect("aviso");
+        assert!(aviso.contains("/user/games"), "{aviso}");
+        assert!(aviso.contains("/user/apps"), "{aviso}");
+    }
+
+    #[test]
+    fn sem_kind_o_pacote_e_jogo() {
+        // Compatibilidade: os três jogos do R35S foram instalados antes de o
+        // campo existir. Se o padrão fosse app, a Home apareceria vazia num
+        // aparelho cheio.
+        let raiz = temp("sem-kind");
+        plantar(&raiz, "cobrinha", None, true);
+
+        let achados = varrer(&[raiz.to_string_lossy().into_owned()]);
+
+        assert_eq!(achados[0].tipo, Tipo::Jogo);
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn tipo_separa_as_duas_listas_e_nenhum_item_aparece_nas_duas() {
+        let raiz = temp("separacao");
+        plantar(&raiz, "jogo1", Some("game"), true);
+        plantar(&raiz, "app1", Some("app"), true);
+
+        let catalogo = Catalogo::dos_detectados(varrer(&[raiz.to_string_lossy().into_owned()]));
+
+        assert_eq!(catalogo.games.len(), 1);
+        assert_eq!(catalogo.apps.len(), 1);
+        assert_eq!(catalogo.games[0].title, "Título jogo1");
+        assert_eq!(catalogo.apps[0].title, "Título app1");
+        // E os alvos acompanham a posição de cada lista.
+        assert_eq!(catalogo.alvo(0).map(|a| a.slug.as_str()), Some("jogo1"));
+        assert_eq!(catalogo.alvo_app(0).map(|a| a.slug.as_str()), Some("app1"));
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn pasta_sem_metadata_nao_vira_pacote() {
+        // `bin/` e `assets/` moram dentro de uma raiz e não têm metadata: se
+        // qualquer pasta virasse app, a raiz inteira viraria catálogo.
+        let raiz = temp("sem-metadata");
+        fs::create_dir_all(raiz.join("bin")).expect("bin");
+        fs::create_dir_all(raiz.join("uma-pasta")).expect("pasta");
+
+        assert!(varrer(&[raiz.to_string_lossy().into_owned()]).is_empty());
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn pacote_com_metadata_quebrado_nao_derruba_a_varredura() {
+        let raiz = temp("quebrado");
+        let quebrado = raiz.join("quebrado");
+        fs::create_dir_all(&quebrado).expect("dir");
+        fs::write(quebrado.join("metadata.json"), "{lixo").expect("metadata");
+        plantar(&raiz, "bom", Some("app"), true);
+
+        let achados = varrer(&[raiz.to_string_lossy().into_owned()]);
+
+        // O quebrado entra com `entrypoint` vazio e é descartado pela poda de
+        // binário; o bom continua. Um pacote estragado não pode esconder os
+        // outros — foi assim que um `index.json` inválido apagou o catálogo.
+        let catalogo = Catalogo::dos_detectados(achados)
+            .podar_sem_binario(|_, _| {});
+        assert_eq!(catalogo.apps.len(), 1);
+        assert_eq!(catalogo.apps[0].id, "bom");
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn entrypoint_fora_de_bin_nao_vira_cartao() {
+        let raiz = temp("entrypoint");
+        let dir = raiz.join("mau");
+        fs::create_dir_all(dir.join("bin")).expect("dir");
+        fs::write(
+            dir.join("metadata.json"),
+            r#"{"title":"Mau","slug":"mau","entrypoint":"../fora"}"#,
+        )
+        .expect("metadata");
+
+        let catalogo = Catalogo::dos_detectados(varrer(&[raiz.to_string_lossy().into_owned()]))
+            .podar_sem_binario(|_, _| {});
+        assert!(catalogo.sem_nada(), "entrypoint fora de bin/ virou cartão");
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn imagem_antes_de_usuario_na_mesma_raiz_nao_duplica() {
+        // Duas cópias do mesmo slug (imagem e usuário): a primeira raiz vence,
+        // e o cartão é um só.
+        let imagem = temp("raiz-imagem");
+        let usuario = temp("raiz-usuario");
+        plantar(&imagem, "x", Some("game"), true);
+        plantar(&usuario, "x", Some("game"), true);
+
+        let catalogo = Catalogo::dos_detectados(varrer(&[
+            imagem.to_string_lossy().into_owned(),
+            usuario.to_string_lossy().into_owned(),
+        ]));
+
+        assert_eq!(catalogo.games.len(), 1);
+        assert_eq!(
+            catalogo.alvo(0).map(|a| a.dir.clone()),
+            Some(imagem.join("x").to_string_lossy().into_owned())
+        );
+        let _ = fs::remove_dir_all(&imagem);
+        let _ = fs::remove_dir_all(&usuario);
+    }
+
+    #[test]
+    fn slug_vem_do_metadata_e_o_nome_da_pasta_e_so_o_ultimo_recurso() {
+        let raiz = temp("slug");
+        let dir = raiz.join("pasta-qualquer");
+        fs::create_dir_all(dir.join("bin")).expect("dir");
+        fs::write(
+            dir.join("metadata.json"),
+            r#"{"title":"T","slug":"nome-estavel","entrypoint":"bin/x"}"#,
+        )
+        .expect("meta");
+        let achados = varrer(&[raiz.to_string_lossy().into_owned()]);
+        assert_eq!(achados[0].slug, "nome-estavel");
+        let _ = fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn raiz_inexistente_nao_e_erro() {
+        // `/opt/giochi/games` não existe em nenhuma imagem até hoje. A varredura
+        // tem de simplesmente não achar nada ali, e não cair.
+        assert!(varrer(&["/caminho/que/nao/existe".to_string()]).is_empty());
     }
 }

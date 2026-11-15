@@ -349,68 +349,52 @@ fn main() -> Result<(), String> {
     let painter = draw::Painter::new(window, &font_path)?;
     informar_projecao(&painter);
 
-    // O catálogo vem do sistema. Sem ele, o launcher mostra o catálogo de
-    // demonstração — o aparelho continua utilizável, mas nenhum app é
-    // iniciável, porque não há caminho para executar.
-    // Catálogo de demonstração só por pedido explícito: ver o bloco do `Err`
-    // abaixo. Uma imagem recém-gravada não tem `index.json`, e mostrar jogos
-    // que não existem é pior que mostrar uma tela vazia e honesta.
+    // ── detecção ────────────────────────────────────────────
+    //
+    // O que abre vem do **disco**: jogos de `/opt/giochi/games` e
+    // `/user/games`, apps de `/opt/giochi/apps` e `/user/apps`. O índice
+    // publicado continua sendo lido, como complemento, para o que estiver fora
+    // dessas raízes (cartão montado noutro caminho).
+    //
+    // A demonstração só entra com `--demo`: numa imagem recém-gravada ela
+    // mostrava jogos e apps que não existem, e apertar `A` dava erro. Contar
+    // ausência como ausência é o comportamento certo.
     let demo_explicito = args.iter().any(|a| a == "--demo");
 
     let (mut state, catalogo) = {
-        let caminho = catalogo::caminho();
-        match catalogo::Catalogo::carregar(&caminho) {
+        match catalogo::Catalogo::detectar() {
             Ok(c) => {
-                // Cartão removível pode não estar montado neste boot. Podar em
-                // tempo de execução é o que impede um cartão ausente de virar
-                // cartão que aparece e não abre.
-                // Tema primeiro: um `launcher-*` que porventura esteja no
-                // índice abriria um SEGUNDO launcher e perderia o DRM. Podar
-                // antes do binário evita que ele apareça no log como "cartão
-                // removido", que mandaria procurar o problema no lugar errado.
+                // Tema primeiro: um `launcher-*` abriria um SEGUNDO launcher e
+                // perderia o DRM. Podar antes do binário evita que ele apareça
+                // no log como "cartão removido", que manda procurar no lugar
+                // errado.
                 let c = c.podar_temas(|slug, _| {
                     eprintln!("catálogo: {slug} fora — é tema do launcher, não um app");
                 });
                 let c = c.podar_sem_binario(|slug, caminho| {
                     eprintln!("catálogo: {slug} fora — {caminho} não existe (cartão removido?)");
                 });
-                if c.vazio() {
-                    // Mesma regra do catálogo ausente: um app que está no
-                    // índice mas não tem binário não vira cartão. Se sobrar
-                    // zero, a tela diz isso — não finge que há jogos.
-                    eprintln!("catálogo: nenhum app com binário presente em {}", caminho.display());
-                    if demo_explicito {
-                        eprintln!("--demo: usando catálogo de demonstração");
-                        (State::new(demo_games(), demo_apps()), None)
-                    } else {
-                        (State::new(Vec::new(), demo_apps()), None)
-                    }
+                eprintln!(
+                    "catálogo: {} jogo(s) e {} app(s) detectado(s) em {}",
+                    c.games.len(),
+                    c.apps.len(),
+                    catalogo::raizes().join(", ")
+                );
+                if c.sem_nada() && demo_explicito {
+                    eprintln!("--demo: usando catálogo de demonstração");
+                    (State::new(demo_games(), demo_apps()), None)
                 } else {
-                    eprintln!("catálogo: {} app(s) de {}", c.games.len(), caminho.display());
-                    (State::new(c.games.clone(), demo_apps()), Some(c))
+                    let (games, apps) = (c.games.clone(), c.apps.clone());
+                    (State::new(games, apps), Some(c))
                 }
             }
             Err(e) => {
-                // ## O catálogo de demonstração era um mentiroso
-                //
-                // Quando o `index.json` não existia, o launcher desenhava
-                // quatro jogos (Arcade Volleyball, Colossal Cave, Spacewar,
-                // Shattered Pixel Dungeon) e oito apps que **não estão no
-                // aparelho**. Apertar A dava "este app não está no catálogo do
-                // sistema" — um cartão que aparece e não abre, que é
-                // exatamente o que `podar_sem_binario` existe para impedir.
-                //
-                // O Giochi System avisou disso pelo canal: numa imagem nova o
-                // selftest dizia `[WARN] sem /opt/giochi/apps/index.json`.
-                // A resposta certa não é o System embarcar o arquivo; é o app
-                // **não inventar conteúdo**. A demonstração continua existindo
-                // para foto e protótipo, mas agora só com `--demo`.
                 eprintln!("catálogo: {e}");
                 if demo_explicito {
                     eprintln!("--demo: usando catálogo de demonstração");
                     (State::new(demo_games(), demo_apps()), None)
                 } else {
-                    (State::new(Vec::new(), demo_apps()), None)
+                    (State::new(Vec::new(), Vec::new()), None)
                 }
             }
         }
@@ -576,7 +560,7 @@ fn main() -> Result<(), String> {
                 })
             })
             .ok_or_else(|| format!("--lancar: app desconhecido: {pedido}"))?;
-        state.lancar = Some(id);
+        state.lancar = Some(giochi_launcher_core::Pedido::jogo(id));
         eprintln!("--lancar: pedido de lançamento para o app {id} ({pedido})");
     }
 
@@ -693,8 +677,17 @@ fn main() -> Result<(), String> {
         // Antes desta checagem o botão "Jogar" só mostrava um aviso: o estado
         // mudava e nada abria. Sem este trecho o app escolhido no cartão
         // continuaria inalcançável.
-        if let Some(id) = app.tomar_pedido_de_lancamento() {
-            let alvo = catalogo.as_ref().and_then(|c| c.alvo(id)).cloned();
+        if let Some(pedido) = app.tomar_pedido_de_lancamento() {
+            // Jogo e app têm listas diferentes: usar o índice de um na lista do
+            // outro abriria o item errado, e o sintoma ("abriu outra coisa")
+            // não aponta para cá.
+            let alvo = catalogo
+                .as_ref()
+                .and_then(|c| match pedido.tipo {
+                    giochi_launcher_core::deteccao::Tipo::Jogo => c.alvo(pedido.indice),
+                    giochi_launcher_core::deteccao::Tipo::App => c.alvo_app(pedido.indice),
+                })
+                .cloned();
 
             // Consome o `App`: o `Painter` morre aqui e o DRM master é liberado.
             // Sem isso o filho recebe `kmsdrm not available` — medido no X35H.

@@ -1,0 +1,18 @@
+[package]
+name = "giochi-musica-core"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Núcleo do app de música do Giochi: biblioteca, carrossel, transporte, capa e layout — sem SDL"
+rust-version = "1.86"
+
+# Sem nenhuma dependência, de propósito: é este crate que o CI compila e testa
+# sem SDL, sem GPU e sem o repositório irmão da engine. Tudo o que decide
+# comportamento (ordem das faixas, o que acontece ao apertar A, geometria do
+# carrossel, tamanho da fonte em cada painel) mora aqui, e é por isso que ele
+# consegue ser testado onde o binário não consegue nem linkar.
+[dependencies]
+
+[lib]
+name = "giochi_musica_core"
+path = "src/lib.rs"

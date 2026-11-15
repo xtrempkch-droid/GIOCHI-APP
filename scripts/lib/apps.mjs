@@ -120,6 +120,10 @@ function validateMetadata(metadata, appDir, errors, distribution = "image") {
         // quebrando o catálogo e o favorito do usuário. O `id` do `apps.json`
         // precisa ser igual quando os dois existem.
         "slug",
+        // Jogo ou app. Decide a aba do launcher **e** a raiz de instalação:
+        // jogos em /user/games, apps em /user/apps. Sem o campo, o padrão é
+        // jogo — o que mantém válido todo pacote anterior a 15/11/2026.
+        "kind",
       ].includes(key)
     ) {
       errors.push({
@@ -143,6 +147,16 @@ function validateMetadata(metadata, appDir, errors, distribution = "image") {
         code: "slug_invalido",
         path: "metadata.json:slug",
         message: "slug tem no máximo 40 caracteres",
+      });
+    }
+  }
+
+  if (metadata.kind !== undefined) {
+    if (!KIND_VALUES.includes(metadata.kind)) {
+      errors.push({
+        code: "kind_invalido",
+        path: "metadata.json:kind",
+        message: `kind precisa ser ${KIND_VALUES.join(" ou ")}; recebido ${JSON.stringify(metadata.kind)}`,
       });
     }
   }
@@ -426,6 +440,26 @@ function validateBin(appDir, errors, warnings) {
 }
 
 export const STATUS_VALUES = ["scaffold", "ready"];
+
+/**
+ * O que o pacote **é**: jogo ou app.
+ *
+ * Existe porque a aba Apps do launcher passou a detectar de verdade, e as duas
+ * listas moram em raízes diferentes (`/opt|/user/games` × `/opt|/user/apps`).
+ * O instalador precisa saber onde pôr o pacote, e o pacote precisa carregar
+ * essa resposta: `.giochi` copiado para um cartão tem de chegar ao lugar certo
+ * **sem** um PC decidindo por ele.
+ *
+ * Ausente vale `game` — compatibilidade, não preferência: todo pacote do
+ * aparelho antes de 15/11/2026 era jogo, e tratá-los como app esvaziaria a Home
+ * de um aparelho cheio.
+ */
+export const KIND_VALUES = ["game", "app"];
+
+/** `kind` do metadata, com o mesmo padrão do lado Rust (`Tipo::de_kind`). */
+export function tipoDeMetadata(metadata) {
+  return metadata && metadata.kind === "app" ? "app" : "game";
+}
 // image — vai dentro da imagem assinada do aparelho
 // store — distribuído pela loja, instalado em /user no aparelho
 // host  — roda no computador do usuário; não vai para o aparelho
@@ -624,6 +658,31 @@ export function validateApp(
     if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
       parsedMetadata = metadata;
       validateMetadata(metadata, appDir, errors, distribution);
+
+      // `kind` é obrigatório para app de **imagem** que não é tema.
+      //
+      // Não é rigor decorativo: é o campo que decide se o `dir` publicado é
+      // `/opt/giochi/games/<id>` ou `/opt/giochi/apps/<id>` e, portanto, em que
+      // aba ele aparece. Faltando, o padrão é jogo — e um app novo apareceria na
+      // Home, no carrossel de jogos, **sem nenhum aviso**: o sintoma é uma tela
+      // certa com um item no lugar errado, que é o tipo de defeito que ninguém
+      // reporta como bug.
+      //
+      // Tema fica de fora: ele não vira cartão nenhum (é a própria interface),
+      // então exigir que se declare jogo ou app dele seria pedir uma mentira.
+      if (
+        distribution === "image" &&
+        papelDeApp(name, role) !== "shell" &&
+        metadata.kind === undefined
+      ) {
+        errors.push({
+          code: "kind_ausente",
+          path: "metadata.json:kind",
+          message:
+            `app de imagem precisa declarar kind (${KIND_VALUES.join(" ou ")}): ` +
+            `é ele que decide a aba e a raiz de instalação`,
+        });
+      }
     } else if (metadata !== null) {
       errors.push({
         code: "metadata_invalido",

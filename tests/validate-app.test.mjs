@@ -27,6 +27,9 @@ const VALID_METADATA = {
   version: "1.0.0",
   arch: "aarch64",
   runtime: "godot",
+  // Obrigatório para app de imagem que não é tema: é o campo que decide a aba
+  // do launcher e a raiz de instalação (`/opt/giochi/games` × `/opt/giochi/apps`).
+  kind: "game",
   entrypoint: "bin/app",
 };
 

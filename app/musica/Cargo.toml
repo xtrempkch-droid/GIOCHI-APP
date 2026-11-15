@@ -1,0 +1,33 @@
+[package]
+name = "giochi-musica"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Tocador de música do Giochi, sobre a GIOCHI-ENGINE"
+rust-version = "1.86"
+
+# `exclude` e não `members`: o crate do núcleo tem de continuar compilando
+# sozinho (`cd crates/core && cargo test`), porque é isso que o CI consegue
+# fazer. Este pacote depende da engine, que por sua vez depende de SDL2 — e o
+# repositório da engine é um **repositório irmão**, que o CI não tem.
+[workspace]
+exclude = ["crates/core"]
+
+[[bin]]
+name = "giochi-musica"
+path = "src/main.rs"
+
+[dependencies]
+giochi-musica-core = { path = "crates/core" }
+
+# O `Mapper` do launcher: borda de botão, atraso de repetição e zona morta do
+# analógico. Reimplementar isso aqui produziria uma segunda curva de repetição —
+# e a do launcher foi medida no aparelho (230 ms de atraso, 100 ms de intervalo).
+giochi-launcher-core = { path = "../launcher/crates/core" }
+
+# A engine 2D do workspace GIOCHI-ENGINE-3D (0.2.0, superfície C-shaped).
+# `sdl2-system`: no aparelho o SDL2 vem da imagem (Buildroot, com KMSDRM).
+giochi-engine = { path = "../../../GIOCHI-ENGINE-3D/giochi-engine", default-features = false, features = ["sdl2-system"] }
+
+# Só para TTF (glifos) e para os tipos de cor/tecla. A engine não expõe texto.
+sdl2 = { version = "0.38", default-features = false, features = ["ttf"] }

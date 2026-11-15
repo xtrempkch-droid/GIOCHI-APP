@@ -22,6 +22,7 @@
 
 pub mod capacidades;
 pub mod cmd;
+pub mod deteccao;
 pub mod focus;
 pub mod gamepad;
 pub mod reduce;
@@ -29,11 +30,12 @@ pub mod state;
 pub mod viewport;
 
 pub use cmd::{Cmd, Dir};
+pub use deteccao::{Detectado, Tipo};
 pub use focus::{Focus, Zone};
 pub use gamepad::{GamepadFrame, Mapper};
 pub use state::{
-    settings_ajustavel, settings_rows, App, DispositivoBt, Game, Overlay, Perf, Rede, Screen, SemFio, Settings, State,
-    Tab, Toast, HUD, KEYBOARD, KEYBOARD_COLS, SETTINGS_CATEGORIES,
+    settings_ajustavel, settings_rows, App, DispositivoBt, Game, Overlay, Pedido, Perf, Rede, Screen, SemFio,
+    Settings, State, Tab, Toast, HUD, KEYBOARD, KEYBOARD_COLS, SETTINGS_CATEGORIES,
 };
 pub use viewport::{grade_de, grade_para, Grade, Viewport};
 

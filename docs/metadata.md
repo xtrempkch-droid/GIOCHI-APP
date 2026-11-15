@@ -16,6 +16,9 @@ Identidade de um app. Schema em [`schemas/metadata.schema.json`](../schemas/meta
 | `buttons_map` | objeto | não | mapeamento de botões específico |
 | `releaseYear` | inteiro | não | ano de lançamento, quatro dígitos (`1988`) |
 | `category` | string | não | gênero exibido no cartão (`Arcade`, `Esporte`), até 40 caracteres |
+| `slug` | string | não | identidade do pacote; derivar do título moveria o app |
+| `license`, `licenseUrl` | string | não | SPDX; precisa bater com o `apps.json` |
+| `kind` | enum | **sim** em app de imagem | `game` ou `app` — decide a aba e a raiz de instalação |
 
 ## Por que `additionalProperties: false`
 
@@ -102,6 +105,30 @@ Declarar `aarch64` num app de PC reprova com
 `arquitetura_de_pc_em_app_do_aparelho`. Só ampliar o enum teria deixado o campo
 voltar a não significar nada — a graça de um valor só era justamente não poder
 estar errado.
+
+## Por que `kind` existe
+
+A partir de 15/11/2026 o launcher tem **duas abas que detectam**: Jogos e Apps.
+Ele varre `/opt/giochi/games`, `/user/games`, `/opt/giochi/apps` e `/user/apps`;
+`kind` é o que diz em qual das duas listas o pacote entra.
+
+| Valor | Aba | Raiz |
+| --- | --- | --- |
+| `game` (ou ausente) | Home / Jogos | `/opt|/user/games` |
+| `app` | Apps | `/opt|/user/apps` |
+
+**Ausente vale `game`, e isso é compatibilidade, não descuido.** Todo pacote
+anterior a 15/11/2026 era jogo; se o padrão fosse `app`, uma imagem cheia
+acordaria com a Home vazia. O preço é que esquecer o campo num app novo o manda
+para o carrossel de jogos em silêncio — então o validador reprova com
+`kind_ausente` quando o app é de **imagem** e não é tema. Tema não precisa: ele
+não entra em catálogo nenhum.
+
+A **declaração vence o lugar**. Um pacote `kind: "app"` em `/user/games` aparece
+na aba Apps e o log diz que o lugar está errado — o inverso faria um cartão
+sumir por causa de uma pasta. Já aconteceu: os três jogos do R35S ficaram em
+`/user/apps` depois da separação, e continuaram na Home justamente porque não
+declaram nada e o padrão é jogo.
 
 ## Por que `entrypoint` precisa existir no disco
 

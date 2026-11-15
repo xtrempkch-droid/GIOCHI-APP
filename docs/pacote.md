@@ -223,10 +223,17 @@ Ciclo completo: **empacotar → assinar → verificar → enviar → extrair →
 
 ### Onde o pacote é instalado
 
-| Origem | Destino | Por quê |
-| --- | --- | --- |
-| imagem assinada | `/opt/giochi/apps/<slug>` | faz parte do sistema |
-| **loja** (`instalar-pacote`) | **`/user/apps/<slug>`** | fora da imagem, substituível |
+| Origem | `kind` | Destino | Por quê |
+| --- | --- | --- | --- |
+| imagem assinada | `game` | `/opt/giochi/games/<slug>` | faz parte do sistema |
+| imagem assinada | `app` | `/opt/giochi/apps/<slug>` | faz parte do sistema |
+| **loja** (`instalar-pacote`) | `game` | **`/user/games/<slug>`** | fora da imagem, substituível |
+| **loja** (`instalar-pacote`) | `app` | **`/user/apps/<slug>`** | fora da imagem, substituível |
+
+Jogos e apps ficam em raízes **separadas** por decisão do dono em 15/11/2026
+(*"os apps deverão ficar em locais diferentes dos jogos para que a detecção não
+se confunda"*). O `kind` do `metadata.json` é o que escolhe — ausente vale
+`game`, e é o que mantém todo pacote anterior a 15/11/2026 funcionando.
 
 Não é organização de pastas. `distribution: store` significa "não faz parte da
 imagem assinada", e é isso que permite vender app **GPL**: o comprador pode
@@ -235,6 +242,12 @@ substituir o pacote em `/user`, e a GPL-3.0 §6 se resolve sem entregar chave.
 A primeira versão instalava tudo em `/opt/giochi/apps` — funcionava, e destruía
 esse argumento. Corrigido e medido:
 `957 ppid=949 /user/apps/pacman/bin/giochi-pacman`.
+
+E a separação jogos × apps tem um caso medido que explica por que `kind` manda
+mais que a pasta: os três jogos do R35S estavam em `/user/apps` (instalados antes
+da separação) e **não declaram `kind`**. Classificar por pasta os faria aparecer
+na aba de apps; classificar por `kind` os mantém na Home, com um aviso no log
+dizendo que o lugar está errado. Ver [`docs/integracao.md`](integracao.md) §2.1.
 
 **Ressalva:** nesta imagem `/user` ainda é diretório no rootfs, não partição
 separada (só `/dev/root` em `/`). O caminho está certo; a partição de dados

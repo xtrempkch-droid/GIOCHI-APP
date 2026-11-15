@@ -17,6 +17,10 @@ nenhum foi escrito "por completude".
 | `scripts/capacidades-input.mjs` | PC | quais códigos de tecla cada `/dev/input` declara |
 | `scripts/compilar-launcher.sh` | PC | compila o launcher para x86-64, sem root |
 | `scripts/compilar-launcher-arm64.sh` | PC | compila para aarch64 e instala no aparelho |
+| `scripts/compilar-musica.sh` | PC | compila/testa o app de música (`--testes`, `--clippy`, `--verificar`) |
+| `scripts/compilar-musica-arm64.sh` | PC | aarch64 do app de música; consome o cache do script do launcher |
+| `scripts/verificar-musica.mjs` | PC | determinismo, rotação e orçamento de desenho do app de música |
+| `scripts/gerar-capa-musica.mjs` | PC | regera o `capa.png` 320×320 do app de música |
 | `scripts/validate-app.mjs` | PC / CI | valida `apps.json`, `metadata.json`, `forge.json` |
 | `scripts/migrar-do-antecessor.sh` | PC | traz as fontes do repositório antecessor |
 

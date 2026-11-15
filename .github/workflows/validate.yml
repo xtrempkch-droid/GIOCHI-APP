@@ -50,6 +50,31 @@ jobs:
         working-directory: app/launcher
         run: cargo test -p giochi-launcher-core --locked
 
+  # O núcleo do app de música, pela mesma razão do launcher-core: sem SDL, sem
+  # GPU e sem o repositório irmão da engine, ele roda em qualquer runner. É onde
+  # estão as decisões que erram calado — ordem natural das faixas, o que fazer ao
+  # apertar A, geometria do carrossel, layout em cada painel e a rotação.
+  #
+  # O **binário** do app fica de fora, como o `launcher-teste`: ele depende do
+  # `GIOCHI-ENGINE-3D`, que este CI não tem. Fingir que compila seria pior que
+  # não compilar — o verde diria que o app inteiro passa.
+  musica-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Test core
+        working-directory: app/musica/crates/core
+        run: cargo test --locked
+
+      - name: Clippy do núcleo
+        working-directory: app/musica/crates/core
+        run: cargo clippy --all-targets --locked -- -D warnings
+
   # O `rustc` compila o `ui-sdl` sem SDL; quem falha é o link. Este job existe
   # porque essa distinção já custou tempo: sem ele, o verde do job acima daria
   # a impressão de que o launcher inteiro compila.

@@ -31,23 +31,40 @@ Grupo não precisa — e não deve — ter `metadata.json` próprio: pasta com o
   "runtime": "native",
   "entrypoint": "bin/meu-app",
   "releaseYear": 2026,
-  "category": "Ferramenta"
+  "category": "Ferramenta",
+  "kind": "app"
 }
 ```
 
 Campos obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`,
-`entrypoint`. Nenhum campo fora do schema é aceito — ver
-[metadata.md](metadata.md).
+`entrypoint` — e **`kind`** para app de imagem que não é tema. Nenhum campo fora
+do schema é aceito — ver [metadata.md](metadata.md).
+
+**`kind` é o que põe o cartão na aba certa.** `"app"` vai para a aba Apps,
+`"game"` para a Home/Jogos. Ausente vale `"game"` — compatibilidade com todo
+pacote anterior a 15/11/2026 —, então esquecer o campo faz um app novo aparecer
+no carrossel de jogos, sem aviso e sem erro. O validador reprova
+(`kind_ausente`) exatamente por isso.
+
+O campo também decide **em que raiz** o pacote instala:
+`/opt/giochi/games` × `/opt/giochi/apps`, `/user/games` × `/user/apps`. A
+detecção do launcher varre as quatro, mas a declaração vence o lugar: um pacote
+na raiz errada aparece na aba certa com um aviso no log.
 
 `releaseYear` e `category` são opcionais, mas **coloque os dois**: são o ano e o
 gênero que aparecem no cartão. Sem o ano a UI mostra `—`; sem o gênero, mostra
 "Aplicativo". O `developer` daqui é o mesmo fabricante que a ficha exibe.
 
-Depois de instalar, publique o catálogo — senão o app existe e não aparece:
+Depois de instalar, publique o catálogo:
 
 ```bash
 bash scripts/aparelho.sh catalogo
 ```
+
+Desde 15/11/2026 o launcher **detecta** o que está no disco, então copiar a pasta
+com o `metadata.json` já faz o app aparecer. O índice continua valendo para o que
+estiver fora das quatro raízes (cartão montado noutro caminho) e é o que
+`aparelho.sh catalogo` publica conferindo cada `entrypoint` no aparelho.
 
 ## 3. Coloque o executável em `bin/`
 

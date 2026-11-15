@@ -163,11 +163,22 @@ fi
 if [ -n "$INSTALAR" ]; then
   DESTINO="/opt/giochi/apps/launcher-teste/bin"
   log "instalando em root@$INSTALAR:$DESTINO"
+  # O `metadata.json` vai junto pela mesma razão do launcher de produção: sem
+  # ele a pasta não é um pacote, e a detecção não tem o que classificar nem o
+  # que podar. O prefixo `launcher-` já basta para a poda de tema — mas só
+  # depois que existir um arquivo para ler.
+  RAIZ_APP="/opt/giochi/apps/launcher-teste"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" "mkdir -p $DESTINO" 2>&1 | ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
     "$BIN" "root@$INSTALAR:$DESTINO/giochi-launcher-teste" 2>&1 | ruido
+  for arquivo in metadata.json capa.png; do
+    [ -f "$APP/$arquivo" ] || continue
+    scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
+      "$APP/$arquivo" "root@$INSTALAR:$RAIZ_APP/$arquivo" 2>&1 | ruido
+  done
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" \
-    "chmod 755 $DESTINO/giochi-launcher-teste && sha256sum $DESTINO/giochi-launcher-teste" 2>&1 | ruido
+    "chmod 755 $DESTINO/giochi-launcher-teste && chmod 644 $RAIZ_APP/metadata.json 2>/dev/null; \
+     sha256sum $DESTINO/giochi-launcher-teste" 2>&1 | ruido
   printf '  local: %s\n' "$(sha256sum "$BIN" | cut -d' ' -f1)"
 
   # O `giochi-teste` é o que alterna a tela do aparelho entre os dois launchers.

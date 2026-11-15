@@ -6,7 +6,9 @@
 
 use crate::cmd::{Cmd, Dir};
 use crate::focus::{navigate, Focus, Zone};
-use crate::state::{Filter, HUD, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS};
+use crate::state::{
+    Filter, Pedido, HUD, Overlay, Screen, Settings, State, Toast, KEYBOARD, KEYBOARD_COLS,
+};
 // `Game` só aparece na construção de estado de teste (`demo` e `mod tests`);
 // importá-lo sempre geraria aviso no build de produção. `Tab` passou a ser
 // usado pelo reducer em si quando os gatilhos ganharam `sub_tab`.
@@ -643,7 +645,7 @@ fn confirm(state: State) -> State {
                 Some((id, title)) => {
                     let s = toast(state, &format!("Iniciando {title}..."));
                     State {
-                        lancar: Some(id),
+                        lancar: Some(Pedido::jogo(id)),
                         ..s
                     }
                 }
@@ -665,10 +667,24 @@ fn confirm(state: State) -> State {
             }
         }
 
+        // ── aba Apps ────────────────────────────────────────
+        //
+        // Antes isto era só `toast("Abrindo X...")`: a lista de apps era escrita
+        // no código (`demo_apps()`) e nenhum deles existia no aparelho, então não
+        // havia o que abrir. Com a detecção (§`deteccao`), o item é real e o
+        // pedido de lançamento sai pelo mesmo caminho do jogo —
+        // `state.lancar = Some(Pedido::app(i))` —, com o tipo separando os dois
+        // índices.
         Zone::AppsGrid => {
-            let title = state.apps.get(index).map(|app| app.title.clone());
-            match title {
-                Some(title) => toast(state, &format!("Abrindo {title}...")),
+            let alvo = state.apps.get(index).map(|app| (index, app.title.clone()));
+            match alvo {
+                Some((indice, title)) => {
+                    let s = toast(state, &format!("Abrindo {title}..."));
+                    State {
+                        lancar: Some(Pedido::app(indice as u32)),
+                        ..s
+                    }
+                }
                 None => state,
             }
         }
@@ -867,7 +883,7 @@ fn confirm(state: State) -> State {
                     Some((id, title)) => {
                         let s = toast(go_back(state), &format!("Iniciando {title}..."));
                         State {
-                            lancar: Some(id),
+                            lancar: Some(Pedido::jogo(id)),
                             ..s
                         }
                     }
@@ -1246,6 +1262,14 @@ fn demo() -> State {
     state
 }
 
+/// `n` apps de teste, como a detecção entregaria.
+#[cfg(test)]
+fn demo_apps(n: usize) -> Vec<crate::state::App> {
+    (0..n)
+        .map(|i| crate::state::App::new(&format!("app{i}"), &format!("App {i}"), "apps", "Sistema"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1572,7 +1596,7 @@ mod tests {
         s.focus = Focus::at(Zone::GameDetailActions, 0);
         s = reduce(s, Cmd::Confirm);
 
-        assert_eq!(s.lancar, Some(id), "o id do jogo precisa ir no pedido");
+        assert_eq!(s.lancar, Some(Pedido::jogo(id)), "o id do jogo precisa ir no pedido");
         // E volta para a Home: ao retornar do jogo o usuário cai na interface,
         // não numa ficha de jogo que ele já iniciou.
         assert!(s.overlays.is_empty());
@@ -1823,7 +1847,7 @@ mod tests {
 
         assert_eq!(
             s.lancar,
-            Some(esperado),
+            Some(Pedido::jogo(esperado)),
             "A na Home tem de pedir o lançamento, não só avisar"
         );
     }
@@ -1863,15 +1887,15 @@ mod tests {
         via_biblioteca.focus = Focus::at(Zone::GameDetailActions, 0);
         let via_biblioteca = reduce(via_biblioteca, Cmd::Confirm);
 
-        assert_eq!(home.lancar, Some(id_home), "Home: A no cartão");
+        assert_eq!(home.lancar, Some(Pedido::jogo(id_home)), "Home: A no cartão");
         assert_eq!(
             via_ficha_home.lancar,
-            Some(id_ficha),
+            Some(Pedido::jogo(id_ficha)),
             "Home: X na ficha, A em Jogar"
         );
         assert_eq!(
             via_biblioteca.lancar,
-            Some(id_bib),
+            Some(Pedido::jogo(id_bib)),
             "Biblioteca: ficha, A em Jogar"
         );
     }
@@ -1881,6 +1905,58 @@ mod tests {
         let mut s = State::new(Vec::new(), Vec::new());
         s.screen = Screen::Running;
         s.focus = Focus::at(Zone::HomeCarousel, 0);
+        let s = reduce(s, Cmd::Confirm);
+        assert_eq!(s.lancar, None);
+    }
+
+    // ── aba Apps: A abre o app, e não só avisa ──────────────
+    //
+    // A aba desenhava oito apps escritos no código e `A` mostrava
+    // `Abrindo X...` sem abrir nada. Depois da detecção, o item é real; estes
+    // testes existem para o pedido não voltar a ser decorativo.
+
+    #[test]
+    fn a_na_grade_de_apps_pede_lancamento_do_app() {
+        let mut s = State::new(Vec::new(), demo_apps(3));
+        s.screen = Screen::Running;
+        s.tab = Tab::Apps;
+        s.focus = Focus::at(Zone::AppsGrid, 2);
+
+        let s = reduce(s, Cmd::Confirm);
+
+        assert_eq!(
+            s.lancar,
+            Some(Pedido::app(2)),
+            "A na aba Apps tem de pedir o lançamento, com o tipo certo"
+        );
+    }
+
+    #[test]
+    fn o_pedido_de_app_nao_se_confunde_com_o_de_jogo() {
+        // Os dois índices valem 0 num aparelho com um jogo e um app. Sem o tipo,
+        // o pedido abriria o jogo e a tela voltaria sem explicação.
+        let mut s = State::new(demo().games, demo_apps(1));
+        s.screen = Screen::Running;
+
+        s.tab = Tab::Apps;
+        s.focus = Focus::at(Zone::AppsGrid, 0);
+        let pedido_app = reduce(s.clone(), Cmd::Confirm).lancar;
+
+        s.tab = Tab::Home;
+        s.focus = Focus::at(Zone::HomeCarousel, 0);
+        let pedido_jogo = reduce(s, Cmd::Confirm).lancar;
+
+        assert_eq!(pedido_app, Some(Pedido::app(0)));
+        assert_eq!(pedido_jogo, Some(Pedido::jogo(0)));
+        assert_ne!(pedido_app, pedido_jogo, "os dois pedidos têm de ser diferentes");
+    }
+
+    #[test]
+    fn a_na_aba_de_apps_vazia_nao_pede_nada() {
+        let mut s = State::new(Vec::new(), Vec::new());
+        s.screen = Screen::Running;
+        s.tab = Tab::Apps;
+        s.focus = Focus::at(Zone::AppsGrid, 0);
         let s = reduce(s, Cmd::Confirm);
         assert_eq!(s.lancar, None);
     }

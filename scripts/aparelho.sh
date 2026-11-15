@@ -1335,10 +1335,15 @@ cmd_instalar_do_cartao() {
 colher_instalados() {
   local destino="$1"
   no_aparelho '
-    # Duas raízes, de propósito: apps da imagem moram em `/opt/giochi/apps`,
-    # apps da loja em `/user/apps`. A colheita tem de ver as duas — um app da
-    # loja que ficasse fora do catálogo seria invisível sem erro.
-    for d in /opt/giochi/apps/*/ /user/apps/*/; do
+    # **Quatro** raízes, de propósito: jogos e apps moram em pastas diferentes
+    # desde 15/11/2026 (imagem em /opt, loja em /user). A colheita tem de ver
+    # todas — um pacote da loja que ficasse fora do catálogo seria invisível sem
+    # erro, e é exatamente o defeito que esta função veio corrigir.
+    #
+    # A separação não decide o tipo aqui: quem decide é o `kind` do
+    # `metadata.json` (ausente = jogo), porque a colheita não sabe ler a
+    # intenção de quem copiou a pasta.
+    for d in /opt/giochi/games/*/ /user/games/*/ /opt/giochi/apps/*/ /user/apps/*/; do
       m="$d/metadata.json"
       [ -f "$m" ] || continue
       id=$(basename "$d")
@@ -1876,41 +1881,59 @@ cmd_bluetooth() {
   titulo "perfil HID"
   no_aparelho '
     # `hidp` é o caminho do HID **clássico** (o controle vira /dev/input pelo
-    # próprio kernel). `uhid` é o caminho do HID sobre GATT (BLE): o BlueZ
-    # precisa dele para criar o dispositivo de entrada virtual.
-    # O que decide não é o módulo estar carregado: é o **transporte HID** estar
-    # registrado no barramento HID. Um `hidp` carregado que não registra aceita
-    # o socket e derruba a conexão em seguida (`disconnected with reason 2`),
-    # sem nunca criar `/dev/input/event*`.
+    # próprio kernel). `uhid` é o do HID sobre GATT (BLE): o BlueZ precisa dele
+    # para criar o dispositivo de entrada virtual.
     #
-    # Medido no X55 em 13/11/2026 (imagem de 09/11): `modprobe hidp` responde
-    # "HIDP socket layer initialized" e `/sys/bus/hid/drivers/` continua sem
-    # `hidp` — é essa a diferença entre "tem Bluetooth" e "tem controle".
-    if [ -d /sys/bus/hid/drivers/hidp ]; then
-      echo "  transporte: OK — /sys/bus/hid/drivers/hidp registrado"
-    elif [ -d /sys/module/hidp ]; then
-      echo "  transporte: QUEBRADO — hidp carregado mas NÃO registrou em"
-      echo "              /sys/bus/hid/drivers/: o controle pareia, conecta e"
-      echo "              cai (reason 2) sem virar /dev/input"
-      # A causa está no próprio módulo: um `hidp` com o transporte HID depende
-      # de `hid`. Sem essa dependência ele é só a camada de socket — aceita a
-      # conexão e não tem como criar dispositivo de entrada.
-      dep=$(modinfo hidp 2>/dev/null | grep "^depends:" | cut -d: -f2 | tr -d " ")
-      case ",$dep," in
-        *,hid,*) echo "              depends: $dep (inclui hid — o problema é outro)";;
-        *)       echo "              depends: $dep — SEM \`hid\`: módulo sem transporte"
-                 echo "              remédio: reconstruir com CONFIG_HID=y (Giochi System)";;
-      esac
-    elif [ -e /lib/modules/$(uname -r)/kernel/net/bluetooth/hidp.ko ]; then
+    # ## O que esta checagem dizia, e era falso
+    #
+    # Até 15/11/2026 ela exigia `/sys/bus/hid/drivers/hidp` e chamava de
+    # "QUEBRADO" quando o diretório não existia. **No kernel 6.12 o `hidp` é
+    # transport driver**, não `hid_driver`: ele aloca um `hid_device`, chama
+    # `hid_parse_report`/`hid_add_device` e quem aparece no barramento é o
+    # `hid-generic`. Logo esse diretório **nunca** existiria, em kernel nenhum —
+    # a ferramenta relatava defeito permanente toda vez que `hidp` estava
+    # carregado. É o §13: medir a intenção ("o módulo parece incompleto") em
+    # vez do efeito ("o módulo carrega e inicializa?").
+    #
+    # E `modinfo` não existe nesta imagem (`sh: modinfo: not found`), então a
+    # linha de `depends:` saía sempre vazia e o veredito mandava reconstruir com
+    # `CONFIG_HID=y` — que a imagem **já tinha**.
+    #
+    # Hoje: o efeito medido é (a) o módulo está carregado e (b) o núcleo HID
+    # está ativo, provado por `hid-generic` existir no barramento. O que **só um
+    # controle pareado** pode provar é a entrega do relatório; sem ele, o texto
+    # diz "não medido" em vez de inventar veredito.
+    cfg() { zcat /proc/config.gz 2>/dev/null | grep -m1 "^CONFIG_$1=" ; }
+
+    if [ -d /sys/bus/hid/drivers/hid-generic ]; then
+      echo "  núcleo HID: ativo (hid-generic no barramento)"
+    else
+      echo "  núcleo HID: AUSENTE — nem teclado USB funcionaria"
+      echo "              remédio: CONFIG_HID=y (Giochi System)"
+    fi
+
+    if [ -d /sys/module/hidp ]; then
+      if [ -d /sys/bus/hid/drivers/hid-generic ]; then
+        echo "  transporte: hidp carregado; entrega ao controle NÃO MEDIDA"
+        echo "              (só um controle pareado cria /dev/input/event*)"
+      else
+        echo "  transporte: hidp carregado, mas sem núcleo HID para entregar"
+      fi
+    elif [ -e "/lib/modules/$(uname -r)/kernel/net/bluetooth/hidp.ko" ]; then
       echo "  transporte: módulo existe, NÃO carregado  -> modprobe hidp"
+      echo "              (medido no R35S: carrega e inicializa com rc=0)"
     else
       echo "  transporte: AUSENTE do kernel  -> CONFIG_BT_HIDP na imagem"
     fi
 
+    # A config é a fonte que não mente sobre o que foi embutido; `/dev/uhid` é o
+    # efeito. Quando as duas respondem, as duas aparecem.
     if [ -c /dev/uhid ]; then
-      echo "  uhid:     /dev/uhid presente  (controle BLE funciona)"
+      echo "  uhid:     /dev/uhid presente  (controle BLE pode virar entrada)"
     else
+      u=$(cfg UHID)
       echo "  uhid:     AUSENTE  -> controle BLE pareia e NÃO vira /dev/input"
+      echo "            config: ${u:-# CONFIG_UHID is not set}"
       echo "            remédio: CONFIG_UHID=y na imagem (é do Giochi System)"
     fi
   '
@@ -1942,11 +1965,15 @@ cmd_bluetooth() {
       echo "  Se um controle não pareia, pode ser timing/alcance: o"
       echo "  controlador só responde enquanto está anunciando."
       echo "  Use: bash scripts/aparelho.sh parear <MAC>"
-      if [ ! -d /sys/bus/hid/drivers/hidp ]; then
+      if [ ! -d /sys/module/hidp ]; then
         echo
-        echo "  MAS o transporte HID do Bluetooth NÃO está registrado: um"
-        echo "  controle clássico pareia, conecta e cai sem virar /dev/input."
-        echo "  É da imagem, não do app — o pedido está no AGENTS.md."
+        echo "  E o módulo hidp não está carregado: sem ele o controle"
+        echo "  clássico não tem por onde virar /dev/input.  -> modprobe hidp"
+      else
+        echo
+        echo "  hidp carregado. Se o controle parear e cair, o próximo dado é o"
+        echo "  motivo do BlueZ (ver 'pareados' acima) — nenhum defeito de"
+        echo "  configuração está provado; a entrega não foi medida."
       fi
       if [ ! -c /dev/uhid ]; then
         echo

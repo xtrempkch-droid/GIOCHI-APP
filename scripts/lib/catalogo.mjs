@@ -27,10 +27,53 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { ehTema, papelDeApp, readIndex } from "./apps.mjs";
+import { ehTema, papelDeApp, readIndex, tipoDeMetadata } from "./apps.mjs";
 
 // Onde o `Giochi System` põe os apps no aparelho. Ver `docs/integracao.md` §2.1.
 export const DIR_BASE_PADRAO = "/opt/giochi/apps";
+
+/**
+ * Raízes de instalação por tipo.
+ *
+ * ## Por que separar
+ *
+ * Decisão do dono, 15/11/2026: "apps deverão ficar em locais diferentes dos
+ * jogos para que a detecção não se confunda". Sem a separação, a aba Apps teria
+ * de distinguir por declaração, e um pacote com o campo esquecido cairia na aba
+ * errada sem aviso.
+ *
+ * | tipo | imagem | usuário / loja |
+ * | --- | --- | --- |
+ * | jogo | `/opt/giochi/games` | `/user/games` |
+ * | app | `/opt/giochi/apps` | `/user/apps` |
+ *
+ * As quatro constam no `AGENTS.md` §8 e no detector do launcher
+ * (`giochi_launcher_core::deteccao`), que é quem realmente varre o aparelho.
+ * O gerador precisa delas para publicar o `dir` de um app de imagem.
+ */
+export const RAIZES = {
+  game: { imagem: "/opt/giochi/games", usuario: "/user/games" },
+  app: { imagem: "/opt/giochi/apps", usuario: "/user/apps" },
+};
+
+/** Todas as raízes de imagem, do jeito que o aparelho as vê. */
+export const RAIZES_IMAGEM = [RAIZES.game.imagem, RAIZES.app.imagem];
+
+/** Raiz de imagem do `kind` declarado (padrão: jogo). */
+export function dirDoApp(id, kind) {
+  return `${RAIZES[kind === "app" ? "app" : "game"].imagem}/${id}`;
+}
+
+/** Raiz de usuário do `kind` declarado — onde a loja/cartão instala. */
+export function raizDeUsuario(kind) {
+  return RAIZES[kind === "app" ? "app" : "game"].usuario;
+}
+
+/** `true` quando `dir` está dentro de `raiz`, por componente de caminho. */
+export function dentroDe(dir, raiz) {
+  const base = raiz.replace(/\/+$/, "");
+  return dir === base || dir.startsWith(`${base}/`);
+}
 
 // O que entra no catálogo, e o que fica de fora (com motivo).
 export const MOTIVOS = {
@@ -51,6 +94,12 @@ export const MOTIVOS = {
   PAPEL_SHELL: "tema do launcher: a cópia instalada no aparelho não vira cartão",
   STORE: "distribution store: instalado em /user pela loja, não faz parte da imagem",
   SEM_BIN: "entrypoint não existe no disco",
+  /** O pacote declara um tipo e mora na raiz do outro.
+   *
+   *  Não é fatal: o launcher mostra o pacote na aba que ele **declara** e diz no
+   *  log que o lugar está errado. Fatal seria o contrário — sumir com um pacote
+   *  que existe porque ele está numa pasta que ninguém esperava. */
+  LUGAR_ERRADO: "está na raiz do outro tipo (kind declarado não bate com a pasta)",
   SEM_METADATA: "metadata.json ausente",
   METADATA_INVALIDO: "metadata.json não é JSON válido",
 };
@@ -83,7 +132,7 @@ export function lerMetadata(appDir) {
  *     acontece.
  * @returns {{ catalogo: object, avisos: Array<{id: string, motivo: string}> }}
  */
-export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstalados = true } = {}) {
+export function gerarCatalogo(appRoot, { dirBase = null, apenasInstalados = true } = {}) {
   const { entries, errors } = readIndex(appRoot);
   if (errors.length > 0) {
     // Índice inválido é erro de build, não aviso: gerar catálogo a partir de um
@@ -161,12 +210,17 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
     }
 
     // O `dir` do aparelho é convenção do sistema e **não** o caminho no repo.
-    // `<grupo>/<slug>` vira `/opt/giochi/apps/<id>`, e o `id` é que manda.
+    // `<grupo>/<slug>` vira `/opt/giochi/{games,apps}/<id>` — o tipo decide
+    // qual das duas raízes, e o `id` é que manda no nome da pasta.
+    const kind = tipoDeMetadata(metadata);
     apps.push({
       id,
+      kind,
       version: metadata.version,
       entrypoint,
-      dir: `${dirBase}/${id}`,
+      // `dirBase` explícito vence (é o que os testes e o `--dir-base` usam);
+      // sem ele, o tipo decide a raiz.
+      dir: dirBase ? `${dirBase}/${id}` : dirDoApp(id, kind),
       title: metadata.title,
       developer: metadata.developer,
       ...(metadata.releaseYear !== undefined ? { year: metadata.releaseYear } : {}),
@@ -207,7 +261,7 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
 export function mesclarInstalados(
   catalogo,
   instalados,
-  { dirBase = DIR_BASE_PADRAO, papeis = new Map() } = {},
+  { papeis = new Map() } = {},
 ) {
   const avisos = [];
   const porId = new Map(catalogo.apps.map((a) => [a.id, a]));
@@ -248,12 +302,30 @@ export function mesclarInstalados(
     }
 
     const anterior = porId.get(id);
+    const kind = tipoDeMetadata(metadata);
+
+    // O pacote declara um tipo e está na raiz do outro: aparece (a declaração
+    // manda) e o aviso diz que o lugar está errado. Sumir com ele seria pior —
+    // é o "app que existe e não aparece" que o catálogo projetado veio corrigir.
+    const raizDoTipo = RAIZES[kind].usuario;
+    const outraRaiz = RAIZES[kind === "app" ? "game" : "app"];
+    const emOutraRaiz =
+      inst.dir &&
+      !dentroDe(inst.dir, raizDoTipo) &&
+      (dentroDe(inst.dir, outraRaiz.usuario) || dentroDe(inst.dir, outraRaiz.imagem));
+    if (emOutraRaiz) {
+      avisos.push({
+        id,
+        motivo: `${MOTIVOS.LUGAR_ERRADO}: ${inst.dir} — o lugar de um ${kind === "app" ? "app" : "jogo"} é ${raizDoTipo}`,
+      });
+    }
 
     const entrada = {
       id,
+      kind,
       version: metadata.version,
       entrypoint,
-      dir: inst.dir || `${dirBase}/${id}`,
+      dir: inst.dir || `${raizDoTipo}/${id}`,
       title: metadata.title,
       developer: metadata.developer,
       ...(metadata.releaseYear !== undefined ? { year: metadata.releaseYear } : {}),
