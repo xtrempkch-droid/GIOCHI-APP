@@ -167,7 +167,7 @@ if [ -n "$INSTALAR" ]; then
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
     "$BIN" "root@$INSTALAR:$DESTINO/giochi-launcher-teste" 2>&1 | ruido
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" \
-    "chmod +x $DESTINO/giochi-launcher-teste && sha256sum $DESTINO/giochi-launcher-teste" 2>&1 | ruido
+    "chmod 755 $DESTINO/giochi-launcher-teste && sha256sum $DESTINO/giochi-launcher-teste" 2>&1 | ruido
   printf '  local: %s\n' "$(sha256sum "$BIN" | cut -d' ' -f1)"
 
   # O `giochi-teste` é o que alterna a tela do aparelho entre os dois launchers.
@@ -180,7 +180,7 @@ if [ -n "$INSTALAR" ]; then
     scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
       "$auxiliar" "root@$INSTALAR:/opt/giochi/apps/launcher-teste/giochi-teste" 2>&1 | ruido
     ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" \
-      "chmod +x /opt/giochi/apps/launcher-teste/giochi-teste" 2>&1 | ruido
+      "chmod 755 /opt/giochi/apps/launcher-teste/giochi-teste" 2>&1 | ruido
     printf '  utilitário: /opt/giochi/apps/launcher-teste/giochi-teste\n'
   fi
   printf '  verificar no aparelho: bash scripts/aparelho.sh verificar-teste\n'

@@ -1058,8 +1058,33 @@ minuto virando entre as duas capturas).
 | acesso | `usb0` `10.55.0.2` + Wi-Fi | `usb0` + rede | `usb0` ou serial |
 | `KEY_POWER` | sim (`rk805`) | sim | **não** |
 | Wi-Fi / BT | sim | sim | **sem rádio** |
-| `libasound` | sim | sim | **não** → volume `—` |
+| `libasound` | sim | sim | **sim** na imagem de 15/11 (§12.1) |
 | `SDL2_ttf` | 2.22 | 2.22 | presente |
+
+### O R35S mudou na imagem de 15/11/2026
+
+A tabela acima é de 06/11 e **não vale mais para o R35S**. Medido na imagem
+`built_at_utc=2026-11-15T12:58:43Z`, com o launcher instalado por SSH:
+
+| | 06/11/2026 | 15/11/2026 |
+| --- | --- | --- |
+| `libasound` | ausente → volume `—` | **presente**, mixer `rk817_int`, Master 255 |
+| `/dev/input` | — | `rk817_int`, `gpio-keys-vol`, `r36s_Gamepad` (**17** códigos) |
+| `KEY_POWER` | não declarado | **continua não declarado** — o launcher avisa e o menu fica no START |
+| rotação | `fbcon/rotate=0` → None | igual, e a referência bate **100,0%** |
+| catálogo | — | 3 apps em `/user/apps`, quadro idêntico ao PC |
+
+O `buttons.map` tem **19 entradas** e todas são símbolos que o `code_for`
+conhece (`verificar-mapa.mjs`: 0 desconhecidos). Isso importa porque o mapa é
+gerado do DTB e traz comentário no fim de cada linha — foi um comentário
+desses que já deixou 1 de 13 botões funcionando.
+
+**Permissão de binário instalado por `scp` depende do umask do aparelho.** Medido:
+umask `077` no R35S, então `chmod +x` deixava o launcher `700` enquanto o mesmo
+app empacotado pelo `empacotar.mjs` chega `755` (o tar escreve modo explícito).
+Mesma família do `tar --mode` que mascara permissão: o defeito não é o modo
+errado, é ele depender de um estado ambiente que ninguém declarou. Hoje os dois
+scripts de instalação fazem `chmod 755`.
 
 **Não confie no nome do aparelho nem no IP.** Leia
 `/etc/giochi/build-info.txt`; o `10.55.0.2` já foi X35H e R35S no mesmo dia, e a
