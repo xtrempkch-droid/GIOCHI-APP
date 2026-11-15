@@ -48,10 +48,6 @@ use giochi_engine::{Color as CorEngine, Rect as RectEngine, RenderContext, Vec2}
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::ttf::{Font, Sdl2TtfContext};
 
-/// Espaço de projeto de referência — a proporção (16:9), não o tamanho.
-pub const DESIGN_W: i32 = 1280;
-pub const DESIGN_H: i32 = 720;
-
 /// Onde o app procura a fonte, em ordem. A mesma lista do launcher de produção:
 /// o Buildroot é o que importa, e foi ele que já apareceu sem rótulo nenhum.
 pub const CANDIDATOS_FONTE: [&str; 6] = [
@@ -114,6 +110,14 @@ pub fn rotate_point(rot: Rotation, design: (i32, i32), x: i32, y: i32) -> (i32, 
     }
 }
 
+/// Desfaz a rotação de um ponto — o caminho de volta do toque.
+///
+/// Sem toque é código sem chamador aqui: quem usa é o launcher de produção, em
+/// `unmap_point`. Fica porque é a **inversa** que o teste de ida-e-volta
+/// verifica; apagá-la apagaria a única prova de que `rotate_point` e
+/// `rotate_rect` giraram no sentido certo, e "de ponta a cabeça" é invisível
+/// para quem só lê a fórmula.
+#[allow(dead_code)]
 pub fn unrotate_point(rot: Rotation, design: (i32, i32), x: i32, y: i32) -> (i32, i32) {
     match rot {
         Rotation::None => (x, y),
@@ -281,10 +285,9 @@ impl Painter {
         // em `/proc/maps` não prova nada: o vídeo `kmsdrm` usa EGL/GBM em
         // qualquer renderer. Quem responde é `SDL_GetRendererInfo`.
         eprintln!(
-            "renderer: {} ({}{})",
+            "renderer: {} ({})",
             render.renderer_name(),
-            if render.renderer_is_accelerated() { "acelerado" } else { "software" },
-            ""
+            if render.renderer_is_accelerated() { "acelerado" } else { "software" }
         );
 
         let proj = projecao(rot, (ow, oh));
@@ -357,20 +360,6 @@ impl Painter {
         self.render.present();
     }
 
-    pub fn rotation(&self) -> Rotation {
-        self.rot
-    }
-
-    pub fn set_rotation(&mut self, rot: Rotation) -> Result<(), String> {
-        if rot == self.rot {
-            return Ok(());
-        }
-        self.rot = rot;
-        self.design = projecao(rot, self.render.size()).design;
-        self.clip_stack.clear();
-        Ok(())
-    }
-
     /// Chamadas de desenho emitidas até agora.
     pub fn desenhos(&self) -> u32 {
         self.desenhos
@@ -403,6 +392,13 @@ impl Painter {
         gravar_bmp(path, w, h, &rgba)
     }
 
+    /// Converte coordenada de janela em coordenada lógica (o caminho do toque).
+    ///
+    /// Sem chamador aqui pelo mesmo motivo de `unrotate_point`: este app não
+    /// trata toque. Fica com a anotação porque o `#[path]`-style de porte é
+    /// "o mesmo pintor", e retirar um método dele faria a comparação entre os
+    /// dois desenhos mentir sobre o que é igual.
+    #[allow(dead_code)]
     pub fn window_to_logical(&self, x: i32, y: i32) -> Option<(i32, i32)> {
         let (out_w, out_h) = self.render.size();
         let (lw, lh) = self.logical_size();
@@ -1175,6 +1171,12 @@ mod tests {
     use super::*;
 
     const TODOS: [Rotation; 3] = [Rotation::None, Rotation::Cw90, Rotation::Ccw90];
+    /// Espaço de projeto de referência dos testes — a proporção (16:9), não um
+    /// tamanho de painel. Fica aqui e não no módulo: no app o espaço de projeto
+    /// vem de `projecao(rot, render.size())`, e uma constante solta convidaria
+    /// alguém a desenhar com ela.
+    const DESIGN_W: i32 = 1280;
+    const DESIGN_H: i32 = 720;
     const REF: (i32, i32) = (DESIGN_W, DESIGN_H);
 
     #[test]

@@ -187,7 +187,7 @@ impl Catalogo {
 
         let mut games = Vec::with_capacity(antes);
         let mut alvos = Vec::with_capacity(antes);
-        for (game, alvo) in self.games.into_iter().zip(self.alvos.into_iter()) {
+        for (game, alvo) in self.games.into_iter().zip(self.alvos) {
             let executavel = alvo.executavel();
             if std::path::Path::new(&executavel).is_file() {
                 games.push(game);
@@ -410,12 +410,12 @@ mod tests {
     /// A licença vive só no índice; trocar a entrada a apagava.
     #[test]
     fn preserva_licenca_do_indice() {
-        let comLicenca = EXEMPLO.replace(r#""developer": "Giochi","#, r#""developer": "Giochi", "license": "Proprietary","#);
+        let com_licenca = EXEMPLO.replace(r#""developer": "Giochi","#, r#""developer": "Giochi", "license": "Proprietary","#);
         let meta1 = serde_json::json!({
             "slug": "volley", "title": "Volley", "developer": "Giochi", "version": "0.2.0",
             "arch": "aarch64", "runtime": "native", "entrypoint": "bin/giochi-volley"
         });
-        let texto = adicionar_ao_indice(&comLicenca, "/user/apps/volley", &meta1).unwrap();
+        let texto = adicionar_ao_indice(&com_licenca, "/user/apps/volley", &meta1).unwrap();
         assert!(texto.contains("Proprietary"), "licença desapareceu: {texto}");
     }
 

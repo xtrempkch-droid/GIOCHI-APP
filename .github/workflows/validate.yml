@@ -69,6 +69,25 @@ jobs:
         working-directory: app/launcher
         run: cargo build --workspace --locked
 
+      # `-D warnings` e não só "rodar clippy".
+      #
+      # Em 15/11/2026 havia 21 avisos acumulados entre as quatro crates —
+      # `rotacao_do_sistema` nunca usado, `sort_by` que devia ser `sort_by_key`,
+      # `let _ =` em valor unitário, `loop`+`match` que era um `while let`,
+      # `u8 * 32` que estourava a partir da nona faixa. Nenhum quebrava teste, e
+      # por isso nenhum apareceu: **aviso que ninguém lê é aviso que não existe.**
+      #
+      # O `launcher-teste` fica de fora porque depende do repositório irmão
+      # `GIOCHI-ENGINE-3D`, que o CI não tem.
+      - name: Clippy (avisos sao erro)
+        run: |
+          set -e
+          for app in launcher launcher-star-dust loja; do
+            echo "::group::$app"
+            ( cd "app/$app" && cargo clippy --all-targets --locked -- -D warnings )
+            echo "::endgroup::"
+          done
+
       # O `texto` é feature porque `SDL2_ttf` é dependência de **link**: a
       # imagem antiga do X55 não a tinha, e sem a feature o launcher desenha
       # tudo menos os glifos. Cada combinação precisa compilar — a de "sem

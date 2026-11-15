@@ -178,6 +178,11 @@ bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
 bash scripts/compilar-launcher.sh --testes  # 253 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 
+# Clippy faz parte da barra: `-D warnings` (é o que o CI roda)
+( cd app/launcher && cargo clippy --all-targets -- -D warnings )
+( cd app/launcher-star-dust && cargo clippy --all-targets -- -D warnings )
+( cd app/loja && cargo clippy --all-targets -- -D warnings )
+
 bash scripts/compilar-launcher-arm64.sh                       # cross-compile aarch64
 bash scripts/compilar-launcher-arm64.sh --app launcher-star-dust --instalar
 bash scripts/compilar-launcher-teste-arm64.sh --instalar
@@ -1122,6 +1127,34 @@ sintoma está no log, não no número: `aviso: compilado sem a feature 'texto'`.
 Depois de exercitar a combinação enxuta, rode `bash scripts/compilar-launcher.sh`
 antes de comparar. A mesma família do `--dump-frame` que grava preto (§13): o
 binário é o mesmo caminho, e o que muda é o que ele sabe fazer.
+
+### Aviso de compilador que ninguém lê é aviso que não existe
+
+Em 15/11/2026 havia **21 avisos** acumulados entre as quatro crates, e **zero**
+no CI: `cargo build` não é `cargo clippy`, e nenhum workflow rodava o segundo.
+O inventário diz o que se perde:
+
+| Aviso | O que escondia |
+| --- | --- |
+| `rotacao_do_sistema` nunca usada | wrapper morto: o caminho vivo é `..._com_fonte` |
+| `sort_by(\|a,b\| b.cmp(&a))` | `sort_by_key` + `Reverse`, que é o que se quis escrever |
+| `let _ = set_clip_rect(...)` | `set_clip_rect` devolve `()`, e o `let _` mentia sobre isso |
+| `loop { match ... Err => break }` | um `while let` — a única saída era a falha de leitura |
+| `i as u8 * 32` em 8 faixas | o cast estoura na **nona** faixa; um efeito a mais quebraria em silêncio |
+| 3 × "items after a test module" | código de produção depois do `mod tests` |
+
+Nenhum quebrava teste, e por isso nenhum apareceu em lugar nenhum. O CI ganhou um
+passo com **`-D warnings`** — rodar clippy sem `-D` só desloca o problema de
+lugar, porque o log de um job verde ninguém abre.
+
+`launcher-teste` fica fora desse passo: depende do repositório irmão
+`GIOCHI-ENGINE-3D`, que o CI não tem. Localmente ele também está em zero.
+
+E os módulos compartilhados por `#[path]` (`views`, `catalogo`, `system` no
+`launcher-teste`) levam `#[allow(dead_code)]` **local ao módulo**: eles trazem
+itens que só o launcher de produção usa (desligar, instalar pacote, toque). A
+alternativa seria copiar e apagar o que sobra — que é como nasceram as cópias
+atrasadas do Star Dust (§7).
 
 ### Um `cfg` que nunca é compilado é código que não existe
 

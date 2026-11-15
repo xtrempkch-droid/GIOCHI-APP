@@ -117,11 +117,26 @@ fn iniciais(titulo: &str) -> String {
     }
 }
 
-/// Desenha a capa num retângulo.
+/// Onde a capa vai: posição e tamanho, num argumento só.
+///
+/// Existe porque `x, y, w, h` como quatro parâmetros soltos fizeram a função
+/// passar de sete argumentos — e argumento posicional desse tipo é o que
+/// permite trocar `w` por `h` sem o compilador reclamar. Com o retângulo, a
+/// chamada diz **o que** está sendo passado.
+#[derive(Clone, Copy, Debug)]
+pub struct Area {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// Desenha a capa na área dada.
 ///
 /// `selecionado` engrossa a borda e clareia; é o único sinal de foco, então tem
 /// de ser visível de longe — a grade não tem cursor de mouse.
-pub fn desenhar(p: &mut Pintor, x: i32, y: i32, w: i32, h: i32, slug: &str, titulo: &str, selecionado: bool) {
+pub fn desenhar(p: &mut Pintor, area: Area, slug: &str, titulo: &str, selecionado: bool) {
+    let Area { x, y, w, h } = area;
     let a = assinatura(slug);
     let (r1, g1, b1) = matiz_para_cor(a.matiz, 0.34);
     let (r2, g2, b2) = matiz_para_cor(a.matiz_detalhe, 0.50);

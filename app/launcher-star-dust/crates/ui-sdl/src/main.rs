@@ -834,18 +834,16 @@ fn espiar_input(segundos: u64) -> Result<(), String> {
             let mut arquivo = arquivo;
             // 24 bytes = `struct input_event` em 64 bits (timeval 16 + 3 u16 + pad).
             let mut buf = [0u8; 24];
-            loop {
-                match arquivo.read_exact(&mut buf) {
-                    Ok(()) => {
-                        let tipo = u16::from_ne_bytes([buf[16], buf[17]]);
-                        let codigo = u16::from_ne_bytes([buf[18], buf[19]]);
-                        let valor = i32::from_ne_bytes([buf[20], buf[21], buf[22], buf[23]]);
-                        // EV_KEY = 1. Ignora autorepeat (2) para não inundar.
-                        if tipo == 1 && valor != 2 {
-                            let _ = tx.send((nome.clone(), codigo, valor));
-                        }
-                    }
-                    Err(_) => break,
+            // `while let` em vez de `loop`+`match`: a única saída é a falha de
+            // leitura (o dispositivo sumiu), e o `break` implícito diz isso
+            // sem precisar de um braço que só serve para sair.
+            while arquivo.read_exact(&mut buf).is_ok() {
+                let tipo = u16::from_ne_bytes([buf[16], buf[17]]);
+                let codigo = u16::from_ne_bytes([buf[18], buf[19]]);
+                let valor = i32::from_ne_bytes([buf[20], buf[21], buf[22], buf[23]]);
+                // EV_KEY = 1. Ignora autorepeat (2) para não inundar.
+                if tipo == 1 && valor != 2 {
+                    let _ = tx.send((nome.clone(), codigo, valor));
                 }
             }
         });

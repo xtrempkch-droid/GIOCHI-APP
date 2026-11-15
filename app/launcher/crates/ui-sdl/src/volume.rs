@@ -353,7 +353,7 @@ mod alsa {
             if rc < 0 || max <= min {
                 return None;
             }
-            Some((min as i64, max as i64))
+            Some((min, max))
         }
     }
 
@@ -450,6 +450,75 @@ impl Mixer for MixerBox {
         }
     }
 }
+
+
+/// Repetição do ajuste quando a tecla fica pressionada.
+///
+/// Sem isto, segurar volume dá um passo de 5 % e para — o usuário precisa
+/// apertar 20 vezes para ir de 0 a 100. O atraso inicial evita que um toque
+/// rápido vire dois passos.
+pub struct Repeticao {
+    atraso: f32,
+    intervalo: f32,
+    desde_aperto: f32,
+    ate_proximo: f32,
+    pressionado: bool,
+}
+
+impl Repeticao {
+    /// 400 ms até começar a repetir; depois um passo a cada 120 ms.
+    pub fn novo() -> Self {
+        Self {
+            atraso: 0.4,
+            intervalo: 0.12,
+            desde_aperto: 0.0,
+            ate_proximo: 0.0,
+            pressionado: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn com_tempos(atraso: f32, intervalo: f32) -> Self {
+        Self {
+            atraso,
+            intervalo,
+            desde_aperto: 0.0,
+            ate_proximo: 0.0,
+            pressionado: false,
+        }
+    }
+
+    /// Alimenta o estado da tecla; devolve quantos passos aplicar neste quadro.
+    pub fn update(&mut self, pressionado: bool, delta: f32) -> i16 {
+        let antes = self.pressionado;
+        self.pressionado = pressionado;
+
+        if pressionado && !antes {
+            self.desde_aperto = 0.0;
+            // Zero, não `atraso`: o atraso já é controlado por `desde_aperto`.
+            // Somar os dois fazia a primeira repetição vir em 2× o atraso.
+            self.ate_proximo = 0.0;
+            return 1;
+        }
+        if !pressionado {
+            self.desde_aperto = 0.0;
+            self.ate_proximo = 0.0;
+            return 0;
+        }
+
+        self.desde_aperto += delta.max(0.0);
+        if self.desde_aperto < self.atraso {
+            return 0;
+        }
+        self.ate_proximo -= delta.max(0.0);
+        if self.ate_proximo <= 0.0 {
+            self.ate_proximo = self.intervalo;
+            return 1;
+        }
+        0
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -572,72 +641,5 @@ mod tests {
         assert!(!v.disponivel(), "sem mixer precisa se declarar indisponível");
         // Definir não explode e mantém o valor na tela.
         assert_eq!(v.definir(55), 55);
-    }
-}
-
-/// Repetição do ajuste quando a tecla fica pressionada.
-///
-/// Sem isto, segurar volume dá um passo de 5 % e para — o usuário precisa
-/// apertar 20 vezes para ir de 0 a 100. O atraso inicial evita que um toque
-/// rápido vire dois passos.
-pub struct Repeticao {
-    atraso: f32,
-    intervalo: f32,
-    desde_aperto: f32,
-    ate_proximo: f32,
-    pressionado: bool,
-}
-
-impl Repeticao {
-    /// 400 ms até começar a repetir; depois um passo a cada 120 ms.
-    pub fn novo() -> Self {
-        Self {
-            atraso: 0.4,
-            intervalo: 0.12,
-            desde_aperto: 0.0,
-            ate_proximo: 0.0,
-            pressionado: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn com_tempos(atraso: f32, intervalo: f32) -> Self {
-        Self {
-            atraso,
-            intervalo,
-            desde_aperto: 0.0,
-            ate_proximo: 0.0,
-            pressionado: false,
-        }
-    }
-
-    /// Alimenta o estado da tecla; devolve quantos passos aplicar neste quadro.
-    pub fn update(&mut self, pressionado: bool, delta: f32) -> i16 {
-        let antes = self.pressionado;
-        self.pressionado = pressionado;
-
-        if pressionado && !antes {
-            self.desde_aperto = 0.0;
-            // Zero, não `atraso`: o atraso já é controlado por `desde_aperto`.
-            // Somar os dois fazia a primeira repetição vir em 2× o atraso.
-            self.ate_proximo = 0.0;
-            return 1;
-        }
-        if !pressionado {
-            self.desde_aperto = 0.0;
-            self.ate_proximo = 0.0;
-            return 0;
-        }
-
-        self.desde_aperto += delta.max(0.0);
-        if self.desde_aperto < self.atraso {
-            return 0;
-        }
-        self.ate_proximo -= delta.max(0.0);
-        if self.ate_proximo <= 0.0 {
-            self.ate_proximo = self.intervalo;
-            return 1;
-        }
-        0
     }
 }

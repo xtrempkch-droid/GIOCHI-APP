@@ -726,7 +726,7 @@ pub fn library(p: &mut Painter, state: &State, layout: &mut Layout) {
     let gap = m.e(9).max(4);
     // O arranjo sai da capacidade da página, não do número de itens visíveis:
     // a grade não pode mudar de forma quando o usuário vira a página.
-    let alvo = games.len().min(LIB_PAGE).max(1);
+    let alvo = games.len().clamp(1, LIB_PAGE);
     let grade = giochi_launcher_core::grade_de(alvo, m.safe_w - m.pad * 2, grid_h, gap);
     layout.grade_biblioteca = Some(grade);
     let (cols, rows) = grade_para(alvo, m.safe_w - m.pad * 2, grid_h, gap);
@@ -1262,7 +1262,7 @@ fn quick_settings(p: &mut Painter, state: &State, layout: &mut Layout) {
                 let knob_x = x + w - borda - trilho;
                 let trilho_y = ry + row_h / 2 - m.e(8).max(5);
                 p.fill_round_rect(knob_x, trilho_y, trilho, m.e(16).max(10), m.e(8).max(3), if on { theme::with_alpha(theme::ACCENT, 80) } else { theme::with_alpha(theme::WHITE, 30) });
-                let r = (m.e(7).max(4)) as i32;
+                let r = m.e(7).max(4);
                 let dot_x = if on { knob_x + trilho - r * 2 - m.e(2).max(1) } else { knob_x + m.e(2).max(1) };
                 p.fill_circle(dot_x + r, trilho_y + m.e(8).max(5), r, if on { theme::ACCENT } else { theme::DIM });
             }
@@ -1472,8 +1472,11 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
     let kb_y = y + linha_y + m.e(12).max(4);
     let r_tecla = m.e(7).max(3);
 
-    for row in 0..KEYBOARD.len() {
-        for col in 0..KEYBOARD_COLS {
+    // `enumerate` em vez de indexar pelo laço: a posição na grade **é** a
+    // posição do caractere, e ler `KEYBOARD[row][col]` deixava as duas
+    // dependentes de `row`/`col` continuarem sincronizados à mão.
+    for (row, linha) in KEYBOARD.iter().enumerate() {
+        for (col, &ch) in linha.iter().enumerate() {
             let index = row * KEYBOARD_COLS + col;
             let kx = kb_x + col as i32 * (key_w + gap);
             let ky = kb_y + row as i32 * (key_h + gap);
@@ -1482,7 +1485,7 @@ fn search(p: &mut Painter, state: &State, layout: &mut Layout) {
             p.fill_round_rect(kx, ky, key_w, key_h, r_tecla, theme::PANEL2);
             p.stroke_round_rect(kx, ky, key_w, key_h, r_tecla, if focused { theme::ACCENT } else { theme::LINE });
 
-            let ch = KEYBOARD[row][col];
+
             let label = if ch == ' ' {
                 "ESP".to_string()
             } else if ch == '\u{8}' {
@@ -1647,176 +1650,6 @@ impl GameLabel for giochi_launcher_core::Game {
 }
 
 
-#[cfg(test)]
-mod tests {
-    use super::{formatar_relogio, grade_para};
-
-    fn chaves(state: &giochi_launcher_core::State) -> Vec<&'static str> {
-        super::dicas(state).iter().map(|(k, _)| *k).collect()
-    }
-
-    /// O relógio é o que fazia a comparação de quadros reprovar 99,9 %.
-    ///
-    /// Aparelho sem NTP fica horas atrás do PC; os quatro dígitos do relógio
-    /// diferiam e o portão acusava divergência em todas as telas. `formatar_`
-    /// `relogio` é a parte pura — `GIOCHI_HORA_FIXA` (lida em `current_clock`)
-    /// é o que congela os dois lados.
-    #[test]
-    fn relogio_formata_hh_mm() {
-        assert_eq!(formatar_relogio(0), "00:00");
-        assert_eq!(formatar_relogio(59), "00:00");
-        assert_eq!(formatar_relogio(60), "00:01");
-        // 2026-11-09 03:44 UTC (o instante medido no PC nesta rodada)
-        assert_eq!(formatar_relogio(1_794_195_840), "03:44");
-        // vira o dia, e a hora volta a zero em vez de mostrar 24
-        assert_eq!(formatar_relogio(86_400), "00:00");
-        assert_eq!(formatar_relogio(23 * 3600 + 59 * 60), "23:59");
-    }
-
-    /// O rodapé só pode anunciar o gatilho onde ele faz alguma coisa.
-    ///
-    /// O rodapé já mentiu duas vezes (`A — Jogar` que não iniciava, `Jogar` na
-    /// Biblioteca onde `A` abre a ficha). Anunciar "L2/R2" numa aba sem sub-aba
-    /// seria a terceira — e o usuário apertaria a tecla sem retorno nenhum.
-    #[test]
-    fn rodape_so_anuncia_gatilho_onde_ele_age() {
-        use giochi_launcher_core::{State, Tab};
-
-        let state = State::new(Vec::new(), Vec::new());
-
-        for tab in [Tab::Library, Tab::Settings] {
-            let s = State { tab, ..state.clone() };
-            assert!(
-                chaves(&s).contains(&"L2/R2"),
-                "{tab:?} tem sub-abas e o rodapé precisa dizer qual tecla as troca"
-            );
-        }
-
-        for tab in [Tab::Home, Tab::Apps] {
-            let s = State { tab, ..state.clone() };
-            assert!(
-                !chaves(&s).contains(&"L2/R2"),
-                "{tab:?} não tem sub-abas: anunciar o gatilho seria promessa vazia"
-            );
-        }
-    }
-
-    /// `A` só é anunciado como "Jogar" na Home, que é a única aba onde ele inicia.
-    #[test]
-    fn rodape_nao_promete_jogar_onde_a_apenas_abre() {
-        use giochi_launcher_core::{State, Tab};
-
-        let base = State::new(Vec::new(), Vec::new());
-        let acao = |tab: Tab| {
-            let s = State { tab, ..base.clone() };
-            super::dicas(&s)
-                .iter()
-                .find(|(k, _)| *k == "A")
-                .map(|(_, v)| v.to_string())
-        };
-
-        assert_eq!(acao(Tab::Home).as_deref(), Some("Jogar"));
-        assert_eq!(acao(Tab::Library).as_deref(), Some("Abrir"));
-        assert_eq!(acao(Tab::Apps), None, "nos Apps o A não faz nada");
-    }
-
-    /// O núcleo e o desenho precisam concordar sobre quantas linhas a categoria
-    /// tem.
-    ///
-    /// Divergir não dá erro em lugar nenhum: o foco simplesmente para antes da
-    /// última linha, ou anda por uma linha que não existe. É a mesma classe de
-    /// erro do carrossel dessincronizado — dois lugares descrevendo a mesma
-    /// lista. Este teste é o elo que faltava entre `views::linhas_da_categoria`
-    /// e `state::settings_rows`.
-    #[test]
-    fn foco_e_desenho_concordam_no_numero_de_linhas() {
-        use giochi_launcher_core::{settings_rows, State, SETTINGS_CATEGORIES};
-
-        let state = State::new(Vec::new(), Vec::new());
-        for (i, categoria) in SETTINGS_CATEGORIES.iter().enumerate() {
-            let desenhadas = super::linhas_da_categoria(categoria, &state).len();
-            assert_eq!(
-                desenhadas,
-                settings_rows(i),
-                "categoria {categoria} (índice {i}): o desenho tem {desenhadas}                  linha(s) e o foco permite {}",
-                settings_rows(i)
-            );
-        }
-    }
-
-    /// As escolhas medidas nos painéis que existem de fato.
-    ///
-    /// 640×480 e 1280×720 são aparelhos reais (X35H e X55); os números aqui são
-    /// os que o app desenha, não exemplos inventados.
-    #[test]
-    fn grade_de_quatro_itens_usa_duas_colunas() {
-        // Área útil medida no X35H: safe_w 480 menos 12 de padding, 377 de altura.
-        assert_eq!(grade_para(4, 468, 377, 5), (2, 2));
-        // E no X55, 936×538: 4 colunas por 1 linha deixariam a célula em pé.
-        assert_eq!(grade_para(4, 936, 538, 9), (2, 2));
-    }
-
-    #[test]
-    fn grade_de_oito_itens_mantem_quatro_colunas_no_painel_grande() {
-        assert_eq!(grade_para(8, 936, 538, 9), (4, 2));
-    }
-
-    #[test]
-    fn grade_de_tres_itens_nao_deixa_coluna_sobrando() {
-        assert_eq!(grade_para(3, 468, 413, 5), (2, 2));
-    }
-
-    /// A célula precisa caber um título: uma tira de 30 px de largura tem área,
-    /// mas não serve. `grade_para` recusa proporções fora de 0,62..2,2.
-    #[test]
-    fn grade_nunca_escolhe_celula_em_tira() {
-        for itens in 1..=12 {
-            for (w, h) in [(468, 377), (936, 538), (600, 300), (300, 400)] {
-                let (cols, rows) = grade_para(itens, w, h, 5);
-                let cw = (w - 5 * (cols - 1)) / cols;
-                let ch = (h - 5 * (rows - 1)) / rows;
-                assert!(cols >= 1 && rows >= 1, "grade vazia para {itens} itens");
-                assert!(
-                    (cols * rows) as usize >= itens,
-                    "{itens} itens não cabem em {cols}x{rows}"
-                );
-                let aspecto = cw as f32 / ch as f32;
-                if itens > 1 {
-                    assert!(
-                        (0.62..=2.2).contains(&aspecto) || cols == 1,
-                        "célula {cw}x{ch} (aspecto {aspecto:.2}) para {itens} itens"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Um item só não tem com o que comparar: a grade degenera para 1×1.
-    #[test]
-    fn grade_de_um_item_ocupa_tudo() {
-        assert_eq!(grade_para(1, 468, 377, 5), (1, 1));
-    }
-
-    /// O rótulo de ano é do **jogo**, não do cartão.
-    ///
-    /// Já esteve errado: `year_label` devolvia `#{:03}` com o id e o cartão
-    /// mostrava `Spacewar • Ação • #002`. Lido na tela do X35H, isso passa por
-    /// informação do jogo — o usuário perguntou o que era. Índice interno não
-    /// pode chegar ao desenho.
-    #[test]
-    fn ano_do_jogo_nao_e_o_indice_do_cartao() {
-        use super::GameLabel;
-        use giochi_launcher_core::Game;
-
-        let g = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false).com_ano(1962);
-        assert_eq!(g.year_label(), "1962");
-        assert_ne!(g.year_label(), "#007");
-
-        // Sem ano no catálogo a UI diz que não sabe; não inventa número.
-        let sem_ano = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false);
-        assert_eq!(sem_ano.year_label(), "—");
-    }
-}
 
 // ── Wi-Fi e Bluetooth ──────────────────────────────────────
 
@@ -1994,7 +1827,7 @@ fn bt_list(p: &mut Painter, state: &State, layout: &mut Layout) {
             rodape,
             itens,
             acao: "Procurar aparelhos",
-            vazio: vazio,
+            vazio,
         },
         Zone::BtDevices,
     );
@@ -2127,4 +1960,176 @@ fn wifi_password(p: &mut Painter, state: &State, layout: &mut Layout) {
         Rect::new(bx, by, bw as u32, bh as u32),
         Hit::PasswordConfirm,
     ));
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{formatar_relogio, grade_para};
+
+    fn chaves(state: &giochi_launcher_core::State) -> Vec<&'static str> {
+        super::dicas(state).iter().map(|(k, _)| *k).collect()
+    }
+
+    /// O relógio é o que fazia a comparação de quadros reprovar 99,9 %.
+    ///
+    /// Aparelho sem NTP fica horas atrás do PC; os quatro dígitos do relógio
+    /// diferiam e o portão acusava divergência em todas as telas. `formatar_`
+    /// `relogio` é a parte pura — `GIOCHI_HORA_FIXA` (lida em `current_clock`)
+    /// é o que congela os dois lados.
+    #[test]
+    fn relogio_formata_hh_mm() {
+        assert_eq!(formatar_relogio(0), "00:00");
+        assert_eq!(formatar_relogio(59), "00:00");
+        assert_eq!(formatar_relogio(60), "00:01");
+        // 2026-11-09 03:44 UTC (o instante medido no PC nesta rodada)
+        assert_eq!(formatar_relogio(1_794_195_840), "03:44");
+        // vira o dia, e a hora volta a zero em vez de mostrar 24
+        assert_eq!(formatar_relogio(86_400), "00:00");
+        assert_eq!(formatar_relogio(23 * 3600 + 59 * 60), "23:59");
+    }
+
+    /// O rodapé só pode anunciar o gatilho onde ele faz alguma coisa.
+    ///
+    /// O rodapé já mentiu duas vezes (`A — Jogar` que não iniciava, `Jogar` na
+    /// Biblioteca onde `A` abre a ficha). Anunciar "L2/R2" numa aba sem sub-aba
+    /// seria a terceira — e o usuário apertaria a tecla sem retorno nenhum.
+    #[test]
+    fn rodape_so_anuncia_gatilho_onde_ele_age() {
+        use giochi_launcher_core::{State, Tab};
+
+        let state = State::new(Vec::new(), Vec::new());
+
+        for tab in [Tab::Library, Tab::Settings] {
+            let s = State { tab, ..state.clone() };
+            assert!(
+                chaves(&s).contains(&"L2/R2"),
+                "{tab:?} tem sub-abas e o rodapé precisa dizer qual tecla as troca"
+            );
+        }
+
+        for tab in [Tab::Home, Tab::Apps] {
+            let s = State { tab, ..state.clone() };
+            assert!(
+                !chaves(&s).contains(&"L2/R2"),
+                "{tab:?} não tem sub-abas: anunciar o gatilho seria promessa vazia"
+            );
+        }
+    }
+
+    /// `A` só é anunciado como "Jogar" na Home, que é a única aba onde ele inicia.
+    #[test]
+    fn rodape_nao_promete_jogar_onde_a_apenas_abre() {
+        use giochi_launcher_core::{State, Tab};
+
+        let base = State::new(Vec::new(), Vec::new());
+        let acao = |tab: Tab| {
+            let s = State { tab, ..base.clone() };
+            super::dicas(&s)
+                .iter()
+                .find(|(k, _)| *k == "A")
+                .map(|(_, v)| v.to_string())
+        };
+
+        assert_eq!(acao(Tab::Home).as_deref(), Some("Jogar"));
+        assert_eq!(acao(Tab::Library).as_deref(), Some("Abrir"));
+        assert_eq!(acao(Tab::Apps), None, "nos Apps o A não faz nada");
+    }
+
+    /// O núcleo e o desenho precisam concordar sobre quantas linhas a categoria
+    /// tem.
+    ///
+    /// Divergir não dá erro em lugar nenhum: o foco simplesmente para antes da
+    /// última linha, ou anda por uma linha que não existe. É a mesma classe de
+    /// erro do carrossel dessincronizado — dois lugares descrevendo a mesma
+    /// lista. Este teste é o elo que faltava entre `views::linhas_da_categoria`
+    /// e `state::settings_rows`.
+    #[test]
+    fn foco_e_desenho_concordam_no_numero_de_linhas() {
+        use giochi_launcher_core::{settings_rows, State, SETTINGS_CATEGORIES};
+
+        let state = State::new(Vec::new(), Vec::new());
+        for (i, categoria) in SETTINGS_CATEGORIES.iter().enumerate() {
+            let desenhadas = super::linhas_da_categoria(categoria, &state).len();
+            assert_eq!(
+                desenhadas,
+                settings_rows(i),
+                "categoria {categoria} (índice {i}): o desenho tem {desenhadas}                  linha(s) e o foco permite {}",
+                settings_rows(i)
+            );
+        }
+    }
+
+    /// As escolhas medidas nos painéis que existem de fato.
+    ///
+    /// 640×480 e 1280×720 são aparelhos reais (X35H e X55); os números aqui são
+    /// os que o app desenha, não exemplos inventados.
+    #[test]
+    fn grade_de_quatro_itens_usa_duas_colunas() {
+        // Área útil medida no X35H: safe_w 480 menos 12 de padding, 377 de altura.
+        assert_eq!(grade_para(4, 468, 377, 5), (2, 2));
+        // E no X55, 936×538: 4 colunas por 1 linha deixariam a célula em pé.
+        assert_eq!(grade_para(4, 936, 538, 9), (2, 2));
+    }
+
+    #[test]
+    fn grade_de_oito_itens_mantem_quatro_colunas_no_painel_grande() {
+        assert_eq!(grade_para(8, 936, 538, 9), (4, 2));
+    }
+
+    #[test]
+    fn grade_de_tres_itens_nao_deixa_coluna_sobrando() {
+        assert_eq!(grade_para(3, 468, 413, 5), (2, 2));
+    }
+
+    /// A célula precisa caber um título: uma tira de 30 px de largura tem área,
+    /// mas não serve. `grade_para` recusa proporções fora de 0,62..2,2.
+    #[test]
+    fn grade_nunca_escolhe_celula_em_tira() {
+        for itens in 1..=12 {
+            for (w, h) in [(468, 377), (936, 538), (600, 300), (300, 400)] {
+                let (cols, rows) = grade_para(itens, w, h, 5);
+                let cw = (w - 5 * (cols - 1)) / cols;
+                let ch = (h - 5 * (rows - 1)) / rows;
+                assert!(cols >= 1 && rows >= 1, "grade vazia para {itens} itens");
+                assert!(
+                    (cols * rows) as usize >= itens,
+                    "{itens} itens não cabem em {cols}x{rows}"
+                );
+                let aspecto = cw as f32 / ch as f32;
+                if itens > 1 {
+                    assert!(
+                        (0.62..=2.2).contains(&aspecto) || cols == 1,
+                        "célula {cw}x{ch} (aspecto {aspecto:.2}) para {itens} itens"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Um item só não tem com o que comparar: a grade degenera para 1×1.
+    #[test]
+    fn grade_de_um_item_ocupa_tudo() {
+        assert_eq!(grade_para(1, 468, 377, 5), (1, 1));
+    }
+
+    /// O rótulo de ano é do **jogo**, não do cartão.
+    ///
+    /// Já esteve errado: `year_label` devolvia `#{:03}` com o id e o cartão
+    /// mostrava `Spacewar • Ação • #002`. Lido na tela do X35H, isso passa por
+    /// informação do jogo — o usuário perguntou o que era. Índice interno não
+    /// pode chegar ao desenho.
+    #[test]
+    fn ano_do_jogo_nao_e_o_indice_do_cartao() {
+        use super::GameLabel;
+        use giochi_launcher_core::Game;
+
+        let g = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false).com_ano(1962);
+        assert_eq!(g.year_label(), "1962");
+        assert_ne!(g.year_label(), "#007");
+
+        // Sem ano no catálogo a UI diz que não sabe; não inventa número.
+        let sem_ano = Game::new(7, "Spacewar", "Ação", 0.0, "nunca", false);
+        assert_eq!(sem_ano.year_label(), "—");
+    }
 }

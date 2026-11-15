@@ -316,7 +316,7 @@ fn juntar_redes(bruto: &str, salvas: &str, conectado: Option<&str>) -> Vec<Rede>
     }
 
     // Sinal melhor primeiro, como qualquer lista de redes faz.
-    redes.sort_by(|a, b| b.sinal.cmp(&a.sinal));
+    redes.sort_by_key(|r| std::cmp::Reverse(r.sinal));
     // A conectada no topo, mesmo com sinal pior: é a que o usuário quer ver.
     if let Some(atual) = conectado {
         if let Some(pos) = redes.iter().position(|r| r.ssid == atual) {
@@ -513,7 +513,7 @@ fn descrever_falha(estado: &str) -> String {
         "SCANNING" => "a rede não respondeu (senha errada ou fora de alcance)".into(),
         "ASSOCIATING" | "ASSOCIATED" => "associou mas não autenticou (senha?)".into(),
         "sem resposta" => "o supplicant não respondeu".into(),
-        outro if outro.is_empty() => "não conectou".into(),
+        "" => "não conectou".into(),
         outro => format!("não conectou ({outro})"),
     }
 }

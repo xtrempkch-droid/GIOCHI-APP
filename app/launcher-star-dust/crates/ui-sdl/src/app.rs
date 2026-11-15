@@ -459,12 +459,14 @@ impl App {
                     self.dirty = true;
                 }
             }
-            Screen::Reboot if antes != Screen::Reboot => {
-                if self.tentativa_desligar.primeira_vez() {
-                    self.avisar_antes_de_executar("Reiniciando...");
-                    self.aviso_sistema = Some(crate::system::executar(Acao::Reiniciar));
-                    self.dirty = true;
-                }
+            // A condição vira `guarda` do padrão: o `if` interno só existia
+            // para decidir se este braço faz alguma coisa.
+            Screen::Reboot
+                if antes != Screen::Reboot && self.tentativa_desligar.primeira_vez() =>
+            {
+                self.avisar_antes_de_executar("Reiniciando...");
+                self.aviso_sistema = Some(crate::system::executar(Acao::Reiniciar));
+                self.dirty = true;
             }
             _ => {}
         }
@@ -551,10 +553,11 @@ impl App {
                 self.pointer(px, py);
             }
 
-            Event::Window { win_event, .. } => {
-                if let sdl2::event::WindowEvent::SizeChanged(w, h) = win_event {
-                    self.window_size = (*w as u32, *h as u32);
-                }
+            Event::Window {
+                win_event: sdl2::event::WindowEvent::SizeChanged(w, h),
+                ..
+            } => {
+                self.window_size = (*w as u32, *h as u32);
             }
 
             _ => {}

@@ -611,7 +611,7 @@ mod tests {
         assert_eq!(map.code("up"), Some(0x220));
         assert_eq!(map.code("a"), Some(0x131));
         assert_eq!(map.code("home"), Some(0x13c));
-        assert!(map.is_complete() == false, "faltam botões de propósito");
+        assert!(!map.is_complete(), "faltam botões de propósito");
     }
 
     #[test]

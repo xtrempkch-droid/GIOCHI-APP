@@ -28,10 +28,25 @@
 
 // As telas são literalmente os arquivos do launcher de produção. `#[path]` faz o
 // módulo apontar para fora da árvore deste crate sem duplicar o código.
+//
+// ## Por que `allow(dead_code)` em três deles
+//
+// Estes arquivos trazem itens que **só o launcher de produção usa**, porque ele
+// faz coisas que este app não faz: desligar e reiniciar (`system::executar`,
+// `views::aviso_sistema`), registrar um pacote recém-instalado
+// (`catalogo::adicionar_ao_indice`), tratar toque (`Layout::hit`,
+// `Layout::comando`).
+//
+// O alternativo seria copiar os arquivos e apagar o que sobra — que é
+// exatamente o que produziu as cópias atrasadas do Star Dust e do próprio
+// `crates/core` (§7 do AGENTS.md). Reusar e declarar o subconjunto é a troca
+// certa, e ela é **local**: o `allow` vale para o módulo compartilhado, não para
+// o código deste app, que continua sendo verificado.
 #[path = "../../launcher/crates/ui-sdl/src/theme.rs"]
 mod theme;
 #[path = "../../launcher/crates/ui-sdl/src/icons.rs"]
 mod icons;
+#[allow(dead_code)]
 #[path = "../../launcher/crates/ui-sdl/src/views.rs"]
 mod views;
 
@@ -40,10 +55,12 @@ mod views;
 // leitura do `index.json` (ou um segundo mapa de botões) começaria igual e
 // divergiria na primeira correção. O que este app troca é a **engine de
 // desenho**, não o contrato com o sistema.
+#[allow(dead_code)]
 #[path = "../../launcher/crates/ui-sdl/src/catalogo.rs"]
 mod catalogo;
 #[path = "../../launcher/crates/ui-sdl/src/input_evdev.rs"]
 mod input_evdev;
+#[allow(dead_code)]
 #[path = "../../launcher/crates/ui-sdl/src/system.rs"]
 mod system;
 

@@ -94,11 +94,6 @@ pub fn rotacao_pedida_no_cmdline() -> Option<u32> {
     rotacao_do_cmdline(&texto)
 }
 
-/// Lê a orientação que o sistema declarou, se declarou.
-pub fn rotacao_do_sistema() -> Option<Rotation> {
-    rotacao_do_sistema_em(CAMINHO_FBCON)
-}
-
 /// O mesmo, mas dizendo **de onde** veio — e cruzando as duas fontes do kernel.
 ///
 /// ## Por que o cruzamento existe

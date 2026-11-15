@@ -461,7 +461,10 @@ impl Efeitos {
                 continue;
             }
             // Meio da faixa: 16, 48, 80…
-            let alfa = (i as u8 * 32 + 16).min(255);
+            // Cálculo em `usize` e depois o corte: `i as u8 * 32` estoura o
+            // u8 na nona faixa (9 * 32 = 288), e um efeito que quebra ao ganhar
+            // uma cor a mais é o tipo de limite que ninguém descobre por leitura.
+            let alfa = (i * 32 + 16).min(255) as u8;
             p.fill_circles(lista, theme::with_alpha(cor, alfa));
         }
         self.brasas = brasas;
@@ -503,7 +506,10 @@ impl Efeitos {
             if lista.is_empty() {
                 continue;
             }
-            let alfa = (i as u8 * 32 + 16).min(255);
+            // Cálculo em `usize` e depois o corte: `i as u8 * 32` estoura o
+            // u8 na nona faixa (9 * 32 = 288), e um efeito que quebra ao ganhar
+            // uma cor a mais é o tipo de limite que ninguém descobre por leitura.
+            let alfa = (i * 32 + 16).min(255) as u8;
             p.fill_rects(lista, theme::with_alpha(quase_branco, alfa));
         }
         self.brilhos = brilhos;
@@ -819,7 +825,6 @@ mod testes {
         // `SettingsContent` e as listas usam índice que pode estar fora do que a
         // tela publicou (categoria sem linhas). O `checked_rem` e o `min` são o
         // que impede o pânico.
-        let s = estado_home();
         let alvo = alvo_em_foco(Zone::LibraryFilters, 99);
         assert!(matches!(alvo, views::Hit::Filter(_)));
     }

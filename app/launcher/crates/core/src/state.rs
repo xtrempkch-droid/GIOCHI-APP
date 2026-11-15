@@ -563,6 +563,14 @@ pub const QWERTY: [char; 26] = [
     'H', 'J', 'K', 'L', 'Z', 'X', 'C', 'V', 'B', 'N', 'M',
 ];
 
+
+/// Linhas focáveis do painel rápido: 6 controles + 2 botões.
+pub const QUICK_SETTINGS_ROWS: usize = 8;
+/// Jogar, favoritar, opções, voltar.
+pub const GAME_DETAIL_ACTIONS: usize = 4;
+/// Suspender, reiniciar, desligar, cancelar.
+pub const POWER_ACTIONS: usize = 4;
+
 #[cfg(test)]
 mod testes_teclado {
     use super::{KEYBOARD, KEYBOARD_COLS, KEYBOARD_ROWS, QWERTY};
@@ -613,10 +621,3 @@ mod testes_teclado {
         assert_eq!(ultima[KEYBOARD_COLS - 2], ' ', "espaço ao lado do apagar");
     }
 }
-
-/// Linhas focáveis do painel rápido: 6 controles + 2 botões.
-pub const QUICK_SETTINGS_ROWS: usize = 8;
-/// Jogar, favoritar, opções, voltar.
-pub const GAME_DETAIL_ACTIONS: usize = 4;
-/// Suspender, reiniciar, desligar, cancelar.
-pub const POWER_ACTIONS: usize = 4;

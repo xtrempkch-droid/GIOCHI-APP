@@ -27,7 +27,6 @@ pub const fn rgb(hex: u32) -> Color {
 pub const BG: Color = rgb(0x070a12);
 pub const PANEL: Color = rgb(0x0f1621);
 pub const PANEL2: Color = rgb(0x1a2436);
-pub const CARD: Color = rgb(0x22304a);
 pub const LINE: Color = rgb(0x2c3b52);
 pub const ACCENT: Color = rgb(0x66c0f4);
 pub const OK: Color = rgb(0x10b981);
@@ -57,7 +56,7 @@ pub struct Pintor {
 
 impl Pintor {
     pub fn novo(
-        mut canvas: WindowCanvas,
+        canvas: WindowCanvas,
         ttf: Option<&'static Sdl2TtfContext>,
         fonte: String,
         largura: i32,

@@ -580,7 +580,8 @@ impl Painter {
             });
         match clip {
             Some(c) => {
-                let _ = self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w.max(0) as u32, c.h.max(0) as u32));
+                self.canvas
+                    .set_clip_rect(Rect::new(c.x, c.y, c.w.max(0) as u32, c.h.max(0) as u32));
             }
             None => self.canvas.set_clip_rect(None),
         }

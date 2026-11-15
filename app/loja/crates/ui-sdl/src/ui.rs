@@ -325,7 +325,13 @@ impl Estado {
             }
             let selecionado = i == self.selecao;
 
-            crate::capa::desenhar(p, x, y, cartao_w, capa_h, &item.slug, &item.titulo, selecionado);
+            crate::capa::desenhar(
+                p,
+                crate::capa::Area { x, y, w: cartao_w, h: capa_h },
+                &item.slug,
+                &item.titulo,
+                selecionado,
+            );
 
             p.texto_limitado(x + 2, y + capa_h + 8, &item.titulo, 20, TEXT, cartao_w - 4);
             let preco = item.preco.to_string();
@@ -344,7 +350,13 @@ impl Estado {
         p.texto(e, y + 48, &format!("{ano}  ·  versão {}", item.versao), 21, DIM, Alinhamento::Esquerda);
 
         // A mesma capa da grade, grande: o usuário reconhece o que clicou.
-        crate::capa::desenhar(p, e, y + 92, 220, 165, &item.slug, &item.titulo, true);
+        crate::capa::desenhar(
+            p,
+            crate::capa::Area { x: e, y: y + 92, w: 220, h: 165 },
+            &item.slug,
+            &item.titulo,
+            true,
+        );
 
         let x = e + 250;
         let largura = p.largura - x - 40;
