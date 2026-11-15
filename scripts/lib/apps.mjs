@@ -431,6 +431,55 @@ export const STATUS_VALUES = ["scaffold", "ready"];
 // host  — roda no computador do usuário; não vai para o aparelho
 export const DISTRIBUTION_VALUES = ["image", "store", "host"];
 
+// `shell` é o único papel declarado: é a própria interface do aparelho, e não
+// algo que se inicia de dentro dela.
+export const ROLE_VALUES = ["shell"];
+
+/**
+ * Prefixo dos apps de interface — os **temas** do launcher.
+ *
+ * ## Por que o nome, e não só a declaração
+ *
+ * Até 15/11/2026 o papel era só declarado (`role: "shell"` no `apps.json`), e a
+ * decisão estava registrada como "não inferir do nome". O dono pediu o
+ * contrário: criar um `launcher-<tema>` novo não deve exigir que alguém lembre
+ * de acrescentar `role` — esquecer isso publica um cartão que abre um **segundo**
+ * launcher, que perde o DRM (exclusivo) e morre com `kmsdrm not available`.
+ *
+ * O erro é fácil de cometer e o sintoma aparece longe da causa, então a regra
+ * passou a ser mecânica: **todo id que começa com `launcher` é tema.**
+ *
+ * O que se perde: um app chamado `launcher-do-vovô` que não fosse interface
+ * seria tratado como tema. Ele continua no `apps.json`, continua validado,
+ * continua empacotável — só não vira cartão. Errar para o lado de "não oferecer
+ * um segundo launcher" é melhor que errar para o lado do DRM.
+ *
+ * A declaração **continua valendo** para quem não casa com o prefixo (um tema
+ * com outro nome), e as duas condições se somam: nunca se subtrai segurança.
+ */
+export const PREFIXO_TEMA = "launcher";
+
+/// `true` quando o id é de um app de interface (tema do launcher).
+export function ehTema(id) {
+  if (typeof id !== "string") return false;
+  // O próprio `launcher` casa pelo igual, e `launcher-<tema>` pelo hífen. O
+  // hífen é exigido para que `launchertool` não seja confundido com tema.
+  return id === PREFIXO_TEMA || id.startsWith(`${PREFIXO_TEMA}-`);
+}
+
+/**
+ * O papel efetivo de um app: o prefixo manda, a declaração soma.
+ *
+ * Uma definição só, consultada por quem gera o catálogo (repositório e
+ * aparelho) e pelo validador. Duas cópias desta condição envelheceriam
+ * diferente — é o mesmo motivo pelo qual `settings_ajustavel` é consultada pelo
+ * desenho e pelo reducer.
+ */
+export function papelDeApp(id, declarado) {
+  if (declarado === "shell" || ehTema(id)) return "shell";
+  return declarado;
+}
+
 /**
  * Lê app/apps.json, a fonte da verdade da lista.
  * Devolve { entries: Map<slug, entry>, errors }.
@@ -488,6 +537,16 @@ export function readIndex(appRoot) {
         message: `distribution precisa ser ${DISTRIBUTION_VALUES.join(" ou ")}; recebido "${item.distribution}"`,
       });
     }
+    // `role` aceitava qualquer texto, e o valor desconhecido era descartado em
+    // silêncio: `role: "tema"` (o nome que o dono usa ao falar) não fazia NADA,
+    // e o app virava cartão como se não tivesse papel nenhum.
+    if (item.role !== undefined && !ROLE_VALUES.includes(item.role)) {
+      errors.push({
+        code: "indice_role_invalido",
+        path: `app/apps.json:${item.id}`,
+        message: `role precisa ser ${ROLE_VALUES.join(" ou ")}; recebido "${item.role}"`,
+      });
+    }
     entries.set(item.id, item);
   }
 
@@ -500,11 +559,30 @@ export function readIndex(appRoot) {
  * na árvore, mas a fonte ainda não foi migrada e o binário não foi exportado.
  * Sem isso o CI ficaria vermelho desde o primeiro push e ninguém olharia mais.
  */
-export function validateApp(appDir, { status = "ready", distribution = "image" } = {}) {
+export function validateApp(
+  appDir,
+  { status = "ready", distribution = "image", role } = {},
+) {
   const errors = [];
   const warnings = [];
   const name = path.basename(appDir);
   let parsedMetadata = null;
+
+  // Tema do launcher fora da imagem é uma armadilha silenciosa.
+  //
+  // Um tema é a **própria interface**: quem o inicia é o `giochi-init`, e ele
+  // procura em `/opt/giochi/apps`. `distribution: store` instala em
+  // `/user/apps`, onde nada o procura — o app existe, instala sem erro, e
+  // nunca abre. Aviso e não erro: rodar um tema à mão para testar é legítimo.
+  if (papelDeApp(name, role) === "shell" && distribution !== "image") {
+    warnings.push({
+      code: "tema_fora_da_imagem",
+      path: "app/apps.json",
+      message:
+        `este app é tema do launcher (prefixo "${PREFIXO_TEMA}") mas tem distribution "${distribution}": ` +
+        `em /user/apps nada o inicia. Um tema pertence à imagem`,
+    });
+  }
 
   if (!existsSync(appDir) || !statSync(appDir).isDirectory()) {
     return {

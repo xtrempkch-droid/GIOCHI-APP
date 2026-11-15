@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { listApps, readIndex, validateApp } from "../scripts/lib/apps.mjs";
+import { ehTema, listApps, readIndex, validateApp } from "../scripts/lib/apps.mjs";
 import { readPngSize } from "../scripts/lib/png.mjs";
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -400,6 +400,51 @@ test("readIndex recusa status inválido", () => {
     );
     const { errors } = readIndex(dir);
     assert.ok(errors.some((item) => item.code === "indice_status_invalido"));
+  });
+});
+
+test("readIndex recusa role desconhecido", () => {
+  // `role` aceitava qualquer texto e o valor desconhecido era descartado em
+  // silêncio: `role: "tema"` — o nome que o dono usa ao falar — não fazia nada,
+  // e o app virava cartão como se não tivesse papel nenhum.
+  withTempDir((dir) => {
+    writeFileSync(
+      path.join(dir, "apps.json"),
+      JSON.stringify({ apps: [{ id: "a", role: "tema" }] }),
+      "utf8",
+    );
+    const { errors } = readIndex(dir);
+    assert.ok(errors.some((item) => item.code === "indice_role_invalido"));
+  });
+});
+
+test("ehTema reconhece o prefixo e só o prefixo", () => {
+  for (const id of ["launcher", "launcher-teste", "launcher-star-dust", "launcher-neon"]) {
+    assert.equal(ehTema(id), true, `${id} é tema`);
+  }
+  // A contraprova: conter a palavra no meio não faz do app um tema, senão a
+  // regra engoliria qualquer coisa com "launcher" no nome.
+  for (const id of ["launchertool", "my-launcher-tool", "relancher", "forge", "painel"]) {
+    assert.equal(ehTema(id), false, `${id} NÃO é tema`);
+  }
+});
+
+test("tema fora da imagem avisa, e não reprova", () => {
+  // Um tema é a própria interface: quem o inicia é o `giochi-init`, que procura
+  // em /opt/giochi/apps. `distribution: store` instala em /user/apps, onde nada
+  // o procura — instala sem erro e nunca abre. Aviso e não erro: rodar um tema
+  // à mão para testar é legítimo.
+  withTempDir((dir) => {
+    const app = makeApp(dir, "launcher-neon");
+    const r = validateApp(app, { distribution: "store" });
+    assert.equal(r.ok, true);
+    assert.ok(
+      r.warnings.some((w) => w.code === "tema_fora_da_imagem"),
+      `esperava o aviso; veio: ${r.warnings.map((w) => w.code).join(",")}`,
+    );
+
+    const naImagem = validateApp(app, { distribution: "image" });
+    assert.ok(!naImagem.warnings.some((w) => w.code === "tema_fora_da_imagem"));
   });
 });
 

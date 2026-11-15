@@ -70,6 +70,7 @@ if (all) {
       validateApp(dir, {
         status: entry.status,
         distribution: entry.distribution || "image",
+        role: entry.role,
       }),
     );
   }
@@ -102,6 +103,7 @@ if (all) {
       validateApp(dir, {
         status: entry ? entry.status : "ready",
         distribution: entry ? entry.distribution || "image" : "image",
+        role: entry ? entry.role : undefined,
       }),
     );
   }

@@ -10,7 +10,7 @@
 | --- | --- |
 | apps em `app/apps.json` | **7**: `launcher`, `launcher-teste`, `launcher-star-dust` (image) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **7 válidos** (1 em scaffold: `launcher-teste`) |
-| `tests/run-all.mjs` | **199/199** JS |
+| `tests/run-all.mjs` | **206/206** JS |
 | `compilar-launcher.sh --testes` | **253** Rust (136 ui-sdl + 117 core) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
@@ -55,7 +55,7 @@ app/
 └── loja/                  # loja gráfica (host, Rust + SDL2)
 schemas/                   # metadata.schema.json + forge.schema.json
 scripts/                   # validador, empacotadores, ferramentas do aparelho
-tests/                     # 199 testes JS + suites Python de forge e painel
+tests/                     # 206 testes JS + suites Python de forge e painel
 docs/                      # 20 páginas
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
@@ -106,9 +106,46 @@ máxima: 2.
 `role: shell` existe porque o launcher tem `status: ready`, `distribution: image`
 e binário no lugar — entrava por todos os critérios, e o cartão "Launcher"
 abriria um **segundo** launcher, que perde o DRM (exclusivo) e morre com
-`kmsdrm not available`. O papel é **declarado**, não inferido do nome: fixar
-`id === "launcher"` funcionaria até alguém renomear a pasta. Hoje vale para os
-três apps de interface.
+`kmsdrm not available`.
+
+### O prefixo `launcher` **é** tema — decisão do dono, 15/11/2026
+
+Até então o papel era declarado e não inferido do nome. O dono pediu o
+contrário: *"todo app com o nome começando com `launcher` seja tratado como tema,
+assim eu poderia criar um outro `launcher-*` e o launcher vai reconhecer como
+tema"*. Vale, e o motivo é bom: **esquecer o `role` era fácil e o sintoma
+aparecia longe da causa**. Hoje as duas condições **somam**:
+
+```js
+papelDeApp(id, declarado) = declarado === "shell" || ehTema(id)
+ehTema(id)                = id === "launcher" || id.startsWith("launcher-")
+```
+
+| Situação | Resultado |
+| --- | --- |
+| `launcher`, `launcher-teste`, `launcher-star-dust`, `launcher-neon` | tema, **sem** declarar nada |
+| `my-launcher-tool`, `launchertool`, `relancher` | app comum — o prefixo é no **começo** e com **hífen** |
+| `meu-tema` com `role: "shell"` | tema, pela declaração |
+
+O hífen não é decoração: sem ele `launchertool` viraria tema e o app sumiria do
+catálogo em silêncio. E a declaração continua valendo — quem não usa o prefixo
+não perde a saída.
+
+O custo aceito é que um app chamado `launcher-*` que **não** seja interface
+também fica de fora. É o erro certo para o lado certo: um cartão a menos é
+recuperável renomeando a pasta; um cartão a mais abre um segundo launcher e
+derruba a interface inteira.
+
+`role` só aceita `shell` (`indice_role_invalido`). Antes qualquer texto passava
+e era descartado em silêncio — `role: "tema"`, o nome que o dono usa ao falar,
+não fazia nada e o app virava cartão como se não tivesse papel nenhum.
+
+**Tema fora da imagem avisa** (`tema_fora_da_imagem`, aviso e não erro): quem
+inicia um tema é o `giochi-init`, que procura em `/opt/giochi/apps`. Um tema com
+`distribution: store` instala em `/user/apps`, onde nada o procura — instala sem
+erro e nunca abre. Rodá-lo à mão para testar é legítimo, daí aviso.
+
+Hoje vale para os três apps de interface.
 
 Pasta em `app/` fora do `apps.json` reprova com `app_nao_registrado`: um app
 invisível para a loja é pior que um app quebrado.
@@ -171,7 +208,7 @@ reprova valor desconhecido (`gles4`, erro de digitação).
 ```bash
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
-node tests/run-all.mjs                      # 199 testes JS (lista vem de readdir)
+node tests/run-all.mjs                      # 206 testes JS (lista vem de readdir)
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
@@ -680,10 +717,16 @@ no app, nem no log, nem na tela.
 | `status: scaffold` fica fora | `bin/` vazio; cartão que não abre é pior que cartão ausente |
 | `distribution: host` fica fora | roda no PC |
 | `distribution: store` fica fora | é instalado em `/user/apps` pela loja |
-| `role: shell` fica fora | senão o launcher **lista a si mesmo** |
+| **tema** (`role: shell` **ou** prefixo `launcher`) fica fora | senão o launcher **lista a si mesmo** |
 | `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
 
-**Hoje o catálogo sai vazio (0 apps)** — os sete apps são host ou shell. Não é
+A linha do tema mudou de nome de propósito: o papel agora vem de duas fontes
+(§3), e `--lista` diz qual delas valeu — `tema do launcher (prefixo "launcher")`
+contra `role shell: é a própria interface`. Dizer "role shell" para um app que
+nunca declarou `role` manda quem lê procurar no `apps.json` um campo que não
+existe; é a ferramenta medindo a intenção em vez do efeito (§13).
+
+**Hoje o catálogo sai vazio (0 apps)** — os sete apps são host ou tema. Não é
 defeito: é o resultado correto das regras de projeção. Assim que um app `image`
 sem `role: shell` existir, ou um pacote da loja for instalado, ele aparece.
 

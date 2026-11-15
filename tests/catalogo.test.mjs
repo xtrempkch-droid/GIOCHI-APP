@@ -121,6 +121,67 @@ test("a interface não lista a si mesma", () => {
   });
 });
 
+// O dono pediu em 15/11/2026: criar um `launcher-<tema>` novo não pode exigir
+// que alguém lembre de declarar `role: "shell"`. Esquecer isso publicava um
+// cartão que abre um SEGUNDO launcher — que perde o DRM (exclusivo) e morre com
+// `kmsdrm not available`. O sintoma aparece longe da causa.
+test("launcher-* novo é tema mesmo sem declarar role", () => {
+  withTempDir((dir) => {
+    escreverIndice(dir, [
+      // Sem `role`: é o caso de quem acabou de criar o tema.
+      criarApp(dir, "launcher-neon"),
+      criarApp(dir, "launcher"),
+      criarApp(dir, "jogo"),
+    ]);
+    const { catalogo, avisos } = gerarCatalogo(dir);
+    assert.deepEqual(catalogo.apps.map((a) => a.id), ["jogo"]);
+    // O motivo tem de dizer *por que* de verdade. "role shell" para um app que
+    // nunca declarou `role` manda quem lê `--lista` procurar no `apps.json` um
+    // campo que não existe: a ferramenta mede a intenção em vez do efeito.
+    assert.ok(
+      avisos.some((a) => a.id === "launcher-neon" && /prefixo "launcher"/.test(a.motivo)),
+      avisos.map((a) => `${a.id}: ${a.motivo}`).join(" | "),
+    );
+    assert.ok(
+      avisos.some((a) => a.id === "launcher" && /prefixo "launcher"/.test(a.motivo)),
+      avisos.map((a) => `${a.id}: ${a.motivo}`).join(" | "),
+    );
+    // E quem declarou `role` continua vendo o motivo declarado, não o prefixo.
+    assert.ok(!avisos.some((a) => a.id === "jogo"));
+  });
+});
+
+// A contraprova do teste acima: o prefixo é `launcher` **no começo** e com
+// hífen. Um app que só contém a palavra no meio é app comum, senão a regra
+// engoliria qualquer coisa com "launcher" no nome.
+test("app que só contém 'launcher' no meio continua sendo app", () => {
+  withTempDir((dir) => {
+    escreverIndice(dir, [
+      criarApp(dir, "my-launcher-tool"),
+      criarApp(dir, "launchertool"),
+      criarApp(dir, "relancher"),
+    ]);
+    const { catalogo } = gerarCatalogo(dir);
+    assert.deepEqual(catalogo.apps.map((a) => a.id).sort(), [
+      "launchertool",
+      "my-launcher-tool",
+      "relancher",
+    ]);
+  });
+});
+
+// E o outro lado: quem não casa com o prefixo continua podendo declarar o papel.
+test("declaração de role continua valendo fora do prefixo", () => {
+  withTempDir((dir) => {
+    escreverIndice(dir, [
+      criarApp(dir, "interface-x", { registro: { role: "shell" } }),
+      criarApp(dir, "jogo"),
+    ]);
+    const { catalogo } = gerarCatalogo(dir);
+    assert.deepEqual(catalogo.apps.map((a) => a.id), ["jogo"]);
+  });
+});
+
 test("scaffold fica de fora, mesmo com binário no disco", () => {
   withTempDir((dir) => {
     escreverIndice(dir, [
@@ -398,6 +459,29 @@ test("instalado com role shell no apps.json não vira cartão", () => {
     avisos.some((a) => a.id === "launcher" && a.motivo === MOTIVOS.PAPEL_SHELL),
     "o motivo tem de dizer que é papel de shell, não que sumiu",
   );
+});
+
+// O `papeis` só existe para o que está no `apps.json`. Mas um tema instalado no
+// aparelho **sem** estar registrado lá ainda é um launcher, e listá-lo abriria
+// um segundo — o mesmo defeito, por outra porta. O prefixo do id resolve sem
+// depender de mapa nenhum.
+test("launcher-* instalado no aparelho não vira cartão, mesmo sem registro", () => {
+  const { catalogo, avisos } = mesclarInstalados(
+    { schemaVersion: 1, apps: [] },
+    [
+      {
+        id: "launcher-neon",
+        dir: "/user/apps/launcher-neon",
+        metadata: {
+          ...METADATA_BASE,
+          entrypoint: "bin/giochi-launcher-neon",
+          title: "Launcher Neon",
+        },
+      },
+    ],
+  );
+  assert.equal(catalogo.apps.length, 0, "tema não é algo para iniciar de dentro dele");
+  assert.ok(avisos.some((a) => a.id === "launcher-neon" && a.motivo === MOTIVOS.PAPEL_SHELL));
 });
 
 test("instalado desconhecido do apps.json continua entrando (pacote da loja)", () => {

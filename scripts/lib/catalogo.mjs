@@ -27,7 +27,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { readIndex } from "./apps.mjs";
+import { ehTema, papelDeApp, readIndex } from "./apps.mjs";
 
 // Onde o `Giochi System` põe os apps no aparelho. Ver `docs/integracao.md` §2.1.
 export const DIR_BASE_PADRAO = "/opt/giochi/apps";
@@ -39,9 +39,16 @@ export const MOTIVOS = {
   SCAFFOLD: "status scaffold: a fonte não foi migrada ou o binário não foi exportado",
   HOST: "distribution host: roda no PC, não vai para o aparelho",
   SHELL: "role shell: é a própria interface, não algo para iniciar de dentro dela",
-  /** O mesmo motivo de `SHELL`, mas a entrada veio de um `metadata.json` colhido
-   *  no aparelho — o caso do launcher instalado como app. */
-  PAPEL_SHELL: "role shell (declarado no apps.json): a cópia instalada não vira cartão",
+  /** Tema reconhecido pelo prefixo do nome, sem `role` declarado.
+   *
+   *  A mensagem separada existe porque "role shell" para um app que nunca
+   *  declarou papel nenhum é a ferramenta dizendo que mediu a intenção em vez
+   *  do efeito: quem lê `--lista` procuraria um `role` no `apps.json` que não
+   *  está lá. O motivo tem de ser o motivo de verdade. */
+  TEMA: 'tema do launcher (prefixo "launcher"): a interface não lista a si mesma',
+  /** O mesmo motivo de `TEMA`/`SHELL`, mas a entrada veio de um `metadata.json`
+   *  colhido no aparelho — o caso do launcher instalado como app. */
+  PAPEL_SHELL: "tema do launcher: a cópia instalada no aparelho não vira cartão",
   STORE: "distribution store: instalado em /user pela loja, não faz parte da imagem",
   SEM_BIN: "entrypoint não existe no disco",
   SEM_METADATA: "metadata.json ausente",
@@ -103,11 +110,15 @@ export function gerarCatalogo(appRoot, { dirBase = DIR_BASE_PADRAO, apenasInstal
     // abriria um SEGUNDO launcher, que brigaria com o primeiro pelo DRM master
     // e falharia com `kmsdrm not available`.
     //
-    // O papel é **declarado** (`role: "shell"` no `apps.json`), não inferido do
-    // nome: fixar `id === "launcher"` no gerador funcionaria até alguém renomear
-    // a pasta, e o erro voltaria sem aviso.
-    if (entrada.role === "shell") {
-      avisos.push({ id, motivo: MOTIVOS.SHELL });
+    // Tema do launcher: `launcher` e tudo que começa com `launcher-`.
+    //
+    // A regra vive em `papelDeApp`, e o prefixo do nome vale tanto quanto a
+    // declaração `role: "shell"`. Motivo: criar um `launcher-<tema>` novo e
+    // esquecer o `role` publicava um cartão que abria um SEGUNDO launcher —
+    // que perde o DRM (exclusivo) e morre com `kmsdrm not available`. O erro é
+    // fácil de cometer e o sintoma aparece longe da causa.
+    if (papelDeApp(id, entrada.role) === "shell") {
+      avisos.push({ id, motivo: ehTema(id) ? MOTIVOS.TEMA : MOTIVOS.SHELL });
       continue;
     }
 
@@ -220,9 +231,11 @@ export function mesclarInstalados(
     // dele justamente por ser shell, então `porId` não tem a informação. É por
     // isso que o chamador passa `papeis` lido do `apps.json`.
     //
-    // E herdar do repositório — em vez de fixar `id === "launcher"` — é o que
-    // mantém a regra declarada: renomear a pasta não muda o papel.
-    const papel = porId.get(id)?.role ?? papeis.get(id);
+    // E a mesma função decide os dois lados: o que está no `apps.json` e o que
+    // só existe no aparelho. Um `launcher-<tema>` instalado por engano em
+    // `/user/apps` cai aqui pela mesma regra de prefixo, sem depender de alguém
+    // ter lembrado de declarar o papel.
+    const papel = papelDeApp(id, porId.get(id)?.role ?? papeis.get(id));
     if (papel === "shell") {
       avisos.push({ id, motivo: MOTIVOS.PAPEL_SHELL });
       continue;
