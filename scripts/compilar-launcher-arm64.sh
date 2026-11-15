@@ -101,7 +101,10 @@ while [ $# -gt 0 ]; do
     --instalar)
       PEDIU_INSTALAR="sim"
       if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then
-        INSTALAR="$2"; shift 2
+        # Aceita `root@ip` e `ip`: o aparelho só tem `root`, e um `--instalar ip`
+        # que virasse `charles@ip` dava `Permission denied (publickey,...)` —
+        # mensagem que manda procurar chave quando o errado era o usuário.
+        INSTALAR="${2#root@}"; shift 2
       else
         shift
       fi
@@ -356,11 +359,11 @@ if [ -n "$INSTALAR" ]; then
   # conexão. O aviso vai para stderr e polui a saída do script inteiro.
   filtrar_ruido() { grep -vE "WARNING:|post-quantum|store now|openssh\.com/pq" || true; }
 
-  log "instalando em $INSTALAR:$DESTINO"
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
+  log "instalando em root@$INSTALAR:$DESTINO"
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" "mkdir -p $DESTINO" 2>&1 | filtrar_ruido
   scp -q -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "$BIN" "$INSTALAR:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$INSTALAR" \
+    "$BIN" "root@$INSTALAR:$DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no "root@$INSTALAR" \
     "chmod +x $DESTINO/$BIN_NAME && ls -la $DESTINO/$BIN_NAME" 2>&1 | filtrar_ruido
   # **Perguntar ao aparelho**, não afirmar. A mensagem dizia sempre "o inittab
   # não inicia o giochi-init", verdade na imagem do X55 de 03/11 e **falsa** nas
@@ -368,7 +371,7 @@ if [ -n "$INSTALAR" ]; then
   #
   # Uma mensagem fixa sobre o estado de outra pessoa envelhece calada, e o custo
   # é diagnosticar "não sobe" quando sobe.
-  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$INSTALAR" \
+  if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 "root@$INSTALAR" \
       'grep -qE "^[^#]*respawn:.*giochi-init" /etc/inittab' 2>/dev/null; then
     log "instalado. O inittab TEM respawn do giochi-init: a interface sobe no boot."
     log "  para ver agora sem reiniciar: bash scripts/aparelho.sh subir"
