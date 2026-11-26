@@ -85,6 +85,14 @@ GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP`.
 Quando a correção mora em repo alheio: **não editar** (nem um comentário); abrir
 uma **issue** no repositório responsável com o que foi medido, arquivo e linha,
 a consequência e o que a correção provavelmente é; registrar o número em §17.
+
+**Contornar aqui não substitui a issue** — decisão do dono, 26/11/2026. Um
+workaround do lado do app faz a coisa funcionar hoje e esconde o defeito de quem
+deveria corrigi-lo: todo frontend novo repete a mesma dança, e o primeiro que
+esquecer volta ao sintoma. O caso que gerou a regra é o `giochi-ports` rodando o
+`pugwash` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot` (§6.11): o
+cartão da loja contorna, e o pedido 6 de `docs/issues-para-outros-repos.md`
+existe para que a correção vá para o wrapper, onde vale para todos.
 Os vizinhos já têm trabalho não commitado de outra pessoa, e escrever ali
 mistura o meu diff com o de alguém.
 

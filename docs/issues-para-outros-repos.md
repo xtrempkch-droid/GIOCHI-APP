@@ -674,7 +674,7 @@ imagem**. Fonte não conserta, e por isso não entra neste pedido.
 
 ## 6. `GIOCHI-SYSTEM` — `giochi-ports` roda o `pugwash` sem duas coisas do caminho oficial, e a GUI não abre
 
-**Título:** `giochi-ports`: a GUI do PortMaster não abre — faltam `PYSDL2_DLL_PATH` e a limpeza do `.pugwash-reboot`
+**Título:** giochi-ports: a GUI do PortMaster não abre — faltam `PYSDL2_DLL_PATH` e a limpeza do `.pugwash-reboot`
 
 ### O que foi medido no R35S em 26/11/2026 (imagem `e0d74e6`, PortMaster `2026.11.17-0700`)
 
