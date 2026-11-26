@@ -428,9 +428,10 @@ falhar devolve o **último estado do supplicant** (`4-WAY_HANDSHAKE` = senha
 recusada; `SCANNING` = fora de alcance).
 
 **Bluetooth como entrada**: o kernel está completo para clássico (`CONFIG_HID`,
-`HID_GENERIC`, `BT_HIDP`), falta `CONFIG_UHID` (BLE) e `hidp` no autoload. O
-ponta a ponta **nunca foi medido**. As três provas que diziam o contrário eram
-falsas (§13).
+`HID_GENERIC`, `BT_HIDP`) e o `CONFIG_UHID=y` já está no fragmento da x55
+(conferido no remoto em 26/11/2026). O ponta a ponta **nunca foi medido** — falta
+uma imagem construída com esse config. As três provas que diziam faltar
+`CONFIG_HID` eram falsas (§13).
 
 ### 6.7 Feature `texto`
 
@@ -779,7 +780,7 @@ armadilha aqui; o caso completo em
 | Wi-Fi sobrevive ao reboot | **medido**: voltou sozinho para a rede, com IP, sem digitar senha |
 | boot automático (`::respawn:` → init → launcher) | **medido** no X55: `ppid` do launcher é o init, 29 s depois do boot |
 | Bluetooth: parear | **medido** (`Bonded: yes`) |
-| Bluetooth: virar entrada | **bloqueado na imagem** (falta `CONFIG_UHID` e `hidp` no autoload) |
+| Bluetooth: virar entrada | **corrigido no config, imagem não medida** — o fragmento da x55 já traz `CONFIG_UHID=y` e `CONFIG_BT_HIDP=m` (conferido no remoto em 26/11/2026); falta uma imagem construída com ele e o teste ponta a ponta |
 | Star Dust desligado = launcher idêntico | **medido**, 4 tamanhos, byte a byte |
 | launcher-teste 100 % pixel a pixel | **medido**, 4 tamanhos + 6 telas |
 | `.pyz` e loja nos três sistemas | **medido** no CI (7 e 4 jobs verdes) |
@@ -842,13 +843,19 @@ A conversa entre as equipes vive em `/home/charles/Giochi/chat_de_equipe.txt` �
 Pedidos abertos em [`docs/issues-para-outros-repos.md`](docs/issues-para-outros-repos.md),
 com medição, arquivo e linha, consequência e como conferir:
 
-| # (doc) | Repo | Pedido | Gravidade |
+| # (doc) | Repo | Pedido | Estado medido em 26/11/2026 |
 | --- | --- | --- | --- |
-| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel |
-| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** |
-| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso |
-| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente |
-| 5 | System | fontes de CJK/devanágari/bengali | **o mais visível**: 3 dos 10 idiomas em quadradinhos |
+| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | **atendido**: `CONFIG_UHID=y` e `CONFIG_BT_HIDP=m` no fragmento da x55, e as três issues fechadas. **Não reenviar** |
+| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **aberto** — `update_config` tem 0 ocorrências no repo remoto; é o mais grave |
+| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | **aberto** — `giochi-selftest:1128-1131` inalterado |
+| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | **aberto** — `pipeline.mjs` põe todo `embedded` em `opt/giochi/apps`, sem `kind` |
+| 5 | System | fontes de CJK/devanágari/bengali | **já é a issue `GIOCHI-SYSTEM#5`**, aberta. Não reenviar |
+
+Os pedidos **2**, **3** e **4** foram entregues em 26/11/2026 pelo formulário do
+`issues/new` já preenchido, aberto no navegador da máquina
+(`node scripts/abrir-issue.mjs {2,3,4} --abrir`). O número entra nesta tabela
+**só quando a issue existir**: anunciar "issue criada" sem ter criado é o §10
+aplicado à conversa entre equipes.
 
 **O número do documento não é o número da issue**, e essa confusão já é o
 primeiro defeito da tabela: as issues **deste** repositório (#2–#5) são o pedido

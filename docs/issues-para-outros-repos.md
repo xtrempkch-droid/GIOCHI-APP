@@ -54,11 +54,37 @@ no ambiente.
 
 | # | Repositório | Assunto | Gravidade |
 | --- | --- | --- | --- |
-| 1 | `GIOCHI-SYSTEM` | `CONFIG_UHID` para BLE + `hidp` no boot | média (só BLE) |
+| 1 | `GIOCHI-SYSTEM` | `CONFIG_UHID` para BLE + `hidp` no boot | **já corrigido do lado deles** (ver abaixo) |
 | 2 | `GIOCHI-SYSTEM` | Wi-Fi não sobrevive ao reboot | **defeito visível ao usuário** |
 | 3 | `GIOCHI-SYSTEM` | Raízes `/opt|/user/games` e o `giochi-selftest` | aviso falso no aparelho |
 | 4 | `GIOCHI-OS` | `runAppsPhase` grava todo app em `/opt/giochi/apps` | **latente** |
 | 5 | `GIOCHI-SYSTEM` | fontes das escritas do launcher (chinês, hindi, bengali) | **o launcher multi-idioma só desenha 7 dos 10** |
+
+### Estado conferido no remoto em 26/11/2026 (antes de reenviar)
+
+Conferir antes de abrir não é zelo: reenviar um pedido já atendido custa uma
+duplicata na caixa da outra equipe. O que foi medido, por leitura do repositório
+remoto (`search_code` / `get_file_contents`), não da cópia local:
+
+| Pedido | Medição | Veredito |
+| --- | --- | --- |
+| **1** (Bluetooth) | `device/powkiddy x55/linux.fragment` traz **`CONFIG_UHID=y`** (linha 265) e **`CONFIG_BT_HIDP=m`** (linha 274), com o comentário que cita `/proc/config.gz`; as issues `GIOCHI-SYSTEM#1`, `#2` e `#3` estão **fechadas** (`#3` como `completed`) | **não reenviar** — o corpo antigo era errado, mas o efeito já foi corrigido |
+| **2** (Wi-Fi) | `search_code: repo:GIOCHI-SYSTEM update_config` → **0 ocorrências** em 26/11/2026 | **vale** — é o mais grave e o único que ninguém tocou |
+| **3** (raízes) | `giochi-selftest` linhas **1128-1131**: `grep -c '"id"'` numa raiz só e o aviso "a grade ficaria vazia" **inalterados** | **vale** |
+| **4** (`kind`) | `pipeline.mjs` escreve todo `embedded` em `opt/giochi/apps` e o `index.push` **não tem `kind`**; `apps.mjs` não lê `kind` do `metadata.json` | **vale** |
+| **5** (fontes) | já é a issue **`GIOCHI-SYSTEM#5`**, aberta | **não reenviar** |
+
+O pedido **1** fica aqui como registro do corpo correto (o que as três issues
+fechadas não tinham), para o dia em que alguém precisar reabrir o assunto — e é
+a prova de que a autocorreção de 15/11/2026 estava certa: o que faltava era
+`CONFIG_UHID` e o `hidp`, não `CONFIG_HID`.
+
+**Como os três foram entregues em 26/11/2026:** `node scripts/abrir-issue.mjs
+{2,3,4} --abrir` abriu o formulário do `issues/new` já preenchido no navegador
+da máquina. O número só entra na tabela do `AGENTS.md` §17 quando a issue
+existir — anunciar "issue criada" sem ter criado é o §10 aplicado à conversa
+entre equipes.
+
 
 A ordem é por gravidade: a **#2** é a mais grave (a documentação atual deixa o
 aparelho pior do que estava), a #1 cobre só BLE depois da correção, e a #4 hoje
