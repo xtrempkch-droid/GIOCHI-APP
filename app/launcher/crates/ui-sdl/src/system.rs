@@ -195,6 +195,68 @@ mod tests {
         assert_eq!(Acao::Desligar.comando(), "poweroff");
     }
 
+    /// `SIGTERM` durante o filho mata o launcher — e é isso que o
+    /// `giochi-ports` espera.
+    ///
+    /// ## O que este teste prende
+    ///
+    /// 1. o **caminho do lançamento** arma o handler (contador). Reverter a
+    ///    correção — tirar `sigterm::instalar()` de `lancar_com_saida` — reprova
+    ///    aqui, e é o defeito medido no R35S em 26/11/2026: o `giochi-ports`
+    ///    pedia a saída, ninguém morria e o cartão do FORM não abria;
+    /// 2. o handler **anota** o sinal em vez de engoli-lo (era o que o handler
+    ///    do SDL fazia: postava `SDL_QUIT` numa fila que ninguém lia).
+    ///
+    /// ## Por que um teste só, e não dois
+    ///
+    /// `SIGTERM` é global ao processo e o `cargo test` roda em paralelo: dois
+    /// testes que armam e restauram o handler se atropelam, e o `raise` de um
+    /// pega o handler padrão do outro — **o processo de teste morre com sinal
+    /// 15** (medido: a suíte inteira caiu). Um teste sequencial não tem essa
+    /// janela.
+    ///
+    /// O `morrer()` não é exercitado: ele mata o processo de teste de propósito.
+    /// Quem o prova é o aparelho, com o FORM abrindo.
+    #[cfg(unix)]
+    #[test]
+    fn sigterm_arma_no_lancamento_e_e_anotado() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("giochi-sigterm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).expect("dir do filho");
+        let bin = dir.join("bin").join("filho");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").expect("script");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("+x");
+
+        let alvo = crate::catalogo::Alvo {
+            slug: "filho-de-teste".to_string(),
+            dir: dir.to_string_lossy().into_owned(),
+            entrypoint: "bin/filho".to_string(),
+            tipo: giochi_launcher_core::deteccao::Tipo::App,
+        };
+
+        // 1) o lançamento arma o handler (e restaura no fim)
+        let antes = super::sigterm::armado_vezes();
+        let resultado = super::lancar_com_saida(&alvo, None);
+        assert!(resultado.is_ok(), "{resultado:?}");
+        assert_eq!(
+            super::sigterm::armado_vezes(),
+            antes + 1,
+            "o lançamento não armou o handler: SIGTERM durante o filho seria engolido"
+        );
+
+        // 2) armado, o sinal é anotado em vez de engolido
+        let anterior = super::sigterm::instalar();
+        assert!(!super::sigterm::pedido(), "o pedido não pode vir de outra rodada");
+        unsafe { super::sigterm::raise_para_teste() };
+        let viu = super::sigterm::pedido();
+        super::sigterm::restaurar(anterior);
+        assert!(viu, "SIGTERM foi engolido: o giochi-ports desistiria em 6 s");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn comando_inexistente_devolve_erro_em_vez_de_panico() {
         // `Acao` só tem comandos que existem, mas o contrato de `executar` é
@@ -339,6 +401,137 @@ impl Drop for Vigia {
     }
 }
 
+/// Quantos descritores deste processo apontam para `/dev/dri/*`, como texto.
+///
+/// ## Por que isto existe
+///
+/// O `giochi-ports` decide "o DRM está livre?" lendo `/proc/*/fd` atrás de
+/// `card0` — **não** pergunta quem tem o *master*. Um descritor aberto basta
+/// para ele concluir que o launcher está usando o display.
+///
+/// Medido no R35S em 26/11/2026, na primeira versão do cartão de port do FORM:
+///
+/// ```text
+/// sistema: iniciando portmaster-form (/user/apps/portmaster-form/bin/portmaster-form)
+/// giochi-ports: rodando FORM.sh (de /user/ports)
+/// giochi-ports: liberando o DRM: parando o PID 5881 (o launcher)
+/// ```
+///
+/// O `Painter` já tinha sido destruído (`App::encerrar`) e o *master* estava
+/// solto — mas o `card0` seguia aberto. **Soltar o `VideoSubsystem` não fecha
+/// esse fd**: medido na primeira tentativa de correção, `1 -> /dev/dri/card0`
+/// continuava ali depois do `drop`. Quem o segura é o driver gráfico (libmali)
+/// que o renderer `opengles2` carrega, e ele só fecha quando o processo morre.
+///
+/// Daí a correção ser outra: **morrer de SIGTERM**, que é exatamente o que o
+/// `giochi-ports` pede ("o supervisor o trará de volta ao sair"). Ver
+/// [`sigterm`].
+pub fn fds_do_drm_detalhe() -> Vec<String> {
+    let Ok(entradas) = std::fs::read_dir("/proc/self/fd") else {
+        return Vec::new();
+    };
+    let mut achados: Vec<String> = entradas
+        .flatten()
+        .filter_map(|e| {
+            let alvo = std::fs::read_link(e.path()).ok()?;
+            let alvo = alvo.to_str()?;
+            alvo.starts_with("/dev/dri/")
+                .then(|| format!("{} -> {alvo}", e.file_name().to_string_lossy()))
+        })
+        .collect();
+    achados.sort();
+    achados
+}
+
+/// SIGTERM durante o filho: sair **de verdade**, por sinal.
+///
+/// ## O defeito que isto corrige
+///
+/// O SDL instala um handler de `SIGTERM` que só posta `SDL_QUIT` na fila. Fora
+/// do laço de eventos isso é o mesmo que ignorar o sinal — e é exatamente onde
+/// o launcher está enquanto um app roda.
+///
+/// O `giochi-ports` foi escrito contando com o contrário: ele cria
+/// `/run/giochi/dev-free-console`, manda `SIGTERM` no dono de `card0`, espera o
+/// descritor liberar e roda o port; o supervisor devolve a interface quando o
+/// marcador some. Com o launcher surdo ao sinal, `liberar_drm` desiste depois de
+/// 6 s, o `trap` remove o marcador e **o port nunca abre** — o sintoma é "o
+/// cartão não abre", sem nenhuma mensagem na tela (medido no R35S, 26/11/2026).
+///
+/// ## Por que reerguer o sinal, e não `exit(143)`
+///
+/// O `giochi-init` zera a cota de reinício quando a saída é **por sinal**; um
+/// `exit` com código 143 conta como queda e gasta uma das cinco. Repor o
+/// handler padrão e chamar `raise` dá a morte por sinal que ele espera.
+#[cfg(unix)]
+mod sigterm {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const SIGTERM: i32 = 15;
+    const SIG_DFL: usize = 0;
+
+    extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+        fn raise(sig: i32) -> i32;
+    }
+
+    static PEDIDO: AtomicBool = AtomicBool::new(false);
+    /// Quantas vezes o handler foi armado. Existe para o teste poder provar que
+    /// **o caminho do lançamento** o arma — um teste que armasse o handler por
+    /// conta própria passaria mesmo sem a correção.
+    static ARMADO: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn anotar(_: i32) {
+        PEDIDO.store(true, Ordering::SeqCst);
+    }
+
+    /// Instala o handler e devolve o anterior, para restaurar.
+    ///
+    /// Só um `store` atômico aqui: o que roda em contexto de sinal tem de ser
+    /// async-signal-safe, e a decisão de sair fica no laço.
+    pub fn instalar() -> usize {
+        ARMADO.fetch_add(1, Ordering::SeqCst);
+        // `as *const () as usize`: o cast direto de fn para inteiro é
+        // `function_casts_as_integer`, que o clippy reprova com `-D warnings`.
+        unsafe { signal(SIGTERM, anotar as *const () as usize) }
+    }
+
+    /// Só o teste usa. Fica `allow` e não `cfg`: o Star Dust compila este módulo
+    /// por `#[path]` e **não** tem esse teste, então tanto o build normal quanto
+    /// o alvo de teste dele a veriam como código morto — e `-D warnings` reprova.
+    #[allow(dead_code)]
+    pub fn armado_vezes() -> usize {
+        ARMADO.load(Ordering::SeqCst)
+    }
+
+    pub fn restaurar(anterior: usize) {
+        unsafe {
+            signal(SIGTERM, anterior);
+        }
+    }
+
+    pub fn pedido() -> bool {
+        PEDIDO.load(Ordering::SeqCst)
+    }
+
+    /// Levanta `SIGTERM` neste processo. Só para teste: é o mesmo efeito de um
+    /// `kill -TERM`, sem depender de `libc` nem do PID.
+    #[cfg(test)]
+    pub unsafe fn raise_para_teste() {
+        raise(SIGTERM);
+    }
+
+    /// Morre por `SIGTERM`, como se ninguém o tivesse interceptado.
+    pub fn morrer() -> ! {
+        unsafe {
+            signal(SIGTERM, SIG_DFL);
+            raise(SIGTERM);
+        }
+        // Se o `raise` não matar (não deveria), sai com o código convencional.
+        std::process::exit(143)
+    }
+}
+
 /// Executa o app e espera.
 ///
 /// ## Por que filho, e não `exec`
@@ -388,11 +581,37 @@ pub fn lancar_com_saida(
         );
     }
 
+    // Daqui até o fim do filho, `SIGTERM` tem de encerrar **este processo**.
+    // Fora isso o SDL trata o sinal (posta `SDL_QUIT` na fila) e o launcher
+    // fica surdo justamente na janela em que o `giochi-ports` precisa que ele
+    // saia para liberar `card0`. Ver [`sigterm`].
+    #[cfg(unix)]
+    let handler_anterior = sigterm::instalar();
+
     let codigo = loop {
         match filho.try_wait() {
             Ok(Some(status)) => break status.code(),
             Ok(None) => {}
-            Err(e) => return Err(format!("não consegui esperar {}: {e}", alvo.slug)),
+            Err(e) => {
+                #[cfg(unix)]
+                sigterm::restaurar(handler_anterior);
+                return Err(format!("não consegui esperar {}: {e}", alvo.slug));
+            }
+        }
+        // Quem pediu a saída foi outra pessoa (o `giochi-ports` é o caso real).
+        // Sair por sinal deixa o filho órfão e vivo, que é o que ele quer: o
+        // port assume a tela e o supervisor devolve a interface depois.
+        #[cfg(unix)]
+        if sigterm::pedido() {
+            let fds = fds_do_drm_detalhe();
+            eprintln!(
+                "sistema: SIGTERM durante {} — saindo para quem pediu devolver a interface \
+                 ({} descritor(es) de /dev/dri neste processo: {})",
+                alvo.slug,
+                fds.len(),
+                if fds.is_empty() { "nenhum".to_string() } else { fds.join(", ") }
+            );
+            sigterm::morrer();
         }
         if vigia.as_ref().is_some_and(Vigia::pediu_saida) {
             // `SIGKILL`, não `SIGTERM`: o SDL instala um handler de SIGTERM que
@@ -405,11 +624,16 @@ pub fn lancar_com_saida(
                 alvo.slug,
                 SAIDA_SEGURADA.as_secs_f32()
             );
+            #[cfg(unix)]
+            sigterm::restaurar(handler_anterior);
             drop(vigia);
             return Ok(Lancamento::EncerradoAMao);
         }
         std::thread::sleep(INTERVALO_DE_VIGIA);
     };
+
+    #[cfg(unix)]
+    sigterm::restaurar(handler_anterior);
 
     eprintln!(
         "sistema: {} terminou ({})",

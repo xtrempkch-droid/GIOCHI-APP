@@ -540,8 +540,21 @@ ponte, na abertura e **antes** da detecção:
 - `--sincronizar-ports` exercita o módulo sem abrir a interface (abrir custa uma
   volta do `giochi-init`, cuja cota é pequena — §13).
 
-Medido no R35S em 26/11/2026: `--lancar portmaster-form` (o mesmo campo do botão
-A) chega a `giochi-ports: rodando FORM.sh`, e o FORM desenha dentro do `bwrap`.
+**O launcher tem de morrer de `SIGTERM` durante o filho — é o contrato dele com
+o `giochi-ports`.** O port não pede só "o DRM livre": ele lê `/proc/*/fd` atrás
+de `card0` e manda `SIGTERM` no dono, contando que o supervisor devolva a
+interface quando o marcador sumir. O launcher mantém `card0` aberto (é a libmali
+do `opengles2`, não o SDL: soltar o `VideoSubsystem` **não** fecha, medido) e,
+sem a correção, o SDL engolia o sinal no laço de espera: o `giochi-ports`
+desistia em 6 s e **o cartão não abria**, sem mensagem na tela. Hoje
+`lancar_com_saida` arma um handler que repõe o default e se reergue (morrer por
+sinal, não `exit(143)`: `giochi-init` zera a cota em saída por sinal).
+
+Medido no R35S em 26/11/2026, no ciclo completo: launcher sai por `SIGTERM` →
+`FORM video: opengles2 renderer, vsync on` dentro do `bwrap` → marcador presente
+durante o port → usuário sai → marcador removido → **supervisor devolve o
+launcher com o DRM**. E um app comum (`musica`) continua voltando: a correção não
+mexeu nesse caminho.
 Detalhe, medições e o que **não** foi feito (aba própria, PortMaster na loja):
 [`docs/portmaster.md`](docs/portmaster.md).
 
@@ -742,7 +755,9 @@ armadilha aqui; o caso completo em
 | o dono do DRM pode ser o app | com `fork`+`wait` sem DRM, matar o launcher deixa o app **órfão com o dispositivo** |
 | `giochi-init` desiste | `RESTART_MAX=5` quedas em 60 s e ele dorme em `sleep 3600`. **Seis `verificar` seguidos deixam o aparelho sem interface** |
 | `SEM_DRM` era aviso, não falha | o caminho de recuperação nunca era alcançado; e `/run/giochi/launcher-parado` nunca era apagado |
-| `SIGTERM` não mata o laço | o SDL só posta `SDL_QUIT` na fila: **`kill -9`**. E `timeout 14 launcher --lancar X` **não termina** (`fork`+`wait`) |
+| `SIGTERM` não mata o laço | o SDL só posta `SDL_QUIT` na fila: **`kill -9`**. Corrigido em 26/11/2026 **na janela do filho** (§6.11) — antes dela segue valendo, e `timeout 14 launcher --lancar X` agora termina |
+| descritor aberto ≠ DRM ocupado | o `giochi-ports` pergunta por `/proc/*/fd`→`card0`, e o `card0` do launcher é da libmali: **soltar o `VideoSubsystem` do SDL não fecha** (medido: `3 -> /dev/dri/card0` continuava). O caminho é morrer de `SIGTERM` (§6.11) |
+| teste que arma `SIGTERM` em paralelo | `SIGTERM` é global ao processo: dois testes que armam/restauram o handler se atropelam e o `raise` de um pega o default do outro — **a suíte morre com sinal 15**. Um teste sequencial só |
 | `timeout` na ponta do host | não mata o processo remoto: matar o `ssh` deixa o comando rodando no aparelho |
 | BMP de 32 bpp | calcular o *stride* como `ceil(largura*bpp/4)*4`; ler como 24 bpp invalida a rodada. Girar 90° e voltar tem de dar 100,00 % |
 | `--dump-frame` grava preto | com backend acelerado o swap esvazia o buffer: use `GIOCHI_GLES=0` |
@@ -788,7 +803,7 @@ armadilha aqui; o caso completo em
 | launcher multi-idioma (10 idiomas) | **medido** no R35S: boas-vindas na 1ª abertura, `en -> pt` pelo caminho real, Home `pt` **99,6 %**, `verificar` **100,0 %** |
 | escolha do idioma por **botão físico** | **medido**: um toque no controle gravou `en\n`, e a execução seguinte abriu sem perguntar |
 | cobertura de fonte por idioma | **medido** com `--fontes` (`TTF_GlyphIsProvided`): `pt/ru/ar` completos, `zh` 5/8, `hi` 1/11, `bn` 1/10 — falta fonte na imagem |
-| ports do PortMaster no launcher | **medido** no R35S em 26/11/2026: cartão criado, detectado e **lançado**, com o FORM rodando dentro do `bwrap` (§6.11) |
+| ports do PortMaster no launcher | **medido** no R35S em 26/11/2026: cartão criado, detectado e **lançado**, com o FORM rodando dentro do `bwrap` — inclusive o **ciclo inteiro**: launcher sai por `SIGTERM`, o port abre com `opengles2`, e o supervisor devolve a interface quando ele termina (§6.11) |
 
 **Regra de honestidade:** nada aqui pode ser declarado "funciona" sem ter sido
 executado. "Compila" e "roda" são afirmações diferentes — e o `poweroff` já caiu

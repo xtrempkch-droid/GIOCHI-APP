@@ -91,6 +91,73 @@ morresse com o marcador, o launcher não voltaria.
 
 ---
 
+## 3b. Por que o cartão não abria — e a correção de 26/11/2026
+
+A primeira versão **funcionava no papel e não abria o FORM**. Medido no R35S:
+
+```text
+sistema: iniciando portmaster-form (/user/apps/portmaster-form/bin/portmaster-form)
+giochi-ports: rodando FORM.sh (de /user/ports)
+giochi-ports: liberando o DRM: parando o PID 5881 (o launcher) — o supervisor o trará de volta ao sair
+```
+
+E o FORM nunca aparecia. A tela ficava onde estava, sem mensagem nenhuma.
+
+### A causa, em três elos
+
+1. **O `giochi-ports` pergunta "o DRM está livre?" lendo `/proc/*/fd`** atrás de
+   `/dev/dri/card0` — não pergunta quem tem o *master*. Basta um descritor
+   aberto para ele concluir que o launcher está com a tela.
+2. **O launcher mantinha `card0` aberto**, mesmo depois de `App::encerrar()`
+   soltar o `Painter` e devolver o *master*. Quem segura o descritor é o driver
+   gráfico (`libmali`) carregado pelo renderer `opengles2`, e ele só fecha quando
+   o processo morre. **Soltar o `VideoSubsystem` do SDL não resolve** — foi a
+   primeira correção tentada, e a medida mostrou que o fd continuava:
+   `1 descritor(es) ... 3 -> /dev/dri/card0`.
+3. **O launcher não morria com `SIGTERM`.** O SDL instala um handler que só
+   posta `SDL_QUIT` na fila de eventos, e durante o filho ninguém bombeia essa
+   fila. O `giochi-ports` esperava 6 s, desistia, removia o marcador e saía.
+
+O terceiro elo é o que o **próprio `giochi-ports` documenta**: ele manda
+`SIGTERM` de propósito porque o `giochi-init` zera a cota de reinício em saída
+por sinal, e conta com o supervisor para devolver a interface quando o port
+terminar. O lado do app é que não cumpria a parte dele.
+
+### A correção, no app
+
+`system::lancar_com_saida` arma um handler de `SIGTERM` durante a espera do
+filho; quando o sinal chega, ele **repõe o handler padrão e se reergue**
+(`raise`), morrendo por sinal de verdade — `exit(143)` contaria como queda e
+gastaria a cota de cinco. O filho fica órfão e vivo, que é o desejado: o port
+assume a tela, e o supervisor devolve o launcher quando o marcador some.
+
+O log diz o que aconteceu, com a medida que explica o pedido:
+
+```text
+sistema: SIGTERM durante portmaster-form — saindo para quem pediu devolver a
+  interface (1 descritor(es) de /dev/dri neste processo: 3 -> /dev/dri/card0)
+```
+
+Fora da janela do filho, o comportamento do SDL continua o de antes: o handler é
+restaurado assim que o app termina normalmente.
+
+### Verificação (R35S, 26/11/2026)
+
+| Passo | Resultado |
+| --- | --- |
+| abre o cartão pelo caminho do botão A | o launcher **sai por `SIGTERM`**, como o `giochi-ports` pede |
+| o port | `FORM video: opengles2 renderer, vsync on` — GPU de verdade, dentro do `bwrap` |
+| durante o port | `/run/giochi/dev-free-console` presente (o supervisor não devolve no meio) |
+| o usuário sai do FORM | `giochi-ports` sai, **o marcador some** |
+| depois | o supervisor sobe o launcher, com `card0` aberto — a interface volta sozinha |
+| app comum (`musica`) | abre, termina e o launcher volta: a correção não mudou esse caminho |
+
+Teste que prende a correção: `sigterm_arma_no_lancamento_e_e_anotado`, em
+`system.rs`. Ele falha se o `sigterm::instalar()` sair de `lancar_com_saida`
+(conferido revertendo de propósito), e roda em **um** teste só porque `SIGTERM` é
+global ao processo: dois testes que armam e restauram o handler em paralelo fazem
+o `raise` de um pegar o handler padrão do outro e **a suíte morre com sinal 15**.
+
 ## 4. Medido no R35S em 26/11/2026
 
 Imagem `e0d74e6` (com `GIOCHI_WITH_PORTMASTER=1`), port `FORM` instalado:
