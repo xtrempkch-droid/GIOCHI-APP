@@ -212,6 +212,26 @@ launcher, espera o `card0` liberar e sobe a GUI; ao sair, remove o marcador e o
 `giochi-init` devolve a interface. Só funciona porque o launcher passou a morrer
 de `SIGTERM` (§3b).
 
+### Duas coisas que o cartão precisa fazer, e por quê
+
+O `giochi-ports` roda `python3 ./pugwash` direto. O caminho **oficial** do
+PortMaster (`PortMaster.sh` → `utils/pm_launch.txt`) faz duas coisas antes, e
+sem elas a loja não abre — as duas foram medidas no R35S em 26/11/2026:
+
+| Falta | Sintoma | Por quê |
+| --- | --- | --- |
+| `PYSDL2_DLL_PATH=/usr/lib` | `SDLError: … No available video device` | sem a variável o `pysdl2` carrega o SDL2 de `exlibs/` do pacote, que não tem KMSDRM. É o `pm_hook_gui_env` deles |
+| apagar `.pugwash-reboot` | abre e **fecha na mesma hora**, sem mensagem | o `pugwash` lê esse arquivo **depois** de inicializar o SDL e, se ele existe, pula o `pm.run()` e retorna 0. É o pedido de "reinicie-me" do auto-update. O `pm_launch.txt` apaga antes de cada execução |
+
+O arquivo estava em `/user/ports/PortMaster/.pugwash-reboot` **desde 20/11** (de
+uma execução anterior da GUI) e a loja nunca abria. É a mesma família do
+marcador de DRM: estado que sobra de uma execução e mente sobre a próxima.
+
+O cartão gerado faz as duas coisas antes do `exec`. O laço de reexecução do
+`pm_launch.txt` (para quando o `pugwash` pede reinício de verdade) **não** foi
+reproduzido: aqui, um pedido de reinício exige que o usuário feche e abra a loja
+de novo — um toque, e evita repetir a dança do DRM no meio de um app.
+
 ### Medido no R35S em 26/11/2026
 
 ```text
@@ -221,10 +241,16 @@ giochi-ports: liberando o DRM: parando o PID 1557 (o launcher) — o supervisor 
 sistema: SIGTERM durante portmaster — saindo para quem pediu devolver a interface
 ```
 
-Depois disso: `pugwash` rodando dentro do `bwrap` (3 processos), o usuário sai,
-`giochi-ports` encerra, o marcador some e o supervisor devolve o launcher com o
-DRM. As duas passadas seguintes de `--sincronizar-ports` dizem `2 igual(es)` —
-não reescreve, que é o comportamento certo num cartão SD.
+Com as duas correções, amostrado com relógio de verdade: a GUI ficou **de t=15 s
+a t=99 s** no ar (a janela inteira do teste), com o marcador do supervisor
+presente, o launcher morto, `pugwash` vivo e **zero** erro de vídeo. Antes:
+`No available video device` (sem a variável) e saída imediata (com o marcador
+velho).
+
+Quando a GUI termina, `giochi-ports` encerra, o marcador some e o supervisor
+devolve o launcher com o DRM — medido: `19698 ppid=4177` com `card0` aberto. As
+passadas seguintes de `--sincronizar-ports` dizem `2 igual(es)` — não reescreve,
+que é o comportamento certo num cartão SD.
 
 ## 4. Medido no R35S em 26/11/2026
 

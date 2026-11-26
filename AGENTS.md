@@ -548,6 +548,20 @@ a GUI, e o devolve"), e ele só funciona porque o launcher morre de `SIGTERM`
 (abaixo). Sem o cartão da loja, instalar um port exigiria SSH — o usuário do
 aparelho não tinha como.
 
+O `giochi-ports` roda `python3 ./pugwash` direto, sem passar pelo
+`PortMaster.sh` deles. Duas coisas do caminho oficial, então, ficam por conta do
+cartão — e sem elas a loja não abre (medido no R35S em 26/11/2026):
+
+- **`PYSDL2_DLL_PATH=/usr/lib`**: o GUI é `pysdl2`; sem a variável ele carrega o
+  SDL2 de `exlibs/` do pacote, que não tem KMSDRM, e o erro é
+  `No available video device` — que aponta para o pysdl2, não para o driver.
+  É o `pm_hook_gui_env` deles;
+- **apagar `.pugwash-reboot` antes de abrir**: o `pugwash` lê esse arquivo
+  *depois* de inicializar o SDL e, se existe, **pula o `pm.run()`** e retorna 0.
+  A loja "abre" e fecha na mesma hora, sem mensagem. O `pm_launch.txt` apaga
+  antes de cada execução; o arquivo estava lá desde 20/11 e nada abria. Mesma
+  família do marcador de DRM: estado que sobra e mente sobre a próxima.
+
 - O `entrypoint` **precisa** começar em `bin/`: o detector recusa o layout da
   raiz que o pedido original sugeria (`entrypoint inválido ... (precisa começar
   em bin/)`, medido no R35S).
@@ -779,6 +793,8 @@ armadilha aqui; o caso completo em
 | `SIGTERM` não mata o laço | o SDL só posta `SDL_QUIT` na fila: **`kill -9`**. Corrigido em 26/11/2026 **na janela do filho** (§6.11) — antes dela segue valendo, e `timeout 14 launcher --lancar X` agora termina |
 | descritor aberto ≠ DRM ocupado | o `giochi-ports` pergunta por `/proc/*/fd`→`card0`, e o `card0` do launcher é da libmali: **soltar o `VideoSubsystem` do SDL não fecha** (medido: `3 -> /dev/dri/card0` continuava). O caminho é morrer de `SIGTERM` (§6.11) |
 | teste que arma `SIGTERM` em paralelo | `SIGTERM` é global ao processo: dois testes que armam/restauram o handler se atropelam e o `raise` de um pega o default do outro — **a suíte morre com sinal 15**. Um teste sequencial só |
+| estado que sobra e mente | `.pugwash-reboot` de uma execução anterior fez o `pugwash` pular a GUI e sair; o cartão "abria" e nada aparecia. A limpeza é do cartão (§6.11), não do usuário |
+| amostrar com `sleep` mentindo o tempo | o laço de amostragem gastava segundos por volta e os rótulos `+42s` eram ficção; a loja rodava 60 s. Medir com `date +%s`, não com contador de laço |
 | `timeout` na ponta do host | não mata o processo remoto: matar o `ssh` deixa o comando rodando no aparelho |
 | BMP de 32 bpp | calcular o *stride* como `ceil(largura*bpp/4)*4`; ler como 24 bpp invalida a rodada. Girar 90° e voltar tem de dar 100,00 % |
 | `--dump-frame` grava preto | com backend acelerado o swap esvazia o buffer: use `GIOCHI_GLES=0` |
@@ -887,6 +903,7 @@ com medição, arquivo e linha, consequência e como conferir:
 | 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | **aberto** — `giochi-selftest:1128-1131` inalterado |
 | 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | **aberto** — `pipeline.mjs` põe todo `embedded` em `opt/giochi/apps`, sem `kind` |
 | 5 | System | fontes de CJK/devanágari/bengali | **já é a issue `GIOCHI-SYSTEM#5`**, aberta. Não reenviar |
+| 6 | System | `giochi-ports` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot`: a GUI do PortMaster não abre | **aberto** (26/11/2026) — o app contorna no cartão da loja, mas a correção é do wrapper |
 
 Os pedidos **2**, **3** e **4** foram entregues em 26/11/2026 pelo formulário do
 `issues/new` já preenchido, aberto no navegador da máquina

@@ -567,6 +567,35 @@ fn script_da_loja(loja: &Loja) -> String {
          # portou no próprio `port.json`.\n\
          #\n\
          # Não edite: este arquivo é reescrito quando a instalação muda.\n\
+         #\n\
+         # A GUI é Python + pysdl2. Sem PYSDL2_DLL_PATH o pysdl2 carrega o SDL2\n\
+         # de `exlibs/` do pacote, que **não** tem KMSDRM, e o erro é\n\
+         #   SDLError: ... No available video device\n\
+         # apontado para o pysdl2 e não para o driver. É exatamente o que o\n\
+         # `pm_hook_gui_env` do `utils/pm_launch.txt` deles faz, e o caminho\n\
+         # oficial (`PortMaster.sh`) passa por lá — o `giochi-ports` chama o\n\
+         # `pugwash` direto, então a variável tem de vir daqui.\n\
+         #\n\
+         # Medido no R35S em 26/11/2026: sem esta linha o cartão abre e nada\n\
+         # aparece; com ela o pugwash fica no ar desenhando pela KMSDRM.\n\
+         PYSDL2_DLL_PATH=/usr/lib\n\
+         export PYSDL2_DLL_PATH\n\
+         #\n\
+         # O `pugwash` só entra no laço da GUI quando este marcador NÃO existe:\n\
+         # ele o consulta DEPOIS de inicializar o SDL e, se estiver lá, pula o\n\
+         # `pm.run()` e retorna 0 — a loja abre e fecha na mesma hora, sem\n\
+         # nenhuma mensagem. O laço oficial (`utils/pm_launch.txt`) apaga o\n\
+         # arquivo antes de cada execução; o `giochi-ports` roda o `pugwash`\n\
+         # direto e não passa por lá, então a limpeza tem de vir daqui.\n\
+         #\n\
+         # Medido no R35S em 26/11/2026: o arquivo estava em\n\
+         # `/user/ports/PortMaster/.pugwash-reboot` desde 20/11 e a GUI nunca\n\
+         # abria. É a mesma família do marcador de DRM: estado que sobra de uma\n\
+         # execução e mente sobre a próxima.\n\
+         for d in ${{GIOCHI_PORTS:-/user/ports}}/PortMaster /roms/ports/PortMaster \\\n\
+                  /opt/tools/PortMaster /opt/system/Tools/PortMaster; do\n\
+             [ -f $d/.pugwash-reboot ] && rm -f $d/.pugwash-reboot\n\
+         done\n\
          exec giochi-ports --liberar-drm\n",
         titulo = loja.titulo
     )
@@ -888,6 +917,19 @@ mod tests {
         let texto = fs::read_to_string(&bin).expect("script");
         assert!(texto.contains("--liberar-drm"), "a GUI precisa pedir a tela: {texto}");
         assert!(texto.contains("PortsMaster"), "o crédito tem de aparecer: {texto}");
+        // Sem esta variável o pysdl2 carrega o SDL2 do `exlibs/` do pacote, que
+        // não tem KMSDRM: a loja "abre" e a tela fica como estava. Medido no
+        // R35S em 26/11/2026 (`No available video device`).
+        assert!(
+            texto.contains("PYSDL2_DLL_PATH=/usr/lib"),
+            "sem PYSDL2_DLL_PATH a GUI não acha driver de vídeo: {texto}"
+        );
+        // O `pugwash` pula o laço da GUI quando este arquivo existe. Deixá-lo
+        // para trás faz a loja abrir e fechar na mesma hora, sem mensagem.
+        assert!(
+            texto.contains(".pugwash-reboot") && texto.contains("rm -f"),
+            "o marcador de reboot do pugwash tem de ser limpo antes de abrir: {texto}"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -895,6 +937,67 @@ mod tests {
             assert_eq!(modo, 0o755);
         }
         let _ = fs::remove_dir_all(&ports);
+    }
+
+    /// O cartão da loja **executa** e limpa o marcador de reboot do `pugwash`.
+    ///
+    /// Este é o teste que pega o defeito medido no R35S em 26/11/2026: com
+    /// `/user/ports/PortMaster/.pugwash-reboot` no disco (estava lá desde 20/11),
+    /// o `pugwash` inicializa o SDL, **pula o `pm.run()`** e retorna 0 — a loja
+    /// abre e fecha na mesma hora, sem mensagem. O laço oficial
+    /// (`utils/pm_launch.txt`) apaga o arquivo antes de cada execução; o
+    /// `giochi-ports` chama o `pugwash` direto, então a limpeza é do cartão.
+    ///
+    /// Roda o script gerado de verdade, com um `giochi-ports` de mentira no
+    /// `PATH` e a raiz dos ports em `GIOCHI_PORTS` — conferir o texto do script
+    /// provaria que eu escrevi o `rm`, não que ele roda.
+    #[cfg(unix)]
+    #[test]
+    fn o_cartao_da_loja_limpa_o_marcador_de_reboot_do_pugwash() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = temp("loja-reboot");
+        let ports = base.join("ports");
+        let pm = ports.join("PortMaster");
+        fs::create_dir_all(&pm).expect("dir do PortMaster");
+        let reboot = pm.join(".pugwash-reboot");
+        fs::write(&reboot, "").expect("marcador");
+
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).expect("bin");
+        let falso = bin.join("giochi-ports");
+        fs::write(&falso, "#!/bin/sh\necho \"stub chamado: $*\"\n").expect("stub");
+        fs::set_permissions(&falso, fs::Permissions::from_mode(0o755)).expect("+x");
+
+        let script = base.join("loja");
+        let loja = Loja {
+            titulo: "PortMaster".to_string(),
+            autor: "Community".to_string(),
+            versao: "1.0.0".to_string(),
+        };
+        fs::write(&script, script_da_loja(&loja)).expect("script");
+
+        let saida = std::process::Command::new("sh")
+            .arg(&script)
+            .env("GIOCHI_PORTS", &ports)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            // O cartão exporta esta variável para o pysdl2 achar o SDL2 do
+            // sistema; aqui ela só precisa não atrapalhar.
+            .env("PYSDL2_DLL_PATH", "/usr/lib")
+            .output()
+            .expect("rodar o script");
+
+        assert!(saida.status.success(), "o cartão falhou: {saida:?}");
+        let texto = String::from_utf8_lossy(&saida.stdout);
+        assert!(
+            texto.contains("--liberar-drm"),
+            "o script não chegou ao giochi-ports: {texto}"
+        );
+        assert!(
+            !reboot.exists(),
+            "o marcador de reboot sobrou: o pugwash pularia a GUI e sairia"
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -671,3 +671,144 @@ O que **continua** faltando em `ar`/`ur` é **bidi de parágrafo misto** (árabe
 número + latino na mesma linha) e layout espelhado — e isso é do `SDL2_ttf` (que
 faz shaping por *run*, não reordena parágrafo) e do layout do app, **não da
 imagem**. Fonte não conserta, e por isso não entra neste pedido.
+
+## 6. `GIOCHI-SYSTEM` — `giochi-ports` roda o `pugwash` sem duas coisas do caminho oficial, e a GUI não abre
+
+**Título:** `giochi-ports`: a GUI do PortMaster não abre — faltam `PYSDL2_DLL_PATH` e a limpeza do `.pugwash-reboot`
+
+### O que foi medido no R35S em 26/11/2026 (imagem `e0d74e6`, PortMaster `2026.11.17-0700`)
+
+O `giochi-ports --liberar-drm` libera o DRM corretamente (o launcher sai por
+`SIGTERM`, medido), sobe o `bwrap` e chama `python3 ./pugwash`. A GUI **não
+aparece** — e são dois defeitos independentes, cada um com um sintoma diferente.
+
+#### (a) Sem `PYSDL2_DLL_PATH`, o pysdl2 carrega o SDL2 do pacote
+
+```text
+  File "/user/ports/PortMaster/exlibs/sdl2/ext/common.py", line 99, in init
+    raise_sdl_err("initializing the {0} subsystem".format(s))
+sdl2.ext.err.SDLError: 'Error encountered initializing the video subsystem: No available video device'
+```
+
+A GUI é `pysdl2`. Sem a variável, o `pysdl2` resolve o SDL2 por
+`exlibs/sdl2` — a cópia que o próprio pacote do PortMaster traz, **sem KMSDRM**.
+O erro aponta para o `pysdl2` e não para o driver, então a pista engana quem
+procura no lugar errado.
+
+O caminho oficial deles já resolve isso em
+`/user/ports/PortMaster/utils/pm_launch.txt:35-38`:
+
+```sh
+## Which SDL2 the GUI loads (pysdl2), after pm_hook_env.
+pm_hook_gui_env() {
+  export PYSDL2_DLL_PATH="/usr/lib"
+}
+```
+
+Com `PYSDL2_DLL_PATH=/usr/lib` o mesmo comando passa a dar
+`kmsdrm not available` **só quando o `card0` está ocupado** — e abre quando está
+livre. Ou seja: é a variável que troca o SDL2 do pacote pelo da imagem.
+
+#### (b) O `.pugwash-reboot` que sobra faz o `pugwash` pular a GUI e sair
+
+Com a variável corrigida, a GUI abria e **fechava em menos de um segundo**, sem
+mensagem nenhuma. A causa está em `pylibs/pugwash/main.py:129-131`:
+
+```python
+reboot_file = (harbourmaster.HM_TOOLS_DIR / "PortMaster" / ".pugwash-reboot")
+if not reboot_file.is_file():
+    with pm.enable_cancellable(True):
+        pm.run()
+```
+
+O arquivo é o pedido de "reinicie-me" que o `pugwash` deixa quando se
+auto-atualiza (`pylibs/pugwash/update.py:112`). O laço oficial apaga antes de
+cada execução (`pm_launch.txt:154`, `$ESUDO rm -f "${controlfolder}/.pugwash-reboot"`)
+e reexecuta quando ele reaparece. O `giochi-ports` chama o `pugwash` **direto**,
+sem passar por esse laço, então:
+
+- um arquivo deixado por **qualquer** execução anterior faz a GUI nunca abrir —
+  medido: o do R35S era de **20/11** (`-rw-r--r-- 0 Nov 20 06:53`) e nada abria
+  desde então;
+- e quando o `pugwash` pede reinício de verdade (auto-update, troca de tema), o
+  pedido é ignorado.
+
+É a mesma família do marcador de DRM que já foi corrigido do lado de vocês:
+estado que sobra de uma execução e mente sobre a próxima.
+
+### A prova de que as duas bastam
+
+Removido o arquivo e exportada a variável, o mesmo
+`giochi-ports --liberar-drm` mantém o `pugwash` no ar **de t=15 s a t=99 s** (a
+janela inteira do teste, com relógio de verdade), marcador de DRM presente,
+launcher morto, **zero** erro de vídeo. Quando a GUI termina, o marcador some e o
+supervisor devolve o launcher com o `card0` aberto.
+
+### O que a correção provavelmente é
+
+No `/usr/bin/giochi-ports`, antes de chamar o `pugwash`:
+
+```sh
+# A GUI é pysdl2: sem isto ele carrega o SDL2 de exlibs/, que não tem KMSDRM.
+PYSDL2_DLL_PATH=/usr/lib
+export PYSDL2_DLL_PATH
+
+# Pedido de reinício de uma execução anterior: sem apagar, o pugwash pula a GUI.
+rm -f "$pm/.pugwash-reboot"
+```
+
+E, para o reinício **de verdade** (auto-update/tema) não se perder, o
+equivalente do laço deles:
+
+```sh
+while :; do
+    "$BWRAP" ... "$py" ./pugwash "$@"
+    [ -f "$pm/.pugwash-reboot" ] || break
+    rm -f "$pm/.pugwash-reboot"
+done
+```
+
+O laço tem uma consequência que vale decidir: cada volta do `pugwash` reabre o
+display, e o marcador de DRM do `giochi-ports` (`/run/giochi/dev-free-console`)
+continua válido durante todas elas — o supervisor só devolve a interface quando
+o wrapper inteiro sai. É o comportamento desejado, mas é bom que esteja escrito.
+
+### Estado do lado do app (workaround, não correção)
+
+O cartão que este repositório gera em `/user/apps/portmaster/` executa
+`giochi-ports --liberar-drm` e **faz as duas coisas antes**, com o comentário do
+porquê em cada uma. Foi o que fez a loja abrir no R35S hoje:
+
+```sh
+PYSDL2_DLL_PATH=/usr/lib
+export PYSDL2_DLL_PATH
+for d in $GIOCHI_PORTS/PortMaster /roms/ports/PortMaster ...; do
+    [ -f $d/.pugwash-reboot ] && rm -f $d/.pugwash-reboot
+done
+exec giochi-ports --liberar-drm
+```
+
+O workaround funciona, mas vive no lugar errado: **todo** frontend que chamar o
+`giochi-ports` (o launcher, a loja do PC, um `giochi-ports --rodar` de um port
+que abra a GUI) repete a mesma dança, e o primeiro que esquecer volta a ter "a
+loja não abre". Corrigir no `giochi-ports` resolve para todos de uma vez — e o
+laço de reinício só existe lá.
+
+### Como conferir
+
+```console
+# o SDL2 que o pysdl2 carrega
+$ PYSDL2_DLL_PATH=/usr/lib python3 -c "import sdl2; print(sdl2.__file__)"
+$ ls /user/ports/PortMaster/.pugwash-reboot    # não pode existir antes de abrir
+
+# a GUI tem de ficar no ar, não sair em 1 s
+$ SDL_VIDEODRIVER=kmsdrm giochi-ports --liberar-drm
+$ for i in 1 2 3; do sleep 15; pgrep -fa './pugwash'; done   # vivo nas três
+
+# e o reinício de verdade continua sendo atendido (o laço)
+$ touch /user/ports/PortMaster/.pugwash-reboot
+$ # depois de fechar a GUI, ela tem de reabrir uma vez
+```
+
+Detalhe do lado do app, com as medições e a tabela de sintomas:
+[`docs/portmaster.md`](https://github.com/xtrempkch-droid/GIOCHI-APP/blob/main/docs/portmaster.md) §3c.
