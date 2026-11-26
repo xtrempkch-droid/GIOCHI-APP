@@ -1,5 +1,22 @@
 //! Ports do PortMaster viram cartões na aba Apps.
 //!
+//! ## Créditos: o PortMaster é de outra equipe
+//!
+//! **O PortMaster é obra da comunidade [`PortsMaster`][pm]**, não deste
+//! repositório. O que é nosso é o `giochi-ports`, um invólucro de ~370 linhas de
+//! `sh` que o roda dentro do `bubblewrap` com o rootfs somente-leitura — porque
+//! ele instala `.zip` **sem assinatura** e executa o `.sh` de dentro como root.
+//! A loja, o catálogo de ports, os ports em si e o trabalho de portar os jogos
+//! são deles.
+//!
+//! O crédito aparece em três lugares, e é de propósito que ele não dependa de
+//! alguém lembrar: o **cartão da loja** na aba Apps (título `PortMaster`), o
+//! `developer` do `metadata.json` gerado (lido do `gameinfo.xml` do próprio
+//! pacote) e o `licenseUrl` apontando para o projeto. Cada cartão de port, por
+//! sua vez, credita **quem portou**, lido do `port.json`.
+//!
+//! [pm]: https://github.com/PortsMaster/PortMaster-New
+//!
 //! ## O problema que isto resolve
 //!
 //! O PortMaster instala em `/user/ports` — `<nome>.sh` ao lado de `<nome>/`, ou
@@ -22,7 +39,7 @@
 //! | cartão em `/user/apps/<slug>/` com `"entrypoint": "bin/<slug>"` | aparece: `4 jogo(s) e 2 app(s)` |
 //! | o mesmo com `"entrypoint": "<slug>"` (na raiz) | **recusado**: `entrypoint inválido ... (precisa começar em bin/)` |
 //! | `giochi-ports --rodar <nome>` | acha os dois layouts, sem diferenciar caixa |
-//! | marcador de DRM do `giochi-ports` | **não** é criado quando ninguém tem o card — é o caso do filho do launcher, que já destruiu o `Painter` |
+//! | marcador de DRM do `giochi-ports` | **é** criado, porque o launcher mantém `card0` aberto até morrer; o `SIGTERM` dele é o que destrava (ver `docs/portmaster.md` §3b) |
 //!
 //! A segunda linha é a que importa para quem ler o pedido original: o layout
 //! sugerido lá (executável na raiz do app, `entrypoint: "<slug>"`) **não**
@@ -32,8 +49,8 @@
 //!
 //! - Não assina nada. Port é código de terceiro sem assinatura; o que o sistema
 //!   garante é o sandbox do `giochi-ports` (`bwrap`, rootfs somente-leitura).
-//! - Não abre a GUI do PortMaster. Instalar port é a loja (host) ou a própria
-//!   GUI; aqui só se transforma port instalado em cartão.
+//! - Não instala port nenhum: quem baixa e instala é a GUI do PortMaster, que
+//!   tem cartão próprio (a **loja**, [`SLUG_LOJA`]) e roda por `giochi-ports`.
 //! - Não toca em diretório de `/user/apps` que não tenha a marca [`MARCA`].
 
 use std::fs;
@@ -73,6 +90,27 @@ const MARCA: &str = ".portmaster-port";
 /// então um port jamais abre um segundo launcher.
 const PREFIXO: &str = "portmaster-";
 
+/// Slug do cartão da **loja** (o PortMaster em si).
+///
+/// Sem o sufixo do prefixo de propósito: `portmaster` é a loja, `portmaster-x`
+/// é um port. E nenhum dos dois começa com `launcher`, então a poda de tema não
+/// os alcança.
+pub const SLUG_LOJA: &str = "portmaster";
+
+/// Conteúdo da marca do cartão da loja.
+///
+/// Diferente do nome de um port para a poda não confundir os dois: `vivos` é
+/// comparado com o conteúdo da marca, e um port chamado `loja-portmaster` não
+/// existe (`PortMaster.sh` é o da loja, e é ignorado em [`listar`]).
+const MARCA_LOJA: &str = "#loja-portmaster";
+
+/// URL do projeto, para o crédito no `metadata.json`.
+///
+/// Medido no pacote do R35S em 26/11/2026: os `port.json`/READMEs do PortMaster
+/// citam `github.com/PortsMaster/PortMaster-New` e `.../PortMaster-GUI`. A URL
+/// não é um chute de memória — é a que o próprio pacote publica.
+pub const URL_PROJETO: &str = "https://github.com/PortsMaster/PortMaster-New";
+
 /// Um port instalado, como o launcher precisa vê-lo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {
@@ -93,6 +131,8 @@ pub struct Relatorio {
     pub atualizados: usize,
     pub iguais: usize,
     pub removidos: usize,
+    /// Título da loja do PortMaster, quando ela está instalada.
+    pub loja: Option<String>,
     pub avisos: Vec<String>,
 }
 
@@ -105,8 +145,12 @@ impl Relatorio {
         if !self.existe {
             return None;
         }
+        let loja = match &self.loja {
+            Some(titulo) => format!("; loja: {titulo}"),
+            None => String::new(),
+        };
         Some(format!(
-            "ports: {} port(s) em {} — {} cartão(ões) ({} novo(s), {} atualizado(s), {} igual(es), {} removido(s))",
+            "ports: {} port(s) em {} — {} cartão(ões) ({} novo(s), {} atualizado(s), {} igual(es), {} removido(s)){loja}",
             self.ports,
             self.raiz,
             self.ports,
@@ -127,7 +171,8 @@ impl Relatorio {
 ///
 /// O nome é o **do arquivo `.sh`**, sem extensão, porque é assim que o
 /// `giochi-ports --rodar` compara (base do arquivo ou nome da pasta, sem caixa).
-/// A pasta `PortMaster/` fica de fora: ela é o instalador, não um port.
+/// A pasta `PortMaster/` fica de fora da lista de **ports** porque ela é a
+/// loja, não um port — ela ganha o cartão próprio em [`sincronizar_loja`].
 pub fn listar(raiz: &Path) -> Vec<Port> {
     let mut candidatos: Vec<(String, PathBuf)> = Vec::new();
     let Ok(entradas) = fs::read_dir(raiz) else {
@@ -378,8 +423,172 @@ pub fn sincronizar(raiz_ports: &Path, raiz_apps: &Path) -> Relatorio {
         vivos.push(port.nome.clone());
         sincronizar_cartao(raiz_apps, port, &slug, &mut rel);
     }
+
+    // A loja do PortMaster tem cartão próprio. Ela **não** é um port: quem baixa
+    // e instala ports é ela, e sem este cartão a única forma de abrir a GUI é
+    // por SSH — o que o usuário do aparelho não tem.
+    if let Some(dir_loja) = achar_loja(raiz_ports) {
+        let loja = ler_loja(&dir_loja);
+        rel.loja = Some(loja.titulo.clone());
+        vivos.push(MARCA_LOJA.to_string());
+        sincronizar_loja(raiz_apps, &loja, &mut rel);
+    }
+
     podar(raiz_apps, &vivos, &mut rel);
     rel
+}
+
+/// A pasta do PortMaster, sem diferenciar caixa.
+///
+/// O pacote se instala como `PortMaster/` (medido no R35S), mas comparar sem
+/// caixa custa uma linha e evita um cartão que não aparece porque o zip mudou
+/// a grafia.
+pub fn achar_loja(raiz_ports: &Path) -> Option<PathBuf> {
+    achar_pasta(raiz_ports, "PortMaster")
+}
+
+/// Identidade da loja, para o cartão e para o crédito.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Loja {
+    pub titulo: String,
+    /// Quem fez o PortMaster — crédito, não campo decorativo.
+    pub autor: String,
+    pub versao: String,
+}
+
+/// Lê o que o próprio pacote declara: `gameinfo.xml` e o arquivo `version`.
+///
+/// O `gameinfo.xml` do PortMaster traz `<name>PortMaster</name>` e
+/// `<developer>Community</developer>` (medido no R35S em 26/11/2026). É daí que
+/// sai o crédito — não de um texto meu, que envelheceria sem ninguém notar.
+pub fn ler_loja(dir_loja: &Path) -> Loja {
+    let xml = fs::read_to_string(dir_loja.join("gameinfo.xml")).unwrap_or_default();
+    let titulo = campo_do_xml(&xml, "name").unwrap_or_else(|| "PortMaster".to_string());
+    let autor = campo_do_xml(&xml, "developer").unwrap_or_else(|| "PortsMaster".to_string());
+    let versao = fs::read_to_string(dir_loja.join("version"))
+        .map(|v| v.trim().to_string())
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "1.0.0".to_string());
+    Loja {
+        titulo,
+        autor,
+        versao,
+    }
+}
+
+/// O primeiro `<campo>…</campo>` do XML, sem dependência de parser.
+///
+/// O arquivo tem **um** `<game>` (é o da loja), e o campo é texto simples — um
+/// parser de XML inteiro entraria no crate por causa de duas linhas.
+fn campo_do_xml(xml: &str, campo: &str) -> Option<String> {
+    let abertura = format!("<{campo}>");
+    let fechamento = format!("</{campo}>");
+    let inicio = xml.find(&abertura)? + abertura.len();
+    let fim = xml[inicio..].find(&fechamento)? + inicio;
+    let texto = xml[inicio..fim].trim();
+    (!texto.is_empty()).then(|| texto.to_string())
+}
+
+/// Escreve o cartão da **loja**: `PortMaster` na aba Apps.
+///
+/// O script roda `giochi-ports --liberar-drm`, e não o `--rodar`: a GUI precisa
+/// pedir a tela, e o modo `--liberar-drm` é o que o `giochi-ports` tem para
+/// exatamente isso ("para o launcher, abre a GUI, e o devolve"). Dentro do
+/// ciclo do launcher ele mata o pai por `SIGTERM` — que agora é honrado (§3b de
+/// `docs/portmaster.md`) —, e o supervisor devolve a interface quando a GUI sai.
+fn sincronizar_loja(raiz_apps: &Path, loja: &Loja, rel: &mut Relatorio) {
+    let dir = raiz_apps.join(SLUG_LOJA);
+    let marca = dir.join(MARCA);
+    if dir.exists() && !marca.exists() {
+        rel.avisos.push(format!(
+            "{} já existe e não veio do PortMaster; pulando a loja",
+            dir.display()
+        ));
+        return;
+    }
+    if let Ok(anterior) = fs::read_to_string(&marca) {
+        if anterior.trim() != MARCA_LOJA {
+            rel.avisos.push(format!(
+                "{} pertence ao port {} (marca); pulando a loja",
+                dir.display(),
+                anterior.trim()
+            ));
+            return;
+        }
+    }
+
+    let existia = dir.join("metadata.json").is_file();
+    let bin = dir.join("bin").join(SLUG_LOJA);
+    let mut mudou = false;
+    match escrever(&bin, &script_da_loja(loja)) {
+        Ok(m) => mudou |= m,
+        Err(e) => {
+            rel.avisos
+                .push(format!("não consegui escrever {}: {e}", bin.display()));
+            return;
+        }
+    }
+    if let Err(e) = dar_execucao(&bin) {
+        rel.avisos
+            .push(format!("não consegui dar +x em {}: {e}", bin.display()));
+    }
+    match escrever(&dir.join("metadata.json"), &metadata_da_loja(loja)) {
+        Ok(m) => mudou |= m,
+        Err(e) => {
+            rel.avisos
+                .push(format!("não consegui escrever o metadata da loja: {e}"));
+            return;
+        }
+    }
+    if let Err(e) = escrever(&marca, &format!("{MARCA_LOJA}\n")) {
+        rel.avisos.push(format!("não consegui marcar a loja: {e}"));
+        return;
+    }
+    if mudou {
+        if existia {
+            rel.atualizados += 1;
+        } else {
+            rel.criados += 1;
+        }
+    } else {
+        rel.iguais += 1;
+    }
+}
+
+fn script_da_loja(loja: &Loja) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # Gerado pelo launcher do Giochi — abre a loja {titulo}.\n\
+         #\n\
+         # CRÉDITOS: {titulo} é obra da comunidade PortsMaster ({URL_PROJETO}).\n\
+         # O que este repositório faz é o `giochi-ports`, que o roda dentro do\n\
+         # `bubblewrap` com o rootfs somente-leitura. Cada port credita quem o\n\
+         # portou no próprio `port.json`.\n\
+         #\n\
+         # Não edite: este arquivo é reescrito quando a instalação muda.\n\
+         exec giochi-ports --liberar-drm\n",
+        titulo = loja.titulo
+    )
+}
+
+fn metadata_da_loja(loja: &Loja) -> String {
+    let json = serde_json::json!({
+        "title": loja.titulo,
+        "slug": SLUG_LOJA,
+        "developer": loja.autor,
+        "version": loja.versao,
+        "arch": "aarch64",
+        "runtime": "native",
+        "entrypoint": format!("bin/{SLUG_LOJA}"),
+        "kind": "app",
+        "category": "Loja",
+        "license": "Open source — MIT (launcher), GPL-2.0/LGPL-2.1 (componentes)",
+        "licenseUrl": URL_PROJETO,
+    });
+    let mut texto = serde_json::to_string_pretty(&json).unwrap_or_default();
+    texto.push('\n');
+    texto
 }
 
 fn sincronizar_cartao(raiz_apps: &Path, port: &Port, slug: &str, rel: &mut Relatorio) {
@@ -625,6 +834,87 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.join(MARCA)).expect("marca").trim(),
             "2048"
+        );
+        let _ = fs::remove_dir_all(&ports);
+    }
+
+    /// Cria a pasta da loja como o pacote do PortMaster a instala.
+    fn plantar_loja(raiz_ports: &Path, titulo: &str, autor: &str) {
+        let dir = raiz_ports.join("PortMaster");
+        fs::create_dir_all(&dir).expect("dir da loja");
+        fs::write(dir.join("PortMaster.sh"), "#!/bin/sh\n").expect("sh da loja");
+        fs::write(
+            dir.join("gameinfo.xml"),
+            format!(
+                r#"<?xml version='1.0' encoding='utf-8'?>
+<gameList>
+  <game>
+    <path>./PortMaster.sh</path>
+    <name>{titulo}</name>
+    <desc>PortMaster is an open-source port manager.</desc>
+    <developer>{autor}</developer>
+  </game>
+</gameList>"#
+            ),
+        )
+        .expect("gameinfo");
+        fs::write(dir.join("version"), "2026.11.17-0700\n").expect("version");
+    }
+
+    #[test]
+    fn a_loja_do_portmaster_vira_cartao_com_credito() {
+        let ports = temp("loja-ports");
+        let apps = ports.join("apps");
+        plantar_loja(&ports, "PortMaster", "Community");
+
+        let rel = sincronizar(&ports, &apps);
+
+        // A loja não entra na contagem de ports: ela **não** é um port.
+        assert_eq!(rel.ports, 0, "{rel:?}");
+        assert_eq!(rel.loja.as_deref(), Some("PortMaster"));
+        let dir = apps.join("portmaster");
+        let meta: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join("metadata.json")).expect("metadata"))
+                .expect("json");
+        assert_eq!(meta["title"], "PortMaster");
+        assert_eq!(meta["kind"], "app");
+        assert_eq!(meta["entrypoint"], "bin/portmaster");
+        // Crédito lido do próprio pacote, não de um texto nosso.
+        assert_eq!(meta["developer"], "Community");
+        assert_eq!(meta["version"], "2026.11.17-0700");
+        assert_eq!(meta["licenseUrl"], URL_PROJETO);
+
+        let bin = dir.join("bin/portmaster");
+        let texto = fs::read_to_string(&bin).expect("script");
+        assert!(texto.contains("--liberar-drm"), "a GUI precisa pedir a tela: {texto}");
+        assert!(texto.contains("PortsMaster"), "o crédito tem de aparecer: {texto}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let modo = fs::metadata(&bin).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(modo, 0o755);
+        }
+        let _ = fs::remove_dir_all(&ports);
+    }
+
+    #[test]
+    fn sem_a_loja_o_cartao_dela_e_removido_e_os_ports_ficam() {
+        let ports = temp("loja-sai");
+        let apps = ports.join("apps");
+        plantar_loja(&ports, "PortMaster", "Community");
+        plantar_port(&ports, "2048", "2048");
+        sincronizar(&ports, &apps);
+        assert!(apps.join("portmaster").is_dir());
+        assert!(apps.join("portmaster-2048").is_dir());
+
+        // A GUI foi desinstalada; o port continua instalado.
+        fs::remove_dir_all(ports.join("PortMaster")).expect("remover loja");
+        let rel = sincronizar(&ports, &apps);
+
+        assert!(!apps.join("portmaster").exists(), "cartão da loja tinha de sair");
+        assert!(
+            apps.join("portmaster-2048").is_dir(),
+            "port vivo não pode ser podado junto: {rel:?}"
         );
         let _ = fs::remove_dir_all(&ports);
     }

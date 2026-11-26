@@ -31,7 +31,7 @@
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
 | apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§8) — **mais um cartão por port do PortMaster** (§6.11) |
 | idiomas da interface | **10** (os do site), padrão **inglês**, escolhidos na primeira abertura e em Config › Aparência (§6.10) |
-| ports do PortMaster | **listados na aba Apps** desde 26/11/2026 (§6.11): `/user/ports` → cartão em `/user/apps`, lançado por `giochi-ports --rodar` |
+| ports do PortMaster | **listados na aba Apps** desde 26/11/2026 (§6.11): `/user/ports` → cartão em `/user/apps`, lançado por `giochi-ports --rodar`; a **loja** tem cartão próprio (`portmaster`, `--liberar-drm`) |
 
 O que roda no aparelho é **o launcher** e os apps que ele detecta. Até
 15/11/2026 o catálogo saía vazio por construção e a aba Apps desenhava **oito
@@ -517,6 +517,15 @@ a paleta. Hoje há **um** tema, e a linha da Config anuncia isso. Completo:
 
 ### 6.11 Ports do PortMaster (26/11/2026)
 
+**O PortMaster é de outra equipe** — a comunidade
+[`PortsMaster`](https://github.com/PortsMaster/PortMaster-New): a loja, o
+catálogo e os ports são deles, e os ports são gratuitos. O que é deste
+repositório é o `giochi-ports`, um invólucro de `sh` que roda o `pugwash` deles
+dentro do `bwrap` (rootfs somente-leitura) porque port chega **sem assinatura**.
+O crédito está no título do cartão, no `developer` lido do `gameinfo.xml` do
+pacote, no `licenseUrl` e no bloco `CRÉDITOS` do script gerado; cada port credita
+quem o portou, do `port.json`.
+
 O PortMaster instala em `/user/ports` (`<nome>.sh` + `<nome>/`, ou
 `<nome>/<nome>.sh`), e o launcher varre `/user/apps`. `portmaster.rs` fecha a
 ponte, na abertura e **antes** da detecção:
@@ -526,7 +535,18 @@ ponte, na abertura e **antes** da detecção:
 ├── .portmaster-port      # marca: só o que tem esta marca é podado
 ├── metadata.json         # kind: app, entrypoint: bin/portmaster-<nome>
 └── bin/portmaster-<nome> # 755 — exec giochi-ports --rodar "<nome>"
+
+/user/apps/portmaster/            # a LOJA (a GUI do PortMaster)
+├── .portmaster-port              # marca "#loja-portmaster" (sentinela, não é port)
+├── metadata.json                 # category: Loja, developer do gameinfo.xml
+└── bin/portmaster                # 755 — exec giochi-ports --liberar-drm
 ```
+
+A loja precisa de `--liberar-drm` e não de `--rodar`: ela **abre a GUI**, que tem
+de pedir a tela. É o modo que o `giochi-ports` documenta ("para o launcher, abre
+a GUI, e o devolve"), e ele só funciona porque o launcher morre de `SIGTERM`
+(abaixo). Sem o cartão da loja, instalar um port exigiria SSH — o usuário do
+aparelho não tinha como.
 
 - O `entrypoint` **precisa** começar em `bin/`: o detector recusa o layout da
   raiz que o pedido original sugeria (`entrypoint inválido ... (precisa começar
@@ -534,9 +554,10 @@ ponte, na abertura e **antes** da detecção:
 - O slug nunca começa com `launcher`, então a poda de tema não o alcança.
 - Conteúdo igual **não reescreve** (é cartão SD); port removido apaga o cartão;
   diretório sem a marca nunca é tocado.
-- O marcador de DRM do `giochi-ports` **não** é criado no caminho do launcher: o
-  `Painter` já foi destruído e não há dono do card — marcar mentiria ao
-  `giochi-init`.
+- O marcador de DRM **é** criado nesse caminho, e isso é esperado: o
+  `giochi-ports` pergunta por **descritor** (`/proc/*/fd` → `card0`), e o
+  launcher mantém `card0` aberto até morrer. Criar o marcador sem matar o dono
+  seria mentir ao `giochi-init`; matar e sair por sinal é o contrato (abaixo).
 - `--sincronizar-ports` exercita o módulo sem abrir a interface (abrir custa uma
   volta do `giochi-init`, cuja cota é pequena — §13).
 
@@ -829,7 +850,8 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | --- | --- |
 | app `image` que não seja shell | **existe**: `musica` (§7) |
 | ports do PortMaster na aba Apps | **feito** (26/11/2026) — cartão por port, lançado por `giochi-ports` (§6.11) |
-| PortMaster como item da loja, declarado **sideload** | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e precisa aparecer como tal na interface |
+| a GUI do PortMaster na aba Apps | **feito** (26/11/2026) — cartão `portmaster`, com crédito no título/metadata/script, aberto por `giochi-ports --liberar-drm` (§6.11) |
+| PortMaster como item da **loja do PC** (`app/store`), declarado **sideload** | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e precisa aparecer como tal na interface |
 | aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports |
 | migrar jogos de `/user/apps` para `/user/games` | **manual** — feito no R35S em 15/11/2026; um `scripts/migrar-raizes.sh` evitaria repetir |
 | barra de progresso no app de música | **não existe** — o `SDL_mixer` não informa a posição; a barra mostraria número inventado |

@@ -1,10 +1,37 @@
-# PortMaster — ports na aba Apps
+# PortMaster — a loja e os ports na aba Apps
 
 > Implementado em 26/11/2026. Responde ao **pedido de PortMaster** registrado
 > nas issues #2–#5 deste repositório (as #3, #4 e #5 são duplicatas da #2).
 >
 > Guia do sistema: `docs/evaluacao-portmaster.md` e `docs/entrada-para-equipes.md`
 > no **GIOCHI-SYSTEM** (somente leitura — §1.1 do `AGENTS.md`).
+
+## 0. Créditos — de quem é o quê
+
+**O PortMaster é obra da comunidade [PortsMaster][pm]**, não deste repositório.
+A loja, o catálogo de ports, o trabalho de portar cada jogo e os ports em si são
+deles; a maior parte é software livre e os ports são **gratuitos**.
+
+O que este repositório escreveu é uma coisa só: o `giochi-ports`, um invólucro de
+~370 linhas de `sh` que roda o PortMaster dentro do `bubblewrap` com o rootfs
+somente-leitura — porque ele baixa `.zip` **sem assinatura** e executa o `.sh` de
+dentro como root. O invólucro não substitui nem reimplementa nada: ele chama o
+`pugwash` deles.
+
+O crédito é gravado onde não depende de alguém lembrar:
+
+| Onde | O que diz |
+| --- | --- |
+| cartão da loja na aba Apps | título **PortMaster** |
+| `metadata.json` do cartão | `developer` lido do `gameinfo.xml` do próprio pacote (`Community`, medido no R35S) e `licenseUrl` para o projeto |
+| script do cartão | o bloco `CRÉDITOS`, com a URL |
+| cartão de cada port | `developer` = **quem portou**, lido do `port.json` |
+
+A URL não é de memória: `github.com/PortsMaster/PortMaster-New` e
+`.../PortMaster-GUI` aparecem **dentro do pacote instalado** (medido com `grep`
+no R35S em 26/11/2026).
+
+[pm]: https://github.com/PortsMaster/PortMaster-New
 
 ---
 
@@ -158,6 +185,47 @@ Teste que prende a correção: `sigterm_arma_no_lancamento_e_e_anotado`, em
 global ao processo: dois testes que armam e restauram o handler em paralelo fazem
 o `raise` de um pegar o handler padrão do outro e **a suíte morre com sinal 15**.
 
+## 3c. A loja do PortMaster também é um app
+
+Antes disto, a GUI do PortMaster só abria por SSH: o usuário do aparelho não
+tinha como instalar um port. Agora ela tem cartão próprio na aba Apps.
+
+```text
+/user/apps/portmaster/
+├── .portmaster-port      # marca: "#loja-portmaster"
+├── metadata.json         # kind: app, entrypoint: bin/portmaster, category: Loja
+└── bin/portmaster        # 755 — exec giochi-ports --liberar-drm
+```
+
+Diferenças em relação ao cartão de um port, e o motivo de cada uma:
+
+| | port | loja |
+| --- | --- | --- |
+| script | `giochi-ports --rodar "<nome>"` | `giochi-ports --liberar-drm` |
+| por quê | rodar um jogo já instalado | abrir a GUI, que precisa pedir a tela |
+| marca | o nome do port | `#loja-portmaster` — sentinela, para a poda não confundir com um port |
+| contagem no log | entra em `N port(s)` | aparece como `; loja: PortMaster` |
+
+`--liberar-drm` é o modo que o próprio `giochi-ports` documenta ("para o
+launcher, abre a GUI, e o devolve"): ele cria o marcador, manda `SIGTERM` no
+launcher, espera o `card0` liberar e sobe a GUI; ao sair, remove o marcador e o
+`giochi-init` devolve a interface. Só funciona porque o launcher passou a morrer
+de `SIGTERM` (§3b).
+
+### Medido no R35S em 26/11/2026
+
+```text
+catálogo: 4 jogo(s) e 3 app(s) detectado(s) em ...   ← era 2, agora inclui a loja
+sistema: iniciando portmaster (/user/apps/portmaster/bin/portmaster)
+giochi-ports: liberando o DRM: parando o PID 1557 (o launcher) — o supervisor o trará de volta ao sair
+sistema: SIGTERM durante portmaster — saindo para quem pediu devolver a interface
+```
+
+Depois disso: `pugwash` rodando dentro do `bwrap` (3 processos), o usuário sai,
+`giochi-ports` encerra, o marcador some e o supervisor devolve o launcher com o
+DRM. As duas passadas seguintes de `--sincronizar-ports` dizem `2 igual(es)` —
+não reescreve, que é o comportamento certo num cartão SD.
+
 ## 4. Medido no R35S em 26/11/2026
 
 Imagem `e0d74e6` (com `GIOCHI_WITH_PORTMASTER=1`), port `FORM` instalado:
@@ -219,7 +287,8 @@ ssh root@<ip> 'SDL_VIDEODRIVER=dummy /opt/giochi/apps/launcher/bin/giochi-launch
 | ports listados na aba Apps | **feito** — cartão por port, detectado do disco |
 | formato do alvo sem mudar o launcher | **feito** — wrapper em `bin/`, sem `args` no `Alvo` |
 | aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports, e `args` mexe no contrato do `Alvo` sem necessidade hoje |
-| PortMaster como item da loja | **não feito** — a loja é código do PC (`app/store`), e o pacote precisa aparecer como **sideload** (não é assinado). Registrado como pendência em `AGENTS.md` §16 |
+| a GUI do PortMaster na aba Apps | **feito** (§3c) — cartão próprio, com crédito, aberto por `giochi-ports --liberar-drm` |
+| PortMaster como item da **loja do PC** (`app/store`) | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e teria de aparecer como **sideload**. Registrado em `AGENTS.md` §16 |
 | assinatura dos ports | **não existe, de propósito** — port é código de terceiro; o que o sistema garante é o sandbox, não o conteúdo |
 
 Dois detalhes do sistema que quem for instalar por outro caminho precisa
