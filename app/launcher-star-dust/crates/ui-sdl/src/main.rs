@@ -72,6 +72,8 @@ mod energia;
 mod icons;
 #[path = "../../../../launcher/crates/ui-sdl/src/input_evdev.rs"]
 mod input_evdev;
+#[path = "../../../../launcher/crates/ui-sdl/src/portmaster.rs"]
+mod portmaster;
 #[path = "../../../../launcher/crates/ui-sdl/src/power.rs"]
 mod power;
 // Idioma e tema gravados em `/user/.config/giochi/`: o mesmo arquivo do
@@ -407,6 +409,25 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
 
+    // Ports do PortMaster: o mesmo caminho do launcher de produção, pelo
+    // `#[path]`. Se o Star Dust for o shell da imagem, um port instalado pela
+    // GUI do PortMaster tem de aparecer na aba Apps — e a divergência entre os
+    // dois seria invisível até alguém instalar um port.
+    if args.iter().any(|a| a == "--sincronizar-ports") {
+        let relatorio = portmaster::sincronizar(&portmaster::raiz_ports(), &portmaster::raiz_apps());
+        for aviso in &relatorio.avisos {
+            println!("aviso: {aviso}");
+        }
+        match relatorio.resumo() {
+            Some(linha) => println!("{linha}"),
+            None => println!(
+                "ports: {} não existe — nada a sincronizar (é o caso do PC)",
+                portmaster::raiz_ports().display()
+            ),
+        }
+        return Ok(());
+    }
+
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
 
@@ -469,6 +490,19 @@ fn main() -> Result<(), String> {
     // A demonstração só entra com `--demo`: numa imagem recém-gravada ela
     // mostrava jogos e apps que não existem, e apertar `A` dava erro. Contar
     // ausência como ausência é o comportamento certo.
+    // Ports do PortMaster viram cartões antes da detecção, igual ao launcher:
+    // o PortMaster instala em `/user/ports`, o launcher varre `/user/apps`, e
+    // quem faz a ponte é este passo. Falha não impede a interface de subir.
+    {
+        let relatorio = portmaster::sincronizar(&portmaster::raiz_ports(), &portmaster::raiz_apps());
+        if let Some(linha) = relatorio.resumo() {
+            eprintln!("{linha}");
+        }
+        for aviso in &relatorio.avisos {
+            eprintln!("ports: {aviso}");
+        }
+    }
+
     let demo_explicito = args.iter().any(|a| a == "--demo");
 
     let (mut state, catalogo) = {

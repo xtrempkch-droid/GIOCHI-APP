@@ -6,6 +6,11 @@ Como o launcher recebe input e como o usuário gerencia os controles.
 
 ## 1. Entrada: evdev direto
 
+> **Atenção (18/11/2026):** o Giochi System passou a publicar **um controle
+> virtual** (`Giochi Gamepad`, 17 botões e 4 eixos num nó só). Este repositório
+> **ainda não o usa** — nada mudou no código. O plano, as armadilhas e o que
+> falta estão em [controle-virtual.md](controle-virtual.md).
+
 **Decisão (02/11/2026): o launcher lê `/dev/input/event*` diretamente. O SDL fica só
 para desenhar.**
 

@@ -46,6 +46,7 @@ mod draw;
 mod energia;
 mod icons;
 mod input_evdev;
+mod portmaster;
 mod power;
 mod preferencias;
 mod semfio;
@@ -342,6 +343,26 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
 
+    // Ports do PortMaster: materializa `/user/ports` → cartões em `/user/apps`.
+    //
+    // A bandeira existe porque é o único jeito de conferir o resultado por SSH
+    // sem abrir a interface — e abrir a interface custa uma volta do
+    // `giochi-init`, cuja cota de reinício é pequena (§13).
+    if args.iter().any(|a| a == "--sincronizar-ports") {
+        let relatorio = portmaster::sincronizar(&portmaster::raiz_ports(), &portmaster::raiz_apps());
+        for aviso in &relatorio.avisos {
+            println!("aviso: {aviso}");
+        }
+        match relatorio.resumo() {
+            Some(linha) => println!("{linha}"),
+            None => println!(
+                "ports: {} não existe — nada a sincronizar (é o caso do PC)",
+                portmaster::raiz_ports().display()
+            ),
+        }
+        return Ok(());
+    }
+
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
 
@@ -411,6 +432,26 @@ fn main() -> Result<(), String> {
     // Detectar em vez de listar resolve os dois lados: o que aparece é o que
     // existe, e um app copiado para a pasta aparece **sem** alguém rodar um
     // script no PC.
+    // ── ports do PortMaster ─────────────────────────────────
+    //
+    // O PortMaster instala em `/user/ports` e o launcher varre `/user/apps`.
+    // Materializar o cartão aqui é o que faz um port instalado pela GUI
+    // aparecer na aba Apps: a GUI roda **sem** o launcher (o KMSDRM é
+    // exclusivo), o supervisor reinicia o launcher ao sair, e esta linha roda
+    // antes da detecção. Nenhum script no PC, nenhum passo manual.
+    //
+    // Falha aqui nunca impede a interface de subir: o pior caso é um port que
+    // não aparece, com a linha `aviso:` dizendo por quê.
+    {
+        let relatorio = portmaster::sincronizar(&portmaster::raiz_ports(), &portmaster::raiz_apps());
+        if let Some(linha) = relatorio.resumo() {
+            eprintln!("{linha}");
+        }
+        for aviso in &relatorio.avisos {
+            eprintln!("ports: {aviso}");
+        }
+    }
+
     let demo_explicito = args.iter().any(|a| a == "--demo");
 
     let (mut state, catalogo) = {

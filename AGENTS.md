@@ -1,29 +1,59 @@
 # AGENTS.md — Giochi app
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 15/11/2026 — **os jogos saíram daqui** (foram para um
-> repositório próprio). Este repositório é só de **apps do sistema**.
+> Atualizado em: 26/11/2026.
+>
+> **Este arquivo é o resumo.** Em 26/11/2026 ele passou de 2.169 linhas para o
+> que está aqui, e o texto completo — com as medições, o porquê de cada decisão
+> e o histórico de cada defeito — foi para [`docs/historico/`](docs/historico/),
+> **verbatim**. Nada foi reescrito nem descartado na mudança; os números de
+> seção são os mesmos dos dois lados, então `§6.3` continua apontando para o
+> mesmo assunto em qualquer um deles.
+>
+> | Preciso de… | Onde |
+> | --- | --- |
+> | o estado de hoje, em uma tela | §0, abaixo |
+> | uma regra ou um comando | este arquivo |
+> | a medição que sustenta uma regra | `docs/historico/` (§ da tabela em §0.1) |
+> | o que já quebrou antes | §13, e `docs/historico/armadilhas.md` |
 
 ## 0. Estado em uma tela
 
 | | |
 | --- | --- |
-| apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (image, tema) + **`musica`** (image, app) + `forge`, `store`, `painel`, `loja` (host) |
+| apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (imagem, tema) + **`musica`** (imagem, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **233/233** JS |
-| `compilar-launcher.sh --testes` | **321** Rust (162 ui-sdl + 159 core) |
-| Star Dust / launcher-teste | **169** / **95** Rust |
+| `compilar-launcher.sh --testes` | **330** Rust (171 ui-sdl + 159 core) |
+| Star Dust / launcher-teste | **178** / **95** Rust |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
 | `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
-| apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§6.9) |
+| apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§8) — **mais um cartão por port do PortMaster** (§6.11) |
 | idiomas da interface | **10** (os do site), padrão **inglês**, escolhidos na primeira abertura e em Config › Aparência (§6.10) |
+| ports do PortMaster | **listados na aba Apps** desde 26/11/2026 (§6.11): `/user/ports` → cartão em `/user/apps`, lançado por `giochi-ports --rodar` |
 
-O que roda no aparelho hoje é **o launcher** e o **app de música**, que ele
-detecta. Até 15/11/2026 o catálogo saía vazio por construção (os sete apps eram
-host ou tema) e a aba Apps desenhava **oito apps escritos no código**, nenhum
-deles instalado: apertar `A` mostrava "Abrindo X..." e nada abria. Hoje as duas
-abas **detectam** — jogos em `/opt|/user/games`, apps em `/opt|/user/apps`.
+O que roda no aparelho é **o launcher** e os apps que ele detecta. Até
+15/11/2026 o catálogo saía vazio por construção e a aba Apps desenhava **oito
+apps escritos no código**, nenhum instalado: apertar `A` dizia "Abrindo X..." e
+nada abria. Hoje as duas abas **detectam** — jogos em `/opt|/user/games`, apps
+em `/opt|/user/apps` — e um port instalado pela GUI do PortMaster aparece sem
+nenhum passo manual.
+
+### 0.1 Onde está o detalhe
+
+| Assunto | Página |
+| --- | --- |
+| §2–§5 (estrutura, contratos, comandos, decisões) | [`docs/historico/estado-e-contratos.md`](docs/historico/estado-e-contratos.md) |
+| §6 (o launcher inteiro) | [`docs/historico/launcher.md`](docs/historico/launcher.md) |
+| §7–§8 (apps e catálogo) | [`docs/historico/apps-e-catalogo.md`](docs/historico/apps-e-catalogo.md) |
+| §9–§10 (PC e pacote) | [`docs/historico/pc-e-pacote.md`](docs/historico/pc-e-pacote.md) |
+| §11–§12 (verificação e ambientes) | [`docs/historico/verificacao-e-ambientes.md`](docs/historico/verificacao-e-ambientes.md) |
+| §13–§14 (armadilhas e o que está provado) | [`docs/historico/armadilhas.md`](docs/historico/armadilhas.md) |
+| §16–§17 (pendências e canal) | [`docs/historico/pendencias-e-canal.md`](docs/historico/pendencias-e-canal.md) |
+| controle virtual `Giochi Gamepad` (18/11/2026, **não implementado**) | [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| ports do PortMaster | [`docs/portmaster.md`](docs/portmaster.md) |
+| idiomas | [`docs/idiomas.md`](docs/idiomas.md) |
 
 ## 1. Objetivo e fronteira
 
@@ -37,16 +67,9 @@ abas **detectam** — jogos em `/opt|/user/games`, apps em `/opt|/user/apps`.
 Cada pasta é **repositório Git individual**. A comunicação é sempre por
 **artefato declarado explicitamente**, nunca por caminho relativo presumido.
 
-Localização: `C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi app`
-(Windows) e `/home/charles/Giochi/GIOCHI-APP` (Linux). GitHub:
-`https://github.com/xtrempkch-droid/GIOCHI-APP`.
+GitHub: `https://github.com/xtrempkch-droid/GIOCHI-APP`.
 
 ### 1.1 Repositório alheio é **SOMENTE LEITURA** — decisão do dono, 15/11/2026
-
-*"de agora em diante trate o repositório alheio como apenas leitura, caso tenha
-alguma alteração crie issues para que a equipe responsável possa tratar."*
-
-O layout da máquina é maior que a tabela acima:
 
 ```text
 /home/charles/Giochi/
@@ -59,70 +82,26 @@ O layout da máquina é maior que a tabela acima:
 └── giochi-engine/       ┘
 ```
 
-**Regra:** só o `GIOCHI-APP` é escrito aqui. Em qualquer outro, a única operação
-permitida é **leitura** — inclusive `git log`/`git diff`, que é como se entende o
-que a outra equipe fez. Quando o diagnóstico concluir que a correção mora em repo
-alheio:
+Quando a correção mora em repo alheio: **não editar** (nem um comentário); abrir
+uma **issue** no repositório responsável com o que foi medido, arquivo e linha,
+a consequência e o que a correção provavelmente é; registrar o número em §17.
+Os vizinhos já têm trabalho não commitado de outra pessoa, e escrever ali
+mistura o meu diff com o de alguém.
 
-1. **não edite** — nem uma linha, nem um comentário, nem um doc;
-2. abra uma **issue** no repositório responsável, com o que foi medido, arquivo e
-   linha, a consequência e o que a correção provavelmente é;
-3. registre o número da issue em §17, para a conversa apontar para ela em vez de
-   repetir a análise.
-
-**O primeiro motivo é medido, e é o mais forte:** os repos vizinhos já têm
-trabalho não commitado de outra pessoa. `git status` de 15/11/2026 mostrou
-`GIOCHI-ENGINE` (6 arquivos + um `examples/captura.rs` novo) e `GIOCHI-GAMES`
-(8 arquivos) com alterações pendentes que **não são deste agente**. Escrever ali
-mistura o meu diff com o de alguém, e depois nem `git diff` separa. O segundo é
-que a fronteira do topo desta seção só vale se o código não atravessá-la.
-
-**O mecanismo foi medido antes da regra ser escrita**, porque prometer issue e
-não conseguir abrir uma é o mesmo defeito do §10 ("silêncio no sucesso é o
-defeito espelhado do silêncio no fracasso"). Resultado medido em 15/11/2026:
-
-| Passo | Resultado |
-| --- | --- |
-| `GET /repos/.../issues` | **200** — ler funciona |
-| `POST` num issue inexistente (`add_issue_comment`) | **404** — autentica; 401 seria falta de token |
-| `POST` de issue (`issue_write`) | **formulário de confirmação no VS Code** — nada é criado sem clique |
-
-O `GIOCHI-SYSTEM` registrou a mesma regra na direção dele (§2-A do `AGENTS.md`
-de lá) supondo que a máquina não tinha credencial nenhuma. A premissa estava
-errada: há **MCP do GitHub autenticado como `xtrempkch-droid`**. O que falta não é
-token, é **um clique** — o agente não clica em formulário de extensão.
-
-Consequência prática, e é o que vale: o entregável é o **corpo pronto** em
-[`docs/issues-para-outros-repos.md`](docs/issues-para-outros-repos.md), e o
-número da issue só entra em §17 **depois** que existir de fato. Anunciar "issue
-criada" sem ter criado é o §10 aplicado à conversa entre equipes — e uma regra
-que promete o que não pode cumprir vira promessa vazia, que é pior que não ter
-regra.
-
-**O clique saiu do caminho em 15/11/2026, e o motivo foi medido na conversa.**
-Depois de duas submissões ao `issue_write`, o retorno do dono do projeto foi
-*"dessa vez não apareceu o pedido para eu clicar"* — o formulário não é uma
-garantia, é uma view que pode não se materializar. Uma regra que depende dele
-produz o mesmo defeito que ela tentava evitar: a issue continua não existindo e
-ninguém sabe por quê.
-
-Hoje o corpo pronto vira **URL do `issues/new`**, com `?title=` e `?body=`:
+**O corpo da issue é entregável deste repo**, não a criação dela:
 
 ```bash
-node scripts/abrir-issue.mjs --lista    # os cinco pedidos, com número e repo
-node scripts/abrir-issue.mjs 5 --abrir  # abre a issue já preenchida
+node scripts/abrir-issue.mjs --lista    # os pedidos, com número e repo
+node scripts/abrir-issue.mjs 5 --abrir  # abre a issue já preenchida no GitHub
 node scripts/abrir-issue.mjs 5 --corpo  # só o texto, para colar
 ```
 
-O clique que resta é no **GitHub**, no formulário que a pessoa já usa — não numa
-extensão que pode não aparecer. O corpo sai verbatim do arquivo (reescrevê-lo no
-script criaria uma segunda versão, que é como nascem as cópias atrasadas do
-§7), e o script reescreve link relativo para absoluto, porque um `idiomas.md`
-solto numa issue aponta para 404 — o corpo deixa este diretório.
-
-`--corpo` não é redundância: a URL do pedido de fontes tem **7.354 bytes**. Cabe,
-mas nem todo veículo que cola link gosta, e o texto é o mesmo.
-
+O formulário do VS Code (`issue_write`) **não é garantia**: duas submissões
+terminaram com "não apareceu o pedido para clicar" e as issues **foram** criadas
+— a conferência antes do clique devolveu o passado e gerou duplicatas (#3, #4 e
+#5 do PortMaster). O caminho de hoje é a URL do `issues/new`, e o clique que
+resta é no GitHub. O corpo sai verbatim de
+[`docs/issues-para-outros-repos.md`](docs/issues-para-outros-repos.md).
 
 ## 2. Estrutura
 
@@ -132,13 +111,14 @@ app/
 ├── _template/             # modelo para app novo
 ├── launcher/              # Rust + SDL2 — a interface do aparelho
 │   ├── Cargo.toml         # workspace: crates/core + crates/ui-sdl
-│   ├── crates/core/       # 8 módulos, 117 testes, sem SDL
-│   └── crates/ui-sdl/     # 15 módulos, 136 testes, KMSDRM + evdev + catálogo
+│   ├── crates/core/       # 10 módulos, 159 testes, sem SDL
+│   └── crates/ui-sdl/     # 16 módulos, 171 testes, KMSDRM + evdev + catálogo + ports
 ├── launcher-teste/        # o mesmo launcher sobre a GIOCHI-ENGINE (scaffold)
 ├── launcher-star-dust/    # o launcher + camada de efeitos (ready)
 ├── forge/                 # empacotador/classificador (host, Python)
 ├── store/                 # baixa/paga e envia ao aparelho (host, Python)
 ├── painel/                # interface web local (host, Python)
+├── musica/                # tocador (imagem, app) — o primeiro `image` que não é tema
 └── loja/                  # loja gráfica (host, Rust + SDL2)
 schemas/                   # metadata.schema.json + forge.schema.json
 
@@ -146,10 +126,12 @@ schemas/                   # metadata.schema.json + forge.schema.json
 /opt/giochi/games/<id>     # jogos que vêm na imagem
 /opt/giochi/apps/<id>      # apps que vêm na imagem (inclui o launcher e o musica)
 /user/games/<id>           # jogos instalados pela loja / cartão
-/user/apps/<id>            # apps instalados pela loja / cartão
+/user/apps/<id>            # apps instalados pela loja / cartão (+ cartões de port)
+/user/ports/               # PortMaster: `<nome>.sh` + `<nome>/` (§6.11)
+
 scripts/                   # validador, empacotadores, ferramentas do aparelho e de issue
 tests/                     # 233 testes JS + suites Python de forge e painel
-docs/                      # 29 páginas (inclui idiomas.md e issues-para-outros-repos.md, §1.1)
+docs/                      # 29+ páginas (inclui idiomas.md, portmaster.md, historico/)
 .github/workflows/         # validate.yml, pc-apps.yml, loja.yml
 ```
 
@@ -166,14 +148,12 @@ app/<slug>/
 └── README.md
 ```
 
-**A distinção `src/` × `bin/` × `assets/` é a decisão estrutural mais importante.**
-`src/` é o que se edita, `bin/` é o que o aparelho executa, `assets/` é material
-de trabalho que não viaja. Confundir isso gera pacote de centenas de megabytes com
-arquivos editáveis dentro.
+**`src/` × `bin/` × `assets/` é a decisão estrutural mais importante.** `src/` é
+o que se edita, `bin/` é o que o aparelho executa, `assets/` é material de
+trabalho que não viaja.
 
 **Grupos** (`app/<grupo>/<slug>`) continuam suportados pelo validador e não são
-usados hoje. O que distingue grupo de app é o `metadata.json` — pasta com o
-arquivo é app, pasta sem ele é grupo, e a varredura desce um nível. Profundidade
+usados hoje. O que distingue grupo de app é o `metadata.json`; profundidade
 máxima: 2.
 
 ## 3. Contratos
@@ -196,52 +176,23 @@ máxima: 2.
 | `license` | SPDX ou `Proprietary` | precisa bater com o `metadata.json` |
 | `role` | `shell` | opcional; fica fora do catálogo |
 
-`role: shell` existe porque o launcher tem `status: ready`, `distribution: image`
-e binário no lugar — entrava por todos os critérios, e o cartão "Launcher"
-abriria um **segundo** launcher, que perde o DRM (exclusivo) e morre com
-`kmsdrm not available`.
-
-### O prefixo `launcher` **é** tema — decisão do dono, 15/11/2026
-
-Até então o papel era declarado e não inferido do nome. O dono pediu o
-contrário: *"todo app com o nome começando com `launcher` seja tratado como tema,
-assim eu poderia criar um outro `launcher-*` e o launcher vai reconhecer como
-tema"*. Vale, e o motivo é bom: **esquecer o `role` era fácil e o sintoma
-aparecia longe da causa**. Hoje as duas condições **somam**:
+**O prefixo `launcher` é tema** (decisão do dono, 15/11/2026): as duas condições
+**somam**.
 
 ```js
 papelDeApp(id, declarado) = declarado === "shell" || ehTema(id)
 ehTema(id)                = id === "launcher" || id.startsWith("launcher-")
 ```
 
-| Situação | Resultado |
-| --- | --- |
-| `launcher`, `launcher-teste`, `launcher-star-dust`, `launcher-neon` | tema, **sem** declarar nada |
-| `my-launcher-tool`, `launchertool`, `relancher` | app comum — o prefixo é no **começo** e com **hífen** |
-| `meu-tema` com `role: "shell"` | tema, pela declaração |
-
 O hífen não é decoração: sem ele `launchertool` viraria tema e o app sumiria do
-catálogo em silêncio. E a declaração continua valendo — quem não usa o prefixo
-não perde a saída.
+catálogo em silêncio. Custo aceito: um app `launcher-*` que não seja interface
+também fica de fora — um cartão a menos é recuperável renomeando a pasta; um
+cartão a mais abre um segundo launcher e derruba a interface.
 
-O custo aceito é que um app chamado `launcher-*` que **não** seja interface
-também fica de fora. É o erro certo para o lado certo: um cartão a menos é
-recuperável renomeando a pasta; um cartão a mais abre um segundo launcher e
-derruba a interface inteira.
-
-`role` só aceita `shell` (`indice_role_invalido`). Antes qualquer texto passava
-e era descartado em silêncio — `role: "tema"`, o nome que o dono usa ao falar,
-não fazia nada e o app virava cartão como se não tivesse papel nenhum.
-
-**Tema fora da imagem avisa** (`tema_fora_da_imagem`, aviso e não erro): quem
-inicia um tema é o `giochi-init`, que procura em `/opt/giochi/apps`. Um tema com
-`distribution: store` instala em `/user/apps`, onde nada o procura — instala sem
-erro e nunca abre. Rodá-lo à mão para testar é legítimo, daí aviso.
-
-Hoje vale para os três apps de interface.
-
-Pasta em `app/` fora do `apps.json` reprova com `app_nao_registrado`: um app
-invisível para a loja é pior que um app quebrado.
+`role` só aceita `shell`. **Tema fora da imagem avisa** (`tema_fora_da_imagem`):
+o `giochi-init` procura em `/opt/giochi/apps`, e `distribution: store` instala
+em `/user/apps`, onde nada o procura. Pasta em `app/` fora do `apps.json`
+reprova (`app_nao_registrado`).
 
 ### `distribution` decide o destino e a licença
 
@@ -251,41 +202,25 @@ invisível para a loja é pior que um app quebrado.
 | `store` | instalado em `/user/apps`, enviado pela loja | aceita GPL |
 | `host` | no **computador do usuário** | não vai para o aparelho |
 
-O validador **recusa mecanicamente** GPL/AGPL/LGPL com `distribution: "image"`
-(código `licenca_gpl_na_imagem`). É o que permite vender app GPL: o pacote
-baixado não faz parte da imagem assinada e o comprador pode substituí-lo em
-`/user` — exatamente o procedimento sem chave que a GPL-3.0 §6 exige.
-
-`arch` é validado **em par com `distribution`**: `aarch64` para `image`/`store`,
-`x86_64`/`arm64`/`any` para `host`. Códigos
-`arquitetura_de_console_em_app_de_pc` e `arquitetura_de_pc_em_app_do_aparelho`.
-Só ampliar o enum teria deixado o campo voltar a não significar nada.
+GPL/AGPL/LGPL com `distribution: "image"` é recusado mecanicamente
+(`licenca_gpl_na_imagem`) — é o que permite vender app GPL. `arch` é validado
+**em par** com `distribution`: `aarch64` para `image`/`store`,
+`x86_64`/`arm64`/`any` para `host`.
 
 ### `metadata.json`
 
 Obrigatórios: `title`, `developer`, `version`, `arch`, `runtime`, `entrypoint`.
 Opcionais: `graphics_api`, `buttons_map`, `license`, `licenseUrl`, `releaseYear`,
-`category`, `slug`, **`kind`**.
+`category`, `slug`, **`kind`**. `additionalProperties: false`; semver obrigatório.
 
-**`kind` decide a aba e a raiz** (`game` ou `app`; ausente = `game`). É
-obrigatório no validador para app de **imagem** que não é tema: é ele que escolhe
-entre `/opt/giochi/games/<id>` e `/opt/giochi/apps/<id>` e, portanto, entre a
-Home e a aba Apps. Sem o campo, o padrão é `game` — e um app novo apareceria no
-carrossel de jogos sem um único aviso. `additionalProperties: false` — campo desconhecido reprova.
-Semver obrigatório (`1.0.0`, não `1.0`).
-
-- **`slug`** — identidade do pacote. Derivar do **título** faria "Editor" →
-  "Editor Pro" mover o app de lugar, quebrando catálogo e favorito. Ordem:
-  `metadata.slug` → `id` do `apps.json` → título (último recurso, e o pacote diz
-  que usou). Um `slug` derivado do título já instalou em
-  `/opt/giochi/apps/pac-man` enquanto o catálogo apontava para `pacman`.
-- **`releaseYear`** e **`category`** viajam numa cadeia de três elos —
-  `metadata.json` → índice da loja → catálogo do launcher. `0`/ausente é
-  *desconhecido* e a UI mostra `—`. **Nunca** derivar do índice do app.
-
-**Substituto de dado ausente precisa ser declarado ausente, não preenchido com
-número interno.** A Home já mostrou `Spacewar • Ação • #002`, que parecia
-informação do jogo e era o índice do cartão.
+- **`kind`** (`game` ou `app`; ausente = `game`) decide a aba **e** a raiz. É
+  obrigatório no validador para app de imagem que não é tema: sem ele, um app
+  novo aparece no carrossel de jogos sem um único aviso.
+- **`slug`** — identidade do pacote. Ordem: `metadata.slug` → `id` do
+  `apps.json` → título (último recurso, e o pacote diz que usou).
+- **`releaseYear`** e **`category`** viajam em três elos — `metadata.json` →
+  índice → catálogo. `0`/ausente é *desconhecido*, e a UI mostra `—`. **Nunca**
+  derivar do índice do app: a Home já mostrou `Spacewar • Ação • #002`.
 
 ### `forge.json`
 
@@ -293,14 +228,12 @@ Requisitos de capacidade — todas opcionais: `arch`, `runtime`,
 `graphics_api_min`, `graphics_api_fallback`, `godot_version`, `ram_min_mb`,
 `vram_min_mb`, `display_min_width/height`, `touchscreen_required`.
 
-**Nunca declara `BR2_PACKAGE_*`.** O Buildroot descarta símbolo inexistente em
-silêncio; um app que declarasse pacote produziria build verde com biblioteca
-ausente. As dependências ficam no `Config.in` do **Giochi System**.
+**Nunca declara `BR2_PACKAGE_*`** — o Buildroot descarta símbolo inexistente em
+silêncio. `graphics_api_min: "none"` existe para app de software; o default é
+`gles3`, porque omitir num app gráfico tem de ser conservador.
 
-`graphics_api_min: "none"` existe para app que roda em software (SDL2 puro). O
-**default continua `gles3`**: omitir num app gráfico tem de ser conservador —
-`none` é declaração, não esquecimento. A cadeia de checagem tem `else` que
-reprova valor desconhecido (`gles4`, erro de digitação).
+Detalhe de cada campo e o motivo:
+[`docs/historico/estado-e-contratos.md`](docs/historico/estado-e-contratos.md).
 
 ## 4. Comandos
 
@@ -311,7 +244,7 @@ node tests/run-all.mjs                      # 233 testes JS (lista vem de readdi
 bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 321 testes
+bash scripts/compilar-launcher.sh --testes  # 330 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 bash scripts/compilar-musica.sh --testes    # 158 testes (120 núcleo + 38 binário)
 bash scripts/compilar-musica.sh --clippy    # -D warnings nos dois crates
@@ -324,10 +257,14 @@ bash scripts/compilar-musica-arm64.sh --instalar   # aarch64 + instala no aparel
 ( cd app/loja && cargo clippy --all-targets -- -D warnings )
 
 bash scripts/compilar-launcher-arm64.sh                       # cross-compile aarch64
-bash scripts/compilar-launcher-arm64.sh --app launcher-star-dust --instalar
+bash scripts/compilar-launcher-arm64.sh --instalar            # e instala no aparelho
 bash scripts/compilar-launcher-teste-arm64.sh --instalar
 node scripts/empacotar.mjs app/launcher --saida dist/pacotes  # .giochi assinado
 node scripts/verificar-pacote.mjs dist/pacotes/launcher.giochi
+
+# ports do PortMaster (§6.11) — no PC, sem aparelho
+GIOCHI_PORTS=/tmp/p/ports GIOCHI_APPS=/tmp/p/apps \
+  ./app/launcher/target/debug/giochi-launcher --sincronizar-ports
 
 # pedido para outro repo: corpo pronto → URL do `issues/new` (§1.1)
 node scripts/abrir-issue.mjs --lista
@@ -337,14 +274,17 @@ node scripts/abrir-issue.mjs 5 --abrir
 **Não rode `cargo test --workspace` direto em `app/launcher`.** O crate linka com
 `rust-lld`, que ignora `LIBRARY_PATH`; sem
 `RUSTFLAGS=-L .../giochi-sdl2/root/usr/lib/x86_64-linux-gnu` o link falha com
-`unable to find library -lSDL2` **mesmo com o build passando**. Os dois scripts
-já exportam isso — use `--testes`.
+`unable to find library -lSDL2` **mesmo com o build passando**. Use `--testes`.
 
 **Não use `node --test tests/`**: o runner spawna um processo por arquivo e sob
-sandbox falha com `spawn EPERM`. O runner próprio existe por isso, e desde
-14/11/2026 ele **descobre** os `.test.mjs` por `readdir` em vez de uma lista
-escrita à mão — a lista fixa deixou um arquivo novo de fora e o resultado saiu
+sandbox falha com `spawn EPERM`. O runner próprio descobre os `.test.mjs` por
+`readdir` — a lista fixa já deixou um arquivo novo de fora e o resultado saiu
 "164/164" com menos cobertura.
+
+**`--testes` compila *harnesses*, não o binário.** Quem for usar
+`target/debug/giochi-launcher` (o `verificar`, uma captura, um teste de ponta a
+ponta) tem de rodar `compilar-launcher.sh` antes — já custou três rodadas com
+número errado (§13).
 
 ## 5. Decisões que não se reabrem sem o dono pedir
 
@@ -363,89 +303,71 @@ escrita à mão — a lista fixa deixou um arquivo novo de fora e o resultado sa
 
 ## 6. O launcher — o app central
 
-Rust + SDL2, **renderer próprio**. Alternativas descartadas: `egui` (desenho
-custom limitado) e Slint (DSL + runtime grande para 1 GB de RAM). SDL2 já está no
-Buildroot e o KMSDRM dispensa compositor.
+Rust + SDL2, **renderer próprio**. `egui` foi descartado (desenho custom
+limitado) e Slint também (DSL + runtime grande para 1 GB de RAM). SDL2 já está
+no Buildroot e o KMSDRM dispensa compositor.
 
 | Peça | Onde |
 | --- | --- |
-| estado, foco, reducer, grade | `crates/core` (117 testes, sem SDL) |
-| janela, desenho, rotação, evdev, catálogo | `crates/ui-sdl` (136 testes) |
+| estado, foco, reducer, grade, detecção | `crates/core` (159 testes, sem SDL) |
+| janela, desenho, rotação, evdev, catálogo, ports | `crates/ui-sdl` (171 testes) |
+
+| Seção | Assunto | Detalhe completo |
+| --- | --- | --- |
+| 6.1 | rotação vinda do sistema | `docs/historico/launcher.md` |
+| 6.2 | layout adaptativo, escala 1,0 | idem |
+| 6.3 | entrada por evdev, não por SDL | idem + [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| 6.4 | o que o kernel promete × entrega | idem |
+| 6.5 | energia, brilho, volume, sono | idem |
+| 6.6 | Wi-Fi e Bluetooth | idem |
+| 6.7 | feature `texto` | idem |
+| 6.8 | catálogo e lançamento (`fork`+`wait`) | idem |
+| 6.9 | as duas abas detectam | idem |
+| 6.10 | idioma e tema | [`docs/idiomas.md`](docs/idiomas.md) |
+| 6.11 | ports do PortMaster | [`docs/portmaster.md`](docs/portmaster.md) |
 
 ### 6.1 Rotação — a orientação é fato do sistema
 
-O app **não contém nome de aparelho nem sentido fixo**. Precedência
-(`crates/ui-sdl/src/display.rs`), e o log diz a fonte:
+O app **não contém nome de aparelho nem sentido fixo**. Precedência, e o log diz
+a fonte: `GIOCHI_ROTATE` → `/user/.config/giochi/rotation` (relê a cada 1 s) →
+`/sys/class/graphics/fbcon/rotate` → `/proc/cmdline` (`fbcon=rotate:N`, usado só
+quando o sysfs diz `0`) → formato do output (marca `Deduzido`).
 
-| Fonte | Quem usa | Recarrega ao vivo |
-| --- | --- | --- |
-| `GIOCHI_ROTATE` | depuração | não (é ambiente de processo) |
-| `/user/.config/giochi/rotation` | usuário | **sim**, a cada 1 s |
-| `/sys/class/graphics/fbcon/rotate` | **sistema** | sim |
-| `/proc/cmdline` (`fbcon=rotate:N`) | sistema, quando o sysfs diz `0` | não |
-| formato do output | último recurso (marca `Deduzido`) | — |
-
-O cruzamento com o `cmdline` existe por medição: no X55 o sysfs respondia `0`
-enquanto o `cmdline` pedia `fbcon=rotate:3`, e o launcher desenhava projeto
-720×1280 num painel retrato. O sysfs **vence** quando diz algo diferente de zero
-(é o estado de execução); só o `0` é desempatado. `fbcon=rotate:2` (180°) não é
-suportado — o app avisa e pede configuração manual em vez de fingir.
-
-Cada primitiva pública mapeia a coordenada **uma vez** e delega para uma versão
-`*_dev` em espaço de dispositivo. Sem essa separação `stroke_round_rect` chamaria
-`fill_rect` e giraria duas vezes. O toque desfaz em `unmap_point`.
-
-A matemática (`rotate_point`/`rotate_rect`/`unrotate_point`) é pura e testada sem
-SDL, incluindo ida-e-volta e a relação de 180° entre os sentidos. Errar o sentido
-dá exatamente "de ponta a cabeça": horário e anti-horário diferem 180°, sem
-meio-termo.
+O cruzamento com o `cmdline` existe por medição: no X55 o sysfs dizia `0`
+enquanto o `cmdline` pedia `fbcon=rotate:3`. Cada primitiva pública mapeia a
+coordenada **uma vez** e delega para uma versão `*_dev`; sem isso
+`stroke_round_rect` giraria duas vezes. Errar o sentido dá "de ponta a cabeça"
+(horário e anti-horário diferem 180°).
 
 ### 6.2 Layout adaptativo — escala 1,0 em qualquer painel
 
 `draw::projecao(rot, output)` devolve o espaço de projeto: sem giro, projeto =
 painel; com giro, projeto é paisagem com medidas trocadas. O espaço lógico
-continua sendo o do dispositivo, então a escala é **1,0 sempre** e a fonte nunca
-encolhe. Em troca, o layout é proporcional: `views::Moldura` calcula margens,
-barras e espaçamentos a partir do tamanho do painel, usando 1280×720 só como
-proporção de referência.
-
-Antes disso o projeto era fixo em 1280×720: num painel 640×480 a escala era 0,5,
-`F_TINY` (9 px) virava 4,5 px de device e sobrava 25 % de letterbox.
+continua sendo o do dispositivo, então a fonte **nunca encolhe**, e o layout é
+proporcional (`views::Moldura`). O projeto fixo em 1280×720 dava escala 0,5 num
+painel 640×480 e 25 % de letterbox.
 
 ### 6.3 Entrada por evdev, não por SDL gamepad
 
 `crates/ui-sdl/src/input_evdev.rs` lê `/dev/input/event*` direto. Motivo medido:
-os botões dos handhelds vêm de driver próprio (`rocknix-joypad`) e o
-`SDL_GameControllerDB` não tem mapeamento para aparelho custom; além disso o
-`buttons.map` mapeia **por código evdev** e o SDL entrega índice. O SDL ficou só
-com janela e desenho. Uma thread de leitura por `event*`, estado é a soma de
-todos. O analógico **não é lido**: normalizar exige `absinfo` por ioctl, e a
-calibração (`axis_*`) já é parseada para quando isso entrar.
+os botões vêm de `gpio-keys`/`adc-joystick`, o `SDL_GameControllerDB` não tem
+mapeamento para aparelho custom, e o `buttons.map` mapeia **por código evdev**
+enquanto o SDL entrega índice. Uma thread por `event*`, estado é a soma de todos.
 
-**A releitura é obrigatória.** O nó `event*` de um controle Bluetooth só existe
-**depois** que ele conecta. Até 13/11/2026 os apps liam `/dev/input` uma vez na
-abertura: um controle pareado em execução nunca era visto. Hoje há varredura a
-cada **2 s** (`REVISAO_MS`), idempotente por `HashSet`, com uma linha de log
-quando acha um dispositivo novo.
+**A releitura é obrigatória.** O nó de um controle Bluetooth só existe depois que
+ele conecta: até 13/11/2026 os apps liam `/dev/input` uma vez e um controle
+pareado em execução nunca era visto. Hoje há varredura a cada **2 s**
+(`REVISAO_MS`), idempotente por `HashSet`, com log quando acha algo novo.
 
-`ButtonsMap::parse` acumula `desconhecidos` e `load` avisa **uma vez**:
+`ButtonsMap::parse` acumula `desconhecidos` e `load` avisa **uma vez** — um
+símbolo desconhecido era descartado em silêncio e o botão não funcionava
+(aconteceu duas vezes: comentário no fim da linha e `KEY_VOLUME*`). **O que foi
+ignorado tem de ser dito.** `scripts/verificar-mapa.mjs` lê a lista de símbolos
+do **binário**, não de uma cópia.
 
-```text
-aviso: 9 símbolo(s) do mapa não reconhecido(s): axis_x_min = 15, ...
-```
-
-O mapa é do **sistema**; o tradutor de símbolos é do app. Um símbolo desconhecido
-era descartado em silêncio e o botão simplesmente não funcionava — aconteceu
-**duas vezes**: com comentário no fim da linha (`up = BTN_DPAD_UP  # gpio4 PA0`,
-que deixava 1 de 13 botões) e com `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN`. Foi esse aviso
-que revelou que as chaves `axis_*` eram declaradas pelo sistema e ignoradas pelo
-app. **O que foi ignorado tem de ser dito.**
-
-`scripts/verificar-mapa.mjs` responde "o app conhece este mapa?" lendo a lista de
-símbolos do **binário** (`--simbolos`), não de uma cópia: um símbolo desconhecido
-vira botão morto em silêncio. Um teste Rust
-(`lista_de_simbolos_bate_com_o_tradutor`) impede a lista de divergir do `code_for`
-— é o que permite verificar um aparelho **que não está na mão**.
+**O analógico não é lido** (normalizar exige `absinfo` por ioctl). O controle
+virtual de 18/11/2026 já entrega `-32767..32767` e dispensa o ioctl — plano em
+[`docs/controle-virtual.md`](docs/controle-virtual.md), **não implementado**.
 
 ### 6.4 O que o kernel promete × o que ele entrega
 
@@ -461,662 +383,184 @@ vira botão morto em silêncio. Um teste Rust
 | não | sim | bitmask incompleto; aviso, não veredito |
 | não | não | o botão não existe neste hardware |
 
-**O formato do bitmask engana.** O kernel lista as palavras de 64 bits em ordem
-**decrescente**, então a última coluna é a palavra 0. Ler da esquerda desloca
-todos os códigos em múltiplos de 64 e produz um mapa plausível e errado:
-
-```text
-B: KEY=10000000000000 0    → palavra 1, bit 52 → 64+52 = 116 = KEY_POWER
-B: KEY=c000000000000 0     → palavra 1, bits 50-51 → 114 e 115 = VOLUMEDOWN/UP
-```
-
-Mapa real do X55: `rk805 pwrkey` 116 · `gpio-keys-control` 304-305, 307-308,
-310-318 (13 botões) e 544-547 (direcional, que são `BTN_DPAD_*`, faixa `BTN_` e
-não `KEY_`, e por isso parecem códigos sem nome) · `gpio-keys-vol` 114-115.
-Somando: **20 códigos, todos com entrada em `code_for` e no `buttons.map`**.
-
-`evtest --query` não ajuda: **devolve 0 para qualquer código** nesta imagem. O
-`/proc` é a única fonte. `crates/core/src/capacidades.rs` decodifica
-`/sys/class/input/event*/device/capabilities/key` com testes usando as três
-strings **reais** medidas em aparelho, e cada arquivo é decodificado
-separadamente (a ordem decrescente vale por arquivo, e concatenar todos antes
-deslocaria os códigos dos seguintes).
-
-`None` (não medido) ≠ lista vazia (medido, não declara nada): no PC não há
-`/sys/class/input/event*` e o launcher **não avisa**. Ele só avisa quando mediu e
-o código não está lá — é o caso do R35S, que não declara `KEY_POWER` e onde o
-toque curto para dormir não existe (o menu de energia continua no START).
+**O formato do bitmask engana**: o kernel lista as palavras de 64 bits em ordem
+**decrescente**, então a última coluna é a palavra 0. `evtest --query` devolve 0
+para qualquer código nesta imagem; o `/proc` é a única fonte. `None` (não medido)
+≠ lista vazia (medido, nada declarado): no PC o launcher **não avisa**.
 
 ### 6.5 Energia, brilho, volume e sono
 
-Cinco regras, todas nascidas de bug real no aparelho:
+1. **Qualquer entrada de pessoa acorda** (`Cmd::is_user_input`), e o botão que
+   acorda é consumido pelo despertar.
+2. **O botão segurado não pode vazar**: `poll_gamepad` roda mesmo dormindo e
+   descarta o resto do quadro quando estava travado.
+3. **Dormir apaga o backlight**; `apagar` é idempotente e `destravar_tela_apagada`
+   reacende se o valor veio 0.
+4. **`KEY_POWER`**: toque curto dorme; segurar 1 s abre o menu **ao atingir o
+   limiar**, não ao soltar. Sem `KEY_POWER` no mapa, o launcher avisa e o menu
+   fica no START.
+5. **Volume controla o mixer ALSA de verdade**, e o brilho grava
+   `/user/.config/giochi/brightness` (é o que o `giochi-init` lê no boot).
 
-1. **Qualquer entrada de pessoa acorda.** `Cmd::is_user_input` separa "um dedo
-   apertou" de "o sistema reportou" (bateria, HUD, presença de controle). O
-   reducer intercepta em `Sleeping`/`Shutdown` **antes** do `match`, e a entrada
-   é consumida pelo despertar — o botão que acorda não age.
-2. **O botão segurado não pode vazar.** `poll_gamepad` roda `mapper.update`
-   mesmo dormindo (senão borda/repetição envelhecem e sai um `Confirm` fantasma
-   logo depois de acordar) e **descarta o resto do quadro** quando estava travado.
-3. **Dormir apaga o backlight.** `backlight.rs` escreve em
-   `/sys/class/backlight/*/brightness`. `apagar` é idempotente (dormir duas vezes
-   não salva 0 como "anterior") e na abertura `destravar_tela_apagada` reacende se
-   o valor veio 0 — proteção para o caso de o processo morrer dormindo.
-4. **O botão de energia físico funciona.** `rk805 pwrkey` emite `KEY_POWER`
-   (116). Toque curto dorme; segurar 1 s abre o menu de energia **ao atingir o
-   limiar**, não ao soltar (senão o usuário segura sem nenhum sinal). A lógica
-   pura vive em `power.rs` (7 testes) e deixa rastro no log:
-   `botão de energia: segurado 1.0s, abrindo menu de energia`.
-5. **As teclas de volume controlam o mixer ALSA de verdade.** `Master Playback
-   Volume` via libasound, passo de 5 %, repetição ao segurar (400 ms, depois
-   120 ms). O slider de brilho também chega no painel e **grava**
-   `/user/.config/giochi/brightness`, o arquivo que o `giochi-init` lê no boot —
-   sem isso a escolha do usuário sumia a cada reinício.
+**`libasound` é resolvida por `dlopen`, não por link**: o R35S não tem a
+biblioteca, e biblioteca ausente é falha de carga — o processo não sobe. Um
+binário só, sem feature, e `libasound` não aparece no `NEEDED`.
 
-**`libasound` é resolvida por `dlopen`, não por link.** O R35S tem `/dev/snd` e
-drivers de áudio, mas **não tem a biblioteca** — e biblioteca ausente é falha de
-carga: o processo não sobe "sem som", ele não sobe. Uma feature de build por
-aparelho quebrava o X55 (que tem a lib e perdia o mixer). Hoje `volume.rs`
-resolve os símbolos em tempo de execução: achando, controla; não achando,
-`Ausente` e o volume mostra `—`. **Um binário, sem feature**, e `libasound` não
-aparece no `NEEDED`.
-
-Diagnóstico de campo, no próprio aparelho:
-
-```bash
-giochi-launcher --testar-backlight   # apaga 2 s e restaura (medido: 833 → 0 → 833)
-giochi-launcher --brilho 40          # mesmo caminho do slider, e persiste
-giochi-launcher --mostrar-volume     # o que o mixer diz agora
-giochi-launcher --volume 30          # aplica pelo mesmo caminho da UI
-giochi-launcher --espiar-input 20    # cada tecla crua do kernel, sem mapa
-```
-
-`--espiar-input` é o que separa "o evento não chega ao sistema" de "chega e o app
-ignora".
-
-Bateria e temperatura vêm de `/sys/class/power_supply` e `/sys/class/thermal`
-(`energia.rs`), despachadas a cada **5 s** — ler 4 arquivos de sysfs a 60 Hz
-seria desperdício e nenhum dos valores muda entre dois quadros. Os dois saem
-juntos no log quando qualquer um muda: uma leitura que falha não pode virar `—`
-sem explicação.
-
-**E o "quando muda" já esteve errado de um jeito que nenhum teste pegava.**
-`hud.temp_c` é `u16` e `0` é o sentinela de "desconhecido"; a comparação era
-`temperatura.map(|t| t as u16) != Some(hud.temp_c)`, e num aparelho **sem
-sensor** o lado esquerdo é `None` — `None != Some(0)` é sempre verdadeiro. O
-resultado medido no R35S: `energia: bateria sem medidor · temperatura sem sensor`
-a cada 5 s no console **serial**, que é o único canal quando o USB não sobe.
-
-Hoje a decisão é uma função pura, `energia_deve_registrar`, que compara `None`
-com o **mesmo sentinela** que a HUD usa e registra a primeira linha sempre (é ela
-que diz "aqui não há medidor nem sensor"). Seis testes cobrem os casos, e reverter
-para a expressão antiga reprova dois: `sem_sensor_nao_registra_a_cada_leitura` e
-`sensor_que_desaparece_registra_uma_vez`. A mesma função foi para o Star Dust.
-
-**Um número no sysfs não prova que o hardware existe.** O X55 publica
-`bateria 0% (Not charging)` porque o nó do PMIC `rk817` existe — a célula foi
-removida fisicamente para dar acesso à serial. Esse módulo não pode ser julgado no
-X55; quem valida bateria é o aparelho que tem célula.
+Bateria e temperatura vêm de sysfs a cada **5 s**, e a decisão de logar é a
+função pura `energia_deve_registrar` — comparar `Option` com o sentinela `0`
+fazia a linha sair para sempre num aparelho sem sensor.
 
 ### 6.6 Wi-Fi e Bluetooth
 
-`semfio.rs` chama `wpa_cli` e `bluetoothctl` e publica `Option<bool>`:
-`None` = não sondado, `Some(false)` = medido que não tem. **`None` não é
-ausência**: o R35S não tem rádio e a tela diz "sem rádio neste aparelho", com o
-"procurar de novo" inerte — sem essa guarda, apertar `A` ligaria "procurando…"
-para sempre.
+`semfio.rs` chama `wpa_cli` e `bluetoothctl` e publica `Option<bool>`: `None` =
+não sondado, `Some(false)` = medido que não tem. **`None` não é ausência**: no
+R35S a tela diz "sem rádio neste aparelho" e o "procurar de novo" fica inerte.
 
-Três armadilhas de ambiente, todas medidas:
+Três armadilhas medidas: **não existe `timeout` na imagem**; **`wlan0` sobe
+DOWN** (o app chama `ip link set up` antes de varrer); **`wpa_cli` e `ip` moram
+em `/usr/sbin` e `/sbin`**.
 
-- **Não existe `timeout` na imagem.** As janelas usam `--timeout` do próprio
-  `bluetoothctl` e espera fixa no `wpa_cli`. Um comando que não existe falha em
-  silêncio se ninguém olhar.
-- **`wlan0` sobe DOWN.** O `S40wifi` do sistema não levanta a interface quando o
-  `wpa_supplicant.conf` está vazio, e `wpa_cli scan` responde `FAIL-BUSY` com o
-  rádio parado. O sintoma é "não acha nenhuma rede", não "erro" — então o app
-  chama `ip link set up` antes de varrer.
-- **`wpa_cli` está em `/usr/sbin` e `ip` em `/sbin`.** `programa()` procura nos
-  diretórios padrão antes de desistir, porque o launcher também é iniciado à mão
-  por SSH no diagnóstico.
+**`update_config=1` é o que separa "conectou" de "vai lembrar"** — e é da
+imagem, não do app (§17, pedido 2 do documento). Quando `save_config` falha, a
+tela diz *"a rede não foi salva: vai pedir a senha de novo"* em vez de silêncio.
+**Esperar a associação é o que separa "aceitou" de "conectou"**: 12 s, e ao
+falhar devolve o **último estado do supplicant** (`4-WAY_HANDSHAKE` = senha
+recusada; `SCANNING` = fora de alcance).
 
-**`update_config=1` é o que separa "conectou" de "vai lembrar".** Medido no X55
-em 15/11/2026, conexão ponta a ponta com a rede real:
-
-```text
-wi-fi: conectando a Kill.exe em wlan0 (senha: 10 caractere(s))
-wi-fi: interface wlan0 levantada
-wpa_state=COMPLETED   inet 192.168.1.7/24   ping 192.168.1.1: 0% perda
-DNS resolve (github.com)   HTTP ok
-```
-
-Mas o `save_config` respondia **`FAIL`**, em silêncio, e a rede sumia no reboot.
-A causa foi medida, não deduzida: `/etc/wpa_supplicant.conf` **não tinha
-`update_config=1`**, e essa opção só é lida na **partida** do supplicant.
-
-| Passo | Resultado |
-| --- | --- |
-| sem `update_config=1` | `save_config` → `FAIL` |
-| com a linha, sem reiniciar o processo | `save_config` → `FAIL` (a flag é lida no boot dele) |
-| com a linha e supplicant reiniciado | `save_config` → **`OK`**, e o `ssid=` aparece no arquivo |
-| matar e subir o supplicant de novo | reconecta **sozinho** a `Kill.exe` (`wpa_state=COMPLETED`) |
-| **reboot do aparelho** | subiu, associou a `Kill.exe` e pediu DHCP **sem ninguém tocar em nada** |
-
-A última linha é a que fecha o caso: `uptime` de 507 s depois de uma queda de
-SSH, com a rede já `COMPLETED` e IP `192.168.1.7`. Ninguém digitou senha. `/` é
-`ext4 (rw)`, então o arquivo sobrevive a reboot de verdade.
-
-Duas consequências no código:
-
-1. `save_config` deixou de ser silencioso. Quando falha, o `conectar()` devolve
-   `Cmd::ConectarSemSalvar(ssid)` e a tela diz *"Conectado a X — a rede não foi
-   salva: vai pedir a senha de novo"*. Antes ia só para o `stderr`, que ninguém
-   lê no aparelho: o usuário reiniciava e encontrava o console desconectado sem
-   nenhuma pista da causa.
-2. A decisão virou função pura, `resultado_da_conexao(salvou, ssid)`, porque o
-   resto do `conectar()` chama `wpa_cli` e não se testa sem aparelho.
-
-**A linha é da imagem, não do app.** Foi aplicada no X55 desta rodada para o
-recurso funcionar hoje; a próxima imagem precisa trazê-la (§17).
-
-**Esperar a associação é o que separa "aceitou" de "conectou".**
-`select_network` responde OK antes de qualquer associação; sem esperar
-`wpa_state=COMPLETED` a tela diria "Conectado" para uma rede que nunca conectou.
-A espera tem 12 s e, ao falhar, devolve **o último estado do supplicant** — não
-"deu errado". `4-WAY_HANDSHAKE` é senha recusada; `SCANNING` é rede fora de
-alcance; são ações diferentes do usuário. `save_config` **não roda** com senha
-errada: o aparelho não tenta sozinho no próximo boot e falha sem ninguém entender.
-
-**Pareamento Bluetooth precisa de scan.** O `0x04` do BlueZ é *page timeout*: o
-controlador só responde enquanto está anunciando, e um scan de 5 s antes do
-`pair` é o que separa "pareou" de `ConnectionAttemptFailed`. O agente
-(`NoInputNoOutput`) tem de estar no **mesmo processo** do `pair`; o veredito sai
-de `info` (`Paired: yes`), não do texto. `motivo_do_pareamento` traduz
-`ConnectionAttemptFailed`/`NotAvailable`/`AuthenticationFailed`/`NoAgentAvailable`
-em instruções — e há teste exigindo que o código bruto do BlueZ nunca chegue ao
-usuário.
-
-**Bluetooth como entrada: o kernel está completo para clássico, falta `UHID`, e
-o ponta a ponta nunca foi medido.** Esta seção já afirmou o contrário — que
-faltava "o transporte HID do kernel" — com três provas que **eram falsas**. Ficam
-registradas porque cada uma é uma armadilha reutilizável (§13).
-
-Medido no R35S em 15/11/2026 (`/proc/config.gz`, que é a fonte real):
-
-```text
-CONFIG_HID=y            # já existe
-CONFIG_HID_GENERIC=y    # já existe — é ele que trata o relatório
-CONFIG_BT=m
-CONFIG_BT_HIDP=m        # já existe
-# CONFIG_UHID is not set ← o único que falta
-```
-
-| Prova antiga | Por que era falsa |
-| --- | --- |
-| `modinfo hidp` mostra `depends: bluetooth` sem `hid` | **`modinfo` não existe nesta imagem** (`sh: modinfo: not found`). A "medição" era memória, não comando. O equivalente real é `grep hidp modules.dep`, e ele não lista `hid.ko` porque `CONFIG_HID=y` está **embutido no vmlinux** — não há `.ko` para depender |
-| `strings hidp.ko \| grep hid_register_driver` devolve vazio | o símbolo no 6.12 é `__hid_register_driver` (macro `hid_register_driver`). E **não há driver a registrar**: `hidp` no 6.12 é **transport driver**, e o `.ko` referencia `hid_allocate_device`/`hid_parse_report`/`hid_add_device`/`hid_input_report` — o conjunto exato de quem cria `hid_device` e entrega ao `hid-generic` |
-| `/sys/bus/hid/drivers/hidp` não existe | **é o esperado.** Só um `hid_driver` aparece ali. Um transport não cria diretório de driver. Medido: `modprobe hidp` → `rc=0`, e o log diz `HIDP socket layer initialized`, que só é impresso **depois** da inicialização bem-sucedida |
-
-A lição vale mais que o achado: **duas das três provas mediam a intenção**
-("o módulo parece incompleto") em vez do efeito (o módulo carrega e inicializa?),
-e a terceira usou uma ferramenta que não está instalada. Foi assim que um pedido
-foi para o canal pedindo `CONFIG_HID=y` para uma imagem que **já tinha**
-`CONFIG_HID=y`.
-
-**O que falta de verdade:** `CONFIG_UHID` (`# CONFIG_UHID is not set`), que é o
-que permite o BlueZ criar o dispositivo HID de um controle **BLE/HOGP**
-(`/dev/uhid` não existe). E `hidp` **não está no autoload**: nem `/etc/modules`
-nem `/etc/modules-load.d/` o citam (medido), então o módulo `=m` só carrega por
-`modprobe` manual. Para HID clássico o kernel está completo — o próximo passo é
-**medir**, não configurar.
-
-**O que segue não medido:** o `disconnected with reason 2` observado no X55 em
-sessão anterior nunca foi reproduzido com o kernel analisado aqui. Medir exige um
-aparelho com rádio — o R35S não tem, e o X55 não estava na rede em 15/11/2026
-(`aparelho.sh procurar` achou só o R35S). **Não repita "o transporte HID falta"
-como fato**: hoje é hipótese sem prova, e a prova anterior foi retirada.
-
-```bash
-bash scripts/aparelho.sh bluetooth      # a pilha inteira, com veredito
-bash scripts/aparelho.sh parear <MAC>   # pareia/conecta com a sequência certa
-```
-
-#### O teclado de senha, e a tela que não tinha saída
-
-Dois relatos do dono em 14/11/2026, e os dois eram de verdade:
-
-1. *"teclado modo qwert"* — a grade era `ABCDEFG / HIJKLMN / OPQRSTU / VWXYZ`,
-   isto é, **alfabética**. Quem digita no PC não procura a letra pelo alfabeto: a
-   mão vai direto onde o QWERTY põe a tecla. Hoje a ordem é
-   `QWERTYUIOPASDFGHJKLZXCVBNM` em leitura, e `state::QWERTY` é o literal que
-   `o_teclado_esta_em_qwerty` compara — reverter para alfabético reprova.
-2. *"quando se digita a senha não há como confirmar"* — literal. `A` digitava,
-   `B` descartava, `X` não fazia nada, e **nenhuma tecla emitia
-   `Cmd::ConectarSenha`**. O comando existia no enum e o `ui-sdl` sabia
-   executá-lo; faltava quem o emitisse. A senha nunca entrava em vigor.
-
-O que a correção exigiu, e cada peça tem teste:
-
-| Peça | Por quê |
-| --- | --- |
-| zona `PasswordActions` | um botão **Conectar** abaixo da grade; `↓` da última linha chega nele. Célula da grade que não digitasse quebraria a regra das 7 colunas |
-| `Cmd::pede_conexao(&state)` | o `ui-sdl` roda `executar_pedido` **antes** do reducer e só vê `Confirm`; o reducer traduz em `ConectarSenha` depois. Sem esta função a tela fechava, o toast prometia "Conectando…" e **nenhum `wpa_cli` saía** |
-| `X` → `MostrarSenha` | o rodapé já anunciava "X Mostrar" e a tecla chamava `open_detail`, que com overlay devolve o estado. Promessa vazia |
-| `push_char` no campo visível | com a senha aberta, uma letra ia para a busca, que não está na tela |
-
-A regra de `pede_conexao` fica em **uma definição**, consultada pelo reducer e
-pelo `ui-sdl` — duas cópias da condição envelheceriam diferente, que é o mesmo
-motivo pelo qual `settings_ajustavel` é consultada pelo desenho e pelo reducer.
-
-#### O núcleo do Star Dust era uma cópia, e ficou para trás
-
-`app/launcher-star-dust/crates/core/` era uma **cópia** do núcleo do launcher:
-4244 linhas contra 4631, sem `pede_conexao`, sem a zona `PasswordActions` e sem a
-navegação do teclado de senha. O efeito era concreto — o botão "Conectar"
-aparecia na tela do Star Dust e não funcionava.
-
-Hoje o `Cargo.toml` aponta por caminho (`../../../launcher/crates/core`), como o
-`launcher-teste` já fazia, e o compilador passou a apontar sozinho o que faltava
-(`efeitos.rs` não cobria a zona nova). **Divergência impossível, não improvável.**
+**Bluetooth como entrada**: o kernel está completo para clássico (`CONFIG_HID`,
+`HID_GENERIC`, `BT_HIDP`), falta `CONFIG_UHID` (BLE) e `hidp` no autoload. O
+ponta a ponta **nunca foi medido**. As três provas que diziam o contrário eram
+falsas (§13).
 
 ### 6.7 Feature `texto`
-
-O crate `ui-sdl` compila em dois modos:
 
 | Build | Feature | Linka contra |
 | --- | --- | --- |
 | padrão | `texto` | `libSDL2` + `libSDL2_ttf` |
 | enxuto | `--no-default-features` | só `libSDL2` |
 
-Sem `texto`, `text_size` devolve altura aproximada para o layout não colapsar e
-`text` não desenha nada. O CI constrói **as duas** combinações: um `cfg` que
-nunca é compilado é código que não existe, e o caminho "aparelho sem SDL2_ttf"
-ficou quebrado por semanas porque só o build padrão rodava.
-
-`ttf::init()` **não pode ser chamado duas vezes** — a segunda devolve
-`SDL2_TTF has already been initialized` e o launcher volta do app **sem nenhum
-texto**. O contexto é um por thread, guardado em `thread_local` (`draw.rs`), para
-não exigir `Send`/`Sync` de um tipo que guarda ponteiro cru do SDL.
+O CI constrói **as duas**. `ttf::init()` **não pode ser chamado duas vezes** — a
+segunda devolve erro e o launcher volta do app **sem nenhum texto**; o contexto
+é por thread (`thread_local`).
 
 ### 6.8 Catálogo e lançamento
 
 `catalogo.rs` monta as duas listas e resolve `id → dir + entrypoint`: varre as
 quatro raízes e junta com `/opt/giochi/apps/index.json`, com o disco vencendo
-(§6.9). `GIOCHI_RAIZES` sobrepõe as raízes varridas e `GIOCHI_CATALOGO=<arquivo>`
-aponta outro índice — os dois existem porque no PC não há `/opt/giochi`. Nem
-`raízes` nem índice desligam o outro: testar com `GIOCHI_RAIZES` num `/tmp` ainda
-soma o índice real do aparelho, então isolar exige apontar `GIOCHI_CATALOGO` para
-um índice vazio.
+(§8). `GIOCHI_RAIZES` sobrepõe as raízes varridas e `GIOCHI_CATALOGO` aponta
+outro índice; isolar de verdade exige apontar `GIOCHI_CATALOGO` para um índice
+vazio.
 
-`--catalogo-adicionar` é como o app registra um pacote recém-instalado — não por
-`sed`, que produziria JSON inválido no primeiro campo com vírgula.
+**O display precisa ser solto**: `App::encerrar()` **consome** o `App`, e o
+`Painter` destruído libera o DRM master. O ciclo é `fork`+`wait` — medido nos
+dois aparelhos, o PID do launcher não muda enquanto o app roda, então **não
+trocar para `exec`** sem confirmar a linha do init em campo.
 
-**O display precisa ser solto, e isso é medido.** Com o launcher vivo segurando o
-DRM master, um segundo processo recebe `kmsdrm not available`. Por isso
-`App::encerrar()` **consome** o `App`: destruir o `Painter` destrói o
-`WindowCanvas`, que é quem segura o master. Não há como "pausar" o desenho e
-liberar o dispositivo — só fechar. O ciclo é `fork`+`wait`; `--lancar <id>`
-escreve em `state.lancar`, o **mesmo** campo que o botão preenche.
-
-**O contrato com o `giochi-init` é `fork`+`wait`, não `exec`.** Medido nos dois
-aparelhos: o PID do launcher não muda enquanto o app roda. Com `fork`+`wait` o
-launcher nunca sai quando um app roda, então o `giochi-init` fica bloqueado nele e
-a cadeia "app termina → init reinicia o launcher" não acontece — não precisa
-acontecer. Um watchdog escrito sobre a premissa do `exec` mataria um launcher
-saudável no meio da execução. **Não trocar para `exec` sem confirmar a linha do
-init em campo.**
-
-**Sair de um app que não responde:** START+B segurados 1,5 s → `SIGKILL` no
-filho. `SIGKILL` e não `SIGTERM` porque o SDL só posta `SDL_QUIT` na fila e um
-app que não bombeia eventos segue vivo com o KMSDRM. Sem `start`/`b` no mapa, o
-launcher **avisa** e segue sem o gesto: adivinhar o código seria pior que não
-oferecer a saída.
-
-**O catálogo é podado em tempo de execução** (`poda_sem_binario`), não na
-geração: o PC que gera o índice não sabe se um cartão removível estará lá.
+**Sair de um app que não responde**: START+B por 1,5 s → `SIGKILL` no filho (o
+SDL só posta `SDL_QUIT` na fila). Sem `start`/`b` no mapa, o launcher **avisa** e
+segue sem o gesto.
 
 ### 6.9 As duas abas **detectam** — decisão do dono, 15/11/2026
-
-*"a aba apps do launcher precisa ser do tipo detectar, assim como a aba jogos.
-os apps deverão ficar em locais diferentes dos jogos para que a detecção não se
-confunda."*
-
-| | antes | agora |
-| --- | --- | --- |
-| aba Jogos | `index.json` + poda em execução | **varredura do disco** + `index.json` de complemento + poda |
-| aba Apps | **oito apps escritos no código** (`demo_apps()`) | varredura de `/opt|/user/apps`, com `kind` |
-| `A` num app | `toast("Abrindo X...")` e nada abria | `state.lancar = Some(Pedido::app(i))` — abre de verdade |
-
-**As raízes são quatro, e nenhuma é compartilhada** (`deteccao::Tipo`):
 
 ```
 jogos:  /opt/giochi/games   /user/games
 apps:   /opt/giochi/apps    /user/apps
 ```
 
-`GIOCHI_RAIZES` (separado por `:`) sobrepõe as raízes **varridas** — é o que
-permite testar a detecção no PC, onde `/opt/giochi` não existe. Ela não desliga o
-índice: no aparelho, `index.json` continua entrando. Medido no R35S em
-15/11/2026, com duas raízes de teste num `/tmp` e uma de cada tipo:
-`catálogo: 4 jogo(s) e 2 app(s)` — os 3 jogos e o `musica` vinham do índice real.
-Para isolar de verdade, aponte **`GIOCHI_CATALOGO`** para um índice vazio; com os
-dois, a conta fecha em `1 jogo(s) e 1 app(s)`.
-
-**A varredura é conjunta e a classificação é pelo `kind` do pacote**, não pela
-pasta. Isso é deliberado e tem uma medição atrás: os três jogos do R35S estavam
-em `/user/apps` (instalados antes da separação) e **não declaram `kind`**. Varrer
-só a raiz do próprio tipo os faria **sumir** da Home; classificar por pasta os
-faria aparecer na aba de apps. Com `kind` (ausente = jogo) eles continuam jogos,
-e o log diz que o lugar está errado:
+`GIOCHI_RAIZES` (separado por `:`) sobrepõe as raízes **varridas**. A varredura
+é **conjunta** e a classificação é pelo `kind` do pacote, não pela pasta: os três
+jogos do R35S estavam em `/user/apps` e não declaram `kind` — varrer só a raiz do
+próprio tipo os faria sumir da Home. Quando o lugar está errado, o log diz a
+frase que existe **em duas linguagens** (gerador do PC e detector do aparelho):
 
 ```text
-catálogo: teste-jogo (/user/apps/teste-jogo) está em /user/apps, que é raiz de outro
-  tipo; o lugar de um jogo é /user/games (ou declare "kind": "app" no metadata.json,
-  se for um app)
+catálogo: <slug> (<dir>) está em /user/apps, que é raiz de outro tipo;
+  o lugar de um jogo é /user/games (ou declare "kind": "app" no metadata.json, se for um app)
 ```
 
-Medido no R35S em 15/11/2026 com um pacote sem `kind` plantado em `/user/apps`. A
-segunda metade da frase existe porque **o campo ausente é metade da causa**: o
-padrão é jogo (§3), então um app sem `kind` "está no lugar errado" por omissão de
-um campo. Antes dela o aviso só mandava mover, e mover era a ação errada.
+**Tema não recebe esse aviso**: o launcher mora em `/opt/giochi/apps`, não declara
+`kind` e cairia no padrão jogo — seguir o aviso quebraria o boot.
 
-Depois da migração, medido no R35S em 15/11/2026:
+**O pedido de lançamento carrega o tipo** (`state::Pedido { tipo, indice }`): os
+dois índices valem 0 ao mesmo tempo, e um pedido só com o número abriria o item
+errado. **Detectar exige pacote com identidade no disco** — a primeira
+instalação do `musica` copiou só o binário e ele apareceu como jogo.
+
+**Vigiar: foco e desenho descrevem a mesma lista.** `settings_rows()` (núcleo) e
+`views::linhas_da_categoria` (desenho) já divergiram e dessincronizaram o
+carrossel; há teste reprovando.
+
+### 6.10 Idioma e tema
+
+Dez idiomas, **os do site**, na ordem do site: `en`, `zh`, `hi`, `es`, `fr`,
+`ar`, `bn`, `pt`, `ru`, `ur`. Padrão **inglês**, escolhido na primeira abertura
+(boas-vindas) e trocável em Config › Aparência. `Idioma::PADRAO` é `En`, mas
+quem decide a boas-vindas é `State::idioma_definido` — "não escolhido" ≠
+"escolhido como inglês".
+
+A tabela fica em `core/src/idioma.rs` (uma linha por chave, dez colunas) e o
+desenho pede a chave (`t(state, Chave::X)`); `Chave` é `#[repr(usize)]` e a linha
+`i` **tem** de ser a chave `i`. Fonte é escolhida **por texto**
+(`Painter::fonte_para`), e a cadeia inclui as fontes dos dez — a lista de
+idiomas desenha os dez nomes nativos o tempo todo.
+
+`ar`/`ur`: **shaping funciona** (`SDL2_ttf` puxa HarfBuzz; 99,8 % de identidade
+entre aparelho e PC). **Bidi de parágrafo misto e layout espelhado não existem** —
+fonte não conserta, e `Idioma::dir()` devolve `Rtl` sem nenhuma tela inverter.
+
+**Tema**: `Tema` no estado, `Paleta` + `theme::accent()` lendo o tema do quadro,
+arquivo em `/user/.config/giochi/theme`. Acrescentar um tema é variante +
+entrada em `TODOS` + `Paleta` novo, e o `match` exaustivo não deixa compilar sem
+a paleta. Hoje há **um** tema, e a linha da Config anuncia isso. Completo:
+[`docs/idiomas.md`](docs/idiomas.md).
+
+### 6.11 Ports do PortMaster (26/11/2026)
+
+O PortMaster instala em `/user/ports` (`<nome>.sh` + `<nome>/`, ou
+`<nome>/<nome>.sh`), e o launcher varre `/user/apps`. `portmaster.rs` fecha a
+ponte, na abertura e **antes** da detecção:
 
 ```text
-catálogo: 3 jogo(s) e 1 app(s) detectado(s) em /opt/giochi/games, /user/games, /opt/giochi/apps, /user/apps
+/user/apps/portmaster-<nome>/
+├── .portmaster-port      # marca: só o que tem esta marca é podado
+├── metadata.json         # kind: app, entrypoint: bin/portmaster-<nome>
+└── bin/portmaster-<nome> # 755 — exec giochi-ports --rodar "<nome>"
 ```
 
-**O índice não sumiu do caminho.** Ele continua sendo lido porque é o que lista
-conteúdo **fora** das raízes (cartão montado noutro caminho) e porque é o
-contrato de `docs/integracao.md` §2.1. Mas o **disco vence** na junção: um
-pacote varrido substitui a entrada do índice para o mesmo slug, com o `dir` onde
-ele está de fato. Foi a lição da loja, que apontava para `/opt/giochi/apps/x` com
-o pacote em `/user/apps/x`.
+- O `entrypoint` **precisa** começar em `bin/`: o detector recusa o layout da
+  raiz que o pedido original sugeria (`entrypoint inválido ... (precisa começar
+  em bin/)`, medido no R35S).
+- O slug nunca começa com `launcher`, então a poda de tema não o alcança.
+- Conteúdo igual **não reescreve** (é cartão SD); port removido apaga o cartão;
+  diretório sem a marca nunca é tocado.
+- O marcador de DRM do `giochi-ports` **não** é criado no caminho do launcher: o
+  `Painter` já foi destruído e não há dono do card — marcar mentiria ao
+  `giochi-init`.
+- `--sincronizar-ports` exercita o módulo sem abrir a interface (abrir custa uma
+  volta do `giochi-init`, cuja cota é pequena — §13).
 
-**O pedido de lançamento carrega o tipo** (`state::Pedido { tipo, indice }`). Os
-dois índices valem 0 ao mesmo tempo em qualquer aparelho com um jogo e um app;
-um pedido que levasse só o número abriria o item errado, e o sintoma ("abriu
-outra coisa") aponta para longe da causa. É a mesma razão pela qual a loja
-separa `PacoteVerificado` de `LicencaAssinada` por tipo.
-
-**Detectar exige pacote com identidade no disco.** Medido: a primeira instalação
-do `musica` no R35S copiou **só o binário**, sem `metadata.json`. A pasta existia,
-tinha executável, e não havia como saber que ali havia um *app* — ele apareceu
-como **jogo**, no carrossel da Home. Hoje `compilar-musica-arm64.sh --instalar`
-copia `metadata.json` (e `capa.png`) junto com o binário.
-
-**O aviso de lugar existe em duas linguagens e diz a mesma frase.** O gerador do
-PC (`scripts/lib/catalogo.mjs`, `LUGAR_ERRADO`) e o detector do aparelho
-(`deteccao::aviso_de_lugar`) não compartilham código — um roda em Node, o outro
-no binário. O que compartilham é o **texto**: `lugar de um <tipo> é <raiz>`. É
-de propósito: `grep "lugar de um"` acha os dois lados, e a mensagem não muda de
-significado conforme quem reclamou.
-
-**Tema não recebe esse aviso**, e a guarda existe por medição: o launcher mora em
-`/opt/giochi/apps`, não declara `kind` (é tema) e caía no padrão jogo — o log
-dizia *"o lugar de um jogo é `/user/games`"*, que é onde o executável de
-inicialização **não** pode ficar. Seguir o aviso quebraria o boot.
-
-**Consequências para quem instala:**
-
-| caminho | quem escolhe a raiz |
-| --- | --- |
-| `instalar-do-cartao.sh` (no aparelho) | `kind` do `metadata.json` dentro do `.giochi` (ausente = `/user/games`) |
-| `aparelho.sh catalogo` | colhe as quatro raízes e o `mesclarInstalados` avisa quando o `kind` não bate com a pasta |
-| `empacotar.mjs` | não muda: o `kind` viaja dentro do pacote |
-| `--catalogo-adicionar` (o próprio aparelho) | recebe o `dir` de quem chama e grava o `kind` junto |
-
-### 6.10 Idioma e tema — os dez do site, e o degrau que faltava no tema
-
-Pedido do dono em 15/11/2026: *"o site já está no ar (fonte giochi-os) lá está
-traduzido para 10 idiomas e sua missão é fazer o launcher multi idiomas. lá onde
-troca o tema terá a opção de trocar o idioma… o tema inicial será inglês (padrão
-comercial) e a troca de tema tem que deixar a base pronta para funcionar."*
-
-Status: os dez existem (§`docs/idiomas.md`), o tema está **ligado ao desenho** e
-tem **um** tema registrado.
-
-#### Os dez são os do site, na ordem do site
-
-`en`, `zh`, `hi`, `es`, `fr`, `ar`, `bn`, `pt`, `ru`, `ur` — os mais falados por
-número total de falantes (Ethnologue), com os mesmos `nome_proprio` do
-`GIOCHI-OS/scripts/lib/i18n.mjs`. Lista diferente obrigaria a mesma pessoa a
-aprender duas, e o idioma escolhido no site não estaria no aparelho.
-
-#### O padrão é inglês, e "não escolhido" ≠ "escolhido como inglês"
-
-`Idioma::PADRAO` é `En`; `Settings::idioma` nasce nele. Mas quem decide a tela de
-boas-vindas é `State::idioma_definido`, e não o idioma em si: um aparelho novo e
-um aparelho configurado em inglês têm o **mesmo** `settings.idioma` e vidas
-diferentes. Devolver o padrão em `preferencias::carregar_idioma()` apagaria essa
-diferença e a boas-vindas nunca apareceria — ou apareceria sempre, que é a mesma
-cegueira com outro sintoma.
-
-#### A tabela fica no núcleo; o desenho pede a chave
-
-Uma linha por chave, dez colunas, em `core/src/idioma.rs`:
-
-```rust
-("set.language", ["Language", "语言", "भाषा", "Idioma", "Langue",
-                  "اللغة", "ভাষা", "Idioma", "Язык", "زبان"]),
-```
-
-`Chave` é `#[repr(usize)]`, então `chave.indice()` é o próprio discriminante e a
-consulta é `O(1)` — e a linha `i` da tabela **tem** de ser a chave `i` do enum. O
-teste `toda_chave_da_tabela_bate_com_o_enum` existe porque consulta por índice
-fora de ordem traduziria a frase errada em silêncio: `Ajustes` aparecendo onde
-devia estar `Idioma`.
-
-A tradução **não** é um `match` por idioma espalhado nas telas: `views` chama
-`t(state, Chave::X)`, e nada mais. É o que permite testar a tabela sem SDL (e é
-o que impede a décima-primeira tradução de nascer num arquivo só).
-
-`Perf::label`, `Filter::label` e `Tab::label` passaram a receber o idioma. Sem
-isso, a aba Jogos ficava com três palavras em português no meio de uma interface
-em chinês — e o rodapé mostrava `Equilibrado` num aparelho em russo.
-
-#### O idioma mora onde se troca o tema, e é dado como o volume
-
-`Config › Aparência` ganhou a linha `Idioma`, entre `Tema` e `Escala`:
-
-| Linha | Ajustável? | O que a seta faz |
-| --- | --- | --- |
-| 0 Tema | **sim** | percorre `Tema::TODOS`; com um tema só, **avisa** que há um |
-| 1 Idioma | **sim** | percorre os dez, com volta, e a interface muda na hora |
-| 2 Escala | não | informa que acompanha o painel |
-
-`settings_rows("appearance")` foi de 2 para 3 e `settings_ajustavel` cobre as
-linhas 0 e 1 — as duas listas continuam sendo consultadas pelo desenho e pelo
-reducer, e o teste `foco_e_desenho_concordam_no_numero_de_linhas` reprova se
-divergirem.
-
-#### A vista de quadros passou a ter **quatro** coisas para congelar
-
-O idioma é a quarta, junto de relógio, bateria e temperatura (§11). Um PC sem
-`/user/.config/giochi/language` desenha a **tela de boas-vindas**; um aparelho
-que já escolheu desenha a Home. Comparar os dois daria uns 60 % e mandaria
-procurar defeito de desenho — exatamente a família de erro que já custou três
-rodadas (§13, "a referência do `verificar` vinha de um binário velho").
-
-Por isso `aparelho.sh` (captura **e** referência), `comparar-launcher-teste.sh`,
-`verificar-star-dust.sh` e `verificar-efeitos.sh` passam `--idioma en` dos dois
-lados. `--idioma` **não grava** nada: se gravasse, cada foto mudaria o estado do
-aparelho.
-
-#### Uma fonte não cobre dez idiomas — e a escolha é por string
-
-O `DejaVuSans.ttf` do aparelho cobre latim, cirílico e parte do árabe; **não**
-cobre chinês, devanágari nem bengali. Trocar a fonte do app por idioma mudaria
-também título de jogo, relógio e número. A saída foi escolher a fonte **por
-texto**: `Painter::fonte_para` usa a primeira da cadeia que tem glifo para todos
-os caracteres, com a resposta memorizada por `(fonte, caractere)` —
-`TTF_GlyphIsProvided` a cada texto, a cada quadro, seria trabalho repetido.
-
-Duas medições mandaram no desenho:
-
-1. **A cadeia tem de incluir as fontes dos dez**, e não só a do idioma escolhido.
-   Medido no PC em 15/11/2026 com a cadeia só do inglês:
-   `aviso: nenhuma das 1 fonte(s) cobre "中文"`. A lista de idiomas desenha os dez
-   nomes nativos o tempo todo — nas boas-vindas e em Config › Aparência —, e é
-   justamente a linha que a pessoa precisa escolher que saía como quadradinhos.
-2. **A principal continua na frente.** Ela cobre o latim, então o título do jogo
-   e o relógio saem exatamente como antes; a fonte da escrita entra só para o
-   texto que a principal não cobre. Sem isso, entrar em chinês mudaria o desenho
-   de tudo que é latino.
-
-Fonte ausente **degrada e avisa**, não impede o app de abrir, e `--fontes` mostra
-a cadeia resolvida com `[NÃO EXISTE]` no que o idioma pede e a imagem não tem.
-
-#### `ar` e `ur`: shaping **funciona**, bidi de parágrafo não
-
-> **Esta seção afirmou o contrário e está corrigida.** Dizia "`SDL2_ttf` sem
-> HarfBuzz, letras isoladas". Era **suposição** — a mesma família das três provas
-> falsas do §13: ninguém tinha rodado `readelf` nem comparado o quadro.
-
-Medido no R35S em 15/11/2026:
-
-```console
-$ readelf -d /usr/lib/libSDL2_ttf-2.0.so.0 | grep -i needed
- (NEEDED)  Shared library: [libharfbuzz.so.0]
-```
-
-O `defconfig` do R35S liga `BR2_PACKAGE_HARFBUZZ=y` (e o comentário lá já explica
-por quê), e o `SDL2_ttf` o puxa de fato. A contraprova visual: o mesmo texto
-árabe no aparelho por KMSDRM e no PC dá **99,8%** de identidade — se um dos dois
-não fizesse shaping, as formas isoladas contra as conectadas derrubariam esse
-número como a rotação oposta derruba para 10,9%.
-
-| O que | Estado |
-| --- | --- |
-| shaping (`ar`/`ur`): ligaduras e formas inicial/medial/final | **funciona** |
-| bidi de parágrafo misto (árabe + número + latino na mesma linha) | **não existe** — o `SDL2_ttf` faz shaping por *run*, não reordena parágrafo |
-| layout espelhado (margens, âncoras) | **não existe** — `Idioma::dir()` devolve `Rtl` e nenhuma tela inverte |
-
-A distinção importa: rótulo curto puramente árabe sai correto; `launcher 0.1.0`
-dentro de uma linha árabe pode sair com os pedaços fora de ordem, e **fonte não
-conserta bidi** — quem consertaria é o layout honrando `dir`. O `App` avisa no log
-ao abrir num idioma RTL. **Não** tratar isso como regressão de desenho.
-
-#### Tema: a base existe, e é o compilador que cobra o resto
-
-Até 15/11/2026 a linha `Tema` dizia `Giochi Dark (único)` e a seta não fazia
-nada — não por bug, mas porque **nada havia para trocar**. O texto "único" era o
-substituto honesto de uma lista inexistente.
-
-Hoje:
-
-| Peça | Onde |
-| --- | --- |
-| escolha | `core::tema::Tema` (`TODOS`, `proximo`, `anterior`, `ha_escolha`), em `Settings::tema` |
-| paleta | `ui-sdl::theme::Paleta` + `paleta(Tema)` com `match` **exaustivo** |
-| desenho | `theme::accent()`, `theme::text()`, … leem a paleta do quadro (`thread_local`, trocada uma vez por quadro em `App::render`) |
-| persistência | `/user/.config/giochi/theme`, por diferença de estado (`App::sync_tema`) |
-
-Acrescentar um tema agora é: variante em `Tema` + entrada em `TODOS` + um
-`Paleta` novo em `theme.rs`. **Nada mais** — e o `match` de `paleta()` não deixa
-compilar sem a paleta. Foi por isso que as 39 cores de `views.rs` e as de
-`efeitos.rs` deixaram de ser constantes: com uma constante, um segundo tema
-mudaria "algumas" cores, que é pior que nenhuma.
-
-O que **não** é do tema continua constante: `WHITE` e `BLACK` puros (camadas de
-alafa por cima de qualquer cor) e as métricas.
-
-#### Medido no R35S em 15/11/2026, imagem `built_at_utc=2026-11-15T21:00:56Z`
-
-| O que | Resultado |
-| --- | --- |
-| primeira abertura | boas-vindas com **inglês em foco**, sem arquivo de idioma |
-| escolher português (`↓`×7 + `A`) | `idioma: en -> pt` e `/user/.config/giochi/language` = `pt` |
-| segunda abertura | `Portuguese (pt)`, **sem** boas-vindas |
-| Home `pt` por KMSDRM × PC | **99,6%** (antialiasing de glifo) |
-| Config `pt` × PC | **99,7%** |
-| quadro `en` × `pt` no aparelho | **98,4%** — a tradução chega à tela |
-| `aparelho.sh verificar` | **100,0%** |
-| as dez abrem | 10/10 |
-| escolher com **botão físico** (não `--teclas`) | a boas-vindas ficou na tela real e um toque no controle escolheu a linha em foco (inglês) e gravou `en\n`; a execução seguinte abriu sem boas-vindas |
-| trocar idioma com **botão físico** | `GIOCHI_DEBUG_CMDS=1` registrou 8× `Cmd::Nav(Left)` de `evdev` e o arquivo andou `zh`→`en`→`ur`→`ru`→`pt`→`bn`→`ar`→`fr`→`es` — cada troca tem uma tecla como causa |
-| nenhuma escrita espontânea | 15 s de amostragem sem entrada ⇒ arquivo parado; 10 s de trace ⇒ nenhum `TrocarIdioma` sem `Nav`. `sync_idioma` só grava quando o valor muda de fato, que é o que poupa o cartão SD |
-
-**A imagem não tem fonte para três dos dez idiomas.** `find /usr/share/fonts
--type f | wc -l` = **21**, todas DejaVu, nenhuma Noto/WenQuanYi. O `--fontes`
-mede (não deduz) a cobertura por `TTF_GlyphIsProvided`:
-
-```text
-en/es/fr/pt 15/15 · ru 10/10 · ar 10/10 · zh 5/8 · hi 1/11 · bn 1/10
-```
-
-Chinês, hindi e bengali saem com quadradinho **no R35S de hoje**. O app degrada e
-avisa; o pedido de fonte para a imagem é a issue nº 5 de
-`docs/issues-para-outros-repos.md`. A lista de idiomas continua utilizável porque
-cada linha mostra o nome nativo **e** o nome em inglês à direita — onde a escrita
-não tem glifo, a coluna da direita identifica a linha.
-
-`--fontes` também já esteve errado de dois jeitos, e os dois são reutilizáveis:
-**deduzia** cobertura pelo tamanho da cadeia (dava "sem fonte" para o português) e
-**pedia dispositivo de vídeo** antes de imprimir (`Error: "No available video
-device"` por SSH — a ferramenta se recusava a rodar onde o problema aparece). Hoje
-ele sai antes de `video.window(...)` e mede o glifo.
-
-#### O teclado de senha é QWERTY em qualquer idioma
-
-`KEYBOARD` tem 26 letras latinas fixas. Uma senha de rede em cirílico ou árabe
-não é digitável no aparelho hoje — e o teclado de senha **não pode** virar o
-teclado do idioma por dedução, porque a senha é da rede e não da interface.
-Registrado como limite em `docs/idiomas.md`; a saída é mapear `KEYBOARD` por
-idioma quando houver aparelho com essas redes.
+Medido no R35S em 26/11/2026: `--lancar portmaster-form` (o mesmo campo do botão
+A) chega a `giochi-ports: rodando FORM.sh`, e o FORM desenha dentro do `bwrap`.
+Detalhe, medições e o que **não** foi feito (aba própria, PortMaster na loja):
+[`docs/portmaster.md`](docs/portmaster.md).
 
 ## 7. Apps sobre a engine: launcher-teste, Star Dust e Música
 
-### `launcher-teste` (scaffold)
-
-O **mesmo desenho sobre a GIOCHI-ENGINE**, em app separado para não arriscar o de
-produção. Reusa o crate `core` e as telas reais por `#[path]`; foi ele que provou
-o porte: **100,0 % pixel a pixel** com o launcher em 640×480, 800×600, 1280×720 e
-720×1280 girado, e nas seis telas.
-
-Depende de `../../../GIOCHI-ENGINE-3D/giochi-engine` — **repositório irmão**. Sem
-ele o build falha; é a única dependência fora deste repo.
-
-Segue `scaffold` porque não tem sono, brilho, volume, energia nem Wi-Fi/BT: é um
-banco de prova de desenho, e chamá-lo de `ready` prometeria o que ele não faz.
-
-### `launcher-star-dust` (ready)
-
-O launcher de produção **mais** a camada de efeitos. Ligada por padrão
-(`--sem-efeitos` ou `GIOCHI_EFEITOS=0` desliga); desligada, o quadro é
-**idêntico byte a byte** ao do launcher — propriedade medida em quatro tamanhos.
-
-Oito efeitos (`efeitos.rs`): `brasas`, `brilho`, `varredura`, `vinheta`,
-`scanlines`, `halo` do foco, `rastro` e `borda` pulsante. A camada inteira custa
-**29 chamadas de desenho**.
-
-O que a medição ensinou, e que vale para qualquer efeito novo:
-
-| Versão | Custo | Causa |
+| App | Estado | O que é |
 | --- | --- | --- |
-| uma chamada por brasa + `stroke_round_rect` no halo | +7,3 ms | 162 chamadas; o halo sozinho +6,9 ms |
-| batelada por faixa de alfa | **+3,1 ms** | 27 chamadas |
+| `launcher-teste` | scaffold | o **mesmo desenho** sobre a GIOCHI-ENGINE, por `#[path]`: 100,0 % pixel a pixel em 4 painéis e 6 telas. Depende do repo irmão `GIOCHI-ENGINE-3D`. Sem sono, brilho, volume, energia ou Wi-Fi — por isso `scaffold` |
+| `launcher-star-dust` | ready | o launcher de produção **mais** 8 efeitos (29 chamadas de desenho). Desligado, é idêntico **byte a byte** ao launcher |
+| `musica` | ready | o primeiro app `image` que não é tema: carrossel, transporte completo, 120 testes sem SDL, quadro **100,00 %** idêntico ao do PC |
 
-**`draw_rect` é uma chamada de backend por retângulo.** O halo com
-`stroke_round_rect` desenhava 4 arestas e 4 arcos de ~30 `draw_line` cada para
-uma borda que ninguém vê; quatro bandas preenchidas num `fill_rects` leem igual e
-custam 4× menos. A camada acrescenta **zero** divergência entre PC e aparelho
-(98,10 % sem efeitos × 98,15 % com) — se introduzisse desenho dependente de GPU,
-esse número teria caído.
+**O núcleo do Star Dust era uma cópia e ficou para trás** (4244 linhas contra
+4631, sem `pede_conexao` nem `PasswordActions`): o botão "Conectar" aparecia e
+não funcionava. Hoje o `Cargo.toml` aponta por caminho, como o `launcher-teste` —
+**divergência impossível, não improvável**.
 
-O `halo` lê a geometria que a **tela publicou** (`layout.hits`), não recalcula:
-recalcular seria a segunda verdade que já desalinhou o carrossel do foco.
-
-A cadência de animação é própria (`GIOCHI_EFEITOS_FPS`, padrão **30**): a UI só
-redesenha quando algo muda, e um efeito animado muda sempre. Não é 60 porque a
-diferença visual em brasas de 1–3 px é nula e animação é contínua — interação é
-que precisa de resposta imediata. Valor inválido cai no padrão; número que não
-parseia não pode zerar a animação em silêncio.
-
-O `rastro` é disparado por `cmd.is_user_input()`, **não** por "o estado mudou":
-com o gatilho errado ele custava 20 chamadas num quadro em que ninguém apertou
-nada, e o efeito perdia o significado ("algo aconteceu") virando ruído
-permanente. A camada é opcional no `launcher-teste` justamente porque lá a medida
-é a fidelidade de desenho; aqui ela **é** o motivo do app.
+Efeitos: `draw_rect` é **uma chamada de backend por retângulo**, e é por isso que
+o halo custa 4 bandas em vez de `stroke_round_rect` (162 chamadas/+7,3 ms contra
+27 chamadas/+3,1 ms). A cadência é própria (30 fps) e o `rastro` é disparado por
+`cmd.is_user_input()`, não por "o estado mudou".
 
 ```bash
 bash scripts/verificar-star-dust.sh              # 640x480
@@ -1124,173 +568,50 @@ bash scripts/verificar-star-dust.sh --tamanho 1280x720
 bash scripts/verificar-efeitos.sh                # 4 tamanhos + 1 rotação
 ```
 
-Cinco perguntas em cada: desenhou? é determinística? some quando desligado? cabe
-no orçamento de chamadas? desligada é idêntica à produção? O determinismo vem de
-animar por **contagem de quadros**, nunca pelo relógio. E `verificar-efeitos.sh`
-tem contador e `exit 1`: a primeira versão imprimiu "ok camada verificada" depois
-de um FALHA, porque o resumo não olhava o que tinha acontecido. **Um resumo que
-ignora falha é pior que nenhum.**
-
-### `musica` (ready) — o primeiro app de imagem que não é tema
-
-O app que faz a aba de apps ter o que mostrar. Tocador sobre a mesma engine do
-`launcher-teste`, em `app/musica/`:
-
-| Peça | Onde | O que decide |
-| --- | --- | --- |
-| núcleo | `crates/core` | ordem natural, foco com volta, transporte, layout, rotação, capa, título — **120 testes, sem SDL** |
-| desenho | `src/pintor.rs`, `src/tela.rs` | pixels, texto, texturas |
-| mundo | `src/audio.rs`, `src/entrada.rs` | mixer e `/dev/input` |
-
-`crates/core` não tem **nenhuma** dependência de propósito: o binário depende da
-engine, que depende de SDL2 e do repositório irmão — e é por isso que só o núcleo
-roda no CI, como o `giochi-launcher-core`.
-
-O que o app de exemplo que originou o pedido fazia de errado, e onde cada coisa
-foi resolvida:
-
-| Defeito do exemplo | Correção |
-| --- | --- |
-| lia o botão por **nível** dentro do passo fixo (segurar o direcional corria a lista) | borda vem do `Mapper` do launcher, com a curva medida |
-| só havia `play`: sem pausa, sem parar, sem volume | `Efeito::{Pausar, Retomar, Parar, Volume}` no reducer |
-| o carrossel parava nas pontas | `Carrossel::mover` dá a volta |
-| pasta vazia derrubava o app no primeiro asset ausente | `Biblioteca::Vazia { motivo }`, que vira frase na tela |
-| ordem vinha do `readdir` | `faixa::ordem_natural` (`Faixa 2` antes de `Faixa 10`) |
-| `aspect` fixo 16:9, sem painel nem rotação | `Layout::de(largura, altura)` + `rotacao::decidir` |
-| `play_sound` (efeito, decodifica na RAM) | API de **música** do mixer, que faz *streaming* |
-| nenhum teste | 158, e 120 deles sem SDL |
-
-**Medido em 15/11/2026:** quadro de 640×480 do R35S **100,00% idêntico** ao do
-PC (mesma pasta, comparação pixel a pixel); 720×1280 des-rotacionado bate
-**99,96%** com 1280×720; 96 a 112 desenhos por quadro; áudio no R35S com mixer
-**2.6.3**, `Playing → Stopped` em **2,5 s** num WAV de 2,5 s (`--testar-som`).
-
-**A imagem passou a trazer o que o app precisa.** O binário pede
-`libSDL2_mixer-2.0.so.0` (e `SDL2_image`), que o launcher nunca pediu — o
-`docs/dependencias-aparelho.md` chamava isso de ausente, e para esta imagem é
-falso. `compilar-musica-arm64.sh --instalar` **pergunta ao aparelho** antes de
-copiar, porque biblioteca ausente aqui é falha de carga, não degradação.
+Completo: [`docs/historico/apps-e-catalogo.md`](docs/historico/apps-e-catalogo.md),
+[`docs/star-dust.md`](docs/star-dust.md), [`docs/musica.md`](docs/musica.md),
+[`docs/launcher-teste.md`](docs/launcher-teste.md).
 
 ## 8. O catálogo do aparelho
 
-**O catálogo não é escrito à mão nem lido cegamente: ele é projetado do que
-existe no disco, e `index.json` é o complemento.** Duas camadas:
+Duas camadas: **varredura** das quatro raízes (o aparelho, sempre) e
+**`index.json`** (complemento para conteúdo fora delas, e contrato de
+`docs/integracao.md`). **O disco vence** na junção — um pacote varrido substitui
+a entrada do índice para o mesmo slug, com o `dir` real.
 
-| Camada | Quem usa | Alcance |
-| --- | --- | --- |
-| **varredura** de `/opt|/user/{games,apps}` | o aparelho, sempre | tudo que está numa raiz, com `kind` lido do pacote |
-| **`index.json`** | complementar | conteúdo fora das raízes e o contrato de `docs/integracao.md` |
-
-O disco **vence** na junção (§6.9): o que foi varrido substitui a entrada do
-índice para o mesmo slug, com o `dir` real.
-
-No PC, é o gerador que projeta `app/apps.json` + `metadata.json`:
+| Regra do gerador (`gerar-catalogo.mjs`) | Por quê |
+| --- | --- |
+| `status: scaffold` fica fora | `bin/` vazio; cartão que não abre é pior que cartão ausente |
+| `distribution: host`/`store` fica fora | roda no PC / é instalado em `/user` |
+| **tema** (`role: shell` **ou** prefixo `launcher`) fica fora | senão o launcher lista a si mesmo |
+| `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
 
 ```bash
 bash scripts/aparelho.sh catalogo        # gera, confere no aparelho e publica
 node scripts/gerar-catalogo.mjs --lista  # quem entra e quem fica de fora
 ```
 
-Antes ele era escrito à mão e o aparelho mostrou **um** cartão com dois apps
-instalados — e um app fora do JSON ficava invisível sem erro em lugar nenhum: nem
-no app, nem no log, nem na tela.
+**O `dir` do aparelho não é derivável do repo e depende do `kind`**:
+`<grupo>/<slug>` é `/opt/giochi/games/<id>` para jogo e `/opt/giochi/apps/<id>`
+para app (`dirDoApp` em `scripts/lib/catalogo.mjs`, com teste).
 
-| Regra | Por quê |
-| --- | --- |
-| `status: scaffold` fica fora | `bin/` vazio; cartão que não abre é pior que cartão ausente |
-| `distribution: host` fica fora | roda no PC |
-| `distribution: store` fica fora | é instalado em `/user/apps` ou `/user/games` pela loja |
-| **tema** (`role: shell` **ou** prefixo `launcher`) fica fora | senão o launcher **lista a si mesmo** |
-| `entrypoint` precisa existir | idem scaffold, mas medido no arquivo |
+**A guarda de tema existe dos dois lados**: `--catalogo-adicionar` (o próprio
+aparelho) **recusa** um `launcher-*.giochi` com o motivo, e `podar_temas` fecha
+o que sobra em tempo de execução — o PC que gera o índice não sabe o que estará
+no aparelho. As duas podas usam um `reter` privado e cobrem **as duas listas**.
 
-A linha do tema mudou de nome de propósito: o papel agora vem de duas fontes
-(§3), e `--lista` diz qual delas valeu — `tema do launcher (prefixo "launcher")`
-contra `role shell: é a própria interface`. Dizer "role shell" para um app que
-nunca declarou `role` manda quem lê procurar no `apps.json` um campo que não
-existe; é a ferramenta medindo a intenção em vez do efeito (§13).
+**A conferência que importa é no aparelho**: `aparelho.sh catalogo` percorre cada
+`dir/entrypoint` por SSH e **reduz** o catálogo antes de publicar. Projeção de
+verdade reflete remoção, não só adição.
 
-**Hoje o catálogo do R35S tem 4 entradas: 3 jogos e `musica`.** O app de música
-é o primeiro `image` sem `role: shell` — o que fez a aba Apps deixar de mostrar
-"Nenhum jogo instalado." (e de mostrar oito apps que não existiam, §6.9). Um
-teste (`tests/musica-app.test.mjs`) reprova se ele sair do catálogo: `status`
-`scaffold`, `bin/` apagado, `kind` perdido ou `role` declarado por engano não
-apareceriam em nenhum outro lugar.
-
-**O `kind` vai em cada entrada do índice**, e não é decoração: é a única coisa
-que diz ao launcher qual aba desenha o cartão. Sem ele o default é `game` (§3),
-e um app cairia na Home.
-
-**A conferência que faltava é no aparelho, não no repo.** O gerador checa o
-binário na árvore; quem importa é o aparelho. `aparelho.sh catalogo` percorre cada
-`dir/entrypoint` por SSH e **reduz** o catálogo antes de publicar, dizendo o que
-tirou e como instalar. Medido: remover o binário do aparelho fez `gerado: 3`
-virar `catálogo reduzido para 2`. **Projeção de verdade reflete remoção, não só
-adição.**
-
-**O `dir` do aparelho não é derivável do repo — e desde 15/11/2026 depende do
-`kind`.** `<grupo>/<slug>` no repositório é `/opt/giochi/games/<id>` para um jogo
-e `/opt/giochi/apps/<id>` para um app. É convenção do `Giochi System`, e a única
-informação do catálogo que não vem do `apps.json` nem do `metadata.json` — por
-isso está explícita em `scripts/lib/catalogo.mjs` (`dirDoApp`) e tem teste. Um
-app `image` com `kind: "app"` publicado em `/opt/giochi/games` apareceria na
-Home; o gerador avisa com `LUGAR_ERRADO`.
-
-**O catálogo inclui o que veio da loja.** Um `.giochi` não está no `apps.json`; a
-colheita lê as **quatro** raízes (`RAIZES`) e o disco vence. E a mesclagem
-**herda** `license` do `apps.json` — substituir a entrada inteira apagava a
-licença.
-
-### A guarda de tema existe dos dois lados, e precisa
-
-O gerador filtra no PC. Mas ele **não é o único caminho até o índice**:
-
-| Caminho | Quem escreve | Passa pelo gerador? |
-| --- | --- | --- |
-| `aparelho.sh catalogo` | PC, via SSH | sim |
-| `--catalogo-adicionar` (o launcher instala um `.giochi`) | **o próprio aparelho** | **não** |
-| índice de uma imagem antiga, ou escrito à mão no diagnóstico | ninguém sabe | **não** |
-
-`adicionar_ao_indice` é o caminho do aparelho, e ele existe porque amarrar
-instalação a Node+SSH não serve num portátil. Instalar um `launcher-neon.giochi`
-por ali criava o cartão que abre um segundo launcher e perde o DRM — então agora
-ele **recusa com o motivo**, em vez de gravar e deixar o usuário descobrir
-apertando `A`.
-
-E `Catalogo::podar_temas` fecha o que sobra, pela mesma razão que
-`podar_sem_binario` é em tempo de execução: **o PC que gera o índice não sabe o
-que estará no aparelho**. A poda de tema roda **antes** da de binário, senão o
-tema apareceria no log como "cartão removido" e mandaria procurar o problema no
-lugar errado.
-
-As duas podas compartilham um `reter` privado — uma segunda cópia da renumeração
-de `Game.id` envelheceria diferente da primeira — e as duas cobrem **as duas
-listas**: `podar_sem_binario` e `podar_temas` percorrem `jogos` **e** `apps`. Um
-tema só na lista de apps passaria pela poda e abriria um segundo launcher.
-
-**Vigiar: foco e desenho descrevem a mesma lista.** `settings_rows()` no núcleo
-decide até onde o foco anda; `views::linhas_da_categoria` monta o que é desenhado.
-Dois lugares descrevendo a mesma lista foi exatamente como o carrossel ficou
-dessincronizado do foco; há teste reprovando se divergirem.
+Completo: [`docs/historico/apps-e-catalogo.md`](docs/historico/apps-e-catalogo.md).
 
 ## 9. Os apps de PC
 
-### forge e store — Python, biblioteca padrão apenas
-
-Decisão de projeto: a loja tem de funcionar numa máquina limpa. Isso torna o
-`.pyz` possível — **um** arquivo, idêntico nos três sistemas — e o PyInstaller
-desnecessário para quem já tem Python 3.9+.
-
-| | `.pyz` | PyInstaller |
-| --- | --- | --- |
-| artefatos | um | um por sistema e por arch |
-| determinístico | **sim** | não |
-| tamanho | ~14 KB | ~10 MB |
-| precisa de Python | **sim** (3.9+) | não |
-
-`scripts/lib/zip.mjs` escreve o ZIP à mão pela mesma razão do `tar.mjs`: o
-`zipapp` oficial grava o `mtime` de origem e dois empacotamentos do mesmo código
-dariam SHA-256 diferentes — o checksum deixaria de identificar conteúdo. Medido:
-mesmo SHA-256 em duas rodadas.
+**forge e store — Python, biblioteca padrão apenas.** A loja tem de funcionar
+numa máquina limpa, o que torna o `.pyz` possível: **um** arquivo, idêntico nos
+três sistemas, ~14 KB, determinístico (`zip.mjs` escreve o ZIP à mão para não
+gravar `mtime` de origem).
 
 ```bash
 bash scripts/testar-apps-pc.sh            # 90 testes
@@ -1298,137 +619,26 @@ node scripts/empacotar-pc.mjs             # .pyz + .sh + .cmd + SHA256SUMS
 app/painel/bin/giochi-painel              # http://127.0.0.1:8710
 ```
 
-**`bin/` tem lançador POSIX** que roda o módulo de `../src`: o repositório clonado
-funciona sem instalar nada. **Windows não executa `sh`** — ali o caminho é o
-`.cmd` da release, e isso está na documentação em vez de ser escondido.
+Três regras de classificação que só existem porque a medição derrubou a crença
+anterior: **o painel é do aparelho, não do SoC** (X55 720×1280 e X35H 640×480,
+os dois RK3566); **a tela é comparada com o espaço de projeto** (`720×1280` vira
+`1280×720`); e **`godot_runtime` tem três estados** — só `False` reprova. A RAM
+dos perfis é a **medida** (`/proc/meminfo`), não o valor nominal do SoC.
 
-**O erro clássico de batch:** `py ... %* && exit /b %ERRORLEVEL%` não funciona —
-em `.cmd` o `%VAR%` é expandido quando a linha é **lida**, então `%ERRORLEVEL%`
-vale o valor de antes. O atalho usa `where py` numa linha e `if %ERRORLEVEL%==0`
-na seguinte, e diz o que instalar se nenhum Python existir. Duplo-clique que abre
-e fecha sem texto é o pior resultado possível.
+**painel** serve em `127.0.0.1:8710`, **chama** o forge e o store (não os copia),
+usa `importlib.resources` (dentro de um `.pyz` não existe diretório ao lado do
+módulo) e **confere o cabeçalho `Host`** — loopback sozinho não impede DNS
+rebinding.
 
-O `sdl2` 0.37 tem `default = []`, sem `use-vcpkg`: o `sdl2-sys` emite só `-l SDL2`
-e deixa o linker procurar, então exportar `SDL2_DIR` não faz nada. O que funciona
-no MSVC é `LIB`, com os zips oficiais "VC" (`include/` + `lib/x64/`).
+**loja** (Rust + SDL2): `PacoteVerificado` prova origem; `LicencaAssinada` prova
+compra e exige a chave do aparelho — **tipos diferentes**, e é o sistema de tipos
+que impede "autêntico" virar "comprado". A loja **não vê cartão** (checkout
+hospedado), **não se declara paga** e **não inventa código PIX**. Uma função
+decide a grade (`grade_para` + `mover`, com teste de propriedade) e o desenho e a
+navegação leem dela.
 
-### forge — classificação
-
-Perfis medidos em `device.conf` do Giochi System: `x55`, `x35h`, `x35s`, `r35s`
-e três genéricos por chip (`rk3326-1gb`, `rk3326-2gb`, `rk3566-2gb`).
-
-Três regras que só existem porque a medição derrubou a crença anterior:
-
-1. **O painel é do aparelho, não do SoC.** X55 é 720×1280 e X35H é 640×480, os
-   dois com RK3566. Um perfil por chip reprovava no X55 um app que roda lá.
-2. **A tela é comparada com o espaço de projeto, não com o painel cru.**
-   `usable_display()` = maior lado × menor lado. O X55 é retrato, mas nenhum app
-   desenha em retrato: 720×1280 → 1280×720, e um app 1280×720 **cabe**.
-3. **`godot_runtime` tem três estados.** `False` = medido que não tem (X55, X35H,
-   X35S), `True` = medido que tem, `None` = não medido (perfis genéricos). Só
-   `False` reprova: **não medir não é reprovar**. Nenhum build oficial do Godot
-   tem KMSDRM, então `runtime: godot` é **Incompatível** — antes era classificado
-   como compatível, o falso verde que este repositório combate.
-
-A RAM dos perfis é a **medida** (`/proc/meminfo`: 1968 MB no X55, 964 MB no
-X35H), não o valor nominal do SoC — o firmware reserva memória para a GPU, e um
-app que declara "preciso de 2048 MB" passaria no número redondo e morreria no
-real.
-
-E o rootfs é **glibc 2.38**, não musl. "Recompilar contra musl" não resolveria
-nada: o bloqueio de Godot é KMSDRM, não a libc.
-
-### painel — a interface web dos apps de PC
-
-Serve `127.0.0.1:8710`, mostra os aparelhos reais, classifica um app e empacota o
-`.giochi`. **Chama o forge e o store; não os copia** — uma segunda implementação
-da regra de compatibilidade envelheceria diferente da primeira, e a primeira é a
-que decide o que o usuário pode comprar. A separação `acoes` × `servidor` é o que
-permite testar sem abrir socket.
-
-**`importlib.resources`, não `Path(__file__)`.** Dentro de um `.pyz` não existe
-diretório ao lado do módulo: `__file__` aponta para dentro do zip e
-`Path.exists()` devolve `False`. Com `Path`, o painel **empacotado** serve 404 na
-própria página. E `__package__` é `None` no 3.9 dentro de um zip (o `zipimport`
-legado de lá não preenche), então `resources.files(None)` estoura com
-`AttributeError` — só no `.pyz`, só no piso. A guarda tem de **executar o zip**, e
-ela roda sob `python3.9` quando ele existe.
-
-**Loopback não basta.** O servidor escuta só `127.0.0.1` **e confere o cabeçalho
-`Host`** contra `127.0.0.1`, `localhost` e `[::1]`. Sem isso, uma página na
-internet resolve um domínio para o loopback e fala com o painel (*DNS
-rebinding*): a origem da requisição não protege nada nesse cenário. Caminhos
-estáticos recusam `..` antes de tocar no disco.
-
-Ele não instala no aparelho (isso é `aparelho.sh instalar-pacote`, por SSH) e não
-guarda chave nenhuma: recebe o caminho de uma chave existente e repassa ao
-`sign_package`.
-
-### loja — Rust + SDL2, três sistemas
-
-Resposta à pergunta que originou tudo — *"não quero que usem a chave para roubar
-os apps"*: **uma chave pública não permite nada além de conferir assinaturas.**
-O risco real nunca foi ela.
-
-| Risco | Mitigação |
-| --- | --- |
-| chave **privada** vaza | `invalida_antes` no catálogo: o que foi assinado antes do corte não vale |
-| **"autêntico" tratado como "comprado"** | licença separada, amarrada ao aparelho |
-| catálogo trocado na rede | catálogo assinado; item sem assinatura não entra |
-| servidor de pacote comprometido | sha256 + assinatura do `.giochi` |
-
-Daí **três chaves e três perguntas**:
-
-| Pergunta | Responde | Privada vive em |
-| --- | --- | --- |
-| "veio da Giochi?" | assinatura do pacote | servidor |
-| "este aparelho pagou?" | **licença** (chave separada) | servidor |
-| "é este aparelho?" | par gerado **no aparelho** | aparelho |
-
-No código são **tipos diferentes**: `PacoteVerificado` prova origem e nada mais;
-`LicencaAssinada` prova compra e exige a chave do aparelho. Confundir os dois é o
-que faria um único pacote copiado servir para todos.
-
-O que ela **não** faz, de propósito:
-
-- **Não vê cartão.** Checkout hospedado no navegador (PCI-DSS SAQ A).
-- **Não se declara paga.** `Estado::Pago` carrega `LicencaAssinada`, e a chave de
-  licença não está no cliente. Não é disciplina, é o sistema de tipos — o teste
-  aperta "Já paguei" dez vezes e exige que continue `Aguardando`.
-- **Não inventa código PIX.** Sem provedor, a tela diz isso. Um "copia e cola"
-  falso é a pior falha possível: o usuário tenta pagar.
-
-**`butlerd` foi decidido não usar, com número:** é um daemon JSON-RPC de download
-incremental para builds de dezenas de GB; um pacote de 81 KB custaria um processo
-a supervisionar para economizar zero. **Regra para reconsiderar: pacotes acima de
-~500 MB.** Antes disso, `curl -C -` resolve e já existe nos três sistemas.
-
-**A mensagem assinada é montada em Rust (verifica) e em JS (assina).** Ela já
-divergiu por um caractere (`item=<slug>|` contra `item|<slug>|`) e o catálogo
-assinado **nunca** verificava, com a mensagem "assinatura inválida, não foi a
-Giochi" mandando procurar no lugar errado. Hoje os dois lados têm o mesmo literal
-com teste, e `giochi-loja --mensagem-catalogo` imprime os bytes.
-
-**O layout é emprestado, não integrado.** Inspiração na forma de grade de cartões;
-**zero** chamadas a serviços externos. A lista vem do catálogo da Giochi. E a
-arquitetura de provedor é explícita: o provedor faz o checkout e **conta as
-instalações** (`activation_limit` fica no servidor dele), o que resolve sem
-backend nosso. Credencial de conta de usuário (API key) prova posse, não vínculo
-com o aparelho — não serve para vender.
-
-**Uma função decide a grade; desenho e navegação leem dela.**
-`giochi_loja_core::grade::grade_para` + `mover`, com 11 testes incluindo um de
-**propriedade** (nenhuma tecla produz índice fora da lista, em nenhuma grade, com
-qualquer total). No launcher este projeto já teve o bug oposto — navegação
-supondo 4 colunas com a tela calculando 2 — e o sintoma foi "a seta para baixo não
-faz nada".
-
-**Capas são desenhadas, porque o PNG só existe depois do download.** FNV-1a
-(**não** `DefaultHasher`, que não é estável entre versões do compilador) → matiz,
-matiz do detalhe e deslocamento da faixa. A cor **colidiu de verdade** (dois apps
-na mesma matiz de 8 bits em 12 itens), então ela não é o único diferenciador e o
-teste exige que o **conjunto** seja único. Um teste separado *documenta* a
-colisão da matiz sozinha, para ninguém "consertar" achando que é bug.
+Completo: [`docs/historico/pc-e-pacote.md`](docs/historico/pc-e-pacote.md),
+[`docs/pc.md`](docs/pc.md), [`docs/loja.md`](docs/loja.md).
 
 ## 10. O pacote `.giochi`
 
@@ -1439,66 +649,25 @@ app/<slug> ──empacotar──▶ <slug>.giochi (+.sig +.manifest.json)
 ```
 
 **O `tar` é escrito à mão** (`scripts/lib/tar.mjs`) por três motivos medidos:
+ordem de contrato, reprodutibilidade (`mtime`/`uid`/`gid` fixos — mesmo SHA-256
+em duas rodadas) e bit de execução (`tar --mode` mascara permissão, e o erro só
+apareceria no aparelho como "entrypoint não existe"). Verificado contra o GNU
+tar; sem isso seria o meu parser concordando com o meu escritor.
 
-1. **Ordem** — o `tar` do sistema usa a ordem do `readdir`; aqui a ordem é
-   contrato e a montagem é uma função só, testável.
-2. **Reprodutibilidade** — `mtime`/`uid`/`gid` fixos. Dois empacotamentos do mesmo
-   conteúdo dão **o mesmo SHA-256** (conferido). Se mudasse, a assinatura deixaria
-   de identificar o conteúdo.
-3. **Bit de execução** — `tar --mode` mascara permissão, e o erro só apareceria no
-   aparelho como "entrypoint não existe".
+**App da loja vai para `/user/apps`, não para `/opt`** — gravar em `/opt`
+destrói o argumento que permite vender app GPL.
 
-Verificado contra o GNU tar: ele lê o ustar escrito à mão, extrai com as
-permissões certas e `test -x` passa. Sem essa conferência seria o meu parser
-concordando com o meu escritor.
+**A assinatura tem um formato só**: o `.sig` tem 64 bytes crus, sem base64 nem
+`\n`. Os dois lados já divergiram (Python 64 bytes, JS base64 de 89) e os testes
+passavam porque assinavam e verificavam com a mesma biblioteca — a prova que
+faltava é externa (`openssl pkeyutl -verify`). No aparelho,
+`verificador-ed25519` confere **tamanho** e **tipo de chave** antes de verificar.
 
-**O extrator é script copiado, não `sh -c` aninhado.** A primeira versão montava o
-comando com aspas dentro de aspas dentro de `ssh` e produziu
-`sh: "bin/giochi-pacman": unknown operand`. Aninhar três níveis de aspas para
-falar com outra máquina não é difícil de escrever — é difícil de **ler quando
-falha**. Hoje é `scripts/lib/extrair-pacote.sh`, copiado e executado.
+**Integridade não é autenticidade**: quem escreve no cartão reescreve o
+`.giochi` **e** o manifesto, e o hash confere.
 
-**App da loja vai para `/user/apps`, não para `/opt`.** `/opt/giochi/apps` é o
-mesmo lugar dos apps **da imagem**, e gravar ali destrói o argumento que justifica
-a loja existir: `distribution: store` significa "não faz parte da imagem
-assinada", e é isso que permite vender app GPL.
-
-### A assinatura tem um formato só, e é o do antecessor
-
-| Guarda | Onde |
-| --- | --- |
-| `manifesto.signature` aponta o arquivo `.sig` | `assinar()` + teste JS |
-| assinatura com tamanho diferente de 64 é recusada | `verificar()` + teste JS |
-| o `.sig` tem 64 bytes e nenhum `\n` | `tests/painel/test_acoes.py` |
-
-Os dois lados já divergiram: o Python gravava 64 bytes crus e o JS gravava base64
-**em texto** (89 bytes com `\n`). Os testes JS assinavam e verificavam com a mesma
-biblioteca, então passavam com qualquer formato. A prova que faltava é
-**ferramenta externa**:
-
-```text
-openssl pkeyutl -verify -pubin -inkey chave-publica.pem \
-  -rawin -in app.giochi -sigfile app.giochi.sig
-Signature Verified Successfully     ← tanto o .sig do Python quanto o do JS
-```
-
-### A verificação no aparelho existe
-
-`verificador-ed25519` (8.912 bytes, `EVP_DigestVerify`, ligado a `libcrypto.so.3`)
-roda no aparelho: **20 MB de RSS, 0,01 s**. Ele confere o **tamanho** antes de
-verificar (um `.sig` de 89 bytes é base64 gravado como texto, e o
-`EVP_DigestVerify` recusaria com uma mensagem que não aponta a causa) e confere o
-**tipo de chave** (uma chave RSA falharia na verificação e o veredito sairia
-"assinatura não confere", culpando o pacote por erro de configuração).
-
-`instalar-do-cartao.sh` recusa antes de extrair e **avisa** quando não tem
-verificador ou chave. A primeira versão verificava em silêncio — o que torna
-"verificou e passou" indistinguível de "não verificou". **Silêncio no sucesso é o
-defeito espelhado do silêncio no fracasso.**
-
-**Integridade não é autenticidade.** SHA-256 pega cópia incompleta — o erro real
-de quem copia pelo leitor de cartão. Quem escreve no cartão reescreve o `.giochi`
-**e** o manifesto, e o hash confere.
+Completo: [`docs/historico/pc-e-pacote.md`](docs/historico/pc-e-pacote.md),
+[`docs/pacote.md`](docs/pacote.md).
 
 ## 11. Verificação no aparelho
 
@@ -1515,39 +684,18 @@ bash scripts/aparelho.sh boot-log     # salva o log ANTES de regravar o cartão
 ```
 
 **`verificar` é o que importa**: para o app (o KMSDRM é exclusivo), captura um
-quadro, desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`, des-rotaciona pela
-orientação que o sistema declara e compara pixel a pixel. No X55 dá **98,9 %** e
-no X35H **99,9 %**; com a rotação oposta cai para **10,9 %**. É essa diferença que
+quadro, desenha a mesma Home no PC com `SDL_VIDEODRIVER=dummy`, des-rotaciona e
+compara pixel a pixel. Rotação oposta cai para **10,9 %** — é essa diferença que
 distingue "desenhou" de "desenhou de ponta a cabeça".
 
-A comparação só vale com a **mesma entrada dos dois lados**: catálogo igual e
-referência no espaço de projeto. As duas coisas já faltaram, e das duas vezes o
-launcher pareceu pior sem ter regredido.
+**Cinco coisas do ambiente precisam ser congeladas dos dois lados**, senão a
+comparação reprova por hardware: relógio (`GIOCHI_HORA_FIXA`), bateria
+(`GIOCHI_BATERIA_FIXA`), temperatura (`GIOCHI_TEMPERATURA_FIXA`), **idioma**
+(`--idioma en`, que não grava) e o **catálogo** — a referência agora inclui a
+colheita das quatro raízes, porque a detecção é disco-primeiro (§8) e um pacote
+fora do `index.json` (app da loja, cartão de port) não existiria no PC.
 
-**Quatro coisas do ambiente mudam e precisam ser congeladas dos dois lados**,
-senão a comparação reprova por hardware: relógio (aparelho sem NTP), bateria,
-temperatura e **idioma**.
-
-| Variável | Onde | Efeito |
-| --- | --- | --- |
-| `GIOCHI_HORA_FIXA` | `views::current_clock` | desenha o texto dado |
-| `GIOCHI_BATERIA_FIXA` | `app::tick_energia` | nível fixo |
-| `GIOCHI_TEMPERATURA_FIXA` | idem | °C fixo |
-| `--idioma en` (argumento novo) | `main.rs` → `App::new` | abre no idioma dado e **não** grava |
-
-Antes das três primeiras cada uma derrubava a comparação para 99,5–99,9 % e
-nenhuma era regressão de desenho. Depois: **100,0 %** nos dois aparelhos.
-
-O idioma entrou nesta lista em 15/11/2026 por um motivo diferente dos outros três:
-ele não muda sozinho, mas muda **por escolha**, e um PC sem
-`/user/.config/giochi/language` desenha a tela de boas-vindas enquanto o aparelho
-já configurado desenha a Home. Por isso os scripts de captura passam `--idioma en`
-dos dois lados (§6.10).
-
-O `retry` de 99,5 % também já esteve **invertido**:
-`awk 'exit !(p < 99.5)' && break` quebrava o laço quando o resultado era **bom**,
-então a segunda tentativa nunca acontecia justamente no caso que ela cobre (o
-minuto virando entre as duas capturas).
+Completo: [`docs/historico/verificacao-e-ambientes.md`](docs/historico/verificacao-e-ambientes.md).
 
 ## 12. Ambientes medidos
 
@@ -1560,423 +708,64 @@ minuto virando entre as duas capturas).
 | acesso | `usb0` `10.55.0.2` + Wi-Fi | `usb0` + rede | `usb0` ou serial |
 | `KEY_POWER` | sim (`rk805`) | sim | **não** |
 | Wi-Fi / BT | sim | sim | **sem rádio** |
-| `libasound` | sim | sim | **sim** na imagem de 15/11 (§12.1) |
-| `SDL2_ttf` | 2.22 | 2.22 | presente |
+| `libasound` | sim | sim | **sim** na imagem de 15/11 |
 
-### O R35S mudou na imagem de 15/11/2026
-
-A tabela acima é de 06/11 e **não vale mais para o R35S**. Medido na imagem
-`built_at_utc=2026-11-15T12:58:43Z`, com o launcher instalado por SSH:
-
-| | 06/11/2026 | 15/11/2026 |
-| --- | --- | --- |
-| `libasound` | ausente → volume `—` | **presente**, mixer `rk817_int`, Master 255 |
-| `SDL2` / `SDL2_mixer` / `SDL2_image` | — | **2.28.5 / 2.6.3 / 2.0.8** — é o que faz o app de música abrir (§7) |
-| `/dev/input` | — | `rk817_int`, `gpio-keys-vol`, `r36s_Gamepad` (**17** códigos) |
-| `KEY_POWER` | não declarado | **continua não declarado** — o launcher avisa e o menu fica no START |
-| rotação | `fbcon/rotate=0` → None | igual, e a referência bate **100,0%** |
-| catálogo | — | 3 apps em `/user/apps`, quadro idêntico ao PC |
-
-O `buttons.map` tem **19 entradas** e todas são símbolos que o `code_for`
-conhece (`verificar-mapa.mjs`: 0 desconhecidos). Isso importa porque o mapa é
-gerado do DTB e traz comentário no fim de cada linha — foi um comentário
-desses que já deixou 1 de 13 botões funcionando.
-
-**Permissão de binário instalado por `scp` depende do umask do aparelho.** Medido:
-umask `077` no R35S, então `chmod +x` deixava o launcher `700` enquanto o mesmo
-app empacotado pelo `empacotar.mjs` chega `755` (o tar escreve modo explícito).
-Mesma família do `tar --mode` que mascara permissão: o defeito não é o modo
-errado, é ele depender de um estado ambiente que ninguém declarou. Hoje os dois
-scripts de instalação fazem `chmod 755`.
+**O R35S mudou na imagem de 15/11/2026**: `libasound` presente, SDL2 2.28.5 +
+`SDL2_mixer` 2.6.3 + `SDL2_image` 2.0.8, 17 códigos de entrada — e `KEY_POWER`
+**continua** não declarado.
 
 **Não confie no nome do aparelho nem no IP.** Leia
 `/etc/giochi/build-info.txt`; o `10.55.0.2` já foi X35H e R35S no mesmo dia, e a
 host key muda ao regravar (`ssh-keygen -R 10.55.0.2` — a mensagem fala de ataque
-MITM e não é).
+MITM e não é). O IP do Wi-Fi é DHCP e muda entre boots.
 
-**O IP do Wi-Fi é DHCP e muda entre boots.** O mesmo X55 respondeu
-`192.168.1.7` numa sessão e `192.168.1.2` na seguinte, e a host key é outra —
-`sem host key` é endereço reciclado, não aparelho diferente. Hardcodar o IP
-rende `Host key verification failed` que parece defeito de rede. `aparelho.sh
-procurar` varre a `/24` justamente por isso.
+Sem `usb0`, a console serial é o único caminho:
+`bash scripts/console-r35s.sh "uname -r"` / `--escutar 12`.
 
-O R35S não tem rádio e o `dwc2` nasce como *host*: `aparelho.sh` (feito de
-`ssh`/`scp`) não o alcança sem `usb0`. Quando o USB não sobe, a console serial
-(`ttyS2` @ 1500000) é o único caminho:
-
-```bash
-bash scripts/console-r35s.sh "uname -r"      # um comando
-bash scripts/console-r35s.sh --escutar 12    # só ouve (boot, panic)
-```
-
-Por dentro é um container `--privileged -v /dev:/dev` com a imagem do System: o
-nó é `root:dialout` e o CH341 **cai do barramento**, então `-v /dev:/dev`
-sobrevive e `--device=` fixado aborta quando o nó some. Leitores órfãos seguram a
-porta e o erro aparece como `returned no data`, que manda procurar defeito no
-cabo.
+Completo: [`docs/historico/verificacao-e-ambientes.md`](docs/historico/verificacao-e-ambientes.md),
+[`docs/r35s.md`](docs/r35s.md), [`docs/teste-x35h.md`](docs/teste-x35h.md).
 
 ## 13. Armadilhas medidas
 
-Cada uma custou pelo menos uma rodada. Nenhuma é hipótese.
+Cada uma custou pelo menos uma rodada. Nenhuma é hipótese. **Uma linha por
+armadilha aqui; o caso completo em
+[`docs/historico/armadilhas.md`](docs/historico/armadilhas.md).**
 
-### Ferramenta que mede a intenção em vez do efeito
-
-Quatro ocorrências, e o padrão é sempre o mesmo: um número que parece medir o
-efeito e mede o pedido.
-
-| Onde | O que acontecia |
+| Armadilha | Em uma linha |
 | --- | --- |
-| contador de efeitos do `launcher-teste` | contava chamadas **dentro** do módulo; imprimia "25" com 182 saindo |
-| `--teclas` do launcher | aplicava antes de `Screen::Running`; imprimia estado inicial, plausível e inalterado |
-| `--tamanho` num painel real | projeto 640×480 num drawable 720×1280; o BMP saía com o conteúdo no canto |
-| `verificar-efeitos.sh` | imprimia "ok camada verificada" depois de um FALHA |
-
-Os contadores passaram para o ponto onde o backend é chamado
-(`Painter::desenhos`), o `--teclas` passou a avançar o boot antes de aplicar, o
-`--tamanho` compara com `janela.drawable_size()` e **avisa** quando o driver
-ignorou o pedido (comparação com o drawable de verdade, não com o nome do driver,
-então vale para qualquer backend), e o script ganhou contador e `exit 1`.
-
-**Um teste que nunca falhou não provou nada.** Todo teste novo desta casa é
-conferido revertendo a correção de propósito.
-
-### Processo que procura a si mesmo
-
-`case "$c" in *giochi-init*)`, `*giochi-launcher*` e `*bluetoothd*` casam com o
-próprio `sh -c` que executa a busca, porque o padrão está no `argv`. Três
-ocorrências. A comparação passou a ser por caminho **exato** ou por
-`readlink -f /proc/PID/exe`.
-
-E `pkill -f giochi-launcher` **mata a própria sessão SSH**. Use `pidof` + `kill`.
-
-### `ps`, `pidof` e o descritor de DRM
-
-- **`ps` mente nesta imagem:** listou 2 de 94 processos, e entre os invisíveis
-  estavam `init`, `sshd`, `giochi-init` **e o launcher**. Leia `/proc/*/cmdline`.
-- **`pidof` não acha script `sh`** (casa por `comm`, truncado em 15 caracteres):
-  `pidof giochi-init` devolve vazio com o processo vivo.
-- **"Vivo" não é "desenhando".** Um launcher pode estar vivo **sem** os descritores
-  de `card0`/`renderD` — nunca respawnado, nunca desenhando. A pergunta é "quem
-  segura o DRM".
-- **O dono do DRM pode ser o app.** Com o launcher em `fork`+`wait` sem DRM, o app
-  é o dono; matar o launcher ali deixa o app **órfão com o dispositivo**.
-
-### O `giochi-init` desiste, e a cota é pequena
-
-`RESTART_MAX=5` quedas em 60 s e ele **para de reiniciar**, dorme em
-`sleep 3600` e grava `/run/giochi/launcher-parado`. Cada `verificar` derruba o
-launcher uma vez — **seis rodadas seguidas deixam o aparelho sem interface**.
-
-`subir` e `verificar` tratam isso: se o launcher não aparece, matam o
-`giochi-init` (o `::respawn:` do inittab o reinicia com `restarts=0`) e esperam
-mais. Três defeitos foram corrigidos nesse caminho: `SEM_DRM` era aviso e não
-falha (o caminho de recuperação nunca era alcançado);
-`/run/giochi/launcher-parado` nunca era apagado (o supervisor novo herdava a
-desistência); e `pid=$(pids_launcher)` devolvia **dois** pids quando havia um
-travado em estado `D`, fazendo o script anunciar tela preta com a tela
-funcionando.
-
-### `SIGTERM` não mata o laço
-
-O SDL instala handler que só posta `SDL_QUIT` na fila. Um app que não bombeia
-eventos (o `launcher-teste`) segue vivo segurando o KMSDRM. **`kill -9`**, e
-esperar o descritor liberar. Mesma família:
-`timeout 14 launcher --lancar X` **não termina** (o launcher está em
-`fork`+`wait`) — a sessão SSH pendura e, quando ela morre, o filho fica órfão dono
-do DRM.
-
-E `timeout` na ponta do **host** não mata o processo remoto: matar o `ssh` deixa o
-comando rodando no aparelho. O `timeout` tem de estar dentro do comando remoto, ou
-não se usa.
-
-### BMP: 32 bpp, e o swap
-
-- O launcher escreve BMP de **32 bpp**. Qualquer script de análise tem de checar
-  `bytesPorPixel` no cabeçalho e calcular o *stride* como
-  `ceil(largura * bpp / 4) * 4`; ler como 24 bpp produziu uma rodada inteira de
-  medições inválidas. Sanidade: girar 90° e voltar tem de dar **100,00 %**.
-- **`--dump-frame` com backend acelerado grava preto**: o swap esvazia o buffer.
-  Use `GIOCHI_GLES=0` (força `software`) na captura. Terceira vez que apareceu.
-- **A inversa de `girar_rect(Ccw90)` não é "girar para o outro lado"** — as
-  dimensões trocam junto. Errar produz uma **transposição**, invisível em quadros
-  quase simétricos.
-
-### `ssh` dentro de `while read` come o stdin
-
-`no_aparelho` chama `ssh`, que lê stdin e o repassa ao shell remoto. Num
-`while read ... do no_aparelho ... done <<< "$lista"` só a **primeira** linha é
-processada — e foi assim que a conferência do catálogo examinou **só o primeiro
-app** e publicou três cartões mortos sem uma linha de aviso. Duas trancas:
-`</dev/null` no `no_aparelho` e `read <&3` com `3<<<` no laço.
-
-### `sh -c` remoto com aspas duplas expande no PC
-
-Corpo remoto entre **aspas duplas** faz o shell local expandir `$e`/`$n` antes de
-enviar; com `set -u` isso vira `e: variável não associada`. Use **aspas simples**
-com marcador (`__MAC__`) trocado no PC.
-
-### O build `--no-default-features` sobrescreve o binário da comparação
-
-`cargo build --no-default-features` em `app/launcher/crates/ui-sdl` grava em
-`target/debug/giochi-launcher` **o mesmo caminho** do build completo. Quem
-compilou a combinação do CI por último deixa o binário **sem texto** ali, e
-`comparar-launcher-teste.sh` passa a comparar um launcher mudo com um que
-desenha — 95,6 % e "linhas 0,11", com cara de regressão de desenho.
-
-Medido em 15/11/2026: os dois quadros pareciam a Home, um sem nenhum texto. O
-sintoma está no log, não no número: `aviso: compilado sem a feature 'texto'`.
-
-Depois de exercitar a combinação enxuta, rode `bash scripts/compilar-launcher.sh`
-antes de comparar. A mesma família do `--dump-frame` que grava preto (§13): o
-binário é o mesmo caminho, e o que muda é o que ele sabe fazer.
-
-### Três provas falsas viraram um pedido errado para outra equipe
-
-Em 15/11/2026 um pedido foi para o canal do Giochi System: *"falta o transporte
-HID do kernel (`CONFIG_HID`/`BT_HIDP`), o `hidp.ko` é só a camada de socket"*.
-Medido no R35S na mesma data, contra `/proc/config.gz`:
-
-```text
-CONFIG_HID=y          # sempre esteve lá
-CONFIG_HID_GENERIC=y
-CONFIG_BT_HIDP=m
-# CONFIG_UHID is not set    ← o único que faltava
-```
-
-O módulo **carrega e inicializa** (`modprobe hidp` → `rc=0`,
-`HIDP socket layer initialized` no `dmesg`, que só aparece depois do sucesso).
-As três provas do pedido eram falsas, cada uma de um jeito diferente:
-
-| Prova | Defeito |
-| --- | --- |
-| `modinfo hidp` mostra `depends: bluetooth` sem `hid` | **`modinfo` não existe na imagem** (`sh: modinfo: not found`). A linha veio de memória e nunca foi executada |
-| `strings hidp.ko \| grep hid_register_driver` vazio | o símbolo no 6.12 é `__hid_register_driver`, gerado por macro. O `grep` procurava o nome errado e o "sinal" era a ausência do que não existe |
-| `/sys/bus/hid/drivers/hidp` não existe | **é o correto**: no 6.12 o `hidp` é transport driver, cria `hid_device` e quem fica no barramento é o `hid-generic`. Esse diretório nunca existiria |
-
-Três lições, todas reutilizáveis:
-
-1. **Ferramenta que não está instalada não é ferramenta.** `modinfo`,
-   `timeout`, `evtest --query` (§6.6) — o comando ausente devolve vazio, e vazio
-   lido como "não tem" é a mesma família de `is_ok()` medindo presença de
-   variável em vez de estado.
-2. **Nome de símbolo é detalhe de versão do kernel.** `hid_register_driver` é
-   macro; o símbolo exportado é `__hid_register_driver`. Procurar o nome
-   plausível devolve vazio, e vazio virou diagnóstico.
-3. **Pergunte se o estado observado é o esperado antes de chamá-lo de defeito.**
-   O jeito de responder isso é o log do próprio módulo (ele diz que inicializou)
-   e a config do kernel (ela diz o que foi embutido), não a estrutura de sysfs
-   que se *esperava*.
-
-A ferramenta do repo (`scripts/aparelho.sh bluetooth`) repetia o mesmo erro e
-ganhou a correção junto: hoje ela prova o núcleo HID por
-`/sys/bus/hid/drivers/hid-generic`, lê a config por `zcat /proc/config.gz` e
-declara **"entrega ao controle NÃO MEDIDA"** em vez de inventar veredito.
-
-### Comparação exata de quadro acusa glifo que a régua do projeto aprova
-
-`verificar-frame.mjs` compara com **tolerância 12** (soma da diferença RGB por
-pixel) e amostra 1 pixel a cada 3×3. Comparar os mesmos dois BMPs com igualdade
-**exata** dá outro número, e o outro número parece regressão:
-
-| Quadro (R35S × PC, 640×480) | exato | régua do projeto (tol. 12) |
-| --- | --- | --- |
-| Home | 98,30 % (5.228 px) | **100,0 %** |
-| Apps | 99,39 % (1.887 px) | **100,0 %** |
-
-Medido em 15/11/2026. Os pixels diferentes são **antialiasing de glifo**: mesmo
-texto, mesma posição, um pixel de borda com 1–3 níveis de diferença. A causa é o
-`FreeType` do Buildroot contra o do PC (o `libSDL2_ttf` é 2.24.0 dos dois lados e
-trocar o arquivo `DejaVuSans.ttf` pelo do aparelho **não mudou um pixel** — os
-arquivos têm MD5 diferentes e rasterizam igual).
-
-Três consequências:
-
-1. **Não use igualdade exata para julgar desenho.** É régua mais dura que a
-   aprovada, e o resultado dela já custou uma rodada de investigação.
-2. **A tolerância 12 existe para isso**, não para perdoar layout errado: um
-   deslocamento de 1 px, uma cor de tema trocada ou um texto faltando estouram
-   muito antes disso (rotação oposta dá 10,9 %, catálogo divergente 92–97 %).
-3. **A fonte é ambiente, não dado.** Como relógio, bateria e temperatura (§11),
-   ela não se congela por variável de ambiente — está na biblioteca.
-
-Sanidade do comparador, e ela é do mesmo tipo da que já existe para o rotador
-(§13, "girar 90° e voltar tem de dar 100,00 %"): **o mesmo BMP contra ele mesmo
-tem de dar 100,0 %**, e um BMP contra a própria imagem deslocada 1 px tem de
-cair. Se as duas coisas não acontecerem, o número está medindo outra coisa.
-
-### Aviso de compilador que ninguém lê é aviso que não existe
-
-Em 15/11/2026 havia **21 avisos** acumulados entre as quatro crates, e **zero**
-no CI: `cargo build` não é `cargo clippy`, e nenhum workflow rodava o segundo.
-O inventário diz o que se perde:
-
-| Aviso | O que escondia |
-| --- | --- |
-| `rotacao_do_sistema` nunca usada | wrapper morto: o caminho vivo é `..._com_fonte` |
-| `sort_by(\|a,b\| b.cmp(&a))` | `sort_by_key` + `Reverse`, que é o que se quis escrever |
-| `let _ = set_clip_rect(...)` | `set_clip_rect` devolve `()`, e o `let _` mentia sobre isso |
-| `loop { match ... Err => break }` | um `while let` — a única saída era a falha de leitura |
-| `i as u8 * 32` em 8 faixas | o cast estoura na **nona** faixa; um efeito a mais quebraria em silêncio |
-| 3 × "items after a test module" | código de produção depois do `mod tests` |
-
-Nenhum quebrava teste, e por isso nenhum apareceu em lugar nenhum. O CI ganhou um
-passo com **`-D warnings`** — rodar clippy sem `-D` só desloca o problema de
-lugar, porque o log de um job verde ninguém abre.
-
-`launcher-teste` fica fora desse passo: depende do repositório irmão
-`GIOCHI-ENGINE-3D`, que o CI não tem. Localmente ele também está em zero.
-
-E os módulos compartilhados por `#[path]` (`views`, `catalogo`, `system` no
-`launcher-teste`) levam `#[allow(dead_code)]` **local ao módulo**: eles trazem
-itens que só o launcher de produção usa (desligar, instalar pacote, toque). A
-alternativa seria copiar e apagar o que sobra — que é como nasceram as cópias
-atrasadas do Star Dust (§7).
-
-### Um `cfg` que nunca é compilado é código que não existe
-
-`cargo build --no-default-features` ficou quebrado por semanas (faltava um campo
-no inicializador do `Painter` na ramificação `not(feature = "texto")`) porque só o
-build padrão rodava. O CI constrói as duas combinações.
-
-### `--instalar <ip>` sem usuário vira `charles@<ip>`
-
-`ssh root@aparelho` é o único login que existe lá. Um `--instalar 10.55.0.2` sem
-`@` faz o `ssh` usar o usuário **deste PC**, e a resposta é
-
-```text
-charles@10.55.0.2: Permission denied (publickey,password,keyboard-interactive)
-```
-
-que manda procurar chave SSH — e o errado era o nome do usuário. O
-`compilar-launcher-teste-arm64.sh` já fazia certo; o
-`compilar-launcher-arm64.sh` não fazia, e os dois divergiram. Hoje ambos usam
-`INSTALAR="${2#root@}"` no parse e `root@$INSTALAR` nos comandos.
-
-### Dois significados para a mesma variável produzem `root@root@`
-
-`compilar-launcher-arm64.sh` guardava o destino do `--instalar` de duas formas:
-`INSTALAR` era **bare** (`${2#root@}`) mas `HOST_SSH` já vinha com `root@`. Quando
-`--instalar` não trazia argumento, `INSTALAR="$HOST_SSH"` gravava `root@10.55.0.2`
-e os quatro `ssh`/`scp` prefixavam `root@` de novo. Medido em 15/11/2026:
-
-```text
-instalando em root@root@10.55.0.2:/opt/giochi/apps/launcher/bin
-root@root@10.55.0.2: Permission denied (publickey,password,keyboard-interactive).
-```
-
-A mensagem manda procurar chave quando o errado era o alvo — a **mesma** família
-do `--instalar ip` que virava `charles@ip`. Corrigir o prefixo num ponto não
-adianta: sobra outro lugar que prefixa. Hoje **uma função** decide, e todo
-`ssh`/`scp` a consulta:
-
-```bash
-alvo_ssh() { case "$INSTALAR" in *@*) printf '%s' "$INSTALAR" ;; *) printf 'root@%s' "$INSTALAR" ;; esac; }
-```
-
-`foo@host` passa intacto (usuário explícito é respeitado), `host` ganha `root@`,
-e `root@host` não ganha nada. Medido nas três formas mais `--instalar` sozinho.
-
-### A referência do `verificar` vinha de um binário velho
-
-`gerar_referencia` usa `app/launcher/target/debug/giochi-launcher` para desenhar a
-Home no PC. Nada garantia que ele fosse atual — e `--testes` compila *harnesses*,
-não o binário, enquanto o clippy só faz type-check. Medido em 15/11/2026: o
-binário era de 08:19, a poda de tema entrou depois, a referência desenhou 6
-cartões e o aparelho 4. **92,4%**, com cara de regressão de desenho e nenhuma
-regressão nenhuma. Com o binário atualizado: **99,6%**.
-
-É a terceira vez que a comparação acusa o desenho por uma assimetria de entrada
-(as outras: catálogo divergente no X35H, 99,4% → 97,8%; e `dir` do aparelho
-inexistente no PC, 36,5%). A diferença é que esta o próprio script podia evitar:
-hoje ele procura `*.rs` mais novo que o binário e **reconstrói** — o build é
-incremental e custa 0,02 s quando nada mudou. Aviso aqui seria lido por ninguém
-e a rodada inteira sairia com o número errado.
-
-### Ferramenta de build que sai calada
-
-`INSTALAR="${2:-}"; shift 2` com um argumento só: o `shift 2` falha e `set -e`
-mata o script **sem imprimir nada**. Um script de build que sai calado é
-indistinguível de um build que não rodou. E `local` fora de função
-(`local: somente pode ser usado em uma função`) passa pelo `bash -n`.
-
-### Um `u16` de sentinela comparado com `Option` é sempre verdadeiro
-
-`hud.temp_c: u16` usa `0` para "desconhecido" — não há valor que signifique "sem
-leitura" num inteiro. Comparar `Option<u16>` com `Some(temp_c)` faz
-`None != Some(0)`, que é **verdadeiro para sempre**, e a linha de log saía a cada
-5 s num aparelho sem sensor (medido no R35S, 06/11/2026; corrigido em 14/11).
-
-Duas lições juntas: **sentinela num tipo que não tem "ausente" convida a esse
-erro**, e a correção certa é converter para o sentinela (`unwrap_or(0)`) em vez de
-comparar tipos diferentes. O teste que fecha é o do caso silencioso — "sem
-sensor, não registra de novo" — porque o caso barulhento já aparecia na tela.
-
-### A flag de diagnóstico aplicada antes de quem a sobrescreve
-
-`--idioma pt` era lido em `main`, gravado no `State` — e o `App::new`, que roda
-depois, lia `/user/.config/giochi/language`, não achava nada e escrevia o padrão
-**por cima**. O log da mesma execução dizia as duas coisas, em duas linhas
-seguidas:
-
-```text
---idioma: Portuguese (pt) — não grava
-idioma: English (en) — primeira abertura, o padrão é inglês
-```
-
-E o sintoma que denunciou foi o quadro: `--dump-frame` em `en`, `pt`, `zh` e `ar`
-saía **idêntico pixel a pixel** (0 de 307.200). Um número que não muda quando a
-entrada muda é a definição de ferramenta que não mede o efeito.
-
-A correção não foi reordenar as escritas: foi tornar a sobreposição **parâmetro**
-(`App::new(..., idioma_forcado: Option<Idioma>)`), para não existir ordem em que
-o arquivo vença um pedido explícito. Mesma família do `INSTALAR`/`HOST_SSH` com
-dois significados (§13): enquanto a informação puder chegar por dois caminhos,
-um deles vai vencer sem avisar.
-
-Sanidade que ficou: comparar dois idiomas diferentes **precisa** dar quadros
-diferentes — medido em 15/11/2026, `en × pt` = 7.351 px, `en × zh` = 11.293 px,
-`en × ar` = 13.993 px na tela de Config. Se der zero, o caminho do idioma
-quebrou antes de chegar ao desenho.
-
-### Ferramenta de diagnóstico que não alcança a tela que diz fotografar
-
-`--tela senha` empilhava o overlay à mão (`overlays.push`) sem passar por
-`focus_on`, então o foco continuava em `HomeCarousel`: `--teclas down,a`
-reportava "foco HomeCarousel 0" e o `↓` caía no carrossel. Uma ferramenta que
-declara fotografar uma tela e não chega nela. Hoje `abrir_tela` move o foco para
-a zona do overlay, e é isso que permitiu medir o defeito da senha **sem dedo no
-aparelho**.
-
-Junto veio `--teclas` aceitando letra solta e `x`. Sem poder digitar, nenhuma
-ferramenta exercitava o teclado de senha — e o defeito estava exatamente ali.
-
-### `is_ok()` é "a variável existe", não "está ligada"
-
-`GIOCHI_GLES` era testada por presença, então `GIOCHI_GLES=0` **ligava** o GLES, e
-a documentação dizia o oposto do que o código fazia. Pior: a variável era inútil
-na direção documentada — sem ela o SDL já escolhe `opengles2` no KMSDRM. Hoje os
-três estados fazem coisas diferentes (ausente = deixa o SDL escolher, `1` = pede
-`opengles2`, `0` = pede `software`) e `Painter::new` **anuncia** qual backend
-abriu de fato, porque `SDL_RENDER_DRIVER` inválido cai em silêncio para outro
-driver — pedir não prova nada.
-
-### CI: `cancelled` sem passos é infraestrutura
-
-O job de macOS era **cancelado em 1 s sem passo nenhum**: `macos-14` foi
-aposentado (`actions/runner-images#15226`). Virou `macos-15`.
-
-**Verificação de CI não lê texto acentuado**: `-match "seleção: 2"` falha no
-PowerShell 5.1 (code page OEM), e `$array -notmatch "x"` **filtra** em vez de
-testar, então a condição fica sempre verdadeira. Daí `--json` com saída ASCII pura
-e diagnóstico no stderr para o stdout ser só dado.
-
-`exit 0` no fim de um passo `pwsh` que testa código de saída diferente de zero não
-é redundância: o runner **anexa** `exit $LASTEXITCODE`, e o passo termina vermelho
-por um sucesso que ele mesmo provocou.
-
-E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtro de
-`validate.yml`, então a correção do 3.9 não acionou o workflow. App fora do filtro
-é app sem CI, e o sintoma é silêncio.
+| ferramenta que mede a intenção | contador contava chamadas dentro do módulo; `--teclas` aplicava antes de `Screen::Running`; `--tamanho` não conferia o drawable; `verificar-efeitos.sh` imprimia "ok" depois de FALHA |
+| teste que nunca falhou | não provou nada: **todo teste novo é conferido revertendo a correção** |
+| processo que procura a si mesmo | `case "$c" in *giochi-init*)` casa com o próprio `sh -c`; comparar por caminho exato ou `readlink -f /proc/PID/exe`. E `pkill -f giochi-launcher` **mata a sessão SSH** — `pidof` + `kill` |
+| `ps` mente nesta imagem | listou 2 de 94 processos, entre eles `init`, `sshd` e o launcher. Leia `/proc/*/cmdline`; `pidof` não acha script `sh` |
+| "vivo" ≠ "desenhando" | um launcher pode estar vivo **sem** os descritores de `card0`/`renderD`. A pergunta é "quem segura o DRM" |
+| o dono do DRM pode ser o app | com `fork`+`wait` sem DRM, matar o launcher deixa o app **órfão com o dispositivo** |
+| `giochi-init` desiste | `RESTART_MAX=5` quedas em 60 s e ele dorme em `sleep 3600`. **Seis `verificar` seguidos deixam o aparelho sem interface** |
+| `SEM_DRM` era aviso, não falha | o caminho de recuperação nunca era alcançado; e `/run/giochi/launcher-parado` nunca era apagado |
+| `SIGTERM` não mata o laço | o SDL só posta `SDL_QUIT` na fila: **`kill -9`**. E `timeout 14 launcher --lancar X` **não termina** (`fork`+`wait`) |
+| `timeout` na ponta do host | não mata o processo remoto: matar o `ssh` deixa o comando rodando no aparelho |
+| BMP de 32 bpp | calcular o *stride* como `ceil(largura*bpp/4)*4`; ler como 24 bpp invalida a rodada. Girar 90° e voltar tem de dar 100,00 % |
+| `--dump-frame` grava preto | com backend acelerado o swap esvazia o buffer: use `GIOCHI_GLES=0` |
+| inversa de `girar_rect` | não é "girar para o outro lado" — as dimensões trocam. Errar dá uma **transposição**, invisível em quadro quase simétrico |
+| `ssh` dentro de `while read` | come o stdin: só a primeira linha é processada (foi assim que a conferência examinou **só o primeiro app**). `</dev/null` + `read <&3` |
+| `sh -c` remoto com aspas duplas | expande no PC e vira `e: variável não associada`: aspas simples com `__MAC__` |
+| build `--no-default-features` | grava **no mesmo caminho** o binário sem texto, e a comparação passa a medir um launcher mudo (95,6 %). Rebuild antes de comparar |
+| `--instalar <ip>` sem usuário | vira `charles@<ip>` e a mensagem manda procurar chave SSH |
+| dois significados para a mesma variável | `INSTALAR` bare + `HOST_SSH` com `root@` produziu `root@root@10.55.0.2`. Hoje **uma função** decide e todo `ssh`/`scp` a consulta |
+| a referência vinha de binário velho | `--testes` compila harness, o clippy só faz type-check: 92,4 % sem regressão nenhuma. Hoje o script reconstrói quando um `.rs` é mais novo |
+| `u16` de sentinela × `Option` | `None != Some(0)` é **sempre verdadeiro**: a linha de energia saía a cada 5 s num aparelho sem sensor |
+| flag de diagnóstico sobrescrita | `--idioma pt` era gravado e o `App::new` lia o arquivo por cima. A correção não foi reordenar: virou **parâmetro** (`idioma_forcado`) |
+| ferramenta que não alcança a tela | `--tela senha` empilhava o overlay sem `focus_on` e o `↓` caía no carrossel |
+| `is_ok()` mede a variável, não o estado | `GIOCHI_GLES=0` **ligava** o GLES. Hoje são três estados e o `Painter::new` **anuncia** o backend real |
+| ferramenta que não está instalada | `modinfo`, `timeout`, `evtest --query` devolvem vazio, e vazio lido como "não tem" virou pedido errado para outra equipe |
+| nome de símbolo é detalhe de versão | `hid_register_driver` é macro; o exportado é `__hid_register_driver`. Procurar o nome plausível devolve vazio |
+| estado observado ≠ defeito | `/sys/bus/hid/drivers/hidp` **nunca** existiria (é transport driver). Perguntar se o estado é o esperado antes de chamá-lo de defeito |
+| comparação exata de quadro | acusa antialiasing de glifo: 98,30 % exato contra **100,0 %** na régua do projeto (tolerância 12, amostra 3×3) |
+| aviso de compilador que ninguém lê | 21 avisos acumulados e zero no CI; um deles era `i as u8 * 32`, que **estoura na nona faixa**. CI com `-D warnings` |
+| `cfg` que nunca é compilado | `--no-default-features` ficou quebrado por semanas; o CI constrói as duas combinações |
+| CI: `cancelled` sem passos | é infraestrutura: `macos-14` foi aposentado. Verificação de CI não lê texto acentuado, e `$array -notmatch "x"` **filtra** em vez de testar |
+| `exit 0` no fim de um passo `pwsh` | não é redundância: o runner **anexa** `exit $LASTEXITCODE` e o passo fica vermelho por um sucesso que ele mesmo provocou |
+| filtro de `paths` faz parte do teste | `app/painel/**` fora do filtro = app sem CI, e o sintoma é silêncio |
+| formulário de issue não é garantia | conferir antes do clique devolve o passado: nasceram três issues duplicadas de PortMaster (#3–#5). O caminho é a URL do `issues/new` |
 
 ## 14. O que está provado e o que é afirmação
 
@@ -1986,20 +775,19 @@ E **filtro de `paths` faz parte do teste**: `app/painel/**` não estava no filtr
 | rotação segue o sistema | **medido** nos três aparelhos, com o `cmdline` desempatando o `0` |
 | botões do controle embutido | **medido**: cobertura completa dos 20 códigos do X55 |
 | brilho, volume, dormir, desligar, reiniciar | **medido** no X55 |
-| senha Wi-Fi: digitar, ver e confirmar | **medido** — o caminho de produção `--conectar` conectou no X55 com a senha real |
-| Wi-Fi sobrevive ao reboot | **medido**: aparelho reiniciou e voltou sozinho para `Kill.exe`, com IP, sem digitar senha |
+| senha Wi-Fi: digitar, ver e confirmar | **medido** — o caminho de produção `--conectar` conectou no X55 |
+| Wi-Fi sobrevive ao reboot | **medido**: voltou sozinho para a rede, com IP, sem digitar senha |
 | boot automático (`::respawn:` → init → launcher) | **medido** no X55: `ppid` do launcher é o init, 29 s depois do boot |
-| Wi-Fi: varredura e lista | **medido** (`wi-fi: 11 rede(s) em wlan0`) |
-| Wi-Fi: conectar com a senha certa | **medido** no X55 (15/11/2026): `COMPLETED`, IP, gateway, DNS e HTTP |
 | Bluetooth: parear | **medido** (`Bonded: yes`) |
-| Bluetooth: virar entrada | **bloqueado na imagem** (falta transporte HID e `uhid`) |
+| Bluetooth: virar entrada | **bloqueado na imagem** (falta `CONFIG_UHID` e `hidp` no autoload) |
 | Star Dust desligado = launcher idêntico | **medido**, 4 tamanhos, byte a byte |
 | launcher-teste 100 % pixel a pixel | **medido**, 4 tamanhos + 6 telas |
 | `.pyz` e loja nos três sistemas | **medido** no CI (7 e 4 jobs verdes) |
 | assinatura verificada no aparelho | **medido**: 20 MB de RSS, 0,01 s |
-| launcher multi-idioma (10 idiomas) | **medido** no R35S em 15/11/2026: boas-vindas na 1ª abertura, `en -> pt` pelo caminho real, 2ª abertura sem boas-vindas, Home `pt` **99,6%** e Config `pt` **99,7%** contra o PC, `verificar` **100,0%**, os dez abrem |
-| escolha do idioma por **botão físico** | **medido**: um toque no controle na boas-vindas gravou `en\n` e a execução seguinte abriu sem perguntar — o caminho `input_evdev`, não o `--teclas` |
-| cobertura de fonte por idioma no aparelho | **medido** com `--fontes` (`TTF_GlyphIsProvided`): `pt/ru/ar` completos, `zh` 5/8, `hi` 1/11, `bn` 1/10 — falta fonte na imagem (issue nº 5) |
+| launcher multi-idioma (10 idiomas) | **medido** no R35S: boas-vindas na 1ª abertura, `en -> pt` pelo caminho real, Home `pt` **99,6 %**, `verificar` **100,0 %** |
+| escolha do idioma por **botão físico** | **medido**: um toque no controle gravou `en\n`, e a execução seguinte abriu sem perguntar |
+| cobertura de fonte por idioma | **medido** com `--fontes` (`TTF_GlyphIsProvided`): `pt/ru/ar` completos, `zh` 5/8, `hi` 1/11, `bn` 1/10 — falta fonte na imagem |
+| ports do PortMaster no launcher | **medido** no R35S em 26/11/2026: cartão criado, detectado e **lançado**, com o FORM rodando dentro do `bwrap` (§6.11) |
 
 **Regra de honestidade:** nada aqui pode ser declarado "funciona" sem ter sido
 executado. "Compila" e "roda" são afirmações diferentes — e o `poweroff` já caiu
@@ -2008,7 +796,7 @@ por ter sido escrito antes de testado.
 **Existir, declarar e ser usado são fatos diferentes.** Uma `.so` no rootfs não
 prova que o app a usa (só `readelf -d` mostra as `DT_NEEDED`); um `/dev/input`
 declarado no `/proc` não prova que o evento chega; uma variável de ambiente
-documentada não prova que o código a lê (§13).
+documentada não prova que o código a lê.
 
 ## 15. Arquivos que não devem ser commitados
 
@@ -2023,129 +811,60 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 
 | Item | Estado |
 | --- | --- |
-| app `image` que não seja shell | **existe**: `musica` (§7) — o catálogo deixou de sair vazio (§8) |
-| migrar jogos de `/user/apps` para `/user/games` | **manual** — feito à mão no R35S em 15/11/2026; a detecção os mantém corretos e só avisa, mas um `scripts/migrar-raizes.sh` evitaria repetir |
+| app `image` que não seja shell | **existe**: `musica` (§7) |
+| ports do PortMaster na aba Apps | **feito** (26/11/2026) — cartão por port, lançado por `giochi-ports` (§6.11) |
+| PortMaster como item da loja, declarado **sideload** | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e precisa aparecer como tal na interface |
+| aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports |
+| migrar jogos de `/user/apps` para `/user/games` | **manual** — feito no R35S em 15/11/2026; um `scripts/migrar-raizes.sh` evitaria repetir |
 | barra de progresso no app de música | **não existe** — o `SDL_mixer` não informa a posição; a barra mostraria número inventado |
 | duração de MP3/OGG/FLAC no app de música | **`—`** — só o WAV declara o tamanho no cabeçalho |
 | licença consultada antes de lançar | **não feito** — o verificador existe, o launcher ainda não pergunta ao servidor |
-| conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta só o `update_config=1` na imagem (§17) |
+| conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta o `update_config=1` na imagem (§17) |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
-| analógico | **não lido** — normalizar exige `absinfo` por ioctl |
-| tema em tempo de execução | **a base existe** (15/11/2026): `Tema` no estado, `Paleta` + `theme::accent()` lendo o tema do quadro, arquivo em `/user/.config/giochi/theme`. Falta o **segundo** tema — hoje há **um**, e a linha da Config o anuncia como único |
-| idioma | **feito**: os dez do site, padrão inglês, boas-vindas na primeira abertura e troca em Config › Aparência (§6.10) |
-| fonte para `zh`/`hi`/`bn` | **falta na imagem** — medido no R35S: `zh` 5/8, `hi` 1/11, `bn` 1/10 de cobertura. Pedido nº 5 em `docs/issues-para-outros-repos.md` |
-| shaping de `ar`/`ur` | **funciona** — HarfBuzz presente no R35S (`readelf` medido) e 99,8% de identidade contra o PC |
-| bidi de parágrafo misto / layout espelhado | **não existe** — `SDL2_ttf` não reordena parágrafo e nenhuma tela inverte âncora. Fonte não conserta |
-| teclado de senha em outros alfabetos | **não existe** — `KEYBOARD` é QWERTY latino fixo; senha cirílica/árabe só pelo PC |
+| analógico | **não lido** — o controle virtual de 18/11/2026 entrega `-32767..32767` e dispensa o ioctl; falta implementar (§6.3) |
+| controle virtual `Giochi Gamepad` | **documentado, não implementado** — [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| tema em tempo de execução | **a base existe**; falta o **segundo** tema (§6.10) |
+| idioma | **feito**: os dez do site, padrão inglês (§6.10) |
+| fonte para `zh`/`hi`/`bn` | **falta na imagem** — pedido nº 5 de `docs/issues-para-outros-repos.md` |
+| shaping de `ar`/`ur` | **funciona**; bidi de parágrafo e layout espelhado **não existem** |
+| teclado de senha em outros alfabetos | **não existe** — `KEYBOARD` é QWERTY latino fixo |
 | `bash -n` no `build-device.sh` | fica no **Giochi System**, outro repositório |
 
 ## 17. Canal com o Giochi System
 
 A conversa entre as equipes vive em `/home/charles/Giochi/chat_de_equipe.txt` —
-**fora dos dois repositórios**, porque nenhum dos dois é visível para o outro lado.
-Aqui há só um ponteiro: `docs/mensagem-giochi-system.md`.
+**fora dos dois repositórios**. Aqui há só um ponteiro:
+`docs/mensagem-giochi-system.md`.
 
-**Janela: 08:00–18:50, horário de Brasília.** Fora dela não se responde nem se
-inicia rodada. `bash scripts/canal.sh` responde, e `--exigir` sai com 1 para
-encadear em script.
+**Janela: 08:00–18:50, horário de Brasília.** `bash scripts/canal.sh` responde, e
+`--exigir` sai com 1 para encadear em script.
 
-Pedidos abertos em **`docs/issues-para-outros-repos.md`** — os cinco corpos
-prontos, com medição, arquivo e linha, consequência e como conferir. Resumo, com
-o estado **medido por `list_issues` em 15/11/2026**:
+Pedidos abertos em [`docs/issues-para-outros-repos.md`](docs/issues-para-outros-repos.md),
+com medição, arquivo e linha, consequência e como conferir:
 
-| # (doc) | Repo | Pedido | Gravidade | Issue no GitHub |
-| --- | --- | --- | --- | --- |
-| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel | **#1, #2, #3** — três cópias, e o **corpo é o antigo** (ver abaixo) |
-| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** | não existe |
-| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso | não existe |
-| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente | não existe |
-| 5 | System | fontes de CJK/devanágari/bengali — `BR2_PACKAGE_WQY_ZENHEI=y` (já na árvore) + 2 arquivos de 224/200 KB | **o mais visível**: 3 dos 10 idiomas em quadradinhos | **#5** (canônica) — a **#4** é duplicata byte a byte |
+| # (doc) | Repo | Pedido | Gravidade |
+| --- | --- | --- | --- |
+| 1 | System | `CONFIG_UHID=y` (BLE) + `hidp` no boot | média — clássico já funciona no papel |
+| 2 | System | `update_config` no **caminho de provisionamento** do Wi-Fi | **a mais grave** |
+| 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | aviso falso |
+| 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | latente |
+| 5 | System | fontes de CJK/devanágari/bengali | **o mais visível**: 3 dos 10 idiomas em quadradinhos |
 
-**O número do documento não é o número da issue, e essa confusão já é o
-primeiro defeito da tabela.** A #4 do GitHub é a duplicata da #5, enquanto a #4
-daqui é o pedido do `GIOCHI-OS`; e as issues #1–#3 do System são todas o pedido
-#1 daqui. Quem apontar "a issue 4" sem dizer de qual lado está falando manda a
-outra pessoa para o repositório errado. Daqui em diante: **`#N` sozinho é do
-GitHub**, e o pedido do documento é sempre "pedido N do documento".
+**O número do documento não é o número da issue**, e essa confusão já é o
+primeiro defeito da tabela: as issues **deste** repositório (#2–#5) são o pedido
+de PortMaster, hoje respondido em [`docs/portmaster.md`](docs/portmaster.md), e
+as dos repos vizinhos têm numeração própria. Use "pedido N do documento" para o
+documento e `#N` só para o GitHub deste repositório.
 
-**A #5 está criada e é a única com estado medido do lado de cá.** Ela é a mais
-barata das cinco, e a verificação ponta a ponta foi feita **antes** de abrir:
-simulando o que o pacote faria (fonte em `/usr/share/fonts/wqy-zenhei/`), o
-`--fontes` no R35S foi de **5/8 para 8/8** e o quadro mudou 8.557 px, com 4.760
-no texto chinês — e **0** na linha do hindi, que é o controle negativo. Ligar o
-pacote resolve sem segunda rodada do app.
+**O pedido 2 corrige um pedido anterior meu**: `/etc/wpa_supplicant.conf`
+**existe** na imagem (é o template do Buildroot) e a receita de provisionamento
+de `docs/x55-bringup.md` o **trunca** com `>`, apagando `ctrl_interface` e
+matando o `wpa_cli`. A correção é no caminho de provisionamento, preservando o
+template.
 
-**A duplicata foi um erro do agente, e o registro vale mais que a limpeza.** Duas
-submissões ao `issue_write` foram dadas como "paradas no clique" porque o
-`list_issues` de conferência rodou **antes** de o segundo clique chegar (22:48:11
-a #4, 22:48:33 a #5). O dono do projeto recebeu "a issue não existe" com as duas
-já criadas. A lição: **o resultado de um formulário assíncrono não se confere
-antes do clique** — a leitura devolve o passado, e chamar isso de verificação é o
-§13 na sua forma mais cara, porque o efeito é uma issue duplicada no repositório
-de outra equipe.
+Estado do mecanismo de issue, medido: o MCP do GitHub autentica, mas
+`issue_write` renderiza um formulário e o agente não clica — e o formulário
+**pode não aparecer**. Por isso o entregável é o corpo pronto + a URL do
+`issues/new` (§1.1).
 
-**As três de Bluetooth carregam o pedido antigo, que está errado.** Elas pedem
-`CONFIG_HID` e `CONFIG_BT_HIDP`, que **já estão** na imagem (§6.6, §13); o que
-falta é `CONFIG_UHID` e o `hidp` no autoload. Não foram reescritas porque escrever
-em repo alheio é só por issue (§1.1) e a correção é um comentário que precisa
-deste corpo novo — o texto corrigido está no pedido 1 do documento, pronto para
-ser colado como comentário nas três.
-
-**A #4 foi fechada como duplicata da #5** em 15/11/2026, pelo mesmo caminho de
-formulário; se ela ainda aparecer aberta, o clique não aconteceu — e agora se sabe
-que isso não significa que a operação falhou, significa que **não houve operação**.
-
-**O pedido #2 CORRIGE o anterior, e a correção é do meu lado.** Até 15/11/2026
-esta seção pedia "`update_config=1` em `/etc/wpa_supplicant.conf`" como se o
-arquivo fosse criado pela imagem. Medido no R35S em 15/11/2026, ele **existe** —
-é o template que o Buildroot instala:
-
-```console
-$ ls -l /etc/wpa_supplicant.conf
--rw-r--r-- 1 root root 78 /etc/wpa_supplicant.conf
-$ cat /etc/wpa_supplicant.conf
-ctrl_interface=/var/run/wpa_supplicant
-ap_scan=1
-
-network={
-  key_mgmt=NONE
-}
-```
-
-Três consequências, e as duas primeiras ninguém tinha visto:
-
-1. **O comentário do `S40wifi:5-7` está errado** — ele afirma "o arquivo NAO vem
-   na imagem", e vem. Quem o lesse concluiria que não há `ctrl_interface`, que é
-   justamente o que faz `wpa_cli` funcionar.
-2. **A receita de provisionamento destrói esse arquivo.** `docs/x55-bringup.md:618`
-   manda `wpa_passphrase 'REDE' 'SENHA' > /etc/wpa_supplicant.conf`, e o `>` trunca:
-   some `ctrl_interface` e some `ap_scan`, então **`wpa_cli` para de responder** e a
-   tela de Wi-Fi do launcher morre inteira — um defeito pior que o original.
-3. **O placeholder vazio é uma armadilha própria.** `network={ key_mgmt=NONE }`
-   sem `ssid` faz o supplicant entrar em `SCANNING` atrás de uma rede aberta que
-   não existe: a tela fica "procurando" e nunca acha. Não é "sem Wi-Fi" — é um
-   bloco que parece uma rede.
-
-A correção certa é no **caminho de provisionamento**, preservando o template e
-acrescentando a linha — não "pôr a linha na imagem", que já foi tentado e é
-apagado por regravar o cartão. É a mesma família do §13: pedir de novo o que já
-era impossível é a ferramenta medindo a intenção em vez do efeito.
-
-**Estado do mecanismo de issue, medido em 15/11/2026:** o MCP do GitHub
-autentica (`POST` em issue inexistente devolve 404, não 401 — o `add_issue_comment`
-provou), mas `issue_write` **renderiza um formulário de confirmação no VS Code** e
-não cria nada sozinho: o agente não consegue clicar. Consequência prática: o
-entregável é o corpo pronto em `docs/issues-para-outros-repos.md`, e o número da
-issue só entra na tabela acima **depois** que existir de fato. Anunciar "issue
-criada" sem ter criado é o §10 aplicado à conversa entre equipes.
-
-**E o formulário não é garantia de nada:** duas submissões seguidas terminaram com
-o dono do projeto dizendo que *não apareceu* o pedido para clicar. Hoje o caminho
-não passa por ele — `node scripts/abrir-issue.mjs 5 --abrir` monta a URL do
-`issues/new` com título e corpo preenchidos (§1.1), e o clique que resta é no
-GitHub. O mecanismo, o tamanho da URL e o `--corpo` estão descritos no §1.1.
-
-E o item 1 foi **refeito do zero** em 15/11/2026, porque o pedido anterior estava
-errado: `CONFIG_HID=y` e `CONFIG_BT_HIDP=m` **já estão** na imagem, e as três
-provas que sustentavam o pedido eram falsas (§6.6). O que resta de verdade é
-`# CONFIG_UHID is not set` e `hidp` fora do autoload.
+Completo: [`docs/historico/pendencias-e-canal.md`](docs/historico/pendencias-e-canal.md).

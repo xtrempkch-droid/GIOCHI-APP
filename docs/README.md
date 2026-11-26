@@ -27,6 +27,9 @@
 - [Diagnóstico do protótipo do launcher](diagnostico-prototipo.md) — defeitos do HTML original e o plano em Rust.
 - [Integração](integracao.md) — o que o launcher lê do sistema, splash, NPU e por que foi descartado.
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.
+- [Controle virtual "Giochi Gamepad"](controle-virtual.md) — a mudança de 18/11/2026 no Giochi System: 17 botões e 4 eixos num nó só, e o que falta implementar aqui (documentado, **não** implementado).
+- [Ports do PortMaster](portmaster.md) — `/user/ports` vira cartão na aba Apps (26/11/2026), o layout que o detector exige e o que foi medido no R35S; o que **não** foi feito (aba própria, PortMaster na loja) também.
+- [Histórico medido](historico/) — o texto completo que saiu do `AGENTS.md` em 26/11/2026, **verbatim**: launcher, apps e catálogo, PC e pacote, verificação e ambientes, armadilhas, pendências.
 - [R35S](r35s.md) — o que o app já garante nesse aparelho, o que **ainda** falta do sistema, e o estado real do build (a imagem existe desde 07/11).
 - [Testar no X35H](teste-x35h.md) — roteiro para uma imagem nova: o que conferir, em que ordem, e de quem é o problema quando falha.
 - [Rede: Wi-Fi e Bluetooth](rede.md) — a aba de configurações navegável, a lista de redes, o teclado de senha e o que foi medido no aparelho.

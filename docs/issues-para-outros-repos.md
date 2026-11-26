@@ -65,6 +65,33 @@ aparelho pior do que estava), a #1 cobre só BLE depois da correção, e a #4 ho
 acerta por acidente (só há um app `image`) e passa a errar quando houver o
 segundo.
 
+### Os quatro pedidos de PortMaster **neste** repositório (26/11/2026)
+
+Antes da tabela acima, este repositório recebeu **quatro** issues iguais sobre o
+PortMaster — `GIOCHI-APP#2`, `#3`, `#4` e `#5`, todas com o título *"PortMaster:
+listar os ports no launcher e oferecer como app de loja (sideload)"*. Nasceram do
+mesmo defeito de mecanismo descrito acima (a conferência antes do clique devolveu
+o passado), e a **#2 é a canônica**.
+
+Elas são de **outro assunto**: não são pedidos para repo alheio, são pedidos para
+**este** repositório, e foram respondidas em
+[`docs/portmaster.md`](portmaster.md):
+
+| Pedido da #2 | Estado |
+| --- | --- |
+| ports na aba Apps, sem mudar o launcher | **feito** — cartão em `/user/apps/portmaster-<nome>` (26/11/2026) |
+| formato do alvo sem `args` | **feito** — o port viaja dentro do script gerado |
+| aba "Ports" própria, `args` no `Alvo` | **não feito** — é UX; registrado em §16 do `AGENTS.md` |
+| PortMaster como item da loja, declarado sideload | **não feito** — o pacote não é assinado (GPL/LGPL dentro) |
+
+O layout que a #2 sugeria (`entrypoint` na raiz do app) **não funciona**: o
+detector exige `bin/` e recusa o resto com `entrypoint inválido`. Medido no R35S.
+
+**As #3, #4 e #5 devem ser fechadas como duplicatas da #2.** O fechamento depende
+do mesmo clique de formulário — foi pedido, e o registro de qual foi fechada fica
+aqui quando o clique acontecer.
+
+
 A **#5** é a mais visível para o usuário final: três dos dez idiomas que o
 launcher oferece não têm fonte na imagem, e o sintoma é uma tela de quadradinhos.
 Ela também é a **mais barata** de corrigir: metade do pedido é ligar um pacote

@@ -502,6 +502,54 @@ gerar_referencia() {
       return 1
     fi
   fi
+
+  # O **disco** do aparelho entra na referência, e não só o `index.json`.
+  #
+  # Desde 15/11/2026 a detecção é disco-primeiro: o launcher varre
+  # `/opt|/user/{games,apps}` e o índice é complemento. Enquanto a referência
+  # vinha só do índice, qualquer pacote instalado **fora** dele (um app da loja,
+  # ou o cartão de um port do PortMaster) existia no aparelho e não no PC — a
+  # comparação caía e não havia regressão nenhuma de desenho.
+  #
+  # Medido no R35S em 26/11/2026, com um port materializado em `/user/apps`:
+  # **98,6%** sem esta colheita, contra 100,0% antes dela.
+  if [ -n "${HOST:-}" ]; then
+    local instalados="$destino.instalados.json"
+    if colher_instalados "$instalados" 2>/dev/null && [ -s "$instalados" ]; then
+      local base_idx="$catalogo_pc"
+      if node -e '
+        const fs = require("fs"), path = require("path");
+        const [idx, inv, dst, base] = process.argv.slice(1);
+        const j = idx && fs.existsSync(idx)
+          ? JSON.parse(fs.readFileSync(idx, "utf8"))
+          : { schemaVersion: 1, apps: [] };
+        const porId = new Map(j.apps.map((a) => [a.id, a]));
+        for (const item of JSON.parse(fs.readFileSync(inv, "utf8"))) {
+          // O `entrypoint` vem do `metadata.json` do pacote; sem ele o pacote
+          // não é lançável e o launcher também o recusaria.
+          const ep = item.metadata && item.metadata.entrypoint;
+          if (!ep || !ep.startsWith("bin/")) continue;
+          const dir = path.join(base, item.id);
+          const alvo = path.join(dir, ep);
+          fs.mkdirSync(path.dirname(alvo), { recursive: true });
+          fs.writeFileSync(alvo, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+          const entrada = {
+            id: item.id,
+            dir,
+            entrypoint: ep,
+            title: (item.metadata && item.metadata.title) || item.id,
+          };
+          if (item.metadata && item.metadata.kind) entrada.kind = item.metadata.kind;
+          // O disco vence o índice, como na detecção do aparelho.
+          porId.set(item.id, entrada);
+        }
+        j.apps = [...porId.values()];
+        fs.writeFileSync(dst, JSON.stringify(j, null, 2));
+      ' "$base_idx" "$instalados" "$destino.catalogo-disco.json" "$destino.jogos" 2>/dev/null; then
+        catalogo_pc="$destino.catalogo-disco.json"
+      fi
+    fi
+  fi
   # `env` explícito em vez de `VAR=... VAR=... comando`.
   #
   # A forma anterior usava `${env_catalogo[@]+"${env_catalogo[@]}"}` no meio da
