@@ -207,8 +207,8 @@ pastas:    /user/games AUSENTE; /user/apps AUSENTE; /user/musica AUSENTE; /user/
 | Pedido | O que foi feito |
 | --- | --- |
 | remover a montagem de `/user` | **já não existia**: nenhum `mount` de `/user` no app, e o `descobrir-cartoes.sh` só monta a `GIOCHI_BOOT` de um cartão que **não é** o do sistema |
-| `mkdir -p` defensivo e parar de culpar o usuário | `musica` cria `/user/musica` na abertura (só a pasta **padrão** — `--pasta`/`GIOCHI_MUSICA` são escolha do usuário e criar o que ele digitou errado esconderia o erro), e a frase de pasta ausente passou a dizer que é **falha da partição de dados** |
-| ler o espaço por `/user` | `aparelho.sh diagnostico` ganhou `dados:` e `user/dados:`; o app não lê espaço em lugar nenhum hoje — quando ler, é `/user` (registrado aqui para não virar `/` por hábito) |
+| `mkdir -p` defensivo e parar de culpar o usuário | `musica` cria `/user/musica` na abertura (só a pasta **padrão** — `--pasta`/`GIOCHI_MUSICA` são escolha do usuário e criar o que ele digitou errado esconderia o erro), e a frase de pasta ausente passou a dizer que é **falha da partição de dados**. O launcher chama `deteccao::garantir_pastas("/user")` antes da detecção — as quatro pastas do contrato, `mkdir -p` idempotente, e o que ele cria aparece no log (`pastas: /user/musica criada (imagem anterior à partição de dados)`) |
+| ler o espaço por `/user` | `aparelho.sh diagnostico` ganhou `dados:` e `user/dados:`, e o **store do PC** passou a ler: `giochi-store espaco` imprime livre/usado do destino, e `instalar` recusa antes de copiar quando não cabe (o número vem do caminho — `/user/games` —, nunca de `/`, que é outro device). O painel mostra o livre em cada destino |
 | não ler `/run/giochi/user-antes-da-montagem` | **não é lido** (`grep` no repo inteiro: zero ocorrências) |
 | init script depois do S20 | o app **não instala** init script; se um dia precisar, é `S21` para cima |
 

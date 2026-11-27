@@ -9,9 +9,11 @@
 > — `entrypoint` tem de começar em `bin/`, o `metadata.json` precisa dos seis
 > campos obrigatórios, a marca `.portmaster-port` é o que permite podar sem
 > tocar no que não é nosso, e o `--rodar` só funciona porque o launcher morre de
-> `SIGTERM` (§3b). O pedido 3 está feito **no aparelho** (§3c) e continua
-> aberto **no PC** (`app/store`, sideload). O pedido 2 (`args` no `Alvo` e aba
-> "Ports" própria) foi recusado por ora, com o custo de cada caminho medido.
+> `SIGTERM` (§3b). O pedido 3 está feito **no aparelho** (§3c) e o **formato
+> de sideload** está pronto no PC (`app/store`, §7) — falta declarar o PortMaster
+> no manifesto de terceiro quando o `.zip` for publicado. O pedido 2 (`args` no
+> `Alvo` e aba "Ports" própria) foi recusado por ora, com o custo de cada
+> caminho medido.
 >
 > Guia do sistema: `docs/evaluacao-portmaster.md` e `docs/entrada-para-equipes.md`
 > no **GIOCHI-SYSTEM** (somente leitura — §1.1 do `AGENTS.md`).
@@ -333,7 +335,7 @@ ssh root@<ip> 'SDL_VIDEODRIVER=dummy /opt/giochi/apps/launcher/bin/giochi-launch
 | formato do alvo sem mudar o launcher | **feito** — wrapper em `bin/`, sem `args` no `Alvo` |
 | aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports, e `args` mexe no contrato do `Alvo` sem necessidade hoje |
 | a GUI do PortMaster na aba Apps | **feito** (§3c) — cartão próprio, com crédito, aberto por `giochi-ports --liberar-drm` |
-| PortMaster como item da **loja do PC** (`app/store`) | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e teria de aparecer como **sideload**. Registrado em `AGENTS.md` §16 |
+| PortMaster como item da **loja do PC** (`app/store`) | **formato pronto** (27/11/2026) — `sideload.json` → chave `sideload` do `store.json`, separada de `itens`; `giochi-store instalar` recusa pacote sem `.sig` sem `--aceitar-sideload` e o painel mostra a coluna **origem**. Falta **declarar o PortMaster** nesse manifesto quando o `.zip` for publicado (§7.1) |
 | assinatura dos ports | **não existe, de propósito** — port é código de terceiro; o que o sistema garante é o sandbox, não o conteúdo |
 
 Dois detalhes do sistema que quem for instalar por outro caminho precisa
@@ -345,3 +347,50 @@ repetir, medidos pela equipe do System:
    DB (2 KB) por cima.
 2. O zip do PortMaster sai com modo `600` sob `umask 077`; `entrypoint` `.sh`
    precisa de `+x` e shebang.
+
+## 7.1 O manifesto de sideload — o formato que falta só preencher
+
+O `app/store` ganhou a distinção que o pedido 3 da issue #2 exige, e ela é
+**mecânica**, não de disciplina:
+
+```text
+dist/pacotes/
+├── app-nativo.giochi          ← tem .sig de 64 bytes → origem: loja
+├── app-nativo.giochi.sig
+└── sideload.json              ← artefatos de terceiro, chave própria no store.json
+```
+
+```json
+{
+  "schema_version": "1.0",
+  "itens": [{
+    "id": "portmaster",
+    "titulo": "PortMaster",
+    "developer": "PortsMaster (comunidade)",
+    "url": "https://github.com/PortsMaster/PortMaster-New/releases/download/<tag>/PortMaster.zip",
+    "sha256": "<64 hex do .zip>",
+    "tamanho_bytes": 25800000,
+    "destino": "ports",
+    "licenca": "GPL-2.0 / LGPL-2.1 dentro",
+    "aviso": "codigo de terceiro sem assinatura; roda em sandbox (bwrap, rootfs ro)"
+  }]
+}
+```
+
+O que o validador recusa, e por que cada um:
+
+| Recusa | Motivo |
+| --- | --- |
+| `url` sem `https://` | a loja recusa `http` (`Item::url_valida`); um manifesto com http geraria lista que ela não abre |
+| `sha256` que não é 64 hex | "baixar e confiar" é exatamente o que este caminho não pode exigir de nós |
+| `aviso` ou `licenca` vazios | a interface precisa da frase; sem ela o item apareceria com o selo dos assinados |
+| campo desconhecido | `sha` no lugar de `sha256` passaria **sem hash** — o mesmo silêncio do `buttons.map` |
+| `id` repetido | o mesmo artefato apareceria duas vezes, possivelmente com destinos diferentes |
+
+E o `instalar` fecha o outro lado: pacote sem `.sig` é pulado com
+`SIDELOAD ... sem .sig — nao instala sem --aceitar-sideload`, e só entra com a
+bandeira. Copiar em silêncio era o defeito, não o comportamento.
+
+**O que falta é uma linha de dados, não código**: declarar o PortMaster nesse
+manifesto quando o `.zip` estiver publicado. A medição do `.zip` (24,6 MB) e da
+licença está na issue #2.

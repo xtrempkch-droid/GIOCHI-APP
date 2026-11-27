@@ -138,6 +138,55 @@ pub fn raiz_de_instalacao(kind: Option<&str>) -> &'static str {
     Tipo::de_kind(kind).raiz_de_instalacao()
 }
 
+/// As quatro pastas do contrato, sob a raiz de dados (`/user`).
+///
+/// Elas são criadas pelo build **e** garantidas na montagem pelo `S20userdata`
+/// do sistema (26/11/2026). Esta lista existe para a imagem **anterior** a isso:
+/// com `/user` no rootfs, "a pasta não existe" significava defeito do sistema, e
+/// não usuário desorganizado.
+pub const PASTAS_DO_CONTRATO: [&str; 4] = ["games", "apps", "musica", "ports"];
+
+/// O que [`garantir_pastas`] fez, para o log poder dizer.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RelatorioDePastas {
+    /// Pastas que **não existiam** e foram criadas agora.
+    pub criadas: Vec<String>,
+    /// Pastas que não puderam ser criadas, com o motivo.
+    pub falhas: Vec<(String, String)>,
+}
+
+/// `mkdir -p` **idempotente** das quatro pastas do contrato (issue #8).
+///
+/// ## Por que o app cria, se é o sistema que cria
+///
+/// Porque a transição é real: a imagem medida em 27/11/2026 (`main-37e08b19`)
+/// ainda é anterior à p3, e nela as pastas não existem. Perguntar "existe?" e
+/// desistir deixaria o usuário com a tela dizendo que a partição de dados
+/// falhou. Criar custa um `mkdir` e cobre os dois mundos — e **o que foi
+/// criado é dito**, senão "a partição está montada" e "alguém criou a pasta à
+/// mão" ficam indistinguíveis no log.
+///
+/// Só a pasta que falta é criada: quem já existe não é tocada, e um erro de
+/// permissão numa delas não impede as outras de existirem.
+pub fn garantir_pastas(
+    base: &str,
+    mut criar: impl FnMut(&str) -> Result<(), String>,
+) -> RelatorioDePastas {
+    let base = base.trim_end_matches('/');
+    let mut relatorio = RelatorioDePastas::default();
+    for nome in PASTAS_DO_CONTRATO {
+        let caminho = format!("{base}/{nome}");
+        if std::path::Path::new(&caminho).is_dir() {
+            continue;
+        }
+        match criar(&caminho) {
+            Ok(()) => relatorio.criadas.push(caminho),
+            Err(erro) => relatorio.falhas.push((caminho, erro)),
+        }
+    }
+    relatorio
+}
+
 /// Aviso quando o pacote está numa raiz que não é a do próprio tipo.
 ///
 /// Devolve `None` quando o lugar está certo — inclusive para pacote em raiz
@@ -462,5 +511,66 @@ mod tests {
         assert_eq!(p.executavel(), "/user/games/x/bin/x");
         p.dir = "/user/games/x".into();
         assert_eq!(p.executavel(), "/user/games/x/bin/x");
+    }
+
+    #[test]
+    fn as_pastas_do_contrato_vao_para_user() {
+        // Os quatro nomes e a base juntos: `/user` + `musica` = a pasta que o
+        // app de música lê. Errar um deles cria a pasta certa no lugar errado.
+        let mut pedidas = Vec::new();
+        let relatorio = garantir_pastas("/user", |p| {
+            pedidas.push(p.to_string());
+            Ok(())
+        });
+        assert_eq!(
+            pedidas,
+            vec!["/user/games", "/user/apps", "/user/musica", "/user/ports"]
+        );
+        assert_eq!(relatorio.criadas, pedidas);
+        assert!(relatorio.falhas.is_empty());
+    }
+
+    #[test]
+    fn pasta_que_ja_existe_nao_e_criada_de_novo() {
+        let dir = std::env::temp_dir().join(format!(
+            "giochi-pastas-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let base = dir.to_str().expect("utf-8");
+
+        let primeira = garantir_pastas(base, |p| {
+            std::fs::create_dir_all(p).map_err(|e| e.to_string())
+        });
+        assert_eq!(primeira.criadas.len(), 4, "{primeira:?}");
+        for pasta in PASTAS_DO_CONTRATO {
+            assert!(dir.join(pasta).is_dir(), "{pasta} não foi criada");
+        }
+
+        // Idempotente: a segunda chamada não cria nada e não falha.
+        let segunda = garantir_pastas(base, |p| {
+            std::fs::create_dir_all(p).map_err(|e| e.to_string())
+        });
+        assert!(segunda.criadas.is_empty(), "{segunda:?}");
+        assert!(segunda.falhas.is_empty(), "{segunda:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn falha_numa_pasta_nao_impede_as_outras() {
+        // Permissão negada em `/user/apps` não pode deixar `/user/musica`
+        // ausente: cada pasta responde por si, e o motivo vai para o log.
+        let relatorio = garantir_pastas("/user", |p| {
+            if p.ends_with("/apps") {
+                Err("permissão negada".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(relatorio.falhas.len(), 1);
+        assert_eq!(relatorio.falhas[0].0, "/user/apps");
+        assert_eq!(relatorio.criadas.len(), 3);
+        assert!(relatorio.criadas.iter().any(|p| p == "/user/musica"));
     }
 }

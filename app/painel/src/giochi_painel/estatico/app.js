@@ -116,6 +116,16 @@ async function empacotar() {
 }
 
 // ── catálogo ──────────────────────────────────────────────
+
+// `origem` é o que separa um pacote da loja de um arquivo copiado à mão.
+// Pacote sem `.sig` não tem como ser verificado no aparelho, e mostrar os dois
+// com o mesmo selo é a mentira que a issue #2 pediu para fechar. Fica na
+// interface e não só no `--json` porque é aqui que alguém decide instalar.
+function rotuloOrigem(p) {
+  if (p.origem === "loja") return "loja (assinado)";
+  return "SIDELOAD (sem .sig)";
+}
+
 async function listarPacotes() {
   const origem = $("origem").value.trim();
   if (!origem) return status("informe a pasta com .giochi", "erro-min");
@@ -133,13 +143,14 @@ async function listarPacotes() {
             <td>${escapar(p.titulo)}</td>
             <td>${escapar(p.versao)}</td>
             <td>${escapar(p.runtime)}</td>
+            <td class="${p.origem === "loja" ? "ok-min" : "aviso-min"}">${escapar(rotuloOrigem(p))}</td>
             <td class="${p.ok ? "ok-min" : "erro-min"}">${p.ok ? "ok" : escapar(p.motivo || "recusado")}</td>
             <td class="mono">${escapar(p.sha256.slice(0, 12))}…</td>
           </tr>`)
         .join("");
       $("lista").innerHTML = `
         <table>
-          <thead><tr><th>app</th><th>versão</th><th>runtime</th><th>estado</th><th>sha256</th></tr></thead>
+          <thead><tr><th>app</th><th>versão</th><th>runtime</th><th>origem</th><th>estado</th><th>sha256</th></tr></thead>
           <tbody>${linhas}</tbody>
         </table>`;
     }
@@ -164,11 +175,14 @@ async function procurarDestinos() {
     } else {
       $("destinos").innerHTML = `
         <table>
-          <thead><tr><th>tipo</th><th>caminho</th></tr></thead>
+          <thead><tr><th>tipo</th><th>caminho</th><th>livre</th></tr></thead>
           <tbody>${r.destinos
-            .map((d) => `<tr><td>${escapar(d.tipo)}</td><td class="mono">${escapar(d.caminho)}</td></tr>`)
+            .map((d) => `<tr><td>${escapar(d.tipo)}</td><td class="mono">${escapar(d.caminho)}</td>` +
+                        `<td class="mono">${escapar(d.livre || "—")}</td></tr>`)
             .join("")}</tbody>
-        </table>`;
+        </table>
+        <p class="dica">o livre é o da <strong>partição de dados</strong> (<code>/user</code>),
+        não o do sistema: são devices diferentes e instalar consome a p3</p>`;
     }
     status(`${r.destinos.length} destino(s)`);
   } catch (e) {

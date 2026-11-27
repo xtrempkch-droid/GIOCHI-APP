@@ -49,8 +49,7 @@ PAINEL_EXTRAS="$RAIZ/app/forge/src:$RAIZ/app/store/src"
 
 case "$ALVO" in
   --forge) rodar "giochi-forge" forge "$RAIZ/app/forge/src" ;;
-  --store) rodar "giochi-store" store "$RAIZ/app/store/src" 2>/dev/null || \
-             printf '  (o store ainda não tem testes próprios)\n' ;;
+  --store) rodar "giochi-store" store "$RAIZ/app/store/src" ;;
   --painel) rodar "giochi-painel" painel "$RAIZ/app/painel/src" "$PAINEL_EXTRAS" ;;
   *)
     rodar "giochi-forge" forge "$RAIZ/app/forge/src"

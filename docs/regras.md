@@ -96,6 +96,13 @@ O caso concreto: o pacote do PortMaster (`gptokeyb2` GPL-2.0, `7-Zip` LGPL-2.1)
 **não** entra na imagem; é instalado em `/user` pela GUI, e o cartão da loja
 declara a licença e a URL do projeto.
 
+E a mesma regra vale para o **caminho do PC**, onde o selo é o que o usuário vê
+antes de instalar: `giochi-store` classifica pacote sem `.sig` de 64 bytes como
+`sideload`, o `instalar` o recusa sem `--aceitar-sideload`, e o artefato de
+terceiro (o `.zip` do PortMaster) vai para uma chave **separada** do
+`store.json` — `sideload`, nunca `itens`. Um selo igual para os dois seria a
+mentira que a regra existe para impedir.
+
 ## R9 — Não confie no relatório: reproduza
 
 **Aplicada.** `AGENTS.md` §11–§12: todo ambiente tem commit e data, e

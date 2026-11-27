@@ -24,11 +24,11 @@
 | apps em `app/apps.json` | **8**: `launcher`, `launcher-teste`, `launcher-star-dust` (imagem, tema) + **`musica`** (imagem, app) + `forge`, `store`, `painel`, `loja` (host) |
 | `validate-app.mjs --all` | **8 válidos** (1 em scaffold: `launcher-teste`) |
 | `tests/run-all.mjs` | **233/233** JS |
-| `compilar-launcher.sh --testes` | **330** Rust (171 ui-sdl + 159 core) |
-| Star Dust / launcher-teste | **178** / **95** Rust |
+| `compilar-launcher.sh --testes` | **343** Rust (180 ui-sdl + 163 core) |
+| Star Dust / launcher-teste | **184** / **95** Rust |
 | `compilar-musica.sh --testes` | **158** Rust (120 núcleo sem SDL + 38 binário) |
 | `compilar-loja.sh --testes` | **116** Rust (100 núcleo + 16 interface) |
-| `testar-apps-pc.sh` | **90** Python (58 forge + 32 painel) |
+| `testar-apps-pc.sh` | **109** Python (58 forge + **17 store** + 34 painel) |
 | apps no catálogo do aparelho | **4** — 3 jogos (`/user/games`) + `musica` (`/opt/giochi/apps`), detectados do disco (§8) — **mais um cartão por port do PortMaster** (§6.11) |
 | idiomas da interface | **10** (os do site), padrão **inglês**, escolhidos na primeira abertura e em Config › Aparência (§6.10) |
 | ports do PortMaster | **listados na aba Apps** desde 26/11/2026 (§6.11): `/user/ports` → cartão em `/user/apps`, lançado por `giochi-ports --rodar`; a **loja** tem cartão próprio (`portmaster`, `--liberar-drm`) |
@@ -259,10 +259,10 @@ Detalhe de cada campo e o motivo:
 node scripts/validate-app.mjs --all         # valida todos
 node scripts/validate-app.mjs app/loja      # valida um
 node tests/run-all.mjs                      # 233 testes JS (lista vem de readdir)
-bash scripts/testar-apps-pc.sh              # 90 testes Python (forge + painel)
+bash scripts/testar-apps-pc.sh              # 109 testes Python (forge + store + painel)
 
 bash scripts/compilar-launcher.sh           # build x86-64, resolve o SDL2
-bash scripts/compilar-launcher.sh --testes  # 330 testes
+bash scripts/compilar-launcher.sh --testes  # 343 testes
 bash scripts/compilar-loja.sh --testes      # 116 testes
 bash scripts/compilar-musica.sh --testes    # 158 testes (120 núcleo + 38 binário)
 bash scripts/compilar-musica.sh --clippy    # -D warnings nos dois crates
@@ -923,7 +923,7 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | app `image` que não seja shell | **existe**: `musica` (§7) |
 | ports do PortMaster na aba Apps | **feito** (26/11/2026) — cartão por port, lançado por `giochi-ports` (§6.11) |
 | a GUI do PortMaster na aba Apps | **feito** (26/11/2026) — cartão `portmaster`, com crédito no título/metadata/script, aberto por `giochi-ports --liberar-drm` (§6.11) |
-| PortMaster como item da **loja do PC** (`app/store`), declarado **sideload** | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e precisa aparecer como tal na interface |
+| PortMaster como item da **loja do PC** (`app/store`), declarado **sideload** | **feito o formato** (27/11/2026): `sideload.json` ao lado dos pacotes vira a chave `sideload` do `store.json`, separada de `itens`, e `instalar` recusa pacote sem `.sig` sem `--aceitar-sideload`. Falta só **listar o PortMaster** nesse manifesto quando o pacote for publicado |
 | aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports |
 | partição de dados (`/user` = p3 `GIOCHI_USER`) | **feita no Giochi System** (`S20userdata`, commit `43e52a5`) — a imagem medida em 27/11/2026 ainda é anterior; o app não monta `/user` e o diagnóstico diz qual dos dois mundos está no cartão (`docs/cartao-sd.md`) |
 | migrar jogos de `/user/apps` para `/user/games` | **manual** — feito no R35S em 15/11/2026; um `scripts/migrar-raizes.sh` evitaria repetir |

@@ -119,6 +119,56 @@ shasum -a 256 -c SHA256SUMS       # macOS
 certutil -hashfile giochi-store.pyz SHA256   # Windows
 ```
 
+## Assinado e sideload: o que a interface precisa distinguir
+
+O catálogo da loja é assinado com **duas chaves**, e o que não foi assinado por
+elas não pode aparecer com o mesmo selo. Duas regras mecânicas, e nenhuma delas
+depende de alguém lembrar:
+
+| Regra | Onde | O que ela impede |
+| --- | --- | --- |
+| `.sig` de **64 bytes** ao lado do `.giochi` = `origem: loja`; sem ele = `sideload` | `catalogo.tem_assinatura` | um `.sig` em base64 (89 caracteres) passando por assinado |
+| artefato de terceiro vai para a chave **`sideload`** do `store.json`, nunca para `itens` | `sideload.ler` | o PortMaster (GPL dentro, `.zip` sem assinatura) aparecendo como conteúdo da loja |
+
+```bash
+# o que veio assinado, e o que foi copiado à mão
+giochi-store listar --src dist/pacotes
+#   App Nativo de Teste   1.0.0  native   10 KB  loja
+#   PortMaster            1.0.0  native   25 MB  SIDELOAD (sem .sig)
+
+# sideload não entra sem confirmação explícita
+giochi-store instalar --src dist/pacotes
+#   SIDELOAD app-nativo.giochi   sem .sig — nao instala sem --aceitar-sideload
+giochi-store instalar --src dist/pacotes --aceitar-sideload
+```
+
+O manifesto de terceiro é um `sideload.json` ao lado dos pacotes, validado
+**campo por campo**: `https` obrigatório (a loja recusa `http`), `sha256` de 64
+hex, `licenca` e `aviso` não vazios, e campo desconhecido é **erro** — `sha` no
+lugar de `sha256` seria ignorado em silêncio e o item passaria sem hash. O
+formato está em [portmaster.md](portmaster.md) §7.
+
+## Espaço: a pergunta é sobre `/user`, não sobre `/`
+
+Desde 26/11/2026 `/user` é a **p3** (`GIOCHI_USER`), um device diferente do
+rootfs. `df /` responde a pergunta errada nos dois sentidos — pode dizer que não
+há espaço com a p3 vazia, e que há com a p3 cheia. O store pergunta ao
+**destino**, que segue o caminho certo sem ninguém precisar lembrar do device:
+
+```bash
+giochi-store espaco                       # descobre o cartão/MTP
+giochi-store espaco --games /media/eu/GIOCHI_USER/games
+#   /media/eu/GIOCHI_USER/games
+#     livre: 108.4 GiB
+#     usado: 7.1 GiB de 115.5 GiB (6%)
+#     (particao de dados em /user, nao o rootfs)
+```
+
+`instalar` confere o espaço **antes** de copiar e recusa quando não cabe:
+encher a p3 no meio de um `copyfile` deixa um `.giochi` truncado com o nome
+certo, que é pior que não copiar. O painel mostra o livre em cada destino e não
+emite opinião sobre `/`.
+
 ## O workflow
 
 `.github/workflows/pc-apps.yml`, dois jobs em série e um de publicação:

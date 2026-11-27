@@ -10,8 +10,13 @@ import sys
 from pathlib import Path
 
 from . import fonte
+from . import sideload as sideload_mod
 from .catalogo import catalogo, novidades, sha256_de, varrer
-from .destino import descobrir, games_de, resumo, todos
+from .destino import bytes_legivel, descobrir, espaco_livre, games_de, resumo, todos
+
+
+class SemEspaco(Exception):
+    """A particao de destino nao tem espaco para o que se quer copiar."""
 
 
 def escrever(destino: Path, nome: str, doc: dict) -> Path:
@@ -55,15 +60,46 @@ def _verificar_escrita(games: Path) -> None:
             pass
 
 
-def instalar(pacotes, games: Path, dry_run: bool) -> tuple[int, int]:
-    if not dry_run:
-        _verificar_escrita(games)
-
+def instalar(pacotes, games: Path, dry_run: bool,
+             aceitar_sideload: bool = False) -> tuple[int, int]:
     """Copia os pacotes validos para `games`, conferindo o sha256 no DESTINO.
 
     Conferir na origem nao serve: copiar e confiar no `shutil.copy` nao pega
     cartao que grava lixo — o mesmo motivo do tools/verify-card.py (§3.42).
+
+    ## Sideload tem de ser uma decisao visivel
+
+    Pacote sem `.sig` de 64 bytes e' **sideload**: nao ha' o que verificar no
+    aparelho, e o conteudo pode ser qualquer coisa. Antes disto ele era copiado
+    como se fosse da loja — o mesmo selo, sem a mesma garantia. Agora ele e'
+    pulado com o motivo, e so' entra com `--aceitar-sideload`, que e' a
+    confirmacao explicita de quem copia. O PortMaster e' o caso concreto
+    (issue #2, pedido 3).
+
+    ## O espaco e' conferido antes, na particao do destino
+
+    Copiar 40 MB para uma p3 cheia enche o cartao no meio do arquivo e deixa um
+    `.giochi` truncado com o mesmo nome — pior que nao copiar. Perguntar antes
+    custa um `statfs`.
     """
+    if not dry_run:
+        _verificar_escrita(games)
+
+    # O que realmente vai ser copiado: valido e, se for sideload, aceito.
+    a_copiar = [
+        p for p in pacotes
+        if p.ok and (p.assinado or aceitar_sideload)
+    ]
+    necessario = sum(p.tamanho for p in a_copiar)
+
+    livre, total = espaco_livre(games)
+    print(f"espaco em {games}: {bytes_legivel(livre)} livres "
+          f"de {bytes_legivel(total)} (particao de dados, nao o rootfs)")
+    if necessario > livre:
+        raise SemEspaco(
+            f"nao cabe: {bytes_legivel(necessario)} a copiar, "
+            f"{bytes_legivel(livre)} livres em {games}")
+
     copiados = falhas = 0
 
     if not dry_run:
@@ -73,6 +109,11 @@ def instalar(pacotes, games: Path, dry_run: bool) -> tuple[int, int]:
         if not p.ok:
             falhas += 1
             print(f"  pulado   {p.caminho.name:32s} {p.motivo}")
+            continue
+        if not p.assinado and not aceitar_sideload:
+            falhas += 1
+            print(f"  SIDELOAD {p.caminho.name:32s} sem .sig — "
+                  "nao instala sem --aceitar-sideload")
             continue
         if dry_run:
             print(f"  copiaria {p.caminho.name:32s} {p.tamanho // 1024} KB")
@@ -111,20 +152,40 @@ def cmd_catalogo(args) -> int:
         return 2
 
     pacotes = varrer(origem)
-    cat = catalogo(pacotes)
+    manifesto = (Path(args.sideload).expanduser() if args.sideload
+                 else sideload_mod.caminho_padrao(origem))
+    try:
+        terceiros = sideload_mod.ler(manifesto)
+    except sideload_mod.SideloadError as exc:
+        print(f"giochi-store: {exc}", file=sys.stderr)
+        return 2
+
+    cat = catalogo(pacotes, terceiros)
     novo = novidades(pacotes)
 
+    sem_sig = [p for p in pacotes if p.ok and not p.assinado]
     if args.dry_run:
         print(f"(dry-run) {len(pacotes)} pacote(s) em {origem}")
         for p in pacotes:
-            print(f"  {'ok    ' if p.ok else 'recusa'} {p.caminho.name:30s} "
-                  f"{p.motivo or p.titulo}")
+            marca = "ok    " if p.ok and p.assinado else (
+                "sidel." if p.ok else "recusa")
+            print(f"  {marca} {p.caminho.name:30s} {p.motivo or p.titulo}")
+        for s in terceiros:
+            print(f"  terc.  {s['id']:30s} {s['titulo']}")
         return 0
 
     destino = Path(args.out).expanduser()
     c = escrever(destino, "store.json", cat)
     n = escrever(destino, "news.json", novo)
     print(f"{len(cat['itens'])} de {len(pacotes)} pacote(s) no catalogo")
+    if sem_sig:
+        # O numero tem de aparecer: um `.giochi` sem `.sig` no catalogo e' o
+        # caminho pelo qual a interface mostraria sideload como conteudo.
+        print(f"  atencao: {len(sem_sig)} pacote(s) sem .sig — "
+              "nao passam pelo `instalar` sem --aceitar-sideload")
+    if terceiros:
+        print(f"  {len(terceiros)} artefato(s) de terceiro em 'sideload' "
+              "(marcados como nao assinados)")
     print(f"  {c}")
     print(f"  {n}")
 
@@ -166,8 +227,12 @@ def cmd_instalar(args) -> int:
         print(f"destino: {games}")
 
     try:
-        copiados, falhas = instalar(pacotes, games, args.dry_run)
+        copiados, falhas = instalar(pacotes, games, args.dry_run,
+                                    aceitar_sideload=args.aceitar_sideload)
     except SemEscrita as exc:
+        print(f"giochi-store: {exc}", file=sys.stderr)
+        return 3
+    except SemEspaco as exc:
         print(f"giochi-store: {exc}", file=sys.stderr)
         return 3
 
@@ -176,6 +241,34 @@ def cmd_instalar(args) -> int:
     else:
         print(f"{copiados} instalado(s), {falhas} recusado(s)")
     return 0 if falhas == 0 else 1
+
+
+def cmd_espaco(args) -> int:
+    """Quanto cabe em `/user` — a pergunta que `df /` responde errado.
+
+    Desde 26/11/2026 `/user` e' a p3 (`GIOCHI_USER`), um device diferente do
+    rootfs. Este comando segue o **destino** (cartao, MTP ou `--games`) e
+    imprime o numero da particao certa. E' o pedido 3 da issue #8, do lado do
+    PC, onde quem instala precisa saber se o app cabe antes de copiar.
+    """
+    if args.games:
+        games = Path(args.games).expanduser()
+    else:
+        alvo = descobrir(preferir=args.preferir)
+        if alvo is None:
+            print(f"giochi-store: {resumo()}", file=sys.stderr)
+            return 2
+        games = games_de(alvo)
+        print(f"destino: {alvo}")
+
+    livre, total = espaco_livre(games)
+    usado = total - livre
+    pct = (usado * 100 / total) if total else 0
+    print(f"{games}")
+    print(f"  livre: {bytes_legivel(livre)}")
+    print(f"  usado: {bytes_legivel(usado)} de {bytes_legivel(total)} ({pct:.0f}%)")
+    print("  (particao de dados em /user, nao o rootfs)")
+    return 0
 
 
 def cmd_destinos(args) -> int:
@@ -243,9 +336,12 @@ def cmd_listar(args) -> int:
         return 0
     for p in pacotes:
         if p.ok:
+            # `origem` e' o que impede um pacote sem `.sig` de aparecer com o
+            # mesmo selo de um pacote da loja (issue #2, pedido 3).
             print(f"  {p.titulo:28s} {str(p.meta.get('version', '')):8s} "
                   f"{str(p.meta.get('runtime', '')):10s} "
-                  f"{p.tamanho // 1024:6d} KB")
+                  f"{p.tamanho // 1024:6d} KB  "
+                  f"{'loja' if p.assinado else 'SIDELOAD (sem .sig)'}")
         else:
             print(f"  {p.caminho.name:28s} RECUSADO: {p.motivo}")
     return 0
@@ -291,6 +387,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--src", required=True, help="pasta com os .giochi")
     c.add_argument("--out", required=True,
                    help="destino (ex.: /media/eu/GIOCHI_USER/.cache)")
+    c.add_argument("--sideload", default=None,
+                   help="manifesto de artefatos de terceiro "
+                        "(padrao: sideload.json ao lado dos pacotes)")
     c.add_argument("--dry-run", action="store_true")
     c.set_defaults(func=cmd_catalogo)
 
@@ -300,8 +399,17 @@ def main(argv: list[str] | None = None) -> int:
                    help="caminho explicito; sem ele, descobre cartao ou MTP")
     i.add_argument("--preferir", choices=("cartao", "mtp"), default=None,
                    help="com dois destinos, qual usar")
+    i.add_argument("--aceitar-sideload", action="store_true",
+                   help="copia tambem pacote sem .sig (sideload explicito)")
     i.add_argument("--dry-run", action="store_true")
     i.set_defaults(func=cmd_instalar)
+
+    e = sub.add_parser("espaco",
+                       help="espaco livre em /user (a particao de dados)")
+    e.add_argument("--games", default=None,
+                   help="caminho explicito; sem ele, descobre cartao ou MTP")
+    e.add_argument("--preferir", choices=("cartao", "mtp"), default=None)
+    e.set_defaults(func=cmd_espaco)
 
     d = sub.add_parser("destinos", help="onde o console esta' visivel")
     d.add_argument("--preferir", choices=("cartao", "mtp"), default=None)

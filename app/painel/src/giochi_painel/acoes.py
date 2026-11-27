@@ -141,15 +141,31 @@ def pacotes(origem: str) -> dict[str, Any]:
             "motivo": pacote.motivo,
             "versao": str(pacote.meta.get("version", "")),
             "runtime": str(pacote.meta.get("runtime", "")),
+            # `origem` e' o que impede um `.giochi` sem `.sig` de aparecer na
+            # interface com o mesmo selo dos pacotes da loja (issue #2/#7).
+            "origem": pacote.origem,
+            "assinado": pacote.assinado,
         })
     return {"pasta": str(pasta), "pacotes": itens}
 
 
 def destinos() -> dict[str, Any]:
-    """Onde o console está visível neste computador."""
-    encontrados = [
-        {"caminho": str(d.caminho), "tipo": d.tipo} for d in destino_mod.todos()
-    ]
+    """Onde o console está visível, e **quanto cabe** em cada destino.
+
+    O espaço vem do próprio destino (`/user`), não de `/`: desde 26/11/2026 são
+    partições diferentes, e o número do rootfs responderia outra pergunta —
+    pode estar cheio com a p3 vazia, e vice-versa (issue #8, pedido 3).
+    """
+    encontrados = []
+    for d in destino_mod.todos():
+        livre, total = destino_mod.espaco_livre(d.caminho)
+        encontrados.append({
+            "caminho": str(d.caminho),
+            "tipo": d.tipo,
+            "livre": destino_mod.bytes_legivel(livre),
+            "livre_bytes": livre,
+            "total_bytes": total,
+        })
     return {
         "destinos": encontrados,
         "resumo": destino_mod.resumo(),

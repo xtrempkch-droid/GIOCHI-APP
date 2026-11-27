@@ -25,6 +25,7 @@ os aplica — por isso o Modo Desenvolvedor é preparado pelo **cartão**
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,6 +127,44 @@ def todos() -> list[Destino]:
     return achados
 
 
+def bytes_legivel(n: int) -> str:
+    """Bytes em unidade que se le' — `40.1 MiB`, nao `42047897 B`."""
+    valor = float(n)
+    for unidade in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if valor < 1024 or unidade == "TiB":
+            return f"{valor:.0f} {unidade}" if unidade == "B" else f"{valor:.1f} {unidade}"
+        valor /= 1024
+    return f"{n} B"  # inalcancavel; o `for` cobre TiB
+
+
+def _existente(caminho: Path) -> Path:
+    """O caminho, ou o ancestral mais proximo que existe.
+
+    `disk_usage` exige um caminho que exista, e num `--dry-run` a pasta de
+    destino pode nao ter sido criada ainda. Subir ate' o ancestral responde
+    pela mesma particao, que e' a pergunta.
+    """
+    p = caminho
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
+
+
+def espaco_livre(caminho: Path) -> tuple[int, int]:
+    """`(livre, total)` **na particao do caminho**.
+
+    ## Por que isto e' uma pergunta sobre `/user`, e nao sobre `/`
+
+    Desde 26/11/2026 `/user` e' a p3 (`GIOCHI_USER`), um device **diferente** do
+    rootfs. `df /` responde o numero errado nos dois sentidos: pode dizer que
+    nao ha' espaco com a p3 vazia, e pode dizer que ha' com a p3 cheia. O
+    destino (`/user/games`) segue o caminho certo sem ninguem precisar lembrar
+    qual e' o device — e' o pedido 3 da issue #8.
+    """
+    uso = shutil.disk_usage(_existente(caminho))
+    return uso.free, uso.total
+
+
 def games_de(destino: Destino) -> Path:
     return destino.caminho / MARCA_JOGOS
 
@@ -143,4 +182,5 @@ def resumo() -> str:
     return "\n".join(f"  - {d}" for d in achados)
 
 
-__all__ = ["Destino", "descobrir", "todos", "games_de", "resumo"]
+__all__ = ["Destino", "descobrir", "todos", "games_de", "resumo",
+           "bytes_legivel", "espaco_livre"]

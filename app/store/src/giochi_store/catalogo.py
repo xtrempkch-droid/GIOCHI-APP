@@ -38,6 +38,35 @@ RUNTIMES_OK = ("godot", "retroarch", "proton", "native")
 # podendo declara-lo no metadata.
 CAMPOS_OBRIGATORIOS = ("title", "version", "entrypoint")
 
+# O `.sig` tem 64 bytes crus — sem base64, sem `\n` (docs/pacote.md). Os dois
+# lados ja' divergiram nisto (Python 64 bytes, JS base64 de 89) e a conferencia
+# de tamanho e' a que pega o erro cedo.
+SIG_BYTES = 64
+
+ORIGEM_LOJA = "loja"
+ORIGEM_SIDELOAD = "sideload"
+
+
+def tem_assinatura(caminho: Path) -> bool:
+    """`true` quando ha' um `.sig` de 64 bytes ao lado do pacote.
+
+    **Presenca nao e' autenticidade** — quem verifica a assinatura e' o aparelho,
+    com a chave publica (`verificador-ed25519`). Aqui a pergunta e' outra, e e' a
+    que a interface precisa responder: este pacote veio pelo caminho assinado, ou
+    e' um arquivo que alguem copiou para a pasta? Sem essa distincao, o
+    PortMaster (que traz GPL dentro e baixa `.zip` sem assinatura) teria o mesmo
+    selo de um pacote da loja.
+
+    Um `.sig` de tamanho errado conta como **ausente**: e' o formato que o
+    `sign_package` nao produz, e aceita-lo faria um arquivo vazio ou base64
+    passar por assinado.
+    """
+    sig = Path(f"{caminho}.sig")
+    try:
+        return sig.is_file() and sig.stat().st_size == SIG_BYTES
+    except OSError:
+        return False
+
 
 @dataclass
 class Pacote:
@@ -49,6 +78,7 @@ class Pacote:
     ok: bool
     motivo: str = ""
     meta: dict = field(default_factory=dict)
+    assinado: bool = False
 
     @property
     def id(self) -> str:
@@ -57,6 +87,10 @@ class Pacote:
     @property
     def titulo(self) -> str:
         return str(self.meta.get("title") or self.caminho.stem)
+
+    @property
+    def origem(self) -> str:
+        return ORIGEM_LOJA if self.assinado else ORIGEM_SIDELOAD
 
 
 def sha256_de(caminho: Path) -> str:
@@ -96,35 +130,36 @@ def validar(caminho: Path) -> Pacote:
     """Valida um `.giochi`. Todo caminho de recusa preenche `motivo`."""
     tamanho = caminho.stat().st_size
     digest = sha256_de(caminho)
+    assinado = tem_assinatura(caminho)
     meta, erro = ler_metadata(caminho)
 
     if meta is None:
-        return Pacote(caminho, digest, tamanho, False, erro)
+        return Pacote(caminho, digest, tamanho, False, erro, assinado=assinado)
 
     arch = str(meta.get("arch", ""))
     if arch != ARCH_OK:
         return Pacote(caminho, digest, tamanho, False,
                       f"arch '{arch}' nao e' {ARCH_OK} (ADR-13 proibe emulacao)",
-                      meta)
+                      meta, assinado)
 
     runtime = str(meta.get("runtime", ""))
     if runtime not in RUNTIMES_OK:
         return Pacote(caminho, digest, tamanho, False,
                       f"runtime '{runtime}' fora de {'|'.join(RUNTIMES_OK)}",
-                      meta)
+                      meta, assinado)
 
     for campo in CAMPOS_OBRIGATORIOS:
         if not str(meta.get(campo, "")).strip():
             return Pacote(caminho, digest, tamanho, False,
-                          f"metadata.json sem '{campo}'", meta)
+                          f"metadata.json sem '{campo}'", meta, assinado)
 
     entry = str(meta["entrypoint"])
     if not entry.startswith("bin/") or ".." in entry:
         return Pacote(caminho, digest, tamanho, False,
                       f"entrypoint '{entry}' tem de ser bin/<algo> sem '..'",
-                      meta)
+                      meta, assinado)
 
-    return Pacote(caminho, digest, tamanho, True, "", meta)
+    return Pacote(caminho, digest, tamanho, True, "", meta, assinado)
 
 
 def varrer(origem: Path) -> list[Pacote]:
@@ -134,8 +169,18 @@ def varrer(origem: Path) -> list[Pacote]:
     return [validar(p) for p in sorted(origem.glob("*.giochi"))]
 
 
-def catalogo(pacotes: list[Pacote]) -> dict:
-    """`store.json`: o que o app da Loja mostra. Ordem estavel por titulo."""
+def catalogo(pacotes: list[Pacote], sideload: list[dict] | None = None) -> dict:
+    """`store.json`: o que o app da Loja mostra. Ordem estavel por titulo.
+
+    ## Por que `sideload` e' uma lista **separada**
+
+    O catalogo assinado (`catalogo.json`, das duas chaves) nao pode conter
+    artefato que a Giochi nao assinou — assinar por ele seria mentir. Os de
+    terceiros vao numa chave propria, e nao misturados em `itens`: assim quem
+    desenha a lista nao consegue mostra-los como conteudo da loja por
+    esquecimento. O caso concreto e' o PortMaster, que traz GPL-2.0/LGPL-2.1
+    dentro e executa script de terceiro como root dentro do `bwrap`.
+    """
     itens = []
     for p in sorted((x for x in pacotes if x.ok),
                     key=lambda x: x.titulo.lower()):
@@ -149,12 +194,15 @@ def catalogo(pacotes: list[Pacote]) -> dict:
             "size_bytes": p.tamanho,
             "sha256": p.sha256,
             "arquivo": p.caminho.name,
+            "assinado": p.assinado,
+            "origem": p.origem,
         })
     return {
         "schema_version": SCHEMA,
         "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "total": len(itens),
         "itens": itens,
+        "sideload": list(sideload or []),
     }
 
 

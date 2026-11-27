@@ -180,6 +180,17 @@ class TestPacotes(unittest.TestCase):
             acoes.empacotar(str(NATIVO), str(saida), str(priv))
             r = acoes.pacotes(str(saida))
             self.assertTrue(r["pacotes"][0]["ok"], r["pacotes"][0]["motivo"])
+            self.assertEqual(r["pacotes"][0]["origem"], "loja")
+            self.assertTrue(r["pacotes"][0]["assinado"])
+
+    def test_pacote_sem_sig_aparece_como_sideload(self):
+        # O painel listava qualquer `.giochi` sem dizer de onde veio; um pacote
+        # copiado de fora aparecia com o mesmo selo dos assinados.
+        with tempfile.TemporaryDirectory() as tmp:
+            acoes.empacotar(str(NATIVO), tmp)
+            r = acoes.pacotes(tmp)
+            self.assertEqual(r["pacotes"][0]["origem"], "sideload")
+            self.assertFalse(r["pacotes"][0]["assinado"])
 
 
 class TestDestinos(unittest.TestCase):
@@ -187,6 +198,14 @@ class TestDestinos(unittest.TestCase):
         r = acoes.destinos()
         self.assertIsInstance(r["destinos"], list)
         self.assertIn("resumo", r)
+
+    def test_destino_traz_o_espaco_da_propria_particao(self):
+        # O espaço é perguntado ao destino (`/user`), não a `/` (issue #8).
+        r = acoes.destinos()
+        for d in r["destinos"]:
+            self.assertIn("livre_bytes", d)
+            self.assertGreater(d["total_bytes"], 0)
+            self.assertLessEqual(d["livre_bytes"], d["total_bytes"])
 
 
 if __name__ == "__main__":

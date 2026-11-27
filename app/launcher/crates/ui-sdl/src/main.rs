@@ -356,6 +356,11 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
 
+    // Pastas do contrato em `/user` (issue #8). Antes da sincronização de
+    // ports, que escreve em `/user/apps`: criar depois deixaria o primeiro
+    // port da imagem antiga sem cartão.
+    garantir_pastas_do_usuario();
+
     // Ports do PortMaster: materializa `/user/ports` → cartões em `/user/apps`.
     //
     // A bandeira existe porque é o único jeito de conferir o resultado por SSH
@@ -1165,6 +1170,74 @@ fn default_font() -> String {
     draw::CANDIDATOS_FONTE[0].to_string()
 }
 
+/// `mkdir -p` das quatro pastas do contrato em `/user` (issue #8).
+///
+/// A imagem cria as pastas e o `S20userdata` as garante na montagem; esta
+/// chamada cobre a imagem **anterior** à partição, onde `/user` está no rootfs
+/// e pasta ausente é defeito do sistema, não usuário desorganizado. Não cria
+/// `/user` no PC: lá a raiz não existe, e criá-la não é papel do app.
+///
+/// O que é criado aparece no log — sem isso, "a partição montou" e "alguém criou
+/// a pasta à mão" ficam indistinguíveis quando algo dá errado depois.
+fn garantir_pastas_do_usuario() {
+    // Sem `/user` não há o que garantir, e é o caso do PC: imprimir quatro
+    // "não existe" em cada `--dump-frame` cobriria a mensagem que importa. No
+    // aparelho a raiz existe (é o ponto de montagem), então o silêncio aqui não
+    // esconde nada — quem relata o fato é `garantir_pastas_em`, e é ela que o
+    // teste exercita.
+    if !std::path::Path::new(RAIZ_DADOS).is_dir() {
+        return;
+    }
+    let relatorio = garantir_pastas_em(std::path::Path::new(RAIZ_DADOS));
+    for caminho in &relatorio.criadas {
+        eprintln!("pastas: {caminho} criada (imagem anterior à partição de dados)");
+    }
+    for (caminho, erro) in &relatorio.falhas {
+        eprintln!("pastas: {caminho}: {erro}");
+    }
+}
+
+/// A raiz dos dados do usuário. Uma constante porque `/user` aparece em quatro
+/// raízes de detecção e num `mkdir`: duas grafias divergiriam no dia em que uma
+/// mudasse.
+const RAIZ_DADOS: &str = "/user";
+
+/// O corpo de [`garantir_pastas_do_usuario`], com a raiz injetada.
+///
+/// Existe pelo mesmo motivo do `existe` de `biblioteca::pasta_padrao` no app de
+/// música: o teste não pode depender de `/user` existir na máquina de quem roda,
+/// e o PC não tem essa raiz. A regra que importa — criar só o que falta e não
+/// parar na primeira falha — roda igual nos dois.
+///
+/// A raiz **não é criada**: ela é o ponto de montagem da partição de dados, e
+/// quem a cria é o sistema. Criá-la aqui faria o PC ganhar um `/user` de
+/// mentira, e no aparelho esconderia que a p3 não montou — o defeito que a
+/// issue #8 pede para o app parar de mascarar.
+fn garantir_pastas_em(
+    base: &std::path::Path,
+) -> giochi_launcher_core::deteccao::RelatorioDePastas {
+    if !base.is_dir() {
+        return giochi_launcher_core::deteccao::RelatorioDePastas {
+            criadas: Vec::new(),
+            falhas: giochi_launcher_core::deteccao::PASTAS_DO_CONTRATO
+                .iter()
+                .map(|nome| {
+                    (
+                        format!("{}/{nome}", base.display()),
+                        format!(
+                            "{} não existe: a partição de dados não está montada",
+                            base.display()
+                        ),
+                    )
+                })
+                .collect(),
+        };
+    }
+    giochi_launcher_core::deteccao::garantir_pastas(&base.to_string_lossy(), |p| {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())
+    })
+}
+
 /// Leva o estado a uma tela nomeada, para `--tela` poder fotografá-la.
 ///
 /// Os nomes são os das telas que existem, não invenção: cada valor precisa ter
@@ -1417,4 +1490,64 @@ fn demo_apps() -> Vec<AppEntry> {
         AppEntry::new("store", "Loja", "cart", "Sistema"),
         AppEntry::new("sync", "Sincronizar", "sync", "Nuvem"),
     ]
+}
+
+#[cfg(test)]
+mod testes_de_pastas {
+    //! As pastas do contrato, exercitadas no caminho que roda no aparelho.
+    //!
+    //! O núcleo tem os testes da regra (`deteccao::garantir_pastas`); aqui o que
+    //! se prova é que a **raiz injetada** atravessa a função sem trocar o nome
+    //! das pastas — `/user` + `musica` tem de dar `/user/musica`, e um erro de
+    //! permissão numa pasta não impede as outras (issue #8).
+
+    use super::garantir_pastas_em;
+
+    fn temporario(nome: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "giochi-ui-pastas-{nome}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir do teste");
+        dir
+    }
+
+    #[test]
+    fn as_quatro_pastras_nascem_sob_a_raiz_pedida() {
+        let base = temporario("quatro");
+        let relatorio = garantir_pastas_em(&base);
+        assert_eq!(relatorio.criadas.len(), 4, "{relatorio:?}");
+        assert!(relatorio.falhas.is_empty(), "{relatorio:?}");
+        for nome in ["games", "apps", "musica", "ports"] {
+            assert!(base.join(nome).is_dir(), "{nome} não foi criada");
+            assert!(
+                relatorio.criadas.iter().any(|p| p.ends_with(nome)),
+                "{nome} não aparece no relatório: {relatorio:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rodar_de_novo_nao_cria_nada_e_nao_falha() {
+        let base = temporario("idempotente");
+        assert_eq!(garantir_pastas_em(&base).criadas.len(), 4);
+        let segunda = garantir_pastas_em(&base);
+        assert!(segunda.criadas.is_empty(), "{segunda:?}");
+        assert!(segunda.falhas.is_empty(), "{segunda:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn raiz_inexistente_nao_e_criada_em_silencio() {
+        // O PC não tem `/user`, e criar não é papel do app. O chamador já
+        // confere antes; aqui garante-se que a função não inventa a raiz.
+        let base = temporario("sem-raiz").join("nao-existe");
+        let relatorio = garantir_pastas_em(&base);
+        assert!(!base.exists(), "a função criou a raiz que não existia");
+        assert_eq!(relatorio.criadas.len(), 0);
+        assert_eq!(relatorio.falhas.len(), 4, "{relatorio:?}");
+        let _ = std::fs::remove_dir_all(base.parent().expect("pai"));
+    }
 }
