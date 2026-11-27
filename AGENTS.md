@@ -895,6 +895,8 @@ armadilha aqui; o caso completo em
 | camada de efeitos no aparelho | **medido**: **23,8 fps** no R35S com efeitos ligados — não sustenta os 30 da cadência |
 | consumo do `launcher-parado` | **implementado**, e o alcance é estreito: o supervisor apaga o rastro na arrancada seguinte, então só aparece quando o launcher é iniciado com o supervisor desistido |
 | ports do PortMaster no launcher | **medido** no R35S em 26/11/2026: cartão criado, detectado e **lançado**, com o FORM rodando dentro do `bwrap` — inclusive o **ciclo inteiro**: launcher sai por `SIGTERM`, o port abre com `opengles2`, e o supervisor devolve a interface quando ele termina (§6.11) |
+| o `Giochi Gamepad` é a fonte, e as fontes não se somam | **medido** no R35S em 27/11/2026: dos 4 nós de entrada o launcher em execução tem **2** abertos (`event1` volume, `event3` o virtual) e nenhum gamepad físico; o bitmask do virtual confere **17/17** códigos e 4 eixos (§6.3, `docs/controle-virtual.md`) |
+| desempenho do launcher | **medido** no R35S: **976** chamadas de backend por quadro e **10 MiB** de RSS (`--desempenho 15`); PC 1160 / 24 MiB. Star Dust com efeitos faz **23,8 fps** ([`docs/desempenho.md`](docs/desempenho.md)) |
 
 **Regra de honestidade:** nada aqui pode ser declarado "funciona" sem ter sido
 executado. "Compila" e "roda" são afirmações diferentes — e o `poweroff` já caiu
