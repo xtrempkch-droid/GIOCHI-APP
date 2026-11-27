@@ -1,7 +1,17 @@
 # PortMaster — a loja e os ports na aba Apps
 
 > Implementado em 26/11/2026. Responde ao **pedido de PortMaster** registrado
-> nas issues #2–#5 deste repositório (as #3, #4 e #5 são duplicatas da #2).
+> nas issues #2–#5 deste repositório (as #3, #4 e #5 eram duplicatas da #2; a #5
+> foi fechada como `NOT_PLANNED` e as #3/#4 apagadas).
+>
+> **A #2 foi respondida em 27/11/2026**, ponto por ponto: o pedido 1 (wrapper em
+> `/user/apps`) está feito, com quatro divergências em relação à forma sugerida
+> — `entrypoint` tem de começar em `bin/`, o `metadata.json` precisa dos seis
+> campos obrigatórios, a marca `.portmaster-port` é o que permite podar sem
+> tocar no que não é nosso, e o `--rodar` só funciona porque o launcher morre de
+> `SIGTERM` (§3b). O pedido 3 está feito **no aparelho** (§3c) e continua
+> aberto **no PC** (`app/store`, sideload). O pedido 2 (`args` no `Alvo` e aba
+> "Ports" própria) foi recusado por ora, com o custo de cada caminho medido.
 >
 > Guia do sistema: `docs/evaluacao-portmaster.md` e `docs/entrada-para-equipes.md`
 > no **GIOCHI-SYSTEM** (somente leitura — §1.1 do `AGENTS.md`).
