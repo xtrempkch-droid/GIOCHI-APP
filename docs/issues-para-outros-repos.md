@@ -59,6 +59,7 @@ no ambiente.
 | 3 | `GIOCHI-SYSTEM` | Raízes `/opt|/user/games` e o `giochi-selftest` | aviso falso no aparelho |
 | 4 | `GIOCHI-OS` | `runAppsPhase` grava todo app em `/opt/giochi/apps` | **latente** |
 | 5 | `GIOCHI-SYSTEM` | fontes das escritas do launcher (chinês, hindi, bengali) | **o launcher multi-idioma só desenha 7 dos 10** |
+| 6 | `GIOCHI-SYSTEM` | `giochi-ports` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot` | **atendido** — medido em 27/11/2026 no `/usr/bin/giochi-ports` da imagem `main-37e08b19` |
 
 ### Estado conferido no remoto em 26/11/2026 (antes de reenviar)
 
@@ -73,6 +74,7 @@ remoto (`search_code` / `get_file_contents`), não da cópia local:
 | **3** (raízes) | `giochi-selftest` linhas **1128-1131**: `grep -c '"id"'` numa raiz só e o aviso "a grade ficaria vazia" **inalterados** | **vale** |
 | **4** (`kind`) | `pipeline.mjs` escreve todo `embedded` em `opt/giochi/apps` e o `index.push` **não tem `kind`**; `apps.mjs` não lê `kind` do `metadata.json` | **vale** |
 | **5** (fontes) | já é a issue **`GIOCHI-SYSTEM#5`**, aberta | **não reenviar** |
+| **6** (`giochi-ports`) | medido no aparelho em 27/11/2026: `/usr/bin/giochi-ports:235` tem `PYSDL2_DLL_PATH=/usr/lib` e a linha 254 tem `rm -f "$PUGWASH_REBOOT"`, com o `main.py:129` do `pugwash` citado no comentário | **atendido — não reenviar** |
 
 O pedido **1** fica aqui como registro do corpo correto (o que as três issues
 fechadas não tinham), para o dia em que alguém precisar reabrir o assunto — e é
@@ -84,6 +86,12 @@ a prova de que a autocorreção de 15/11/2026 estava certa: o que faltava era
 da máquina. O número só entra na tabela do `AGENTS.md` §17 quando a issue
 existir — anunciar "issue criada" sem ter criado é o §10 aplicado à conversa
 entre equipes.
+
+**O pedido 6 não precisou de issue.** Foi escrito em 26/11/2026, e em 27/11/2026
+a leitura do `/usr/bin/giochi-ports` no aparelho mostrou as duas correções já
+aplicadas — a equipe de sistema leu o documento e agiu antes do formulário. É o
+desfecho que o §1.1 quer: a correção foi para o wrapper, onde vale para todo
+app, e não ficou só no contorno do cartão.
 
 
 A ordem é por gravidade: a **#2** é a mais grave (a documentação atual deixa o
