@@ -830,6 +830,23 @@ cmd_diagnostico() {
     echo "distro:    $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")"
     echo "memória:   $(awk "/MemTotal/{printf \"%d MB\", \$2/1024}" /proc/meminfo)"
     echo "rootfs:    $(df -h / | awk "NR==2{print \$4\" livres de \"\$2}")"
+    # O espaço que importa para instalar é o de **/user**, não o do rootfs: com a
+    # partição de dados eles são devices diferentes, e o `/` pode estar cheio
+    # com a p3 vazia (issue #8). Enquanto a imagem não tiver a p3, os dois
+    # mostram o mesmo número — e é por isso que a linha diz qual é qual.
+    echo "dados:     $(df -h /user 2>/dev/null | awk "NR==2{print \$4\" livres de \"\$2\" em \"\$6}")"
+    # Comparação por major:minor do `/proc/self/mountinfo`, que é fato do
+    # kernel: `stat` **não existe** nesta imagem (medido) e `/dev/root` não é
+    # caminho. Sem `awk` de propósito — este bloco já vai dentro de aspas
+    # simples, e aspas dentro de aspas foi o que quebrou a linha na primeira
+    # tentativa.
+    echo "user/dados: $(lr=$(grep -F " / / " /proc/self/mountinfo | head -1); \
+      lu=$(grep -F " /user " /proc/self/mountinfo | head -1); \
+      set -- $lr; raiz=$3; set -- $lu; dados=$3; \
+      if [ -z "$dados" ]; then echo "sem montagem em /user — a particao de dados NAO esta montada"; \
+      elif [ "$raiz" = "$dados" ]; then echo "mesmo device do rootfs ($raiz) — a particao de dados NAO esta montada"; \
+      else echo "particao propria ($dados != $raiz) — /user sobrevive a regravacao"; fi)"
+    echo "pastas:    $(for d in /user/games /user/apps /user/musica /user/ports; do [ -d "$d" ] || printf "%s AUSENTE; " "$d"; done; true)"
   '
 
   titulo "tela"

@@ -139,6 +139,11 @@ schemas/                   # metadata.schema.json + forge.schema.json
 /user/games/<id>           # jogos instalados pela loja / cartão
 /user/apps/<id>            # apps instalados pela loja / cartão (+ cartões de port)
 /user/ports/               # PortMaster: `<nome>.sh` + `<nome>/` (§6.11)
+# `/user` é uma PARTIÇÃO (p3, rótulo `GIOCHI_USER`), montada pelo `S20userdata`
+# do sistema (commit 43e52a5). O app NÃO monta `/user` e NÃO lê espaço por `/`:
+# são devices diferentes, e o `/` pode estar cheio com a p3 vazia.
+# 📌 A imagem do R35S medida em 27/11/2026 é ANTERIOR a isso (`main-37e08b19`):
+# `aparelho.sh diagnostico` diz na linha `user/dados:` qual dos dois mundos é.
 
 scripts/                   # validador, empacotadores, ferramentas do aparelho e de issue
 tests/                     # 233 testes JS + suites Python de forge e painel
@@ -831,6 +836,7 @@ armadilha aqui; o caso completo em
 | `SIGTERM` não mata o laço | o SDL só posta `SDL_QUIT` na fila: **`kill -9`**. Corrigido em 26/11/2026 **na janela do filho** (§6.11) — antes dela segue valendo, e `timeout 14 launcher --lancar X` agora termina |
 | descritor aberto ≠ DRM ocupado | o `giochi-ports` pergunta por `/proc/*/fd`→`card0`, e o `card0` do launcher é da libmali: **soltar o `VideoSubsystem` do SDL não fecha** (medido: `3 -> /dev/dri/card0` continuava). O caminho é morrer de `SIGTERM` (§6.11) |
 | teste que arma `SIGTERM` em paralelo | `SIGTERM` é global ao processo: dois testes que armam/restauram o handler se atropelam e o `raise` de um pega o default do outro — **a suíte morre com sinal 15**. Um teste sequencial só |
+| `stat` não existe nesta imagem | `stat -c %d /user` devolve vazio, e **dois vazios comparam iguais** — a comparação passa por acidente e passaria por acidente ao contrário no próximo aparelho. Comparar `major:minor` do `/proc/self/mountinfo` é fato do kernel e não depende de applet |
 | estado que sobra e mente | `.pugwash-reboot` de uma execução anterior fez o `pugwash` pular a GUI e sair; o cartão "abria" e nada aparecia. A limpeza é do cartão (§6.11), não do usuário |
 | amostrar com `sleep` mentindo o tempo | o laço de amostragem gastava segundos por volta e os rótulos `+42s` eram ficção; a loja rodava 60 s. Medir com `date +%s`, não com contador de laço |
 | `timeout` na ponta do host | não mata o processo remoto: matar o `ssh` deixa o comando rodando no aparelho |
@@ -912,6 +918,7 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | a GUI do PortMaster na aba Apps | **feito** (26/11/2026) — cartão `portmaster`, com crédito no título/metadata/script, aberto por `giochi-ports --liberar-drm` (§6.11) |
 | PortMaster como item da **loja do PC** (`app/store`), declarado **sideload** | **não feito** — o pacote não é assinado (GPL-2.0/LGPL-2.1 dentro) e precisa aparecer como tal na interface |
 | aba "Ports" própria e `args` no `Alvo` | **não feito** — é UX; a aba Apps já mostra os ports |
+| partição de dados (`/user` = p3 `GIOCHI_USER`) | **feita no Giochi System** (`S20userdata`, commit `43e52a5`) — a imagem medida em 27/11/2026 ainda é anterior; o app não monta `/user` e o diagnóstico diz qual dos dois mundos está no cartão (`docs/cartao-sd.md`) |
 | migrar jogos de `/user/apps` para `/user/games` | **manual** — feito no R35S em 15/11/2026; um `scripts/migrar-raizes.sh` evitaria repetir |
 | barra de progresso no app de música | **não existe** — o `SDL_mixer` não informa a posição; a barra mostraria número inventado |
 | duração de MP3/OGG/FLAC no app de música | **`—`** — só o WAV declara o tamanho no cabeçalho |

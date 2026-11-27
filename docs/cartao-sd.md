@@ -170,14 +170,47 @@ com os números acima. As três perguntas objetivas ao System estão na segunda
 mensagem: convenção de montagem, onde ficam os apps com eMMC, e se "partição de
 dados" e "slot 2" são a mesma coisa ou duas.
 
-| # | Item | Por que trava |
+| # | Item | Estado em 27/11/2026 |
 | --- | --- | --- |
-| 1 | **Partição de dados** nos 116,5 GB | hoje `/user` é diretório **dentro do rootfs**. Regravar a imagem apaga os apps comprados — e `distribution: store` ("fora da imagem assinada") deixa de ser verdade |
-| 1b | **Layout nos aparelhos com 2 slots + eMMC** | o app já descobre qualquer número de cartões, mas *onde* os apps devem morar (instalar em `/user` ou rodar do cartão) muda com o layout da imagem |
-| 1c | **Convenção de montagem** para o slot 2 | hoje o app monta em `/mnt/cartao<N>` porque ninguém monta; se o sistema fixar um caminho, o app para de montar |
-| 1d | **eMMC: apps onde?** | eMMC, cartão, ou os dois — muda o `dir` do catálogo, e a loja precisa saber antes de instalar |
-| 2 | **Montar `GIOCHI_BOOT`** no boot | não está no `fstab` nem montada. Se eles montarem num caminho fixo, o app para de montar |
-| 3 | **Automount** de mídia removível | não há `mdev.conf` nem udev ativo. Irrelevante para o cartão de boot; necessário para um segundo slot ou pendrive |
+| 1 | **Partição de dados** nos 116,5 GB | **resolvido no Giochi System** ([issue #8](https://github.com/xtrempkch-droid/GIOCHI-APP/issues/8)): a p3 (`GIOCHI_USER`) é montada em `/user` pelo `S20userdata`, achada por **rótulo** — `commit` do System `43e52a5` e ajuste `3fa5b07`. Ver a ressalva da imagem abaixo |
+| 1b | **Layout nos aparelhos com 2 slots + eMMC** | **respondido**: nenhum dos três aparelhos tem eMMC (`no-mmc` no `sdmmc1` da X55/X35H; o R35S não tem nó). Apps moram em `/user`, que é a p3 |
+| 1c | **Convenção de montagem** | **resolvido**: `/user` fixo; o app **para de montar** — quem monta é o sistema. O que o app ainda monta é a `GIOCHI_BOOT` do cartão **dele**, e só quando ninguém montou (`descobrir-cartoes.sh` checa `/proc/mounts` antes) |
+| 1d | **eMMC: apps onde?** | resolvido junto com 1b: `/user`, e quando existir eMMC o caminho não muda — muda o device por baixo, que o app não precisa saber |
+| 2 | **Montar `GIOCHI_BOOT`** no boot | **não feito no sistema**. Continua valendo: se o app lê o `giochi-boot.log`, ele monta a p1 por conta própria |
+| 3 | **Automount** de mídia removível | **não feito**. Cartão sem o rótulo não aparece montado |
+
+### A ressalva da imagem, medida
+
+O código do sistema **tem** a partição (`S20userdata` em
+`device/common/rootfs-overlay/etc/init.d/`, commit `43e52a5`), mas a **imagem
+medida no R35S em 27/11/2026** (`main-37e08b19`) **não a tem**:
+
+```console
+$ ls /etc/init.d/S20userdata
+ls: /etc/init.d/S20userdata: No such file or directory
+$ blkid | grep mmcblk1        # só p1 (GIOCHI_BOOT) e p2 (rootfs): não há p3
+$ grep -F " /user " /proc/self/mountinfo     # vazio: /user está no rootfs
+```
+
+Ou seja: **a promessa é do próximo build**, não desta imagem. É a regra R9 do
+[documento de regras](regras.md) no sentido inverso: o relatório estava certo, a
+imagem é que é anterior. `aparelho.sh diagnostico` passou a dizer isso na cara,
+em vez de deixar deduzir:
+
+```text
+user/dados: mesmo device do rootfs (0:32) — a particao de dados NAO esta montada
+pastas:    /user/games AUSENTE; /user/apps AUSENTE; /user/musica AUSENTE; /user/ports AUSENTE;
+```
+
+### O que mudou do lado do app (issue #8)
+
+| Pedido | O que foi feito |
+| --- | --- |
+| remover a montagem de `/user` | **já não existia**: nenhum `mount` de `/user` no app, e o `descobrir-cartoes.sh` só monta a `GIOCHI_BOOT` de um cartão que **não é** o do sistema |
+| `mkdir -p` defensivo e parar de culpar o usuário | `musica` cria `/user/musica` na abertura (só a pasta **padrão** — `--pasta`/`GIOCHI_MUSICA` são escolha do usuário e criar o que ele digitou errado esconderia o erro), e a frase de pasta ausente passou a dizer que é **falha da partição de dados** |
+| ler o espaço por `/user` | `aparelho.sh diagnostico` ganhou `dados:` e `user/dados:`; o app não lê espaço em lugar nenhum hoje — quando ler, é `/user` (registrado aqui para não virar `/` por hábito) |
+| não ler `/run/giochi/user-antes-da-montagem` | **não é lido** (`grep` no repo inteiro: zero ocorrências) |
+| init script depois do S20 | o app **não instala** init script; se um dia precisar, é `S21` para cima |
 
 O item 1 é o que tem consequência jurídica. Sem ele, app GPL vendido pela loja
 volta a ser inseparável da imagem assinada, e o argumento da GPL-3.0 §6 que

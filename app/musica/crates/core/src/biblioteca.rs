@@ -43,7 +43,14 @@ impl Vazio {
     /// Frase para a tela. Diz o que aconteceu **e** onde.
     pub fn explicacao(self, pasta: &str) -> String {
         match self {
-            Vazio::PastaNaoExiste => format!("a pasta {pasta} não existe"),
+            // Com `/user` como partição de dados, a pasta do contrato é criada
+            // pela imagem **e** garantida na montagem. Então "não existe"
+            // deixou de ser "o usuário não criou": é diagnóstico de sistema.
+            // Dizer isso evita a rodada de suporte em que alguém pede ao
+            // usuário para "criar a pasta" num aparelho com a p3 sem montar.
+            Vazio::PastaNaoExiste => {
+                format!("a pasta {pasta} não existe — é falha da partição de dados, não falta de música")
+            }
             Vazio::SemMusica => format!("nenhuma música em {pasta}"),
             Vazio::SemLeitura => format!("sem permissão para ler {pasta}"),
         }
@@ -142,6 +149,21 @@ pub fn montar(pasta: &str, entradas: &[Entrada]) -> Biblioteca {
 /// O último recurso é o caminho do aparelho mesmo quando ele não existe: é ele
 /// que a tela precisa mostrar ("a pasta /user/musica não existe"), e mostrar o
 /// caminho do PC num aparelho mandaria o usuário procurar no lugar errado.
+/// Cria a pasta de música do aparelho, se ela for a padrão.
+///
+/// `mkdir -p` **idempotente**, de propósito (issue #8): a imagem cria as quatro
+/// pastas do contrato e o `S20userdata` as garante na montagem, mas uma imagem
+/// anterior à partição não as tem — e não criar ali faria o app abrir dizendo
+/// "a pasta não existe" num aparelho que só está velho. Custa nada e cobre a
+/// transição.
+///
+/// Só a pasta **padrão** é criada: `--pasta` e `GIOCHI_MUSICA` apontam para o
+/// que o usuário escolheu, e criar o que ele digitou errado esconderia o erro.
+pub fn garantir_pasta_do_aparelho(criar: impl Fn(&str) -> bool) {
+    const NO_APARELHO: &str = "/user/musica";
+    criar(NO_APARELHO);
+}
+
 pub fn pasta_padrao(
     env: Option<&str>,
     existe: impl Fn(&str) -> bool,
@@ -235,7 +257,11 @@ mod tests {
             pasta: "/user/musica".into(),
             motivo: Vazio::PastaNaoExiste,
         };
-        assert_eq!(b.mensagem(), "a pasta /user/musica não existe");
+        // A frase diz **onde** e de quem é o problema: com `/user` como
+        // partição de dados, pasta ausente é diagnóstico de sistema, e mandar o
+        // usuário "criar a pasta" seria mandar consertar o que ele não quebrou.
+        assert!(b.mensagem().contains("a pasta /user/musica não existe"), "{:?}", b.mensagem());
+        assert!(b.mensagem().contains("partição de dados"), "{:?}", b.mensagem());
         assert_ne!(b.mensagem(), Vazio::SemMusica.explicacao("/user/musica"));
     }
 

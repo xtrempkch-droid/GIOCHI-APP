@@ -200,6 +200,13 @@ fn principal() -> Result<(), String> {
 
     let mut pintor = criar_pintor(&platform, largura, altura, &fonte)?;
 
+    // A pasta do contrato é criada antes de procurar: com a partição de dados,
+    // "não existe" é falha do sistema, e o app não deve transformar isso na
+    // primeira coisa que o usuário vê. `mkdir -p` idempotente (issue #8).
+    giochi_musica_core::biblioteca::garantir_pasta_do_aparelho(|p| {
+        std::fs::create_dir_all(p).is_ok()
+    });
+
     let pasta = opcoes
         .pasta
         .clone()
