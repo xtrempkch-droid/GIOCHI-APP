@@ -867,6 +867,7 @@ armadilha aqui; o caso completo em
 | `exit 0` no fim de um passo `pwsh` | não é redundância: o runner **anexa** `exit $LASTEXITCODE` e o passo fica vermelho por um sucesso que ele mesmo provocou |
 | filtro de `paths` faz parte do teste | `app/painel/**` fora do filtro = app sem CI, e o sintoma é silêncio |
 | formulário de issue não é garantia | conferir antes do clique devolve o passado: nasceram três issues duplicadas de PortMaster (#3–#5). O caminho é a URL do `issues/new` |
+| o padrão embutido não é o aparelho | `default_map()` tem **13** nomes e só roda quando `/etc/giochi/buttons.map` não existe; concluir "o mapa não tem `thumbl`" por ele é medir o fallback — o mapa do R35S tem 19. Conferir com `grep`, no aparelho |
 
 ## 14. O que está provado e o que é afirmação
 
