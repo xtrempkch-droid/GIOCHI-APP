@@ -94,8 +94,10 @@ workaround do lado do app faz a coisa funcionar hoje e esconde o defeito de quem
 deveria corrigi-lo: todo frontend novo repete a mesma dança, e o primeiro que
 esquecer volta ao sintoma. O caso que gerou a regra é o `giochi-ports` rodando o
 `pugwash` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot` (§6.11): o
-cartão da loja contorna, e o pedido 6 de `docs/issues-para-outros-repos.md`
-existe para que a correção vá para o wrapper, onde vale para todos.
+cartão da loja contornava, e o pedido 6 de `docs/issues-para-outros-repos.md`
+foi aberto para que a correção fosse para o wrapper, onde vale para todos —
+**e foi**: as duas estão no `/usr/bin/giochi-ports` desde a imagem de 27/11/2026
+(§17).
 Os vizinhos já têm trabalho não commitado de outra pessoa, e escrever ali
 mistura o meu diff com o de alguém.
 
@@ -592,8 +594,10 @@ a GUI, e o devolve"), e ele só funciona porque o launcher morre de `SIGTERM`
 aparelho não tinha como.
 
 O `giochi-ports` roda `python3 ./pugwash` direto, sem passar pelo
-`PortMaster.sh` deles. Duas coisas do caminho oficial, então, ficam por conta do
-cartão — e sem elas a loja não abre (medido no R35S em 26/11/2026):
+`PortMaster.sh` deles. Duas coisas do caminho oficial ficavam por conta do
+cartão — sem elas a loja não abre (medido no R35S em 26/11/2026); **hoje as duas
+estão também no wrapper** (pedido 6, §17) e o cartão mantém a cópia idempotente
+para abrir em imagem anterior à correção:
 
 - **`PYSDL2_DLL_PATH=/usr/lib`**: o GUI é `pysdl2`; sem a variável ele carrega o
   SDL2 de `exlibs/` do pacote, que não tem KMSDRM, e o erro é
@@ -953,11 +957,13 @@ com medição, arquivo e linha, consequência e como conferir:
 | 3 | System | raízes `/opt|/user/games` e `giochi-selftest` contando o binário | **aberto** — `giochi-selftest:1128-1131` inalterado |
 | 4 | OS | `runAppsPhase` escolher a raiz por `kind` e gravar `kind` no índice | **aberto** — `pipeline.mjs` põe todo `embedded` em `opt/giochi/apps`, sem `kind` |
 | 5 | System | fontes de CJK/devanágari/bengali | **já é a issue `GIOCHI-SYSTEM#5`**, aberta. Não reenviar |
-| 6 | System | `giochi-ports` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot`: a GUI do PortMaster não abre | **aberto** (26/11/2026) — o app contorna no cartão da loja, mas a correção é do wrapper |
+| 6 | System | `giochi-ports` sem `PYSDL2_DLL_PATH` e sem limpar o `.pugwash-reboot`: a GUI do PortMaster não abre | **atendido** (medido 27/11/2026 na imagem `main-37e08b19`: as duas estão em `/usr/bin/giochi-ports`). **Não reenviar** |
 
-Os pedidos **2**, **3** e **4** foram entregues em 26/11/2026 pelo formulário do
-`issues/new` já preenchido, aberto no navegador da máquina
-(`node scripts/abrir-issue.mjs {2,3,4} --abrir`). O número entra nesta tabela
+Os pedidos **2**, **3** e **4** foram entregues pelo formulário do `issues/new`
+já preenchido, aberto no navegador da máquina
+(`node scripts/abrir-issue.mjs {2,3,4} --abrir`). O **6** não foi por formulário:
+a equipe de sistema corrigiu no `giochi-ports` e a correção chegou na imagem —
+o crédito e a medição estão no cabeçalho do pedido. O número entra nesta tabela
 **só quando a issue existir**: anunciar "issue criada" sem ter criado é o §10
 aplicado à conversa entre equipes.
 

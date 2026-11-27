@@ -676,6 +676,23 @@ imagem**. Fonte não conserta, e por isso não entra neste pedido.
 
 **Título:** giochi-ports: a GUI do PortMaster não abre — faltam `PYSDL2_DLL_PATH` e a limpeza do `.pugwash-reboot`
 
+> **ATENDIDO** — medido no R35S em 27/11/2026, imagem `main-37e08b19`. As duas
+> correções estão no `/usr/bin/giochi-ports`, uma ao lado da outra, com o
+> `main.py:129` do `pugwash` citado no comentário:
+>
+> ```text
+> 235:PYSDL2_DLL_PATH=/usr/lib
+> 236:export PYSDL2_DLL_PATH
+> 254:PUGWASH_REBOOT="$pm/.pugwash-reboot"
+> ```
+>
+> **Não reenviar.** O que resta abaixo é o registro do defeito como foi medido,
+> e continua valendo como prova de por que o caminho oficial não pode ser
+> encurtado sem repor o que ele faz. O cartão da loja (§3c de
+> [`portmaster.md`](portmaster.md)) mantém a cópia das duas — é defesa para
+> imagem antiga, não contorno de defeito vivo, e as duas são idempotentes
+> (`VAR=valor` e `rm -f`).
+
 ### O que foi medido no R35S em 26/11/2026 (imagem `e0d74e6`, PortMaster `2026.11.17-0700`)
 
 O `giochi-ports --liberar-drm` libera o DRM corretamente (o launcher sai por

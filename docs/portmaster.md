@@ -232,6 +232,15 @@ O cartão gerado faz as duas coisas antes do `exec`. O laço de reexecução do
 reproduzido: aqui, um pedido de reinício exige que o usuário feche e abra a loja
 de novo — um toque, e evita repetir a dança do DRM no meio de um app.
 
+**As duas passaram a existir também no `/usr/bin/giochi-ports`** — o pedido 6 de
+[`issues-para-outros-repos.md`](issues-para-outros-repos.md) foi atendido, medido
+em 27/11/2026 na imagem `main-37e08b19` (`PYSDL2_DLL_PATH=/usr/lib` na linha 235,
+`rm -f "$PUGWASH_REBOOT"` na 254). O cartão **mantém a cópia** e as duas são
+idempotentes (`VAR=valor` não acumula, `rm -f` de arquivo ausente é no-op): é o
+que faz o cartão abrir numa imagem anterior à correção, sem que ninguém precise
+saber qual imagem está no cartão. Não é contorno de defeito vivo — se um dia
+divergirem, quem manda é o wrapper, e o teste do cartão é o que avisa.
+
 ### Medido no R35S em 26/11/2026
 
 ```text
