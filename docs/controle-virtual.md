@@ -1,10 +1,11 @@
 # Controle virtual "Giochi Gamepad"
 
-> **Mudança do Giochi System, 18/11/2026.** Registrada aqui em 18/11/2026
-> **sem implementação** — o dono pediu para documentar e deixar para a próxima
-> oportunidade. Hoje **nenhuma linha deste repositório lê o virtual**: o
-> launcher, o Star Dust, o launcher-teste e o `musica` continuam abrindo todos os
-> `/dev/input/event*` como antes.
+> **Mudança do Giochi System, 18/11/2026.** Documentada em 18/11/2026 como
+> pendência e **implementada em 27/11/2026** (issue #6 do app + item 3 da issue
+> #7). Hoje o launcher **prefere o `Giochi Gamepad`** e não soma fontes: é ele a
+> fonte dos `BTN_*`/`ABS_*`, e os nós físicos ficam só para `KEY_*` (volume e
+> energia). O que continua **não implementado** é a leitura dos **eixos** — ver
+> §3.5.
 >
 > Guia de origem: `docs/entrada-para-equipes.md` no **GIOCHI-SYSTEM** (repo
 > vizinho, somente leitura — §1.1 do `AGENTS.md`). A referência completa, com as
@@ -113,7 +114,42 @@ modelo de estado atual consegue representar.** As duas saídas plausíveis:
 | Saída | Efeito |
 | --- | --- |
 | mapa `pressed` por dispositivo, mesclado com E | correto, mas mexe no núcleo e em todo leitor |
-| virtual como fonte dos `BTN_*`/`ABS_*`; físico só para `KEY_*` | mudança menor, e o volume/power continuam funcionando |
+| virtual como fonte dos `BTN_*`/`ABS_*`; físico só para `KEY_*` | **foi a escolhida** (27/11/2026): mudança menor, e volume/power continuam funcionando |
+
+### 3.3.1 O que foi implementado, e o que a medida mudou
+
+`Papel` (em `input_evdev.rs`) classifica cada nó **pelo que ele declara** —
+`/sys/class/input/<nó>/device/capabilities/{key,abs}` — em `Virtual`, `Gamepad`,
+`Teclado` e `Ignorado`. A decisão é tomada **antes** de abrir qualquer nó.
+
+Medido no R35S em 27/11/2026, com 4 nós:
+
+```text
+entrada: `rk817_int Headphones` ignorado — não declara botão nem eixo de
+         controle (é o caso do jack de fone)
+entrada: `r36s_Gamepad` ignorado como controle — o `Giochi Gamepad` é a fonte;
+         ler os dois contaria o mesmo botão duas vezes
+entrada: usando o controle virtual `Giochi Gamepad` — os nós físicos ficam só
+         para volume e energia
+```
+
+Duas coisas que a medição derrubou, e que valem para quem repetir:
+
+1. **`key=0 abs=0` não é capacidade.** O jack de fone tem os dois arquivos e
+   ambos zerados; tratar "o arquivo de `abs` existe" como "tem eixo" fez ele ser
+   classificado como controle na primeira versão.
+2. **A ordem do `read_dir` põe o físico antes** (`event2` < `event3`). Decidir
+   enquanto se abre fazia o launcher anunciar "sem `Giochi Gamepad`" e abrir o
+   físico, para descobrir o virtual na linha seguinte. Por isso a classificação
+   é uma passada separada.
+
+Se o virtual aparecer **depois** do físico (imagem antiga, ou `S52gamepad`
+subindo com o launcher no ar), o leitor do físico é desligado por um
+`AtomicBool` compartilhado: leitura bloqueante não tem cancelamento em `std`, e
+ler os dois conta o mesmo botão duas vezes (o defeito do `neon-drift`).
+
+O `Vigia` (saída de emergência START+B) herda tudo: ele abre o **mesmo**
+`EvdevInput`, então não há segundo caminho para divergir.
 
 A segunda é a que combina com o contrato: o virtual é a tradução; o físico segue
 legível para diagnóstico (o daemon **não** faz `EVIOCGRAB`).
@@ -206,7 +242,7 @@ mesma lição do `aviso: 9 símbolo(s) do mapa não reconhecido(s)` (§6.3).
 | --- | --- |
 | virtual como fonte dos `BTN_*`/`ABS_*` e físico só para `KEY_*`, ou estado por dispositivo? | as duas funcionam; a primeira é menor e não mexe no núcleo (§3.3) |
 | o launcher continua em evdev ou passa a `SDL_GameController`? | não há motivo para trocar: o SDL continua só desenhando (§6.3), e o `SDL_GAMECONTROLLERCONFIG` do `giochi-init` nem seria usado |
-| eixos analógicos entram no `Mapper`/núcleo? | hoje não existe ação para direção analógica; o virtual remove o bloqueio do `absinfo`, não o do desenho |
+| eixos analógicos entram no `Mapper`/núcleo? | **continua aberto, e é de propósito**: o virtual removeu o bloqueio do `absinfo` (a faixa é `-32767..32767` nos quatro eixos), mas não existe **ação** que consuma direção analógica. Implementar a leitura sem consumidor seria código morto — e a issue #6 diz "não é urgente" |
 | zona morta de jogo | o `flat=32` do kernel é ruído de centro, não zona morta; valor tem de ser medido, não copiado |
 | `musica` e `launcher-teste` herdam a mudança? | sim, pelo `#[path]` — e é por isso que o teste dos quatro consumidores é obrigatório (§3.1) |
 
