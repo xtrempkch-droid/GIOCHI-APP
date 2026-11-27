@@ -151,6 +151,35 @@ ler os dois conta o mesmo botão duas vezes (o defeito do `neon-drift`).
 O `Vigia` (saída de emergência START+B) herda tudo: ele abre o **mesmo**
 `EvdevInput`, então não há segundo caminho para divergir.
 
+#### O contrato confere com o aparelho — 17/17 e 4 eixos
+
+Lido o bitmask do nó virtual no R35S em 27/11/2026, comparado com a tabela da
+§1:
+
+```text
+/sys/class/input/event3/device/name: Giochi Gamepad
+key: f00000000 0 0 0 7fdb000000000000 0 0 0 0
+abs: 1b                                  ← bits 0,1,3,4 = ABS_X, ABS_Y, ABS_RX, ABS_RY
+```
+
+Decodificado: os **17** nomes do contrato estão declarados — `BTN_THUMBL`/
+`BTN_THUMBR` inclusive — e o total de bits de tecla é exatamente 17. O
+`abs=1b` são os **4** eixos. O virtual declara **o mesmo bitmask** que o
+`r36s_Gamepad`: é a confirmação de que ele é o mesmo contrato com o hardware
+traduzido por baixo, e não um device novo com semântica nova.
+
+E o `/etc/giochi/buttons.map` do aparelho **já tem** as 19 entradas —
+`thumbl`, `thumbr`, `l2`, `r2`, `home`, `volup`, `voldown`, além das 12 comuns.
+Nada falta no mapa do aparelho; o que não existe é **ação** para o clique dos
+analógicos.
+
+> **Armadilha: o mapa embutido não é o mapa do aparelho.** `ButtonsMap::default_map()`
+> tem **13** nomes e é o que roda quando `/etc/giochi/buttons.map` não existe
+> (num PC, ou numa imagem sem o arquivo). Concluir "o mapa não tem `thumbl`" a
+> partir dele é medir o fallback e chamar de aparelho — foi o que eu fiz, e a
+> leitura do arquivo real desmentiu em um `grep`. Quem for conferir um botão:
+> `grep thumbl /etc/giochi/buttons.map`, no aparelho, nunca no código.
+
 A segunda é a que combina com o contrato: o virtual é a tradução; o físico segue
 legível para diagnóstico (o daemon **não** faz `EVIOCGRAB`).
 
@@ -194,7 +223,7 @@ posterior a 18/11/2026.** Regravar o cartão é pré-requisito, não otimizaçã
 
 ---
 
-## 5. Como verificar quando implementar
+## 5. Como verificar no aparelho
 
 No aparelho (ferramentas do **Giochi System**, não deste repo):
 
