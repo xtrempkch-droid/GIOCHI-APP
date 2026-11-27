@@ -25,7 +25,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -276,6 +278,65 @@ pub fn code_for(symbol: &str) -> Option<u16> {
     })
 }
 
+/// Nome do controle virtual publicado pelo sistema (`/etc/init.d/S52gamepad`).
+///
+/// É o identificador **estável** do contrato: o número do `eventN` muda entre
+/// boots e entre aparelhos, o nome não.
+pub const NOME_VIRTUAL: &str = "Giochi Gamepad";
+
+/// Para que serve um nó de `/dev/input`, decidido pelo que ele **declara**.
+///
+/// ## Por que classificar em vez de abrir tudo
+///
+/// Medido no R35S em 26/11/2026, com o launcher no ar: `/proc/<pid>/fd` tinha
+/// `event0`, `event1` e `event2` abertos, e nenhum era "o controle":
+///
+/// | Nó | O que é de verdade |
+/// | --- | --- |
+/// | `event0` | jack de fone (`rk817 Headphones`) — não gera botão nenhum |
+/// | `event1` | teclado de volume (`KEY_VOLUMEUP`/`DOWN`) |
+/// | `event2` | o controle |
+///
+/// Abrir todos não produzia botão errado (o `buttons.map` filtra por código),
+/// mas **escondia** o que importa: um nó que não é controle ocupando leitor, e
+/// o log dizendo "3 dispositivos" sem dizer quais. E no dia em que o volume
+/// for mapeado como navegação, o sintoma seria "os botões viraram teclado".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Papel {
+    /// O controle virtual do contrato: fonte **exclusiva** dos `BTN_*` e `ABS_*`.
+    Virtual,
+    /// Um controle físico (tem códigos de gamepad ou eixos).
+    Gamepad,
+    /// Só teclas: volume e energia. Contribui apenas com `KEY_*`.
+    Teclado,
+    /// Nada que interesse (jack de fone, sensor): não abre.
+    Ignorado,
+}
+
+impl Papel {
+    /// Classifica pelo nome e pelo que o kernel declara.
+    ///
+    /// `declara_botao` e `declara_eixo` vêm de
+    /// `/sys/class/input/<nó>/device/capabilities/{key,abs}` — a **única**
+    /// fonte que responde "este nó emite isso", e não "este nó existe".
+    pub fn de(nome: &str, declara_botao: bool, declara_eixo: bool) -> Papel {
+        if nome == NOME_VIRTUAL {
+            return Papel::Virtual;
+        }
+        if declara_botao || declara_eixo {
+            Papel::Gamepad
+        } else if nome.contains("vol")
+            || nome.contains("pwr")
+            || nome.contains("Power")
+            || nome.contains("keyboard")
+        {
+            Papel::Teclado
+        } else {
+            Papel::Ignorado
+        }
+    }
+}
+
 /// Estado de todos os controles abertos.
 pub struct EvdevInput {
     rx: Receiver<Ev>,
@@ -290,7 +351,18 @@ pub struct EvdevInput {
     tx: Sender<Ev>,
     dir: PathBuf,
     abertos: HashSet<PathBuf>,
+    /// Papel e chave de "ainda vale ler" de cada nó aberto.
+    ///
+    /// O `ativo` é um `AtomicBool` compartilhado com a thread do leitor: quando
+    /// o controle virtual aparece **depois** de um gamepad físico já aberto,
+    /// desligar o físico é o único jeito de não somar as duas fontes sem matar
+    /// a thread (não há cancelamento de leitura bloqueante em `std`).
+    papeis: HashMap<PathBuf, (Papel, Arc<AtomicBool>)>,
     proxima_revisao: Instant,
+    /// Um aviso por motivo, não um por varredura de 2 s.
+    avisou_virtual: bool,
+    avisou_fisico: bool,
+    avisou_ignorado: bool,
 }
 
 /// De quanto em quanto tempo `/dev/input` é reexaminado.
@@ -319,7 +391,11 @@ impl EvdevInput {
             tx,
             dir: input_dir.to_path_buf(),
             abertos: HashSet::new(),
+            papeis: HashMap::new(),
             proxima_revisao: Instant::now() + Duration::from_millis(REVISAO_MS),
+            avisou_virtual: false,
+            avisou_fisico: false,
+            avisou_ignorado: false,
         };
         this.abrir_novos();
         this
@@ -345,19 +421,119 @@ impl EvdevInput {
             .collect();
         caminhos.sort();
 
-        let mut novos = 0;
+        // **Classificar tudo antes de abrir nada.** A ordem do `read_dir` põe o
+        // físico antes do virtual (`event2` < `event3` no R35S), e decidir
+        // enquanto se abre fazia o launcher anunciar "sem `Giochi Gamepad`" e
+        // abrir o físico — para descobrir o virtual na linha seguinte. Medido
+        // no R35S em 27/11/2026.
+        let mut candidatos: Vec<(PathBuf, String, Papel)> = Vec::new();
         for path in caminhos {
             if self.abertos.contains(&path) {
                 continue;
             }
-            if let Some(handle) = spawn_reader(path.clone(), self.tx.clone()) {
+            let nome = device_name(&path).unwrap_or_default();
+            let papel = Papel::de(
+                &nome,
+                declara_codigos(&path, "key"),
+                declara_codigos(&path, "abs"),
+            );
+            candidatos.push((path, nome, papel));
+        }
+        if candidatos.is_empty() {
+            return 0;
+        }
+
+        let tem_virtual = self
+            .papeis
+            .values()
+            .any(|(papel, _)| *papel == Papel::Virtual)
+            || candidatos.iter().any(|(_, _, p)| *p == Papel::Virtual);
+
+        let mut novos = 0;
+        for (path, nome, papel) in candidatos {
+            // O contrato prefere o virtual: se ele existe, o físico **não** entra
+            // como botão. Duas fontes com o mesmo `BTN_*` e significados
+            // diferentes foi o defeito do `neon-drift` (acelerar e frear no
+            // mesmo A), e a regra da issue #7 é não somar.
+            match papel {
+                Papel::Virtual => {
+                    if !self.avisou_virtual {
+                        eprintln!(
+                            "entrada: usando o controle virtual `{NOME_VIRTUAL}` — \
+                             os nós físicos ficam só para volume e energia"
+                        );
+                        self.avisou_virtual = true;
+                    }
+                }
+                Papel::Gamepad if tem_virtual => {
+                    if !self.avisou_fisico {
+                        eprintln!(
+                            "entrada: `{nome}` ignorado como controle — o `{NOME_VIRTUAL}` é a \
+                             fonte; ler os dois contaria o mesmo botão duas vezes"
+                        );
+                        self.avisou_fisico = true;
+                    }
+                    continue;
+                }
+                Papel::Gamepad => {
+                    if !self.avisou_fisico {
+                        // Imagem anterior ao contrato (o virtual não existe):
+                        // ler o físico é o comportamento certo, e o log tem de
+                        // dizer qual dos dois caminhos foi usado.
+                        eprintln!(
+                            "entrada: sem `{NOME_VIRTUAL}` neste aparelho — lendo o controle \
+                             físico `{nome}` (imagem anterior ao contrato?)"
+                        );
+                        self.avisou_fisico = true;
+                    }
+                }
+                Papel::Teclado => {}
+                Papel::Ignorado => {
+                    if !self.avisou_ignorado {
+                        eprintln!(
+                            "entrada: `{nome}` ignorado — não declara botão nem eixo de \
+                             controle (é o caso do jack de fone)"
+                        );
+                        self.avisou_ignorado = true;
+                    }
+                    continue;
+                }
+            }
+
+            let ativo = Arc::new(AtomicBool::new(true));
+            if let Some(handle) = spawn_reader(path.clone(), self.tx.clone(), ativo.clone()) {
                 self._threads.push(handle);
                 self.abertos.insert(path.clone());
+                self.papeis.insert(path.clone(), (papel, ativo.clone()));
                 self.devices = self.abertos.len();
-                if let Some(name) = device_name(&path) {
-                    self.names.push(name);
+                if !nome.is_empty() {
+                    self.names.push(nome);
                 }
                 novos += 1;
+
+                // O virtual chegou **depois** do físico (imagem antiga, ou o
+                // `S52gamepad` subindo com o launcher já no ar): o físico tem
+                // thread aberta e não há cancelamento de leitura bloqueante —
+                // desligar a leitura é o que evita somar as duas fontes.
+                if papel == Papel::Virtual {
+                    let fisicos: Vec<PathBuf> = self
+                        .papeis
+                        .iter()
+                        .filter(|(outro, (outro_papel, _))| {
+                            *outro_papel == Papel::Gamepad && outro.as_path() != path.as_path()
+                        })
+                        .map(|(outro, _)| outro.clone())
+                        .collect();
+                    for outro in fisicos {
+                        if let Some((_, ativo)) = self.papeis.get(&outro) {
+                            ativo.store(false, Ordering::SeqCst);
+                            eprintln!(
+                                "entrada: {} desligado — o `{NOME_VIRTUAL}` passou a ser a fonte",
+                                outro.display()
+                            );
+                        }
+                    }
+                }
             }
         }
         novos
@@ -495,7 +671,43 @@ fn device_name(path: &Path) -> Option<String> {
         .map(|text| text.trim().to_string())
 }
 
-fn spawn_reader(path: PathBuf, tx: Sender<Ev>) -> Option<JoinHandle<()>> {
+/// Lê os códigos que o nó **declara** emitir, de `/sys/class/input`.
+///
+/// `classe` é `key` ou `abs` — os dois arquivos têm o mesmo formato de máscara
+/// e a mesma armadilha de ordem (ver `core::capacidades`). Vazio ou ausente
+/// devolve `false`: sem a informação, o nó não é tratado como controle, e isso
+/// é o lado conservador.
+fn declara_codigos(path: &Path, classe: &str) -> bool {
+    let Some(nome) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let nome = nome.to_string();
+    let arquivo = format!("/sys/class/input/{nome}/device/capabilities/{classe}");
+    let Ok(texto) = fs::read_to_string(arquivo) else {
+        return false;
+    };
+    let codigos = giochi_launcher_core::capacidades::decodificar(&texto);
+    if codigos.is_empty() {
+        // O arquivo existe e está zerado (medido: `rk817_int Headphones`,
+        // `abs=0`). Existir não é declarar — foi tratar `abs` como "tem eixo"
+        // só por o arquivo estar lá que o jack de fone virou "controle".
+        return false;
+    }
+    if classe == "abs" {
+        // Ter eixo **de verdade** separa um controle de um teclado; o mapa
+        // decide depois qual eixo interessa.
+        return true;
+    }
+    codigos
+        .iter()
+        .any(|c| giochi_launcher_core::capacidades::eh_codigo_de_controle(*c))
+}
+
+fn spawn_reader(
+    path: PathBuf,
+    tx: Sender<Ev>,
+    ativo: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
     let mut file = File::open(&path).ok()?;
 
     let handle = thread::spawn(move || {
@@ -504,6 +716,11 @@ fn spawn_reader(path: PathBuf, tx: Sender<Ev>) -> Option<JoinHandle<()>> {
             if file.read_exact(&mut buffer).is_err() {
                 // Dispositivo removido ou erro de leitura: encerra a thread.
                 break;
+            }
+            // Fonte desligada (o virtual assumiu): o evento é lido e
+            // descartado, porque a leitura bloqueante não tem cancelamento.
+            if !ativo.load(Ordering::SeqCst) {
+                continue;
             }
 
             let event_type = u16::from_ne_bytes([buffer[16], buffer[17]]);
@@ -865,6 +1082,30 @@ mod tests {
         assert_eq!(map.code("voldown"), Some(114));
     }
 
+    /// O contrato do sistema prefere o virtual, e a classificação é o que decide.
+    ///
+    /// Medido no R35S em 26/11/2026: `event0` é o jack de fone, `event1` é o
+    /// teclado de volume e `event2` é o controle. Abrir os três não produzia
+    /// botão errado — o mapa filtra por código — mas escondia **qual** nó é o
+    /// quê, e o log dizia "3 dispositivos" sem dizer quais.
+    #[test]
+    fn papel_separa_virtual_controle_teclado_e_lixo() {
+        // O nome do contrato vence qualquer capacidade.
+        assert_eq!(Papel::de(NOME_VIRTUAL, false, false), Papel::Virtual);
+        assert_eq!(Papel::de(NOME_VIRTUAL, true, true), Papel::Virtual);
+
+        // Controle físico: declara botão de gamepad ou eixo.
+        assert_eq!(Papel::de("r36s_Gamepad", true, false), Papel::Gamepad);
+        assert_eq!(Papel::de("adc-joystick", false, true), Papel::Gamepad);
+
+        // Só teclas: é teclado, não controle — e não vira navegação.
+        assert_eq!(Papel::de("gpio-keys-vol", false, false), Papel::Teclado);
+        assert_eq!(Papel::de("rk805 pwrkey", false, false), Papel::Teclado);
+
+        // Nem botão nem eixo: não abre. É o caso do jack de fone.
+        assert_eq!(Papel::de("rk817 Headphones", false, false), Papel::Ignorado);
+    }
+
     #[test]
     fn mapa_padrao_tem_os_treze_nomes() {
         assert!(ButtonsMap::default_map().is_complete());
@@ -883,6 +1124,10 @@ mod tests {
             tx: channel().0,
             dir: PathBuf::from("/dev/input"),
             abertos: HashSet::new(),
+            papeis: HashMap::new(),
+            avisou_virtual: false,
+            avisou_fisico: false,
+            avisou_ignorado: false,
             proxima_revisao: Instant::now() + Duration::from_secs(3600),
         };
         let frame = input.frame();

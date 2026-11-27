@@ -66,9 +66,37 @@ pub fn tem_power(codigos: &[u16]) -> bool {
     codigos.contains(&KEY_POWER)
 }
 
+/// Se o código é de **controle** — e não de teclado.
+///
+/// A faixa é a do kernel para gamepad (`BTN_MISC`..`BTN_GEAR_UP`, isto é
+/// 0x120..0x151) mais o direcional, que mora em `BTN_DPAD_*` (0x220..0x223),
+/// longe dos botões por razão histórica. `KEY_VOLUMEUP` (115) e `KEY_POWER`
+/// (116) ficam **fora** — e é essa a distinção que a enumeração precisa: um nó
+/// que só tem volume é teclado, e ler as teclas dele como navegação é o
+/// sintoma "os botões viraram teclado".
+pub fn eh_codigo_de_controle(codigo: u16) -> bool {
+    (0x120..=0x151).contains(&codigo) || (0x220..=0x223).contains(&codigo)
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn codigo_de_controle_nao_alcanca_volume_nem_power() {
+        // Medido no R35S em 26/11/2026: `event1` é o teclado de volume
+        // (`KEY_VOLUMEUP`/`DOWN`) e `event2` é o controle. Se a faixa pegasse
+        // 115, o teclado de volume seria classificado como controle.
+        for codigo in [0x120, 0x130, 0x133, 0x13f, 0x220, 0x223] {
+            assert!(eh_codigo_de_controle(codigo), "{codigo:#x} é botão de controle");
+        }
+        for codigo in [KEY_POWER, 114, 115, 0x100, 0x11f, 0x224] {
+            assert!(
+                !eh_codigo_de_controle(codigo),
+                "{codigo:#x} não é botão de controle"
+            );
+        }
+    }
 
     #[test]
     fn gpio_keys_vol_do_x55_da_114_e_115() {

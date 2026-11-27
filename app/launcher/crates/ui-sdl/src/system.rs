@@ -32,6 +32,7 @@
 //! `declaracao_de_energia()` abaixo continua existindo como informação sobre o
 //! device tree — nunca como previsão do que o comando fará.
 
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -193,6 +194,49 @@ mod tests {
         assert!(!declaracao_de_energia_em(&dir.to_string_lossy()));
         // O contrato: `executar` continua sendo a única fonte de verdade.
         assert_eq!(Acao::Desligar.comando(), "poweroff");
+    }
+
+    /// O rastro do supervisor vira frase, e uma queda só não vira tragédia.
+    ///
+    /// O arquivo é o formato real que o `giochi-init` grava (medido no R35S em
+    /// 26/11/2026):
+    ///
+    /// ```text
+    /// motivo=quedas_repetidas
+    /// quedas=5
+    /// janela_s=60
+    /// ultimo_status=1
+    /// launcher=/opt/giochi/apps/launcher/bin/giochi-launcher
+    /// uptime_s=1379
+    /// ```
+    #[test]
+    fn rastro_de_desistencia_vira_frase_que_diz_o_numero() {
+        let dir = std::env::temp_dir().join(format!("giochi-parado-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let arquivo = dir.join("launcher-parado");
+        std::fs::write(
+            &arquivo,
+            "motivo=quedas_repetidas\nquedas=5\njanela_s=60\nultimo_status=1\n\
+             launcher=/opt/giochi/apps/launcher/bin/giochi-launcher\nuptime_s=1379\n",
+        )
+        .expect("arquivo");
+
+        let d = Desistencia::ler(&arquivo).expect("tinha de ler o rastro");
+        assert_eq!(d.quedas, 5);
+        assert_eq!(d.janela_s, 60);
+        let frase = d.explicacao();
+        assert!(frase.contains("caiu várias vezes"), "{frase}");
+        assert!(frase.contains('5') && frase.contains("60"), "{frase}");
+
+        // Sem o arquivo é o caso normal (arrancada nova apaga o rastro).
+        assert!(Desistencia::ler(&dir.join("nao-existe")).is_none());
+
+        // Arquivo ilegível não pode virar "desisti": motivo vazio = ausência.
+        std::fs::write(dir.join("vazio"), "quedas=3\n").expect("vazio");
+        assert!(Desistencia::ler(&dir.join("vazio")).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `SIGTERM` durante o filho mata o launcher — e é isso que o
@@ -397,6 +441,90 @@ impl Drop for Vigia {
             // limitado no tempo, e deixá-la solta manteria os descritores de
             // `/dev/input` abertos enquanto o launcher desenha.
             let _ = thread.join();
+        }
+    }
+}
+
+/// Memória residente deste processo, em MiB, e o pico desde o início.
+///
+/// Lido de `/proc/self/status` (`VmRSS`, `VmHWM`), que é o que o kernel
+/// contabiliza — e não uma estimativa. A issue #7 dá o orçamento: o R35S tem
+/// **981 MiB** e nenhum aparelho tem swap, então a soma do launcher com o jogo
+/// é metade do aparelho no apertado. O `OOM killer` não avisa.
+pub fn memoria() -> Option<(u32, u32)> {
+    let texto = fs::read_to_string("/proc/self/status").ok()?;
+    let ler = |chave: &str| -> Option<u32> {
+        texto
+            .lines()
+            .find(|l| l.starts_with(chave))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|kb| kb.parse::<u32>().ok())
+            .map(|kb| kb / 1024)
+    };
+    Some((ler("VmRSS:")?, ler("VmHWM:")?))
+}
+
+/// Caminho do rastro de desistência do supervisor.
+///
+/// `giochi-init` grava aqui quando o launcher cai `RESTART_MAX` vezes dentro da
+/// janela e ele **para de reiniciar**. O formato é `chave=valor`, uma por linha.
+pub const ARQUIVO_PARADO: &str = "/run/giochi/launcher-parado";
+
+/// O que o supervisor registrou sobre a última desistência.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Desistencia {
+    pub motivo: String,
+    pub quedas: u32,
+    pub janela_s: u32,
+    pub ultimo_status: String,
+    pub uptime_s: u32,
+}
+
+impl Desistencia {
+    /// Lê o arquivo, se existir.
+    ///
+    /// `None` é o caso **normal**: numa arrancada nova o supervisor apaga o
+    /// rastro (cota nova, rastro novo). Então isto só responde quando o
+    /// launcher foi iniciado **enquanto o supervisor estava desistido** — que é
+    /// exatamente o caso de quem entra por SSH para diagnosticar.
+    pub fn ler(caminho: &Path) -> Option<Desistencia> {
+        let texto = fs::read_to_string(caminho).ok()?;
+        let mut d = Desistencia::default();
+        for linha in texto.lines() {
+            let Some((chave, valor)) = linha.split_once('=') else {
+                continue;
+            };
+            let valor = valor.trim();
+            match chave.trim() {
+                "motivo" => d.motivo = valor.to_string(),
+                "quedas" => d.quedas = valor.parse().unwrap_or(0),
+                "janela_s" => d.janela_s = valor.parse().unwrap_or(0),
+                "ultimo_status" => d.ultimo_status = valor.to_string(),
+                "uptime_s" => d.uptime_s = valor.parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+        (!d.motivo.is_empty()).then_some(d)
+    }
+
+    /// A frase que vai para a tela.
+    ///
+    /// Diz o **motivo** e o número de quedas, e não "erro": o usuário não pode
+    /// fazer nada com "erro", mas "a interface caiu 5 vezes em 60 s" diz que o
+    /// problema se repete e não é um tropeço.
+    pub fn explicacao(&self) -> String {
+        let motivo = match self.motivo.as_str() {
+            "quedas_repetidas" => "a interface caiu várias vezes seguidas",
+            outro => outro,
+        };
+        if self.quedas > 0 && self.janela_s > 0 {
+            format!(
+                "{motivo} ({0} vezes em {1} s). O supervisor parou de reiniciar; \
+                 o código de saída da última foi {2}.",
+                self.quedas, self.janela_s, self.ultimo_status
+            )
+        } else {
+            format!("{motivo}. O supervisor parou de reiniciar a interface.")
         }
     }
 }

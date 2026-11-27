@@ -349,6 +349,18 @@ pub struct Clip {
 
 pub struct Painter {
     canvas: WindowCanvas,
+    /// Quantas chamadas de backend foram feitas desde a criação.
+    ///
+    /// A pergunta que isto responde é a da issue #7: o teto deste aparelho é de
+    /// **submissão**, não de shader — medido pelo Giochi System em 49,0 kdraws/s
+    /// no R35S contra 90,7 na X55, com 4000 retângulos pequenos. Um quadro com
+    /// 4000 elementos tem teto de ~12 fps **com a GPU ociosa**, e o jeito de
+    /// saber se um quadro chegou perto disso é contar, não estimar.
+    ///
+    /// Conta o que o desenho pede ao SDL — `fill_rect`, `draw_line`, `copy`,
+    /// `clear` —, e não chamadas às funções públicas daqui: `fill_round_rect`
+    /// são várias bandas, e cada banda é uma submissão.
+    pub chamadas: u64,
     /// Guardado porque `Texture` empresta do `TextureCreator`. Criar um por
     /// texto obrigaria a manter os dois vivos ao mesmo tempo dentro da função.
     #[cfg(feature = "texto")]
@@ -517,6 +529,7 @@ impl Painter {
 
             Ok(Self {
                 canvas,
+                chamadas: 0,
                 creator,
                 ttf,
                 fonts: HashMap::new(),
@@ -534,6 +547,7 @@ impl Painter {
             eprintln!("aviso: compilado sem a feature `texto`; nenhum texto será desenhado");
             Ok(Self {
                 canvas,
+                chamadas: 0,
                 clip_stack: Vec::new(),
                 rot,
                 // Esquecido quando `design` entrou (layout adaptativo): o build
@@ -626,12 +640,18 @@ impl Painter {
     // ── quadro ───────────────────────────────────────────────
 
     pub fn clear(&mut self, color: Color) {
+        self.chamadas += 1;
         self.canvas.set_draw_color(color);
         self.canvas.clear();
     }
 
     pub fn present(&mut self) {
         self.canvas.present();
+    }
+
+    /// Quantas chamadas de backend foram feitas até agora.
+    pub fn chamadas(&self) -> u64 {
+        self.chamadas
     }
 
     /// Rotação em uso agora.
@@ -825,6 +845,7 @@ impl Painter {
         if w <= 0 || h <= 0 {
             return;
         }
+        self.chamadas += 1;
         self.canvas.set_draw_color(color);
         let _ = self
             .canvas
@@ -835,6 +856,7 @@ impl Painter {
         if w <= 0 || h <= 0 {
             return;
         }
+        self.chamadas += 1;
         self.canvas.set_draw_color(color);
         let _ = self
             .canvas
@@ -875,6 +897,7 @@ impl Painter {
         }
 
         self.canvas.set_draw_color(color);
+        self.chamadas += 1;
         let _ = self.canvas.fill_rects(&spans);
     }
 
@@ -920,6 +943,7 @@ impl Painter {
                 cy + (rad.sin() * r as f32).round() as i32,
             );
             if let Some(prev) = previous {
+                self.chamadas += 1;
                 let _ = self.canvas.draw_line(prev, point);
             }
             previous = Some(point);
@@ -981,6 +1005,7 @@ impl Painter {
                 cy + (t.sin() * r as f32).round() as i32,
             );
             if let Some(prev) = previous {
+                self.chamadas += 1;
                 let _ = self.canvas.draw_line(prev, point);
             }
             previous = Some(point);
@@ -1000,6 +1025,7 @@ impl Painter {
             }
         }
         self.canvas.set_draw_color(color);
+        self.chamadas += 1;
         let _ = self.canvas.fill_rects(&spans);
     }
 
@@ -1031,6 +1057,7 @@ impl Painter {
                     let a = map(*x1, *y1);
                     let b = map(*x2, *y2);
                     self.canvas.set_draw_color(color);
+                    self.chamadas += 1;
                     let _ = self.canvas.draw_line(a, b);
                 }
                 Prim::Poly(points, filled) => {
@@ -1044,7 +1071,8 @@ impl Painter {
                         for pair in points.windows(2) {
                             let a = map(pair[0].0, pair[0].1);
                             let b = map(pair[1].0, pair[1].1);
-                            let _ = self.canvas.draw_line(a, b);
+                            self.chamadas += 1;
+                    let _ = self.canvas.draw_line(a, b);
                         }
                     }
                 }
@@ -1093,7 +1121,8 @@ impl Painter {
         }
         if !spans.is_empty() {
             self.canvas.set_draw_color(color);
-            let _ = self.canvas.fill_rects(&spans);
+            self.chamadas += 1;
+        let _ = self.canvas.fill_rects(&spans);
         }
     }
 
@@ -1177,12 +1206,15 @@ impl Painter {
             if let Ok(texture) = self.creator.create_texture_from_surface(&surface) {
                 match self.rot {
                     Rotation::None => {
+                        self.chamadas += 1;
                         let _ = self.canvas.copy(&texture, None, Some(dst));
                     }
                     Rotation::Cw90 => {
+                        self.chamadas += 1;
                         let _ = self.canvas.copy_ex(&texture, None, Some(dst), 90.0, None, false, false);
                     }
                     Rotation::Ccw90 => {
+                        self.chamadas += 1;
                         let _ = self.canvas.copy_ex(&texture, None, Some(dst), 270.0, None, false, false);
                     }
                 }

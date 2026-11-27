@@ -51,7 +51,10 @@ nenhum passo manual.
 | §11–§12 (verificação e ambientes) | [`docs/historico/verificacao-e-ambientes.md`](docs/historico/verificacao-e-ambientes.md) |
 | §13–§14 (armadilhas e o que está provado) | [`docs/historico/armadilhas.md`](docs/historico/armadilhas.md) |
 | §16–§17 (pendências e canal) | [`docs/historico/pendencias-e-canal.md`](docs/historico/pendencias-e-canal.md) |
-| controle virtual `Giochi Gamepad` (18/11/2026, **não implementado**) | [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| as doze regras de engenharia, e onde cada uma é aplicada aqui | [`docs/regras.md`](docs/regras.md) |
+| entrada: enumeração por capacidade e o `Giochi Gamepad` | §6.3 e [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| consumo do `/run/giochi/launcher-parado` | §6.8 |
+| RSS e draws por quadro, medidos no aparelho | [`docs/desempenho.md`](docs/desempenho.md) |
 | ports do PortMaster | [`docs/portmaster.md`](docs/portmaster.md) |
 | idiomas | [`docs/idiomas.md`](docs/idiomas.md) |
 
@@ -270,6 +273,10 @@ bash scripts/compilar-launcher-teste-arm64.sh --instalar
 node scripts/empacotar.mjs app/launcher --saida dist/pacotes  # .giochi assinado
 node scripts/verificar-pacote.mjs dist/pacotes/launcher.giochi
 
+# desempenho medido no aparelho (§14, docs/desempenho.md)
+ssh root@10.55.0.2 'SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+  /opt/giochi/apps/launcher/bin/giochi-launcher --desempenho 15'
+
 # ports do PortMaster (§6.11) — no PC, sem aparelho
 GIOCHI_PORTS=/tmp/p/ports GIOCHI_APPS=/tmp/p/apps \
   ./app/launcher/target/debug/giochi-launcher --sincronizar-ports
@@ -372,6 +379,29 @@ símbolo desconhecido era descartado em silêncio e o botão não funcionava
 (aconteceu duas vezes: comentário no fim da linha e `KEY_VOLUME*`). **O que foi
 ignorado tem de ser dito.** `scripts/verificar-mapa.mjs` lê a lista de símbolos
 do **binário**, não de uma cópia.
+
+**A enumeração é por capacidade, e o `Giochi Gamepad` é preferido** (issue #7,
+27/11/2026). Medido no R35S, com 4 nós em `/dev/input`:
+
+| Nó | O que é | Papel |
+| --- | --- | --- |
+| `event0` | jack de fone (`rk817 Headphones`, `key=0 abs=0`) | **ignorado** |
+| `event1` | teclado de volume (`gpio-keys-vol`) | `Teclado` — só `KEY_*` |
+| `event2` | controle físico (`r36s_Gamepad`) | `Gamepad`, **não aberto** quando há virtual |
+| `event3` | **`Giochi Gamepad`** | `Virtual` — a fonte dos `BTN_*`/`ABS_*` |
+
+Classificar vem de `capabilities/{key,abs}` (`core::capacidades::eh_codigo_de_controle`),
+não da existência do nó: `key=0 abs=0` é "existe e não declara nada", e tratar
+arquivo presente como capacidade foi o que fez o **jack de fone** ser
+classificado como controle na primeira versão. Todas as decisões são tomadas
+**antes** de abrir qualquer nó — decidir enquanto se abre fazia o launcher
+anunciar "sem `Giochi Gamepad`" e abrir o físico, para descobrir o virtual na
+linha seguinte.
+
+Se o virtual aparecer **depois** do físico (imagem antiga, ou `S52gamepad`
+subindo com o launcher no ar), o leitor do físico é **desligado** por um
+`AtomicBool` compartilhado: leitura bloqueante não tem cancelamento, e ler os
+dois conta o mesmo botão duas vezes (o defeito do `neon-drift`).
 
 **O analógico não é lido** (normalizar exige `absinfo` por ioctl). O controle
 virtual de 18/11/2026 já entrega `-32767..32767` e dispensa o ioctl — plano em
@@ -848,6 +878,11 @@ armadilha aqui; o caso completo em
 | launcher multi-idioma (10 idiomas) | **medido** no R35S: boas-vindas na 1ª abertura, `en -> pt` pelo caminho real, Home `pt` **99,6 %**, `verificar` **100,0 %** |
 | escolha do idioma por **botão físico** | **medido**: um toque no controle gravou `en\n`, e a execução seguinte abriu sem perguntar |
 | cobertura de fonte por idioma | **medido** com `--fontes` (`TTF_GlyphIsProvided`): `pt/ru/ar` completos, `zh` 5/8, `hi` 1/11, `bn` 1/10 — falta fonte na imagem |
+| enumeração de entrada por capacidade | **medido** no R35S em 27/11/2026: jack ignorado, físico não aberto quando há virtual, `Giochi Gamepad` como fonte |
+| RSS do launcher no aparelho | **medido**: **10 MiB** (pico 10), R35S, `--desempenho`; 24 MiB no PC |
+| custo do quadro da Home | **medido**: **976 chamadas de backend por quadro** no R35S (1160 no PC) |
+| camada de efeitos no aparelho | **medido**: **23,8 fps** no R35S com efeitos ligados — não sustenta os 30 da cadência |
+| consumo do `launcher-parado` | **implementado**, e o alcance é estreito: o supervisor apaga o rastro na arrancada seguinte, então só aparece quando o launcher é iniciado com o supervisor desistido |
 | ports do PortMaster no launcher | **medido** no R35S em 26/11/2026: cartão criado, detectado e **lançado**, com o FORM rodando dentro do `bwrap` — inclusive o **ciclo inteiro**: launcher sai por `SIGTERM`, o port abre com `opengles2`, e o supervisor devolve a interface quando ele termina (§6.11) |
 
 **Regra de honestidade:** nada aqui pode ser declarado "funciona" sem ter sido

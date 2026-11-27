@@ -34,6 +34,8 @@ pub struct App {
     evdev: EvdevInput,
     window_size: (u32, u32),
     boot_frames: u32,
+    /// Quadros realmente desenhados — divisor de `--desempenho`.
+    quadros: u64,
     start_was_down: bool,
     fps_frames: u32,
     fps_elapsed: f32,
@@ -93,6 +95,19 @@ impl App {
     /// Grava o último quadro em BMP. Ver `Painter::save_frame`.
     pub fn save_frame(&self, path: &str) -> Result<(), String> {
         self.painter.save_frame(path)
+    }
+
+    /// Chamadas de desenho feitas até agora (`--desempenho`).
+    pub fn chamadas_de_desenho(&self) -> u64 {
+        self.painter.chamadas()
+    }
+
+    /// Quantos quadros foram **desenhados** (o `render` sai cedo quando nada
+    /// mudou). É o divisor certo de "chamadas por quadro": dividir pelo número
+    /// de iterações do laço dava 10 num quadro que custa centenas — a régua
+    /// medindo a intenção.
+    pub fn quadros_desenhados(&self) -> u64 {
+        self.quadros
     }
 
     /// Constrói o app.
@@ -244,6 +259,7 @@ impl App {
             evdev,
             window_size: (1280, 720),
             boot_frames: 0,
+            quadros: 0,
             start_was_down: false,
             fps_frames: 0,
             fps_elapsed: 0.0,
@@ -1010,6 +1026,7 @@ impl App {
             return;
         }
         self.dirty = false;
+        self.quadros += 1;
 
         // A paleta do tema escolhido vale para o quadro inteiro. Trocar de tema
         // com a tela aberta muda as cores no quadro seguinte, então a decisão é

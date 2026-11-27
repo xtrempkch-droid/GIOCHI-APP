@@ -88,6 +88,19 @@ fn main() -> Result<(), String> {
         .cloned()
         .unwrap_or_else(default_font);
 
+    // `--desempenho <segundos>`: mede o que a issue #7 pede — draws por quadro
+    // e RSS — **no aparelho**, e sai. Existe porque "roda liso" no PC não diz
+    // nada sobre um R35S com 981 MiB: o teto de lá é de submissão de desenho
+    // (49 kdraws/s medidos pelo System, contra 90,7 na X55).
+    let medir_segundos: Option<f32> = args
+        .iter()
+        .position(|a| a == "--desempenho")
+        .map(|i| {
+            args.get(i + 1)
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(10.0)
+        });
+
     // `--idioma <codigo>`: abre neste idioma sem gravar nada.
     //
     // Aceita o código curto e a etiqueta BCP-47, pela mesma função que lê o
@@ -754,6 +767,21 @@ fn main() -> Result<(), String> {
 
     let mut app = app::App::new(painter, state, evdev, idioma_forcado);
 
+    // O supervisor desistiu de reiniciar? Ele grava o motivo em
+    // `/run/giochi/launcher-parado` e dorme — a tela fica parada, sem texto, e
+    // "tela parada" é indistinguível de "não ligou".
+    //
+    // O arquivo **normalmente não existe**: numa arrancada nova o `giochi-init`
+    // apaga o rastro (§R12 — estado que sobra mentiria sobre a próxima). Quem o
+    // encontra é quem subiu o launcher **com o supervisor desistido**, que é o
+    // caso de quem entra por SSH para diagnosticar. É pouco, e é melhor que
+    // nada: antes, esse launcher abria como se nada tivesse acontecido.
+    if let Some(d) = system::Desistencia::ler(std::path::Path::new(system::ARQUIVO_PARADO)) {
+        let frase = d.explicacao();
+        eprintln!("sistema: o supervisor desistiu de reiniciar — {frase}");
+        app.avisar(&frase);
+    }
+
     // `--teclas`: um quadro primeiro (para o desenho publicar o arranjo da
     // grade), depois a sequência pelo mesmo `dispatch` da entrada real.
     if let Some((lista, cmds)) = sequencia {
@@ -826,8 +854,12 @@ fn main() -> Result<(), String> {
     let mut events = sdl.event_pump()?;
     let mut last = Instant::now();
     let inicio = Instant::now();
+    // Quadros de verdade, contados. Assumir 60 Hz deu "10 por quadro" num
+    // quadro que tinha 116 — a régua medindo a intenção (§13).
+    let mut quadros_desenhados: u64 = 0;
 
     'outer: loop {
+        quadros_desenhados += 1;
         for event in events.poll_iter() {
             if !app.handle_event(&event) {
                 break 'outer;
@@ -932,6 +964,27 @@ fn main() -> Result<(), String> {
         let elapsed = now.elapsed();
         if elapsed < frame {
             std::thread::sleep(frame - elapsed);
+        }
+
+        // `--desempenho`: a medida vai para a saída, não para o olho de quem
+        // olha a tela. Conta **chamadas de backend**, que é o que limita este
+        // aparelho, e lê o RSS do `/proc` — nenhuma das duas é estimativa.
+        if let Some(segundos) = medir_segundos {
+            let decorrido = inicio.elapsed().as_secs_f32();
+            if decorrido >= segundos {
+                let chamadas = app.chamadas_de_desenho();
+                // Quadros **desenhados** — o `render` sai cedo quando nada muda,
+                // e dividir pelas iterações do laço daria um número 30× menor.
+                let quadros = app.quadros_desenhados().max(1);
+                let (rss, pico) = system::memoria().unwrap_or((0, 0));
+                println!(
+                    "desempenho: {chamadas} chamada(s) de desenho em {quadros} quadro(s) \
+                     desenhado(s) de {quadros_desenhados} ({decorrido:.1} s) — {:.0} por \
+                     quadro · RSS {rss} MiB (pico {pico} MiB)",
+                    chamadas as f64 / quadros as f64
+                );
+                break;
+            }
         }
     }
 

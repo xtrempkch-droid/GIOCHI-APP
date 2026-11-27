@@ -29,6 +29,8 @@
 - [Controles](controles.md) — entrada por evdev, múltiplos controles e o programa de gerenciamento.
 - [Controle virtual "Giochi Gamepad"](controle-virtual.md) — a mudança de 18/11/2026 no Giochi System: 17 botões e 4 eixos num nó só, e o que falta implementar aqui (documentado, **não** implementado).
 - [PortMaster: a loja e os ports](portmaster.md) — créditos (é obra da comunidade PortsMaster; aqui só o invólucro `giochi-ports`), a GUI com cartão próprio na aba Apps, `/user/ports` virando cartão, o layout que o detector exige e o que foi medido no R35S.
+- [Regras de engenharia](regras.md) — a adoção das doze regras do Giochi System: onde cada uma já está aplicada aqui, com o teste que a prende.
+- [Desempenho medido no aparelho](desempenho.md) — RSS e chamadas de desenho por quadro no R35S, e o que a camada de efeitos custa de ritmo.
 - [Histórico medido](historico/) — o texto completo que saiu do `AGENTS.md` em 26/11/2026, **verbatim**: launcher, apps e catálogo, PC e pacote, verificação e ambientes, armadilhas, pendências.
 - [R35S](r35s.md) — o que o app já garante nesse aparelho, o que **ainda** falta do sistema, e o estado real do build (a imagem existe desde 07/11).
 - [Testar no X35H](teste-x35h.md) — roteiro para uma imagem nova: o que conferir, em que ordem, e de quem é o problema quando falha.

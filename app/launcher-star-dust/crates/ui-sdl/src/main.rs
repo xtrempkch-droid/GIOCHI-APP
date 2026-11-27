@@ -141,6 +141,17 @@ fn main() -> Result<(), String> {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
         .unwrap_or(90);
+    // `--desempenho <segundos>`: mesma medida do launcher de produção (§7 da
+    // issue de regras). Aqui ela também responde "quanto custa a camada de
+    // efeitos neste aparelho".
+    let medir_segundos: Option<f32> = args
+        .iter()
+        .position(|a| a == "--desempenho")
+        .map(|i| {
+            args.get(i + 1)
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(10.0)
+        });
     let espera_ms: u64 = args
         .iter()
         .position(|a| a == "--esperar-ms")
@@ -769,6 +780,15 @@ fn main() -> Result<(), String> {
 
     let mut app = app::App::com_efeitos(painter, state, evdev, efeitos, idioma_forcado);
 
+    // Mesmo consumo do launcher de produção (o módulo vem por `#[path]`): se o
+    // supervisor desistiu de reiniciar, o motivo está em
+    // `/run/giochi/launcher-parado` e a tela não pode ficar muda.
+    if let Some(d) = system::Desistencia::ler(std::path::Path::new(system::ARQUIVO_PARADO)) {
+        let frase = d.explicacao();
+        eprintln!("sistema: o supervisor desistiu de reiniciar — {frase}");
+        app.avisar(&frase);
+    }
+
     // Captura: adiantar a animação **antes** do primeiro desenho. O caminho de
     // dump avança um número fixo de quadros, então o BMP não depende de quanto
     // o processo levou para abrir a janela — e duas execuções do mesmo comando
@@ -849,8 +869,12 @@ fn main() -> Result<(), String> {
     let mut events = sdl.event_pump()?;
     let mut last = Instant::now();
     let inicio = Instant::now();
+    // Quadros de verdade, contados. Assumir 60 Hz deu "10 por quadro" num
+    // quadro que tinha 116 — a régua medindo a intenção (§13).
+    let mut quadros_desenhados: u64 = 0;
 
     'outer: loop {
+        quadros_desenhados += 1;
         for event in events.poll_iter() {
             if !app.handle_event(&event) {
                 break 'outer;
@@ -965,6 +989,25 @@ fn main() -> Result<(), String> {
         let elapsed = now.elapsed();
         if elapsed < frame {
             std::thread::sleep(frame - elapsed);
+        }
+
+        if let Some(segundos) = medir_segundos {
+            let decorrido = inicio.elapsed().as_secs_f32();
+            if decorrido >= segundos {
+                let chamadas = app.chamadas_de_desenho();
+                // Quadros **desenhados** — o `render` sai cedo quando nada muda,
+                // e dividir pelas iterações do laço daria um número 30× menor.
+                let quadros = app.quadros_desenhados().max(1);
+                let (rss, pico) = system::memoria().unwrap_or((0, 0));
+                println!(
+                    "desempenho (efeitos {}): {chamadas} chamada(s) em {quadros} quadro(s) \
+                     desenhado(s) de {quadros_desenhados} ({decorrido:.1} s) — {:.0} por \
+                     quadro · RSS {rss} MiB (pico {pico} MiB)",
+                    if efeitos { "ligados" } else { "desligados" },
+                    chamadas as f64 / quadros as f64
+                );
+                break;
+            }
         }
     }
 
