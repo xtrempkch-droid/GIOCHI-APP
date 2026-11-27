@@ -148,6 +148,23 @@ subindo com o launcher no ar), o leitor do físico é desligado por um
 `AtomicBool` compartilhado: leitura bloqueante não tem cancelamento em `std`, e
 ler os dois conta o mesmo botão duas vezes (o defeito do `neon-drift`).
 
+#### A prova que fecha: os descritores do processo em execução
+
+O log diz o que o launcher **decidiu**; os `fd` dizem o que ele **fez**. Com o
+launcher de produção rodando no R35S (27/11/2026, binário `b08666c7`, o mesmo do
+`/opt/giochi/apps/launcher/bin`), dos **4** nós de entrada ele tem **2** abertos:
+
+```text
+/proc/<pid>/fd →  /dev/input/event1   ← `gpio-keys-vol` (volume: teclado)
+                  /dev/input/event3   ← `Giochi Gamepad` (o virtual)
+```
+
+`event0` (jack de fone, `key=0 abs=0`) e `event2` (`r36s_Gamepad`) **não** estão
+abertos. É exatamente o desenho: uma fonte de controle (o virtual) mais o teclado
+que segura volume e power, e nenhum nó físico de gamepad. Comparar `md5sum` de
+`/proc/<pid>/exe` com o binário instalado é o que garante que a medida é do
+código novo e não de um launcher velho que ficou no ar.
+
 O `Vigia` (saída de emergência START+B) herda tudo: ele abre o **mesmo**
 `EvdevInput`, então não há segundo caminho para divergir.
 
