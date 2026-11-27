@@ -926,7 +926,7 @@ versões que foram de fato compiladas; o CI usa `--locked`.
 | conexão Wi-Fi real | **feita e persistente** (15/11/2026) — falta o `update_config=1` na imagem (§17) |
 | pareamento BT virar entrada | **bloqueado na imagem** — pedido no canal (§17) |
 | analógico | **não lido** — o controle virtual de 18/11/2026 entrega `-32767..32767` e dispensa o ioctl; falta implementar (§6.3) |
-| controle virtual `Giochi Gamepad` | **documentado, não implementado** — [`docs/controle-virtual.md`](docs/controle-virtual.md) |
+| controle virtual `Giochi Gamepad` | **implementado** (27/11/2026): o virtual é a fonte, o físico fica para volume/energia, e as fontes não se somam. Falta só a leitura dos **eixos**, que depende de uma ação que os consuma (§6.3) |
 | tema em tempo de execução | **a base existe**; falta o **segundo** tema (§6.10) |
 | idioma | **feito**: os dez do site, padrão inglês (§6.10) |
 | fonte para `zh`/`hi`/`bn` | **falta na imagem** — pedido nº 5 de `docs/issues-para-outros-repos.md` |
